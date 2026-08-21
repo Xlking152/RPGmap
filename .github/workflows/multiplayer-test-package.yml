@@ -1,0 +1,99 @@
+name: Build Multiplayer Test Package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/multiplayer-v1
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'deployment/local-server/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
+      - '.github/workflows/multiplayer-test-package.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find src deployment/local-server -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
+
+      - name: Build web client
+        run: npm run build
+
+      - name: Assemble Multiplayer test package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE/artifact/RPGmap-Multiplayer-Test"
+          rm -rf "$GITHUB_WORKSPACE/artifact"
+          mkdir -p "$ROOT/public" "$ROOT/data/worlds" "$ROOT/data/uploads" "$ROOT/data/backups" "$ROOT/docs"
+
+          cp -R dist/. "$ROOT/public/"
+          cp deployment/local-server/server.mjs "$ROOT/server.mjs"
+          cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
+          cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
+          cp deployment/local-server/start-rpgmap-internet.bat "$ROOT/start-rpgmap-internet.bat"
+          cp deployment/local-server/setup-cloudflared.bat "$ROOT/setup-cloudflared.bat"
+          cp deployment/local-server/run-rpgmap-public-server.bat "$ROOT/run-rpgmap-public-server.bat"
+          cp deployment/local-server/README.md "$ROOT/README.md"
+          cp deployment/local-server/INTERNET-TEST.md "$ROOT/INTERNET-TEST.md"
+          cp deployment/local-server/data/README.txt "$ROOT/data/README.txt"
+          cp '文档/联机测试指南.md' "$ROOT/docs/MULTIPLAYER-TEST-GUIDE.md"
+          chmod +x "$ROOT/start-rpgmap.sh"
+
+          cat > "$ROOT/VERSION.json" <<EOF
+          {
+            "app": "RPGmap",
+            "version": "1.3.0-multiplayer-test",
+            "commit": "${GITHUB_SHA}",
+            "serverMode": "multiplayer-test",
+            "defaultPort": 30000
+          }
+          EOF
+
+          test -f "$ROOT/public/index.html"
+          test -f "$ROOT/start-rpgmap-internet.bat"
+          test -f "$ROOT/setup-cloudflared.bat"
+
+          cd "$GITHUB_WORKSPACE/artifact"
+          zip -r -9 -q RPGmap-Multiplayer-Test.zip RPGmap-Multiplayer-Test
+          sha256sum RPGmap-Multiplayer-Test.zip > RPGmap-Multiplayer-Test.zip.sha256
+
+      - name: Upload Multiplayer test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RPGmap-Multiplayer-Test
+          path: |
+            artifact/RPGmap-Multiplayer-Test.zip
+            artifact/RPGmap-Multiplayer-Test.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
