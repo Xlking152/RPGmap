@@ -19,6 +19,7 @@ export class TokenDragPlan {
     this.current = null;
     this.route = null;
     this.startClient = null;
+    this.nextClickCreatesWaypoint = false;
     return this;
   }
   begin({ characterId, start, pointerId = null, client = null, snapStep = 5 }) {
@@ -29,6 +30,7 @@ export class TokenDragPlan {
     this.current = copyPoint(start);
     this.route = null;
     this.startClient = client ? { x: Number(client.x), y: Number(client.y) } : null;
+    this.nextClickCreatesWaypoint = false;
     return this;
   }
   update(point, route = this.route, rawPointer = point) {
@@ -45,12 +47,14 @@ export class TokenDragPlan {
       this.current = copyPoint(point);
       this.route = null;
       this.phase = MovementPhase.PLANNING;
+      this.nextClickCreatesWaypoint = true;
       return false;
     }
     this.session.addWaypoint(point);
     this.current = copyPoint(point);
     this.route = null;
     this.phase = MovementPhase.PLANNING;
+    this.nextClickCreatesWaypoint = false;
     return true;
   }
   removeWaypoint() {
@@ -61,13 +65,19 @@ export class TokenDragPlan {
     if (this.phase === MovementPhase.READY) this.phase = MovementPhase.PLANNING;
     return removed;
   }
-  continuePlanning() { if (!this.session) return false; this.phase = MovementPhase.PLANNING; return true; }
+  continuePlanning({ nextClickCreatesWaypoint = false } = {}) {
+    if (!this.session) return false;
+    this.phase = MovementPhase.PLANNING;
+    this.nextClickCreatesWaypoint = Boolean(nextClickCreatesWaypoint);
+    return true;
+  }
   ready(route = this.route) {
     if (!this.session || !route?.valid) return false;
     this.route = route;
     this.current = copyPoint(route.destination);
     this.session.updateCurrent(route.destination, this.session.rawPointer);
     this.phase = MovementPhase.READY;
+    this.nextClickCreatesWaypoint = false;
     return true;
   }
   startMoving() {
