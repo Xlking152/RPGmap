@@ -30,6 +30,7 @@ import yamenSideHallUrl from './assets/generated/yamen-side-hall.webp';
 import yellowRiverPontoonUrl from './assets/generated/yellow-river-pontoon.webp';
 import yellowRiverUrl from './assets/generated/yellow-river.webp';
 import { createRpgMapApp } from './engine/app.js';
+import { createFvttWaypointMovementTool } from './tools/fvtt-waypoint-movement.js';
 import { createLanzhouMapPackage } from './maps/lanzhou.js';
 
 const mapPackage = createLanzhouMapPackage({
@@ -65,5 +66,6 @@ const mapPackage = createLanzhouMapPackage({
 
 createRpgMapApp({
   container: document.getElementById('app'),
-  mapPackage
+  mapPackage,
+  tools: [createFvttWaypointMovementTool()]
 });
