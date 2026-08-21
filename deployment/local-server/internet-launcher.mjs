@@ -19,7 +19,7 @@ export function createInternetCredentials() {
   };
 }
 
-export function buildConnectionInfo({ publicUrl, joinCode, gmSecret, version = '1.4.1', port = 30000 }) {
+export function buildConnectionInfo({ publicUrl, joinCode, gmSecret, version = '1.4.2', port = 30000 }) {
   return [
     '============================================================',
     ` RPGmap Multiplayer Connection Info  |  ${version}`,
@@ -37,7 +37,7 @@ export function buildConnectionInfo({ publicUrl, joinCode, gmSecret, version = '
     ' GM Secret is for the GM only. Do not send it to Players.',
     ' The public URL is temporary and expires when this launcher stops.',
     '',
-    ' All RPGmap World/User data stays inside this package map/ folder.',
+    ' RPGmap World/User state stays in world/. Map resources stay in maps/.',
     ' You may close this information window manually at any time.',
   ];
 }
@@ -56,7 +56,7 @@ async function readVersion() {
   try {
     return JSON.parse(await readFile(path.join(ROOT, 'VERSION.json'), 'utf8'));
   } catch {
-    return { app: 'RPGmap', version: '1.4.1', commit: 'unknown' };
+    return { app: 'RPGmap', version: '1.4.2', commit: 'unknown' };
   }
 }
 
@@ -166,25 +166,27 @@ async function waitForServer(port, timeoutMs = 20000) {
 
 function printServerBanner({ port, publicUrl, credentials, health, version }) {
   const multiplayer = health?.multiplayer || {};
-  const mapDir = path.resolve(process.env.RPGMAP_MAP_DIR || path.join(ROOT, 'map'));
+  const worldDir = path.resolve(process.env.RPGMAP_WORLD_DIR || path.join(ROOT, 'world'));
+  const mapsDir = path.resolve(process.env.RPGMAP_MAPS_DIR || path.join(ROOT, 'maps'));
   const packageVersion = version?.version || version?.packageVersion || health?.version || 'unknown';
 
   console.log('');
   console.log('============================================================');
   console.log(` RPGmap Multiplayer Server  |  ${packageVersion}`);
   console.log('============================================================');
-  console.log(` Local     : http://127.0.0.1:${port}`);
-  for (const url of networkUrls(port)) console.log(` Network   : ${url}`);
-  console.log(` Public URL: ${publicUrl}`);
-  console.log(` World     : ${multiplayer.worldId || 'default'} · revision ${multiplayer.revision ?? 0}`);
-  console.log(` Map Root  : ${mapDir}`);
-  console.log(` Users     : ${multiplayer.users ?? 0} persistent Player identities`);
-  console.log(` Storage   : ${multiplayer.storageMode || 'portable-map-root'}`);
-  console.log(' Public    : ON');
-  console.log(` JoinCode  : ${credentials.joinCode}`);
-  console.log(` GMSecret  : ${credentials.gmSecret}`);
-  console.log(` Build     : ${version?.commit || 'unknown'}`);
-  console.log(' Status    : READY');
+  console.log(` Local      : http://127.0.0.1:${port}`);
+  for (const url of networkUrls(port)) console.log(` Network    : ${url}`);
+  console.log(` Public URL : ${publicUrl}`);
+  console.log(` World      : ${multiplayer.worldId || 'default'} · revision ${multiplayer.revision ?? 0}`);
+  console.log(` World Data : ${worldDir}`);
+  console.log(` Map Library: ${mapsDir}`);
+  console.log(` Users      : ${multiplayer.users ?? 0} persistent Player identities`);
+  console.log(` Storage    : ${multiplayer.storageMode || 'portable-world-maps'}`);
+  console.log(' Public     : ON');
+  console.log(` JoinCode   : ${credentials.joinCode}`);
+  console.log(` GMSecret   : ${credentials.gmSecret}`);
+  console.log(` Build      : ${version?.commit || 'unknown'}`);
+  console.log(' Status     : READY');
   console.log('============================================================');
   console.log('');
   console.log(' PLAYER INVITE - send only these two items:');
@@ -192,7 +194,7 @@ function printServerBanner({ port, publicUrl, credentials, health, version }) {
   console.log(`   JoinCode : ${credentials.joinCode}`);
   console.log('');
   console.log(' GM Secret is for the GM only. Do not send it to Players.');
-  console.log(' World/User data stays inside map/ beside this launcher.');
+  console.log(' World/User state stays in world/. Map resources stay in maps/.');
   console.log(' A separate connection-info window has been opened for quick reference.');
   console.log(' Press Ctrl+C to stop the server and tunnel.');
   console.log('');
@@ -213,7 +215,8 @@ async function main() {
   console.log(` Cloudflare : ${cloudflaredExe}`);
   console.log(' Transport  : HTTP/2 over TCP');
   console.log(` Origin     : ${originUrl}`);
-  console.log(` Map Root   : ${path.resolve(process.env.RPGMAP_MAP_DIR || path.join(ROOT, 'map'))}`);
+  console.log(` World Data : ${path.resolve(process.env.RPGMAP_WORLD_DIR || path.join(ROOT, 'world'))}`);
+  console.log(` Map Library: ${path.resolve(process.env.RPGMAP_MAPS_DIR || path.join(ROOT, 'maps'))}`);
   console.log(' Status     : creating Quick Tunnel...');
   console.log('============================================================');
   console.log('');
@@ -251,7 +254,8 @@ async function main() {
       RPGMAP_GM_SECRET: credentials.gmSecret,
       RPGMAP_PLAYER_WRITE: process.env.RPGMAP_PLAYER_WRITE || '1',
       RPGMAP_PUBLIC_DIR: process.env.RPGMAP_PUBLIC_DIR || path.join(ROOT, 'app'),
-      RPGMAP_MAP_DIR: process.env.RPGMAP_MAP_DIR || path.join(ROOT, 'map'),
+      RPGMAP_WORLD_DIR: process.env.RPGMAP_WORLD_DIR || path.join(ROOT, 'world'),
+      RPGMAP_MAPS_DIR: process.env.RPGMAP_MAPS_DIR || path.join(ROOT, 'maps'),
       PORT: String(port),
     };
 
@@ -274,7 +278,7 @@ async function main() {
       publicUrl,
       joinCode: credentials.joinCode,
       gmSecret: credentials.gmSecret,
-      version: version?.version || version?.packageVersion || '1.4.1',
+      version: version?.version || version?.packageVersion || '1.4.2',
       port,
     });
     infoWindow = openConnectionInfoWindow(connectionInfo);
