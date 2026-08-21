@@ -21,11 +21,13 @@ if not exist "%~dp0internet-launcher.mjs" (
   exit /b 1
 )
 
-if not exist "%~dp0map" mkdir "%~dp0map"
-if not exist "%~dp0map\uploads" mkdir "%~dp0map\uploads"
-if not exist "%~dp0map\backups" mkdir "%~dp0map\backups"
+if not exist "%~dp0world" mkdir "%~dp0world"
+if not exist "%~dp0world\uploads" mkdir "%~dp0world\uploads"
+if not exist "%~dp0world\backups" mkdir "%~dp0world\backups"
+if not exist "%~dp0maps" mkdir "%~dp0maps"
 set "RPGMAP_PUBLIC_DIR=%~dp0app"
-set "RPGMAP_MAP_DIR=%~dp0map"
+set "RPGMAP_WORLD_DIR=%~dp0world"
+set "RPGMAP_MAPS_DIR=%~dp0maps"
 
 set "CLOUDFLARED_EXE="
 if exist "%~dp0cloudflared.exe" set "CLOUDFLARED_EXE=%~dp0cloudflared.exe"
@@ -63,8 +65,9 @@ set "RPGMAP_PLAYER_WRITE=1"
 
 echo.
 echo [INFO] Starting integrated Internet Multiplayer flow...
-echo [INFO] Program files: app\
-echo [INFO] Map/User data: map\
+echo [INFO] Program files : app\
+echo [INFO] World data    : world\
+echo [INFO] Map library   : maps\
 echo [INFO] The launcher will create the Quick Tunnel first, attach its
 echo        public URL to RPGmap Server, then open the public page.
 echo.
