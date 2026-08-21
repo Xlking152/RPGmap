@@ -109,13 +109,13 @@ export function createMovementDistanceRenderer({ defaultStep = 5, settings = nul
         const summary = summarizeMovementSegments(segments, step);
         summary.segments.forEach((segment, index) => {
           if (!segment.midpoint) return;
-          L.tooltip({ permanent:true, direction:'center', className:'fvtt-segment-distance-label', pane:'measurePane', interactive:false })
+          L.tooltip({ permanent:true, direction:'top', offset:[0,-10], className:'fvtt-segment-distance-label', pane:'measurePane', interactive:false })
             .setLatLng(worldToLatLng(segment.midpoint, api.mapPackage.height))
             .setContent((index + 1) + ' · ' + segment.displayCost + ' m')
             .addTo(labelLayer);
         });
         const endpoint = routePoints.at(-1);
-        L.tooltip({ permanent:true, direction:'bottom', offset:[0,12], className:'fvtt-distance-total-label', pane:'measurePane', interactive:false })
+        L.tooltip({ permanent:true, direction:'top', offset:[0,-18], className:'fvtt-distance-total-label', pane:'measurePane', interactive:false })
           .setLatLng(worldToLatLng(endpoint, api.mapPackage.height))
           .setContent('总 ' + summary.displayCost + ' m')
           .addTo(labelLayer);
