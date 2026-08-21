@@ -173,7 +173,9 @@ export function normalizeAccessState(raw) {
     const ownership = normalizeOwnership(item.ownership);
     let defaultActorId = cleanActorId(item.defaultActorId);
     if (defaultActorId && ownership[defaultActorId] !== OWNERSHIP.OWNER) defaultActorId = null;
-    const legacyClaimHash = typeof item.claimHash === 'string' && item.claimHash.length === 64 ? item.claimHash : null;
+    const keyHash = typeof item.playerKeyHash === 'string' && item.playerKeyHash.length === 64
+      ? item.playerKeyHash
+      : typeof item.claimHash === 'string' && item.claimHash.length === 64 ? item.claimHash : null;
     users.push({
       id,
       name: cleanName(item.name),
@@ -181,7 +183,8 @@ export function normalizeAccessState(raw) {
       defaultActorId,
       ownership,
       tokenHash: typeof item.tokenHash === 'string' && item.tokenHash.length === 64 ? item.tokenHash : null,
-      playerKeyHash: typeof item.playerKeyHash === 'string' && item.playerKeyHash.length === 64 ? item.playerKeyHash : legacyClaimHash,
+      playerKeyHash: keyHash,
+      claimHash: keyHash,
       disabled: item.disabled === true,
       createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
       updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString(),
@@ -203,6 +206,7 @@ function baseUser({ name, defaultActorId = null, ownership = {} } = {}) {
     ownership: normalizedOwnership,
     tokenHash: null,
     playerKeyHash: null,
+    claimHash: null,
     disabled: false,
     createdAt: now,
     updatedAt: now,
@@ -210,19 +214,25 @@ function baseUser({ name, defaultActorId = null, ownership = {} } = {}) {
 }
 
 export function createBoundUser(options = {}) {
-  const authToken = newAuthToken();
+  // The first browser credential is also the portable Player Key. This lets the
+  // newly-approved Player save one short credential that still works when a
+  // Quick Tunnel restart changes the browser origin.
   const playerKey = newPlayerKey();
   const user = baseUser(options);
-  user.tokenHash = hashCredential(authToken);
-  user.playerKeyHash = hashCredential(playerKey);
-  return { user, authToken, playerKey };
+  const keyHash = hashCredential(playerKey);
+  user.tokenHash = keyHash;
+  user.playerKeyHash = keyHash;
+  user.claimHash = keyHash;
+  return { user, authToken: playerKey, playerKey };
 }
 
 export function createClaimableUser(options = {}) {
   const playerKey = newPlayerKey();
   const user = baseUser(options);
-  user.playerKeyHash = hashCredential(playerKey);
-  return { user, playerKey };
+  const keyHash = hashCredential(playerKey);
+  user.playerKeyHash = keyHash;
+  user.claimHash = keyHash;
+  return { user, playerKey, claimCode: playerKey };
 }
 
 export function verifyUserCredential(user, authToken) {
@@ -243,13 +253,25 @@ export function bindWithPlayerKey(user, playerKey) {
   return authToken;
 }
 
+// Compatibility names used by the V1.4 server message wiring while V1.4.1
+// presents the value as a reusable Player Key rather than a one-time claim.
+export function claimUser(user, claimCode) {
+  return bindWithPlayerKey(user, claimCode);
+}
+
 export function resetUserPlayerKey(user) {
   if (!user) return null;
   const playerKey = newPlayerKey();
-  user.playerKeyHash = hashCredential(playerKey);
+  const keyHash = hashCredential(playerKey);
+  user.playerKeyHash = keyHash;
+  user.claimHash = keyHash;
   user.tokenHash = null;
   user.updatedAt = new Date().toISOString();
   return playerKey;
+}
+
+export function resetUserClaim(user) {
+  return resetUserPlayerKey(user);
 }
 
 export function updateUserRecord(user, patch = {}) {
