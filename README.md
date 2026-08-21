@@ -8,11 +8,9 @@ RPGmap 是一个面向 TRPG / VTT 的浏览器端自托管跑团平台，目标�
 
 ## 项目目标
 
-RPGmap 希望形成一套可自托管、可携带、可扩展的 VTT 架构：
-
 ```text
 RPGmap
-├─ Native Launcher / GM Control Center
+├─ Unified Web Launcher / GM Control Center
 ├─ App / UI
 ├─ Map / Scene System
 ├─ Actor / Token / Form
@@ -26,76 +24,105 @@ RPGmap
 └─ Internet Multiplayer
 ```
 
-## V1.4.3：Native Launcher + GM Control Center
+## V1.4.3：单 BAT + Web Launcher
 
-V1.4.3 将过去分散的本机、LAN、Internet、cloudflared、连接信息和 User 后台脚本整合为一个 Launcher。
+V1.4.3 将过去分散的本机、LAN、Internet、cloudflared、连接信息和 User 后台整合为一个浏览器 Launcher / GM Control Center。
 
-Windows 发布包唯一启动入口：
-
-```text
-RPGmap Launcher.exe
-```
-
-它是一个轻量 Windows 原生启动壳，不使用 Electron，也不把完整浏览器或 Node Runtime 打进 EXE。
-
-EXE 负责查找 Node.js 并启动：
+Windows 发布包只保留一个启动入口：
 
 ```text
-launcher/launcher.mjs
+启动 RPGmap.bat
 ```
 
-Launcher 随后在本机打开：
+BAT 本身不承担任何业务逻辑，只负责：
 
 ```text
-http://127.0.0.1:29999
+查找 Node.js
+    ↓
+启动 launcher/launcher.mjs
+    ↓
+Launcher 选择本机空闲端口
+    ↓
+自动打开浏览器 GM Control Center
 ```
 
-并统一负责：
+当前 Node.js 运行要求：
+
+```text
+^20.19.0 || >=22.12.0
+```
+
+启动时依次尝试：
+
+1. `tools/node/node.exe`；
+2. RPGmap 根目录 `node.exe`；
+3. 系统 PATH 中的 `node.exe`。
+
+这为未来内置 Portable Node 保留了空间，但当前不要求把 Node 复制进项目目录。
+
+### 为什么撤回 Native EXE
+
+V1.4.3 Candidate 曾尝试轻量 Windows 原生 EXE 启动壳。该方案虽然可以编译并通过 CI，但在不同 Windows 实机环境中出现了启动失败不易诊断、端口冲突反馈不直观等问题。
+
+因此当前 Candidate 明确回到更简单、可维护、可诊断的方案：
+
+```text
+启动 RPGmap.bat + Web Launcher
+```
+
+RPGmap 不为了“看起来像桌面软件”增加额外启动层。真正的产品能力集中在网页 Launcher 中。
+
+## Launcher / GM Control Center
+
+Launcher 统一负责：
 
 - 启动 / 停止 RPGmap Server；
 - 本机 / LAN 模式；
 - Cloudflare Quick Tunnel Internet 模式；
-- 本机地址、LAN 地址、Public URL；
+- Local / LAN / Public URL；
 - Join Code / 房间号；
 - GM Secret；
 - 玩家邀请文本；
 - Server / Tunnel 日志；
 - World / Maps 路径；
+- pending Player；
 - User / Ownership 后台管理。
 
-### 为什么不用 Electron
+### 动态 Launcher 端口
 
-Launcher 的核心仍然是 Node + Web UI。
-
-Native EXE 只提供 Windows 桌面软件式的单入口，因此：
-
-- EXE 本身很小；
-- 不增加 Electron 运行时；
-- 不让发布包突然膨胀几十或几百 MB；
-- 保持 Launcher UI 易开发、易调试；
-- Windows 用户仍然可以直接双击 `.exe`。
-
-当前运行前提仍为：
+Launcher 只绑定本机 loopback：
 
 ```text
-Node.js ^20.19.0 或 >=22.12.0
+127.0.0.1
 ```
 
-如果没有检测到 Node.js，Native Launcher 会提示安装。
+首选端口为：
+
+```text
+29999
+```
+
+如果被占用，会自动尝试：
+
+```text
+29998 → 29997 → 29996 → 29995
+```
+
+仍然不可用时，让 Windows 自动分配一个空闲本机端口。浏览器会自动打开实际选中的地址，因此用户不需要记 Launcher 端口。
+
+Game Server 仍默认使用：
+
+```text
+0.0.0.0:30000
+```
+
+Cloudflare Tunnel 只转发 Game Server，不转发 Launcher 管理端口。
 
 ### Launcher 安全边界
 
-Launcher 只绑定：
+Launcher 本机 API 使用随机 Browser Token。
 
-```text
-127.0.0.1:29999
-```
-
-Cloudflare Tunnel 只转发 RPGmap 游戏端口，不转发 Launcher。
-
-Launcher 自己使用随机 Browser Token 保护本机管理 API。
-
-更重要的是，Launcher **不直接编辑 `world/users.json`**。它建立一个隐藏的本机 GM WebSocket Session，通过 Multiplayer Server 现有的 User / Ownership 协议执行：
+Launcher **不直接编辑 `world/users.json`**，而是建立隐藏的本机 GM WebSocket Session，通过 Multiplayer Server 已有的权限协议执行：
 
 - 批准 pending Player；
 - 预创建 User；
@@ -104,63 +131,43 @@ Launcher 自己使用随机 Browser Token 保护本机管理 API。
 - 重发 Player Key；
 - 删除 User。
 
-因此 Launcher 和游戏内“联机 / Users”面板始终共享同一套 Server 内存状态、权限规则与持久化逻辑。
+因此 Launcher 与游戏内“联机 / Users”面板始终共享同一套 Server 内存状态、权限规则与持久化逻辑。
 
 ## Launcher 未来管理中心
 
-V1.4.3 已在 Launcher 首页预留三个明确入口，当前保持禁用并标记为“计划中”：
+V1.4.3 已在 Launcher 首页预留三个禁用模块：
 
 ### World Manager
 
-未来负责：
-
-- World 选择；
-- 创建 / 复制 / 重命名；
-- 归档；
-- 启动前选择 Campaign；
-- World schema / migration 检查。
+未来负责 World 选择、创建、复制、重命名、归档、启动和 schema / migration 检查。
 
 ### Scene Manager
 
-未来负责：
-
-- Map Registry；
-- MapPackage 导入；
-- 多地图 / Scene 列表；
-- 排序与切换；
-- Scene reset / clone。
+未来负责 Map Registry、MapPackage 导入、多地图 / Scene 列表、排序、切换、reset / clone。
 
 ### Backup Center
 
-未来负责：
+未来负责一键 Snapshot、自动备份、备份列表、恢复、World 导入 / 导出和升级前备份。
 
-- 一键 World Snapshot；
-- 自动备份；
-- 备份列表；
-- 恢复；
-- World 导入 / 导出；
-- 升级前备份。
-
-完整状态和已完成项见 `文档/未来规划.md`。
+完整状态见 `文档/未来规划.md`。
 
 ## 发布包结构
 
-V1.4.3 发布包进一步整理为：
-
 ```text
 RPGmap-v1.4.3/
-├─ RPGmap Launcher.exe
+├─ 启动 RPGmap.bat
 ├─ 操作说明.md
 ├─ app/                  RPGmap Web App
-├─ launcher/             本机 Launcher / Admin Console
+├─ launcher/             本机 Web Launcher / GM Control Center
 ├─ server/               Multiplayer Server 内部程序
 ├─ world/                当前 World / Campaign 持久数据
 ├─ maps/                 真正 Map / Scene 资源库
+├─ tools/                cloudflared / 未来 Portable Node 等内部工具
 ├─ docs/
 └─ VERSION.json
 ```
 
-发布包根目录不再暴露多个 BAT，也不再放散落的 Server 脚本。
+发布包根目录只保留一个 BAT，不包含 Native Launcher EXE，也不暴露散落的 Server 脚本。
 
 ## app / world / maps
 
@@ -189,7 +196,7 @@ world/
 
 ### maps/
 
-`maps/` 专门留给真正的地图 / Scene 资源：
+`maps/` 专门留给真正的 Map / Scene 资源：
 
 ```text
 maps/
@@ -212,8 +219,6 @@ Session → Persistent User → Default Actor / Ownership
 ```
 
 默认流程：Player 首次 Join Code 加入 → pending → GM 在 Launcher 或游戏内 Users 面板批准 → 分配默认 Actor / Ownership → Server 创建持久 User → Player 保存 Player Key。
-
-GM 也可以预创建 Player User，并把 Player Key 私下发给对应玩家。
 
 Quick Tunnel 域名变化时，Player Key 用于在新 URL 恢复同一个持久 User。Server 只保存凭证哈希。
 
@@ -260,8 +265,6 @@ Server authoritative validation
 - Cloudflare Quick Tunnel；
 - Launcher GM Admin Session。
 
-主要共享 Actor / Token、位置、Health / Damage / Healing、Combat、Chat / Game Log、Scene / World 状态。
-
 Selection、Ruler、地图视角 / Zoom、Hover、当前窗口等个人瞬时 UI 不进入共享 World。
 
 ## 旧数据迁移
@@ -302,7 +305,7 @@ src/
 
 deployment/
 ├─ launcher/
-│  ├─ windows-launcher.c
+│  ├─ start-rpgmap.bat
 │  ├─ launcher.mjs
 │  ├─ admin-client.mjs
 │  ├─ index.html
@@ -325,7 +328,7 @@ tests/
 - `README.md`：项目整体介绍、架构和能力边界。
 - `CHANGELOG.md`：版本级更新摘要。
 - `文档/工作日志.md`：详细开发记录。
-- `文档/未来规划.md`：带“已实现 / 部分实现 / 计划中”状态的项目路线。
+- `文档/未来规划.md`：带状态的项目路线。
 - `文档/联机使用说明.md`：Multiplayer / Identity / Ownership。
 - `deployment/local-server/操作说明.md`：发布 ZIP 的实际操作说明。
 
