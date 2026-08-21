@@ -1,4 +1,4 @@
-name: Build RPGmap 1.4.2 Package
+name: Build RPGmap 1.4.3 Package
 
 on:
   workflow_dispatch:
@@ -9,6 +9,7 @@ on:
       - 'src/**'
       - 'tests/**'
       - 'deployment/local-server/**'
+      - 'deployment/launcher/**'
       - '文档/**'
       - 'README.md'
       - 'CHANGELOG.md'
@@ -18,11 +19,12 @@ on:
       - '.github/workflows/multiplayer-test-package.yml'
   push:
     branches:
-      - feat/v1.4.2-world-maps-layout
+      - feat/v1.4.3-launcher-admin
     paths:
       - 'src/**'
       - 'tests/**'
       - 'deployment/local-server/**'
+      - 'deployment/launcher/**'
       - '文档/**'
       - 'README.md'
       - 'CHANGELOG.md'
@@ -61,7 +63,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r -d '' file; do
             node --check "$file"
-          done < <(find src deployment/local-server -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
+          done < <(find src deployment/local-server deployment/launcher -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
 
       - name: Build web client
         run: npm run build
@@ -81,25 +83,27 @@ jobs:
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE/artifact/RPGmap-v${PACKAGE_VERSION}"
           rm -rf "$GITHUB_WORKSPACE/artifact"
-          mkdir -p "$ROOT/app" "$ROOT/world/uploads" "$ROOT/world/backups" "$ROOT/maps" "$ROOT/docs"
+          mkdir -p "$ROOT/app" "$ROOT/launcher" "$ROOT/server" "$ROOT/world/uploads" "$ROOT/world/backups" "$ROOT/maps" "$ROOT/docs"
 
           cp -R dist/. "$ROOT/app/"
-          cp deployment/local-server/server.mjs "$ROOT/server.mjs"
-          cp deployment/local-server/access-control.mjs "$ROOT/access-control.mjs"
-          cp deployment/local-server/portable-storage.mjs "$ROOT/portable-storage.mjs"
-          cp deployment/local-server/internet-launcher.mjs "$ROOT/internet-launcher.mjs"
-          cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
-          cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
-          cp deployment/local-server/start-rpgmap-internet.bat "$ROOT/start-rpgmap-internet.bat"
-          cp deployment/local-server/setup-cloudflared.bat "$ROOT/setup-cloudflared.bat"
-          cp deployment/local-server/run-rpgmap-public-server.bat "$ROOT/run-rpgmap-public-server.bat"
+
+          cp deployment/launcher/launcher.mjs "$ROOT/launcher/launcher.mjs"
+          cp deployment/launcher/admin-client.mjs "$ROOT/launcher/admin-client.mjs"
+          cp deployment/launcher/index.html "$ROOT/launcher/index.html"
+          cp deployment/launcher/launcher.js "$ROOT/launcher/launcher.js"
+          cp deployment/launcher/launcher.css "$ROOT/launcher/launcher.css"
+          cp deployment/launcher/start-rpgmap.bat "$ROOT/启动 RPGmap.bat"
+
+          cp deployment/local-server/server.mjs "$ROOT/server/server.mjs"
+          cp deployment/local-server/access-control.mjs "$ROOT/server/access-control.mjs"
+          cp deployment/local-server/portable-storage.mjs "$ROOT/server/portable-storage.mjs"
+
           cp 'deployment/local-server/操作说明.md' "$ROOT/操作说明.md"
           cp deployment/local-server/INTERNET-TEST.md "$ROOT/docs/INTERNET-MULTIPLAYER.md"
           cp deployment/local-server/world/README.txt "$ROOT/world/README.txt"
           cp deployment/local-server/maps/README.txt "$ROOT/maps/README.txt"
           cp '文档/联机使用说明.md' "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           cp CHANGELOG.md "$ROOT/docs/CHANGELOG.md"
-          chmod +x "$ROOT/start-rpgmap.sh"
 
           cat > "$ROOT/VERSION.json" <<EOF
           {
@@ -108,17 +112,22 @@ jobs:
             "commit": "${SOURCE_COMMIT}",
             "serverMode": "multiplayer",
             "storageMode": "portable-world-maps",
-            "defaultPort": 30000
+            "launcherMode": "unified-admin-console",
+            "defaultPort": 30000,
+            "launcherPort": 29999
           }
           EOF
 
           test -f "$ROOT/app/index.html"
-          test -f "$ROOT/server.mjs"
-          test -f "$ROOT/access-control.mjs"
-          test -f "$ROOT/portable-storage.mjs"
-          test -f "$ROOT/internet-launcher.mjs"
-          test -f "$ROOT/start-rpgmap-internet.bat"
-          test -f "$ROOT/setup-cloudflared.bat"
+          test -f "$ROOT/launcher/launcher.mjs"
+          test -f "$ROOT/launcher/admin-client.mjs"
+          test -f "$ROOT/launcher/index.html"
+          test -f "$ROOT/launcher/launcher.js"
+          test -f "$ROOT/launcher/launcher.css"
+          test -f "$ROOT/server/server.mjs"
+          test -f "$ROOT/server/access-control.mjs"
+          test -f "$ROOT/server/portable-storage.mjs"
+          test -f "$ROOT/启动 RPGmap.bat"
           test -f "$ROOT/操作说明.md"
           test -f "$ROOT/world/README.txt"
           test -d "$ROOT/world/uploads"
@@ -129,6 +138,12 @@ jobs:
           test ! -d "$ROOT/data"
           test ! -d "$ROOT/public"
           test ! -f "$ROOT/README.md"
+          test ! -f "$ROOT/server.mjs"
+          test ! -f "$ROOT/start-rpgmap.bat"
+          test ! -f "$ROOT/start-rpgmap-internet.bat"
+          test ! -f "$ROOT/setup-cloudflared.bat"
+          test ! -f "$ROOT/run-rpgmap-public-server.bat"
+          test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
 
           cd "$GITHUB_WORKSPACE/artifact"
           ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
@@ -141,12 +156,12 @@ jobs:
           root = artifact / f'RPGmap-v{version}'
           archive = artifact / f'RPGmap-v{version}.zip'
           with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-              for path in sorted(root.rglob('*')):
-                  arcname = path.relative_to(artifact).as_posix()
-                  if path.is_dir():
+              for item in sorted(root.rglob('*')):
+                  arcname = item.relative_to(artifact).as_posix()
+                  if item.is_dir():
                       zf.writestr(arcname.rstrip('/') + '/', b'')
                   else:
-                      zf.write(path, arcname)
+                      zf.write(item, arcname)
           PY
           sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
 
@@ -164,16 +179,20 @@ jobs:
               zf.extractall(verify)
           PY
           VROOT="$VERIFY/RPGmap-v${PACKAGE_VERSION}"
+          test -f "$VROOT/启动 RPGmap.bat"
           test -f "$VROOT/操作说明.md"
+          test -f "$VROOT/launcher/launcher.mjs"
+          test -f "$VROOT/server/server.mjs"
           test -f "$VROOT/app/index.html"
           test -f "$VROOT/world/README.txt"
           test -f "$VROOT/maps/README.txt"
-          test ! -e "$VROOT/#U64cd#U4f5c#U8bf4#U660e.md"
           test ! -d "$VROOT/map"
           test ! -d "$VROOT/data"
           test ! -d "$VROOT/public"
           test ! -f "$VROOT/README.md"
+          test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
           test "$(node -p "require('$VROOT/VERSION.json').commit")" = "$SOURCE_COMMIT"
+          test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "unified-admin-console"
           rm -rf "$VERIFY"
 
       - name: Upload RPGmap package
