@@ -32,6 +32,7 @@ import yellowRiverUrl from './assets/generated/yellow-river.webp';
 import { createRpgMapApp } from './engine/app.js';
 import { createFvttWaypointMovementTool } from './tools/fvtt-waypoint-movement.js';
 import { createFvttTokenGhostTool } from './tools/fvtt-token-ghost.js';
+import { createFvttSegmentDistanceTool } from './tools/fvtt-segment-distance.js';
 import { createLanzhouMapPackage } from './maps/lanzhou.js';
 
 const mapPackage = createLanzhouMapPackage({
@@ -68,5 +69,9 @@ const mapPackage = createLanzhouMapPackage({
 createRpgMapApp({
   container: document.getElementById('app'),
   mapPackage,
-  tools: [createFvttWaypointMovementTool(), createFvttTokenGhostTool()]
+  tools: [
+    createFvttWaypointMovementTool(),
+    createFvttTokenGhostTool(),
+    createFvttSegmentDistanceTool({ defaultStep: 5 })
+  ]
 });
