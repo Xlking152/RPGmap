@@ -70,6 +70,7 @@ jobs:
 
           cp -R dist/. "$ROOT/public/"
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
+          cp deployment/local-server/internet-launcher.mjs "$ROOT/internet-launcher.mjs"
           cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
           cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
           cp deployment/local-server/start-rpgmap-internet.bat "$ROOT/start-rpgmap-internet.bat"
@@ -93,6 +94,7 @@ jobs:
 
           test -f "$ROOT/public/index.html"
           test -f "$ROOT/start-rpgmap-internet.bat"
+          test -f "$ROOT/internet-launcher.mjs"
           test -f "$ROOT/setup-cloudflared.bat"
 
           cd "$GITHUB_WORKSPACE/artifact"
