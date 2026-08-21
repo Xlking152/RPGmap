@@ -5,9 +5,11 @@
 ## Windows
 
 1. 安装 Node.js 20.19+ 或 22.12+。
-2. 双击 `一键启动RPGmap.bat`。
+2. 双击 `start-rpgmap.bat`。
 3. 浏览器会打开 `http://127.0.0.1:30000`。
 4. 同一局域网设备可以使用控制台中显示的 `Network` 地址访问。
+
+> Windows 启动脚本使用纯 ASCII 文件名和纯英文控制台提示，避免 ZIP 解压和系统代码页造成 BAT 文件名或内容乱码。
 
 ## Linux / macOS
 
@@ -22,8 +24,9 @@ Release ZIP 只包含运行所需内容：
 
 - `public/`：GitHub Actions 预编译好的 Web Client。
 - `server.mjs`：零第三方运行依赖的 Node HTTP Server。
-- `一键启动RPGmap.bat` / `start-rpgmap.sh`：启动入口。
+- `start-rpgmap.bat` / `start-rpgmap.sh`：启动入口。
 - `data/`：未来 World Store、上传和备份的数据目录。
+- `docs/FUTURE-ROADMAP.md`：服务器化后续规划。
 - `VERSION.json`：构建版本与 Commit 信息。
 
 不会包含 `.git`、`node_modules`、npm cache、tests、源码、构建缓存或日志。
