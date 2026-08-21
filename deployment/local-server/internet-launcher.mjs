@@ -19,6 +19,28 @@ export function createInternetCredentials() {
   };
 }
 
+export function buildConnectionInfo({ publicUrl, joinCode, gmSecret, version = '1.4.0', port = 30000 }) {
+  return [
+    '============================================================',
+    ` RPGmap Multiplayer Connection Info  |  ${version}`,
+    '============================================================',
+    ` Public URL : ${publicUrl}`,
+    ` Join Code  : ${joinCode}`,
+    ` GM Secret  : ${gmSecret}`,
+    ` Local URL  : http://127.0.0.1:${port}`,
+    '============================================================',
+    '',
+    ' PLAYER SHARE ONLY:',
+    `   URL       : ${publicUrl}`,
+    `   Join Code : ${joinCode}`,
+    '',
+    ' GM Secret is for the GM only. Do not send it to Players.',
+    ' The public URL is temporary and expires when this launcher stops.',
+    '',
+    ' You may close this information window manually at any time.',
+  ];
+}
+
 function networkUrls(port) {
   const urls = [];
   for (const entries of Object.values(os.networkInterfaces())) {
@@ -33,7 +55,7 @@ async function readVersion() {
   try {
     return JSON.parse(await readFile(path.join(ROOT, 'VERSION.json'), 'utf8'));
   } catch {
-    return { app: 'RPGmap', version: '1.3.0-multiplayer-test', commit: 'unknown' };
+    return { app: 'RPGmap', version: '1.4.0', commit: 'unknown' };
   }
 }
 
@@ -51,6 +73,36 @@ function openBrowser(url) {
     });
     child.unref();
   } catch {}
+}
+
+function escapeCmdEcho(value) {
+  return String(value).replace(/[&|<>^]/g, match => `^${match}`);
+}
+
+function openConnectionInfoWindow(lines) {
+  if (process.platform !== 'win32') return null;
+  try {
+    const echoCommands = lines.map(line => line ? `echo ${escapeCmdEcho(line)}` : 'echo.');
+    const command = [
+      'chcp 65001>nul',
+      'title RPGmap Multiplayer Info',
+      'color 0A',
+      'mode con cols=100 lines=24',
+      'cls',
+      ...echoCommands,
+      'echo.',
+      'echo Press any key to close this information window...',
+      'pause>nul',
+    ].join(' & ');
+    return spawn('cmd.exe', ['/D', '/Q', '/S', '/C', command], {
+      cwd: ROOT,
+      detached: false,
+      stdio: 'ignore',
+      windowsHide: false,
+    });
+  } catch {
+    return null;
+  }
 }
 
 function stopChild(child) {
@@ -125,7 +177,7 @@ function printServerBanner({ port, publicUrl, credentials, health, version }) {
   console.log(` Public URL: ${publicUrl}`);
   console.log(` World     : ${multiplayer.worldId || 'default'} · revision ${multiplayer.revision ?? 0}`);
   console.log(` Data      : ${dataDir}`);
-  console.log(` Players   : ${multiplayer.playerWriteEnabled === false ? 'read-only' : 'write-enabled (test mode)'}`);
+  console.log(` Players   : ${multiplayer.playerWriteEnabled === false ? 'read-only' : 'write-enabled'}`);
   console.log(' Public    : ON');
   console.log(` JoinCode  : ${credentials.joinCode}`);
   console.log(` GMSecret  : ${credentials.gmSecret}`);
@@ -138,6 +190,7 @@ function printServerBanner({ port, publicUrl, credentials, health, version }) {
   console.log(`   JoinCode : ${credentials.joinCode}`);
   console.log('');
   console.log(' GM Secret is for the GM only. Do not send it to Players.');
+  console.log(' A separate connection-info window has been opened for quick reference.');
   console.log(' Press Ctrl+C to stop the server and tunnel.');
   console.log('');
 }
@@ -171,10 +224,12 @@ async function main() {
   });
 
   let server = null;
+  let infoWindow = null;
   let shuttingDown = false;
   const cleanup = () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    stopChild(infoWindow);
     stopChild(server);
     stopChild(tunnel);
   };
@@ -208,6 +263,15 @@ async function main() {
     server.once('error', error => console.error('[RPGmap] Server process error:', error));
     const health = await waitForServer(port);
     printServerBanner({ port, publicUrl, credentials, health, version });
+
+    const connectionInfo = buildConnectionInfo({
+      publicUrl,
+      joinCode: credentials.joinCode,
+      gmSecret: credentials.gmSecret,
+      version: version?.version || version?.packageVersion || '1.4.0',
+      port,
+    });
+    infoWindow = openConnectionInfoWindow(connectionInfo);
     openBrowser(publicUrl);
 
     const result = await Promise.race([

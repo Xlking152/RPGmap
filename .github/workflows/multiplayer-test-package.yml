@@ -1,4 +1,4 @@
-name: Build Multiplayer Test Package
+name: Build RPGmap 1.4 Package
 
 on:
   workflow_dispatch:
@@ -9,6 +9,9 @@ on:
       - 'src/**'
       - 'tests/**'
       - 'deployment/local-server/**'
+      - '文档/**'
+      - 'README.md'
+      - 'CHANGELOG.md'
       - 'package.json'
       - 'package-lock.json'
       - 'vite.config.js'
@@ -20,6 +23,9 @@ on:
       - 'src/**'
       - 'tests/**'
       - 'deployment/local-server/**'
+      - '文档/**'
+      - 'README.md'
+      - 'CHANGELOG.md'
       - 'package.json'
       - 'package-lock.json'
       - 'vite.config.js'
@@ -60,11 +66,18 @@ jobs:
       - name: Build web client
         run: npm run build
 
-      - name: Assemble Multiplayer test package
+      - name: Resolve package version
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="$GITHUB_WORKSPACE/artifact/RPGmap-Multiplayer-Test"
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          echo "PACKAGE_VERSION=${PACKAGE_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Assemble RPGmap package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE/artifact/RPGmap-v${PACKAGE_VERSION}"
           rm -rf "$GITHUB_WORKSPACE/artifact"
           mkdir -p "$ROOT/public" "$ROOT/data/worlds" "$ROOT/data/uploads" "$ROOT/data/backups" "$ROOT/docs"
 
@@ -77,36 +90,40 @@ jobs:
           cp deployment/local-server/setup-cloudflared.bat "$ROOT/setup-cloudflared.bat"
           cp deployment/local-server/run-rpgmap-public-server.bat "$ROOT/run-rpgmap-public-server.bat"
           cp deployment/local-server/README.md "$ROOT/README.md"
-          cp deployment/local-server/INTERNET-TEST.md "$ROOT/INTERNET-TEST.md"
+          cp deployment/local-server/INTERNET-TEST.md "$ROOT/INTERNET-MULTIPLAYER.md"
           cp deployment/local-server/data/README.txt "$ROOT/data/README.txt"
-          cp '文档/联机测试指南.md' "$ROOT/docs/MULTIPLAYER-TEST-GUIDE.md"
+          cp '文档/联机使用说明.md' "$ROOT/docs/MULTIPLAYER-GUIDE.md"
+          cp CHANGELOG.md "$ROOT/docs/CHANGELOG.md"
           chmod +x "$ROOT/start-rpgmap.sh"
 
           cat > "$ROOT/VERSION.json" <<EOF
           {
             "app": "RPGmap",
-            "version": "1.3.0-multiplayer-test",
+            "version": "${PACKAGE_VERSION}",
             "commit": "${GITHUB_SHA}",
-            "serverMode": "multiplayer-test",
+            "serverMode": "multiplayer",
             "defaultPort": 30000
           }
           EOF
 
           test -f "$ROOT/public/index.html"
-          test -f "$ROOT/start-rpgmap-internet.bat"
+          test -f "$ROOT/server.mjs"
           test -f "$ROOT/internet-launcher.mjs"
+          test -f "$ROOT/start-rpgmap-internet.bat"
           test -f "$ROOT/setup-cloudflared.bat"
+          test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
 
           cd "$GITHUB_WORKSPACE/artifact"
-          zip -r -9 -q RPGmap-Multiplayer-Test.zip RPGmap-Multiplayer-Test
-          sha256sum RPGmap-Multiplayer-Test.zip > RPGmap-Multiplayer-Test.zip.sha256
+          ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
+          zip -r -9 -q "$ARCHIVE" "RPGmap-v${PACKAGE_VERSION}"
+          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
 
-      - name: Upload Multiplayer test package
+      - name: Upload RPGmap package
         uses: actions/upload-artifact@v4
         with:
-          name: RPGmap-Multiplayer-Test
+          name: RPGmap-v${{ env.PACKAGE_VERSION }}
           path: |
-            artifact/RPGmap-Multiplayer-Test.zip
-            artifact/RPGmap-Multiplayer-Test.zip.sha256
+            artifact/RPGmap-v${{ env.PACKAGE_VERSION }}.zip
+            artifact/RPGmap-v${{ env.PACKAGE_VERSION }}.zip.sha256
           if-no-files-found: error
           retention-days: 14
