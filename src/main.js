@@ -31,11 +31,19 @@ import yellowRiverPontoonUrl from './assets/generated/yellow-river-pontoon.webp'
 import yellowRiverUrl from './assets/generated/yellow-river.webp';
 import { createRpgMapApp } from './engine/app.js';
 import { createMovementSystem } from './movement/index.js';
+import { createMeasurementSystem } from './measurement/index.js';
 import { createEntitySystem } from './entities/index.js';
 import { createAppShellUi } from './ui/index.js';
+import { createSelectionSystem } from './selection/index.js';
+import { createHealthSystem } from './health/index.js';
+import { createChatSystem } from './chat/index.js';
+import { createDamageSystem } from './damage/index.js';
+import { createHealingSystem } from './healing/index.js';
+import { createCombatSystem } from './combat/index.js';
 import { createLanzhouMapPackage } from './maps/lanzhou.js';
+import { cleanMapPackagePresentation } from './maps/presentation-cleanup.js';
 
-const mapPackage = createLanzhouMapPackage({
+const mapPackage = cleanMapPackagePresentation(createLanzhouMapPackage({
   chenghuangTempleUrl, cityGatehouseUrl, cityWallTowerUrl, jinchengGatehouseUrl, loessTerrainUrl,
   marketOfficeHallUrl, marketStorehouseUrl, yamenHallUrl, yellowRiverPontoonUrl, yellowRiverUrl,
   buildingSprites: {
@@ -45,7 +53,9 @@ const mapPackage = createLanzhouMapPackage({
     residenceCourtyard: [residenceCourtyard01Url, residenceCourtyard02Url],
   },
   rubbleAtlas: { url: rubbleAtlasUrl, width: 1536, height: 1024, columns: 3, rows: 2 },
-});
+}));
+
+const selectionSystem = createSelectionSystem();
 
 createRpgMapApp({
   container: document.getElementById('app'),
@@ -53,6 +63,13 @@ createRpgMapApp({
   tools: [
     createMovementSystem({ defaultStep: 5, autoStep: true }),
     createEntitySystem({ dropLegacyMarkers: true }),
-    createAppShellUi()
+    createAppShellUi(),
+    createMeasurementSystem(),
+    selectionSystem,
+    createHealthSystem(),
+    createChatSystem({ selection: selectionSystem }),
+    createDamageSystem({ selection: selectionSystem }),
+    createHealingSystem({ selection: selectionSystem }),
+    createCombatSystem({ selection: selectionSystem })
   ]
 });

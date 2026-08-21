@@ -1,7 +1,32 @@
+import { createHealthRuntime, defaultHealthMode, normalizeHealthRuntime } from '../health/model.js';
 const CORE_RESOURCE_DEFS = Object.freeze([
   { id: 'hp', name: '生命', kind: 'hp' },
   { id: 'stamina', name: '精力', kind: 'stamina' },
   { id: 'willpower', name: '意志', kind: 'willpower' },
+]);
+
+const BAD_STATUS_DEFS = Object.freeze([
+  { id: 'bad-status-32', name: '冻结点数', group: 0 },
+  { id: 'bad-status-33', name: '失速点数', group: 0 },
+  { id: 'bad-status-34', name: '燃烧点数', group: 0 },
+  { id: 'bad-status-35', name: '纠缠点数', group: 0 },
+  { id: 'bad-status-36', name: '恶心点数', group: 1 },
+  { id: 'bad-status-37', name: '晶化点数', group: 1 },
+  { id: 'bad-status-38', name: '麻痹点数', group: 1 },
+  { id: 'bad-status-39', name: '剧痛点数', group: 1 },
+  { id: 'bad-status-40', name: '眩晕点数', group: 1 },
+  { id: 'bad-status-41', name: '肢体妨碍', group: 2 },
+  { id: 'bad-status-42', name: '流血点数', group: 2 },
+  { id: 'bad-status-43', name: '疲乏点数', group: 2 },
+  { id: 'bad-status-44', name: '耳鸣点数', group: 3 },
+  { id: 'bad-status-45', name: '目眩点数', group: 3 },
+  { id: 'bad-status-46', name: '沮丧点数', group: 4 },
+  { id: 'bad-status-47', name: '亢奋点数', group: 4 },
+  { id: 'bad-status-48', name: '恐惧点数', group: 4 },
+  { id: 'bad-status-49', name: '仇恨点数', group: 4 },
+  { id: 'bad-status-50', name: '欲眠点数', group: 4 },
+  { id: 'bad-status-51', name: '精神束缚', group: 4 },
+  { id: 'bad-status-52', name: '魅惑点数', group: 5 },
 ]);
 
 function uid(prefix) {
@@ -20,6 +45,41 @@ function text(value, fallback = '') {
 
 function clone(value) {
   return structuredClone(value);
+}
+
+function emptyBadStatuses() {
+  return BAD_STATUS_DEFS.map(def => ({ id: def.id, name: def.name, light: 0, severe: 0, destruction: 0 }));
+}
+
+function migrateBadStatuses(form) {
+  if (Array.isArray(form?.badStatuses) && form.badStatuses.length) return clone(form.badStatuses);
+  const legacySaves = Array.isArray(form?.checks?.saves) ? form.checks.saves : [];
+  const legacyThresholds = legacySaves.filter(item =>
+    Number.isFinite(Number(item?.light)) && Number.isFinite(Number(item?.severe)) && Number.isFinite(Number(item?.devastating))
+  );
+  if (!legacyThresholds.length) return emptyBadStatuses();
+  return BAD_STATUS_DEFS.map(def => {
+    const threshold = legacyThresholds[def.group] || {};
+    return {
+      id: def.id,
+      name: def.name,
+      light: Math.max(0, finite(threshold.light)),
+      severe: Math.max(0, finite(threshold.severe)),
+      destruction: Math.max(0, finite(threshold.devastating)),
+    };
+  });
+}
+
+function normalizeForm(form) {
+  const next = clone(form || {});
+  const legacySaves = Array.isArray(next.checks?.saves) ? next.checks.saves : [];
+  const savesWereThresholds = legacySaves.some(item => item && 'light' in item && 'severe' in item && 'devastating' in item);
+  next.checks = {
+    skills: Array.isArray(next.checks?.skills) ? clone(next.checks.skills) : [],
+    saves: savesWereThresholds ? [] : clone(legacySaves),
+  };
+  next.badStatuses = migrateBadStatuses(form);
+  return next;
 }
 
 export function createEmptyEntityState() {
@@ -48,6 +108,7 @@ export function createFormFromImport(imported, { id = uid('form'), name = import
       skills: clone(imported.checks?.skills || []),
       saves: clone(imported.checks?.saves || []),
     },
+    badStatuses: Array.isArray(imported.badStatuses) && imported.badStatuses.length ? clone(imported.badStatuses) : emptyBadStatuses(),
     combat: clone(imported.combat || { attacks: [], defenses: [] }),
     tokenAppearance: {
       color: imported.tokenAppearance?.color || '#3d9b63',
@@ -64,6 +125,7 @@ export function createActorFromImport(imported, { id = uid('actor'), formId, for
     const maximum = form.resourceBases[def.id]?.baseMax || 0;
     resources[def.id] = { current: maximum, maxOverride: null, policy: 'preserve' };
   }
+  const badStatuses = Object.fromEntries((form.badStatuses || []).map(status => [status.id, 0]));
   return {
     id,
     name: text(imported.identity?.name, '未命名角色'),
@@ -73,6 +135,12 @@ export function createActorFromImport(imported, { id = uid('actor'), formId, for
       resources,
       customResources: [],
       attributeAdjustments: {},
+      badStatuses,
+      health: createHealthRuntime({
+        mode: defaultHealthMode(imported.source?.type),
+        max: form.resourceBases.hp?.baseMax || 0,
+        simpleCurrent: resources.hp?.current ?? form.resourceBases.hp?.baseMax ?? 0,
+      }),
     },
     effects: [],
     notes: '',
@@ -89,6 +157,7 @@ export function createLegacyActor(character, { actorId = uid('actor') } = {}) {
     resources: { hp: 0, stamina: 0, willpower: 0 },
     attributes: [],
     checks: { skills: [], saves: [] },
+    badStatuses: emptyBadStatuses(),
     combat: { attacks: [], defenses: [] },
     tokenAppearance: { color: character.color || '#3d9b63', scale: 1 },
     source: { type: 'legacy-character', characterId: character.id },
@@ -111,16 +180,35 @@ export function createTokenForActor(actorId, characterId, overrides = {}) {
 
 export function normalizeEntityState(raw) {
   if (!raw || typeof raw !== 'object') return createEmptyEntityState();
-  const actors = Array.isArray(raw.actors) ? raw.actors.filter(Boolean).map(actor => ({
-    ...clone(actor),
-    forms: Array.isArray(actor.forms) ? clone(actor.forms) : [],
-    runtime: {
-      resources: clone(actor.runtime?.resources || {}),
-      customResources: Array.isArray(actor.runtime?.customResources) ? clone(actor.runtime.customResources) : [],
-      attributeAdjustments: clone(actor.runtime?.attributeAdjustments || {}),
-    },
-    effects: Array.isArray(actor.effects) ? clone(actor.effects) : [],
-  })) : [];
+  const actors = Array.isArray(raw.actors) ? raw.actors.filter(Boolean).map(actor => {
+    const forms = Array.isArray(actor.forms) ? actor.forms.map(normalizeForm) : [];
+    const badStatuses = clone(actor.runtime?.badStatuses || {});
+    for (const form of forms) {
+      for (const status of form.badStatuses || []) {
+        if (badStatuses[status.id] === undefined) badStatuses[status.id] = 0;
+      }
+    }
+    const resources = clone(actor.runtime?.resources || {});
+    const activeForm = forms.find(form => form.id === actor.currentFormId) || forms[0] || null;
+    const hpMax = Math.max(0, finite(activeForm?.resourceBases?.hp?.baseMax));
+    const hpCurrent = finite(resources?.hp?.current, hpMax);
+    return {
+      ...clone(actor),
+      forms,
+      runtime: {
+        resources,
+        customResources: Array.isArray(actor.runtime?.customResources) ? clone(actor.runtime.customResources) : [],
+        attributeAdjustments: clone(actor.runtime?.attributeAdjustments || {}),
+        badStatuses,
+        health: normalizeHealthRuntime(actor.runtime?.health, {
+          defaultMode: defaultHealthMode(activeForm?.source?.type),
+          max: hpMax,
+          simpleCurrent: hpCurrent,
+        }),
+      },
+      effects: Array.isArray(actor.effects) ? clone(actor.effects) : [],
+    };
+  }) : [];
   const actorIds = new Set(actors.map(actor => String(actor.id)));
   const tokens = Array.isArray(raw.tokens) ? raw.tokens.filter(token => token && actorIds.has(String(token.actorId))).map(clone) : [];
   return { schemaVersion: 1, actors, tokens };
@@ -164,7 +252,11 @@ export function addFormToActor(actor, imported, options = {}) {
       policy: 'preserve',
     };
   }
+  actor.runtime.badStatuses ||= {};
+  for (const status of form.badStatuses || []) {
+    if (actor.runtime.badStatuses[status.id] === undefined) actor.runtime.badStatuses[status.id] = 0;
+  }
   return form;
 }
 
-export { CORE_RESOURCE_DEFS };
+export { CORE_RESOURCE_DEFS, BAD_STATUS_DEFS };

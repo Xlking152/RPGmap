@@ -1,3 +1,4 @@
+import { defaultHealthMode, normalizeHealthRuntime, resolveHealth } from '../health/model.js';
 import { currentForm } from './model.js';
 
 function finite(value, fallback = 0) {
@@ -54,17 +55,39 @@ export function resolveResource(actor, resourceId) {
   return { id: resourceId, name: base.name, kind: base.kind, baseMax: finite(base.baseMax), max, current, policy: runtime.policy || 'preserve', custom: false };
 }
 
+export function resolveBadStatus(actor, statusId) {
+  const form = currentForm(actor);
+  const base = form?.badStatuses?.find(item => item.id === statusId);
+  if (!base) return null;
+  return {
+    ...base,
+    light: Math.max(0, finite(base.light)),
+    severe: Math.max(0, finite(base.severe)),
+    destruction: Math.max(0, finite(base.destruction)),
+    current: Math.max(0, finite(actor.runtime?.badStatuses?.[statusId])),
+  };
+}
+
 export function resolveActor(actor) {
   const form = currentForm(actor);
   if (!form) return null;
+  const resources = [...Object.keys(form.resourceBases || {}), ...(actor.runtime?.customResources || []).map(item => item.id)]
+    .map(id => resolveResource(actor, id)).filter(Boolean);
+  const hp = resources.find(resource => resource.id === 'hp') || { max: 0, current: 0 };
+  const healthRuntime = normalizeHealthRuntime(actor.runtime?.health, {
+    defaultMode: defaultHealthMode(form.source?.type),
+    max: hp.max,
+    simpleCurrent: hp.current,
+  });
   return {
     id: actor.id,
     name: actor.name,
     form,
-    resources: [...Object.keys(form.resourceBases || {}), ...(actor.runtime?.customResources || []).map(item => item.id)]
-      .map(id => resolveResource(actor, id)).filter(Boolean),
+    resources,
+    health: resolveHealth(healthRuntime, { max: hp.max, simpleCurrent: hp.current }),
     attributes: (form.attributes || []).map(item => resolveAttribute(actor, item.id)).filter(Boolean),
     checks: form.checks || { skills: [], saves: [] },
+    badStatuses: (form.badStatuses || []).map(item => resolveBadStatus(actor, item.id)).filter(Boolean),
     combat: form.combat || { attacks: [], defenses: [] },
   };
 }
@@ -99,6 +122,13 @@ export function setAttributeAdjustment(actor, attributeId, value) {
   if (!number) delete actor.runtime.attributeAdjustments[attributeId];
   else actor.runtime.attributeAdjustments[attributeId] = number;
   return number;
+}
+
+export function setBadStatusCurrent(actor, statusId, value) {
+  actor.runtime.badStatuses ||= {};
+  const current = Math.max(0, finite(value));
+  actor.runtime.badStatuses[statusId] = current;
+  return current;
 }
 
 export function addCustomResource(actor, { id, name, current = 0, max = 0 } = {}) {

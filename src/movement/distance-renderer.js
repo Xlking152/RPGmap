@@ -1,5 +1,6 @@
 import L from 'leaflet';
-import { latLngToWorld, worldToLatLng } from '../engine/geometry.js';
+import { latLngToWorld } from '../engine/geometry.js';
+import { ensurePathLabelPane, installPathLabelStyles, addPathDistanceLabel } from '../path/labels.js';
 import {
   MOVEMENT_DISTANCE_STEPS,
   normalizeMovementDistanceStep,
@@ -49,17 +50,13 @@ function createControl(mapElement, step) {
   L.DomEvent.disableScrollPropagation(control);
   return { control, select };
 }
-function injectStyles(documentNode) {
-  if (documentNode.getElementById('fvtt-segment-distance-style')) return;
+function injectControlStyles(documentNode) {
+  if (documentNode.getElementById('fvtt-segment-distance-control-style')) return;
   const style = documentNode.createElement('style');
-  style.id = 'fvtt-segment-distance-style';
+  style.id = 'fvtt-segment-distance-control-style';
   style.textContent = `
     .fvtt-distance-step-control { position:absolute; z-index:1200; top:12px; right:12px; display:inline-flex; align-items:center; gap:7px; padding:6px 8px; border:1px solid rgba(57,119,131,.42); border-radius:7px; color:#33494d; background:rgba(248,250,247,.94); box-shadow:0 2px 8px rgba(31,39,38,.13); font-size:12px; font-weight:700; }
     .fvtt-distance-step-control select { min-height:27px; padding:2px 22px 2px 6px; border:1px solid #adb3af; border-radius:5px; color:#252a2b; background:#fff; font:inherit; }
-    .leaflet-tooltip.fvtt-segment-distance-label,.leaflet-tooltip.fvtt-distance-total-label { border:0; box-shadow:0 2px 7px rgba(0,0,0,.22); font-weight:800; white-space:nowrap; pointer-events:none; }
-    .leaflet-tooltip.fvtt-segment-distance-label { padding:4px 6px; color:#fff; background:rgba(31,82,90,.96); font-size:11px; }
-    .leaflet-tooltip.fvtt-distance-total-label { padding:5px 8px; color:#fff; background:rgba(150,63,47,.97); font-size:12px; }
-    .leaflet-tooltip.fvtt-segment-distance-label::before,.leaflet-tooltip.fvtt-distance-total-label::before { display:none; }
   `;
   documentNode.head.append(style);
 }
@@ -69,7 +66,9 @@ export function createMovementDistanceRenderer({ defaultStep = 5, settings = nul
     register(api) {
       const mapElement = api.map.getContainer();
       const documentNode = mapElement.ownerDocument || document;
-      injectStyles(documentNode);
+      injectControlStyles(documentNode);
+      ensurePathLabelPane(api.map);
+      installPathLabelStyles(documentNode);
       const labelLayer = L.layerGroup([]).addTo(api.map);
       const storageKey = (api.mapPackage.id || 'rpg-map') + ':' + STORAGE_SUFFIX;
       let step = settings ? normalizeMovementDistanceStep(settings.step, defaultStep) : normalizeMovementDistanceStep(defaultStep);
@@ -109,16 +108,21 @@ export function createMovementDistanceRenderer({ defaultStep = 5, settings = nul
         const summary = summarizeMovementSegments(segments, step);
         summary.segments.forEach((segment, index) => {
           if (!segment.midpoint) return;
-          L.tooltip({ permanent:true, direction:'top', offset:[0,-10], className:'fvtt-segment-distance-label', pane:'tooltipPane', interactive:false })
-            .setLatLng(worldToLatLng(segment.midpoint, api.mapPackage.height))
-            .setContent((index + 1) + ' · ' + segment.displayCost + ' m')
-            .addTo(labelLayer);
+          addPathDistanceLabel(
+            labelLayer,
+            api.mapPackage,
+            segment.midpoint,
+            (index + 1) + ' · ' + segment.displayCost + ' m',
+          );
         });
         const endpoint = routePoints.at(-1);
-        L.tooltip({ permanent:true, direction:'top', offset:[0,-28], className:'fvtt-distance-total-label', pane:'tooltipPane', interactive:false })
-          .setLatLng(worldToLatLng(endpoint, api.mapPackage.height))
-          .setContent('总 ' + summary.displayCost + ' m')
-          .addTo(labelLayer);
+        addPathDistanceLabel(
+          labelLayer,
+          api.mapPackage,
+          endpoint,
+          '总 ' + summary.displayCost + ' m',
+          { total: true },
+        );
         rendering = false;
       }
       const relevantLayer = layer => isMovementRoute(layer) || waypointNumber(layer) !== null;

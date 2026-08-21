@@ -76,14 +76,37 @@ export function parseCharacterSheets({ overview, detailed, fileName = '', avatar
   }
 
   const saves = [];
-  for (let row = 32; row <= 53; row += 1) {
-    const name = clean(value(detailed, `AA${row}`));
-    if (!name.includes('+')) continue;
-    const light = Number(value(detailed, `AB${row}`));
-    const severe = Number(value(detailed, `AC${row}`));
-    const devastating = Number(value(detailed, `AD${row}`));
-    if (![light, severe, devastating].every(Number.isFinite)) continue;
-    saves.push({ id: `save-${row}`, name, light, severe, devastating, checkValue: light, sourceRow: row });
+  for (let row = 72; row <= 74; row += 1) {
+    const name = clean(value(detailed, `S${row}`));
+    if (!name.includes('豁免')) continue;
+    saves.push({
+      id: `save-${row}`,
+      name,
+      checkValue: number(detailed, `AA${row}`),
+      totalBonus: number(detailed, `AC${row}`),
+      sourceRow: row,
+    });
+  }
+
+  const badStatuses = [];
+  let thresholds = { light: 0, severe: 0, destruction: 0 };
+  for (let row = 32; row <= 52; row += 1) {
+    const name = clean(value(detailed, `W${row}`));
+    if (!name) continue;
+    const light = Number(value(detailed, `AB${row}`, NaN));
+    const severe = Number(value(detailed, `AC${row}`, NaN));
+    const destruction = Number(value(detailed, `AD${row}`, NaN));
+    if ([light, severe, destruction].every(Number.isFinite)) {
+      thresholds = { light, severe, destruction };
+    }
+    badStatuses.push({
+      id: `bad-status-${row}`,
+      name,
+      light: thresholds.light,
+      severe: thresholds.severe,
+      destruction: thresholds.destruction,
+      sourceRow: row,
+    });
   }
 
   const overviewText = clean(value(overview, 'I1'));
@@ -101,6 +124,7 @@ export function parseCharacterSheets({ overview, detailed, fileName = '', avatar
     resources,
     attributes,
     checks: { skills, saves },
+    badStatuses,
     combat: { attacks: [], defenses: [] },
     tokenAppearance: { color: '#3d9b63', scale: 1 },
     avatarImage,
