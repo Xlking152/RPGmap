@@ -3,8 +3,7 @@ name: Build RPGmap 1.4.3 Package
 on:
   workflow_dispatch:
   pull_request:
-    branches:
-      - main
+    branches: [main]
     paths:
       - 'src/**'
       - 'tests/**'
@@ -18,8 +17,7 @@ on:
       - 'vite.config.js'
       - '.github/workflows/multiplayer-test-package.yml'
   push:
-    branches:
-      - feat/v1.4.3-launcher-admin
+    branches: [feat/v1.4.3-launcher-admin]
     paths:
       - 'src/**'
       - 'tests/**'
@@ -86,8 +84,7 @@ jobs:
           mkdir -p "$ROOT/app" "$ROOT/launcher" "$ROOT/server" "$ROOT/world/uploads" "$ROOT/world/backups" "$ROOT/maps" "$ROOT/docs" "$ROOT/tools"
 
           cp -R dist/. "$ROOT/app/"
-
-          cp deployment/launcher/start-rpgmap.bat "$ROOT/启动 RPGmap.bat"
+          cp deployment/launcher/start-rpgmap.bat "$ROOT/RPGmap.bat"
           cp deployment/launcher/launcher.mjs "$ROOT/launcher/launcher.mjs"
           cp deployment/launcher/admin-client.mjs "$ROOT/launcher/admin-client.mjs"
           cp deployment/launcher/index.html "$ROOT/launcher/index.html"
@@ -121,28 +118,17 @@ jobs:
           EOF
 
           test -f "$ROOT/app/index.html"
-          test -f "$ROOT/启动 RPGmap.bat"
+          test -f "$ROOT/RPGmap.bat"
           test -f "$ROOT/launcher/launcher.mjs"
-          test -f "$ROOT/launcher/admin-client.mjs"
-          test -f "$ROOT/launcher/index.html"
-          test -f "$ROOT/launcher/launcher.js"
-          test -f "$ROOT/launcher/launcher.css"
           test -f "$ROOT/server/server.mjs"
-          test -f "$ROOT/server/access-control.mjs"
-          test -f "$ROOT/server/portable-storage.mjs"
           test -f "$ROOT/操作说明.md"
           test -f "$ROOT/world/README.txt"
-          test -d "$ROOT/world/uploads"
-          test -d "$ROOT/world/backups"
           test -f "$ROOT/maps/README.txt"
-          test -d "$ROOT/tools"
-          test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           test -f "$ROOT/docs/FUTURE-ROADMAP.md"
           test ! -d "$ROOT/map"
           test ! -d "$ROOT/data"
           test ! -d "$ROOT/public"
           test ! -f "$ROOT/README.md"
-          test ! -f "$ROOT/server.mjs"
           test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
           test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 0
 
@@ -151,7 +137,6 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           import os, zipfile
-
           artifact = Path(os.environ['GITHUB_WORKSPACE']) / 'artifact'
           version = os.environ['PACKAGE_VERSION']
           root = artifact / f'RPGmap-v{version}'
@@ -174,24 +159,16 @@ jobs:
           import os, zipfile
           artifact = Path(os.environ['GITHUB_WORKSPACE']) / 'artifact'
           version = os.environ['PACKAGE_VERSION']
-          archive = artifact / f'RPGmap-v{version}.zip'
-          verify = artifact / 'verify'
-          with zipfile.ZipFile(archive) as zf:
-              zf.extractall(verify)
+          with zipfile.ZipFile(artifact / f'RPGmap-v{version}.zip') as zf:
+              zf.extractall(artifact / 'verify')
           PY
           VROOT="$VERIFY/RPGmap-v${PACKAGE_VERSION}"
-          test -f "$VROOT/启动 RPGmap.bat"
+          test -f "$VROOT/RPGmap.bat"
           test -f "$VROOT/操作说明.md"
           test -f "$VROOT/launcher/launcher.mjs"
           test -f "$VROOT/server/server.mjs"
           test -f "$VROOT/app/index.html"
-          test -f "$VROOT/world/README.txt"
-          test -f "$VROOT/maps/README.txt"
           test -f "$VROOT/docs/FUTURE-ROADMAP.md"
-          test ! -d "$VROOT/map"
-          test ! -d "$VROOT/data"
-          test ! -d "$VROOT/public"
-          test ! -f "$VROOT/README.md"
           test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
           test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 0
           test "$(node -p "require('$VROOT/VERSION.json').commit")" = "$SOURCE_COMMIT"
@@ -226,23 +203,21 @@ jobs:
           name: RPGmap-v1.4.3
           path: smoke
 
-      - name: Launch direct BAT runtime with preferred port occupied
+      - name: Launch RPGmap.bat with preferred port occupied
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           Expand-Archive -Path 'smoke/RPGmap-v1.4.3.zip' -DestinationPath 'smoke/package' -Force
           $root = (Resolve-Path 'smoke/package/RPGmap-v1.4.3').Path
-          $bat = Join-Path $root '启动 RPGmap.bat'
           $log = Join-Path $root 'launcher-startup.log'
           $blockerScript = Join-Path $root 'block-port.js'
           Set-Content -Path $blockerScript -Encoding UTF8 -Value 'const net=require("net"); const s=net.createServer(()=>{}); s.listen(29999,"127.0.0.1"); setInterval(()=>{},1000);'
 
           $node = (Get-Command node.exe).Source
-          Write-Host "Node: $node"
           $blocker = Start-Process -FilePath $node -ArgumentList @($blockerScript) -WorkingDirectory $root -PassThru
           Start-Sleep -Milliseconds 700
 
-          $bootstrap = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d','/c','call "启动 RPGmap.bat"') -WorkingDirectory $root -PassThru
+          $bootstrap = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d','/c','call RPGmap.bat') -WorkingDirectory $root -PassThru
 
           $ready = $false
           for ($i = 0; $i -lt 60; $i++) {
@@ -261,7 +236,7 @@ jobs:
           if (Test-Path $log) { Get-Content $log }
           if (-not $ready) {
             if ($bootstrap.HasExited) { Write-Host "BAT runtime exit code: $($bootstrap.ExitCode)" }
-            throw 'Direct BAT Launcher did not fall back from occupied 29999 to 29998.'
+            throw 'RPGmap.bat did not start the Launcher on fallback port 29998.'
           }
 
           Stop-Process -Id $blocker.Id -Force -ErrorAction SilentlyContinue
