@@ -1,4 +1,6 @@
-function uid(prefix = 'log') {
+const MAX_MESSAGES = 500;
+
+function uid(prefix) {
   const value = globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2) + Date.now().toString(36);
   return `${prefix}-${value}`;
 }
@@ -7,36 +9,43 @@ function text(value, fallback = '') {
   return typeof value === 'string' ? value.trim() : fallback;
 }
 
+function safeData(value) {
+  if (value == null) return null;
+  try { return structuredClone(value); }
+  catch { return null; }
+}
+
 export function createEmptyChatState() {
   return { schemaVersion: 1, messages: [] };
 }
 
 export function normalizeChatState(raw) {
-  const messages = Array.isArray(raw?.messages) ? raw.messages.filter(Boolean).map(message => ({
-    id: String(message.id || uid()),
-    type: String(message.type || 'system'),
-    author: text(message.author, ''),
-    text: text(message.text, ''),
-    createdAt: message.createdAt || new Date().toISOString(),
-    data: message.data && typeof message.data === 'object' ? structuredClone(message.data) : {},
+  if (!raw || typeof raw !== 'object') return createEmptyChatState();
+  const messages = Array.isArray(raw.messages) ? raw.messages.filter(Boolean).slice(-MAX_MESSAGES).map(item => ({
+    id: String(item.id || uid('message')),
+    type: ['chat', 'system', 'combat', 'damage', 'roll'].includes(item.type) ? item.type : 'system',
+    text: text(item.text),
+    createdAt: Number.isFinite(Date.parse(item.createdAt)) ? item.createdAt : new Date().toISOString(),
+    data: safeData(item.data),
   })) : [];
-  return { schemaVersion: 1, messages: messages.slice(-500) };
+  return { schemaVersion: 1, messages };
 }
 
-export function createChatMessage({ type = 'system', author = '', text: messageText = '', data = {} } = {}) {
-  return {
-    id: uid(type),
-    type,
-    author: text(author, ''),
-    text: text(messageText, ''),
+export function appendMessage(state, { type = 'system', text: message = '', data = null } = {}) {
+  const item = {
+    id: uid('message'),
+    type: ['chat', 'system', 'combat', 'damage', 'roll'].includes(type) ? type : 'system',
+    text: text(message),
     createdAt: new Date().toISOString(),
-    data: data && typeof data === 'object' ? structuredClone(data) : {},
+    data: safeData(data),
   };
+  state.messages ||= [];
+  state.messages.push(item);
+  if (state.messages.length > MAX_MESSAGES) state.messages.splice(0, state.messages.length - MAX_MESSAGES);
+  return item;
 }
 
-export function appendChatMessage(state, message) {
-  state.messages ||= [];
-  state.messages.push(message);
-  if (state.messages.length > 500) state.messages.splice(0, state.messages.length - 500);
-  return message;
+export function clearMessages(state) {
+  state.messages = [];
+  return state;
 }
