@@ -1,0 +1,380 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 9a1545b..ada8b8a 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,14 @@
+ 
+ 当前应用版本：`1.1.0`；地图数据版本：`1.0.5`；存档格式：`SaveV2`。应用版本与地图数据版本相互独立；升级地图数据版本时，需要同步维护兼容版本或迁移逻辑。
+ 
++## Unreleased
++
++- 角色移动底层新增 `MovementSession` 与独立 waypoint 路径计算层，移动路径由起点、多个拐点和当前终点组成。
++- “移动角色”工具支持 `Ctrl`/`Cmd` + 点击添加拐点、右键撤销最近拐点、`Esc` 取消整次移动规划；普通点击继续作为最终目的地预览。
++- 每个 waypoint 路段分别调用现有 EasyStar A*，继续遵守道路优先、建筑/城墙/水域/弹坑阻挡；任一分段无路时整条路径不可提交，并标出受阻状态。
++- 路径预览显示累计移动距离和拐点数量；角色确认移动后沿完整折线路径动画执行。
++- 新增 waypoint 会话与多段路径测试，自动化测试由 67 项增加到 69 项。
++
+ ## 1.1.0
+ 
+ - 地图数据升至 `1.0.5`，55 栋建筑加入用途、构造、说明、可进入状态和稳定入口；州衙仪门作为通道保持不可进入，其余 54 栋可进入。
+diff --git a/src/engine/app.js b/src/engine/app.js
+index f85fb5d..8b1447f 100644
+--- a/src/engine/app.js
++++ b/src/engine/app.js
+@@ -47,6 +47,7 @@ import {
+   nearestWalkablePoint
+ } from './navigation.js';
+ import { createBrowserStorage, createStatePersistence } from '../app/storage.js';
++import { MovementSession, calculateWaypointRoute } from './movement-path.js';
+ import { createMapPresentation } from '../render/map-presentation.js';
+ import { createSceneRenderer } from '../render/scene-renderer.js';
+ import {
+@@ -319,6 +320,7 @@ export function createRpgMapApp({
+     selectedMarkerId: null,
+     selectedCharacterId: null,
+     characterMovePreview: null,
++    characterMoveSession: null,
+     characterMoveRequest: 0,
+     navigationBase: null,
+     navigationGrid: null,
+@@ -695,8 +697,10 @@ export function createRpgMapApp({
+         : runtime.characterMovePreview.committing ? '正在移动' : '移动预览'));
+       preview.append(createElement('p', '', runtime.characterMovePreview.calculating
+         ? '正在避开建筑、城墙、水域与弹坑。'
+-        : (character?.name || '角色') + ' · ' + formatDistance(runtime.characterMovePreview.distance)));
+-      if (!runtime.characterMovePreview.calculating && !runtime.characterMovePreview.committing) {
++        : (character?.name || '角色') + ' · ' + formatDistance(runtime.characterMovePreview.distance || 0)
++          + (runtime.characterMovePreview.waypointCount ? ' · ' + runtime.characterMovePreview.waypointCount + ' 个拐点' : '')
++          + (runtime.characterMovePreview.invalid ? ' · 路径无效' : '')));
++      if (!runtime.characterMovePreview.calculating && !runtime.characterMovePreview.committing && !runtime.characterMovePreview.invalid) {
+         const previewButtons = createElement('div', 'button-row');
+         previewButtons.append(buttonNode('开始移动', 'primary', 'confirm-character-move'));
+         previewButtons.append(buttonNode('取消', '', 'cancel-character-move'));
+@@ -1583,7 +1587,7 @@ export function createRpgMapApp({
+     if (event.key === 'Escape') {
+       runtime.placingArea = false;
+       runtime.damagePreview = null;
+-      if (runtime.characterMovePreview) cancelCharacterMove();
++      if (runtime.characterMovePreview || runtime.characterMoveSession) cancelCharacterMove();
+       if (runtime.tool === 'distance') clearDistance();
+       else setTool('pan');
+     } else if (event.key === 'Delete' && runtime.tool === 'marker-select') {
+@@ -1645,7 +1649,7 @@ export function createRpgMapApp({
+       inspect: '检查地物：点击建筑、城墙、城门、树木或桥梁',
+       'character-place': '放置角色：在底图可行走位置点击',
+       'character-move': selectedCharacter()
+-        ? '移动角色：点击目的地预览道路优先路线'
++        ? '移动角色：点击终点；Ctrl/Cmd+点击添加拐点，右键撤销，Esc 取消'
+         : '移动角色：请先在角色面板选择角色',
+       distance: '两点测距：依次点击两个标记',
+       route: '路线测距：在底图内点击添加节点，双击或 Enter 完成',
+@@ -1736,7 +1740,9 @@ export function createRpgMapApp({
+           showToast('移动目标必须位于底图范围内', 'error');
+           return;
+         }
+-        planCharacterMove(runtime.selectedCharacterId, point);
++        const wantsWaypoint = Boolean(event.originalEvent?.ctrlKey || event.originalEvent?.metaKey);
++        if (wantsWaypoint) addCharacterMoveWaypoint(runtime.selectedCharacterId, point);
++        else planCharacterMove(runtime.selectedCharacterId, point);
+         return;
+       }
+       if (runtime.tool === 'route') {
+@@ -1754,6 +1760,11 @@ export function createRpgMapApp({
+         placeAttackArea(snapForPreference(point));
+       }
+     });
++    map.on('contextmenu', event => {
++      if (runtime.tool !== 'character-move') return;
++      L.DomEvent.stop(event);
++      if (removeCharacterMoveWaypoint()) showToast('已撤销上一个移动拐点');
++    });
+     map.on('dblclick', event => {
+       if (runtime.tool !== 'route') return;
+       L.DomEvent.stop(event);
+@@ -2208,41 +2219,104 @@ export function createRpgMapApp({
+     runtime.damagePreview = null;
+   }
+ 
+-  async function planCharacterMove(characterId, destination, arrival = null) {
++  function ensureCharacterMoveSession(characterId, arrival = null) {
+     const character = state.characters.find(item => item.id === characterId);
+-    if (!character || character.location.type !== 'map') {
++    if (!character || character.location.type !== 'map') return null;
++    if (!runtime.characterMoveSession || runtime.characterMoveSession.characterId !== characterId) {
++      runtime.characterMoveSession = new MovementSession({ characterId, start: character.location, arrival });
++    }
++    if (arrival) runtime.characterMoveSession.arrival = arrival;
++    return runtime.characterMoveSession;
++  }
++
++  async function recalculateCharacterMove(characterId, destination, arrival = null) {
++    const character = state.characters.find(item => item.id === characterId);
++    const session = ensureCharacterMoveSession(characterId, arrival);
++    if (!character || !session) {
+       showToast('请先选择一个位于地图上的角色', 'error');
+       return null;
+     }
+     const request = ++runtime.characterMoveRequest;
+-    runtime.characterMovePreview = { characterId, calculating: true, arrival };
++    session.updateCurrent(destination);
++    runtime.characterMovePreview = { characterId, calculating: true, arrival: arrival || session.arrival, waypointCount: session.waypoints.length };
+     renderCharacters();
+     renderCharacterRoute();
+-    setStatus('正在计算道路优先路线…');
+-    const route = await findNavigationPath(ensureNavigationGrid(), character.location, destination);
++    setStatus('正在计算分段道路优先路线…');
++    const route = await calculateWaypointRoute({
++      session,
++      destination,
++      findPath: (from, to) => findNavigationPath(ensureNavigationGrid(), from, to),
++    });
+     if (request !== runtime.characterMoveRequest) return null;
+-    if (!route) {
+-      runtime.characterMovePreview = null;
++    if (!route.valid) {
++      runtime.characterMovePreview = {
++        characterId,
++        ...route,
++        arrival: arrival || session.arrival,
++        calculating: false,
++        invalid: true,
++        waypointCount: session.waypoints.length,
++      };
+       renderCharacters();
+       renderCharacterRoute();
+-      showToast('找不到可行路线，角色位置未改变', 'error');
++      setStatus('第 ' + (route.failedSegmentIndex + 1) + ' 段无法通行 · 右键撤销拐点或重新选择终点');
++      showToast('路径中的一段被建筑、城墙、水域或弹坑阻挡', 'error');
+       return null;
+     }
+-    runtime.characterMovePreview = { characterId, ...route, arrival, calculating: false };
++    runtime.characterMovePreview = {
++      characterId,
++      ...route,
++      arrival: arrival || session.arrival,
++      calculating: false,
++      waypointCount: session.waypoints.length,
++    };
+     renderCharacters();
+     renderCharacterRoute();
+-    setStatus('路线 ' + formatDistance(route.distance) + ' · 确认后开始移动');
++    setStatus('路线 ' + formatDistance(route.distance) + (session.waypoints.length ? ' · ' + session.waypoints.length + ' 个拐点' : '') + ' · 确认后开始移动');
+     emit('character:move-preview', structuredClone(runtime.characterMovePreview));
+     return route;
+   }
+ 
++  async function addCharacterMoveWaypoint(characterId, point) {
++    const session = ensureCharacterMoveSession(characterId);
++    if (!session) {
++      showToast('请先选择一个位于地图上的角色', 'error');
++      return false;
++    }
++    const route = await recalculateCharacterMove(characterId, point);
++    if (!route) return false;
++    session.addWaypoint(route.destination);
++    runtime.characterMovePreview.waypointCount = session.waypoints.length;
++    renderCharacters();
++    renderCharacterRoute();
++    setStatus('已添加拐点 ' + session.waypoints.length + ' · Ctrl/Cmd+点击继续添加，普通点击设置终点，右键撤销');
++    return true;
++  }
++
++  function removeCharacterMoveWaypoint() {
++    const session = runtime.characterMoveSession;
++    if (!session?.waypoints.length) return false;
++    session.removeLastWaypoint();
++    const destination = session.current;
++    runtime.characterMovePreview = null;
++    renderCharacters();
++    renderCharacterRoute();
++    setStatus('已撤销拐点 · 剩余 ' + session.waypoints.length + ' 个');
++    if (session.waypoints.length) recalculateCharacterMove(session.characterId, destination, session.arrival);
++    return true;
++  }
++
++  async function planCharacterMove(characterId, destination, arrival = null) {
++    return recalculateCharacterMove(characterId, destination, arrival);
++  }
++
+   function renderCharacterRoute() {
+     layers.characterRoute.clearLayers();
+     const preview = runtime.characterMovePreview;
+     if (!preview || preview.calculating || !preview.points?.length) return;
+     L.polyline(preview.points.map(point => worldToLatLng(point, mapPackage.height)), {
+       pane: 'measurePane',
+-      color: '#176d76',
++      color: preview.invalid ? '#b52f2a' : '#176d76',
+       weight: 4,
+       dashArray: '10 7',
+       interactive: false,
+@@ -2250,8 +2324,15 @@ export function createRpgMapApp({
+     }).addTo(layers.characterRoute);
+     L.tooltip({ permanent: true, direction: 'top', className: 'marker-tooltip', pane: 'measurePane' })
+       .setLatLng(worldToLatLng(preview.points.at(-1), mapPackage.height))
+-      .setContent(formatDistance(preview.distance))
++      .setContent(preview.invalid ? '路径受阻' : formatDistance(preview.distance))
+       .addTo(layers.characterRoute);
++    const session = runtime.characterMoveSession;
++    session?.waypoints.forEach((point, index) => {
++      L.circleMarker(worldToLatLng(point, mapPackage.height), {
++        pane: 'measurePane', radius: 5, color: '#176d76', weight: 2, fillColor: '#ffffff', fillOpacity: 1, interactive: false,
++      }).bindTooltip('拐点 ' + (index + 1), { permanent: false, direction: 'top' }).addTo(layers.characterRoute);
++    });
++
+   }
+ 
+   function animateCharacterRoute(character, preview, onComplete) {
+@@ -2284,7 +2365,7 @@ export function createRpgMapApp({
+ 
+   function commitCharacterMove() {
+     const preview = runtime.characterMovePreview;
+-    if (!preview || preview.calculating) return false;
++    if (!preview || preview.calculating || preview.invalid) return false;
+     const character = state.characters.find(item => item.id === preview.characterId);
+     if (!character || character.location.type !== 'map') return false;
+     const arrival = preview.arrival;
+@@ -2303,6 +2384,7 @@ export function createRpgMapApp({
+         showToast(character.name + ' 已进入' + (featureById.get(arrival.featureId)?.name || '建筑'), 'success');
+       }
+       runtime.characterMovePreview = null;
++      runtime.characterMoveSession = null;
+       renderCharacters();
+       renderCharacterLayers();
+       renderCharacterRoute();
+@@ -2319,6 +2401,7 @@ export function createRpgMapApp({
+   function cancelCharacterMove(render = true) {
+     runtime.characterMoveRequest += 1;
+     runtime.characterMovePreview = null;
++    runtime.characterMoveSession = null;
+     if (render) {
+       renderCharacters();
+       renderCharacterRoute();
+diff --git a/src/engine/movement-path.js b/src/engine/movement-path.js
+new file mode 100644
+index 0000000..64f0b66
+--- /dev/null
++++ b/src/engine/movement-path.js
+@@ -0,0 +1,84 @@
++function copyPoint(point) {
++  return { x: Number(point.x), y: Number(point.y) };
++}
++
++function appendRoutePoints(target, points) {
++  if (!points?.length) return;
++  points.forEach((point, index) => {
++    if (index === 0 && target.length) return;
++    target.push(copyPoint(point));
++  });
++}
++
++export class MovementSession {
++  constructor({ characterId, start, arrival = null }) {
++    this.characterId = characterId;
++    this.start = copyPoint(start);
++    this.waypoints = [];
++    this.current = copyPoint(start);
++    this.arrival = arrival;
++  }
++
++  addWaypoint(point) {
++    this.waypoints.push(copyPoint(point));
++    this.current = copyPoint(point);
++    return this.waypoints.length;
++  }
++
++  removeLastWaypoint() {
++    const removed = this.waypoints.pop() || null;
++    this.current = copyPoint(this.waypoints.at(-1) || this.start);
++    return removed;
++  }
++
++  updateCurrent(point) {
++    this.current = copyPoint(point);
++  }
++
++  getControlPoints(destination = this.current) {
++    return [this.start, ...this.waypoints, copyPoint(destination)];
++  }
++}
++
++export async function calculateWaypointRoute({ session, destination, findPath }) {
++  const controls = session.getControlPoints(destination);
++  const points = [];
++  const segments = [];
++  let distance = 0;
++  let snappedDestination = false;
++
++  for (let index = 0; index < controls.length - 1; index += 1) {
++    const route = await findPath(controls[index], controls[index + 1]);
++    if (!route) {
++      return {
++        valid: false,
++        failedSegmentIndex: index,
++        controls,
++        segments,
++        points,
++        distance,
++      };
++    }
++    appendRoutePoints(points, route.points);
++    segments.push({
++      index,
++      from: copyPoint(controls[index]),
++      to: copyPoint(controls[index + 1]),
++      distance: route.distance,
++      points: route.points.map(copyPoint),
++      snappedDestination: Boolean(route.snappedDestination),
++    });
++    distance += route.distance;
++    snappedDestination = Boolean(route.snappedDestination);
++  }
++
++  return {
++    valid: true,
++    controls,
++    points,
++    segments,
++    distance,
++    destination: points.at(-1) || copyPoint(destination),
++    snappedDestination,
++  };
++}
+diff --git a/tests/movement-path.test.js b/tests/movement-path.test.js
+new file mode 100644
+index 0000000..ff7ed69
+--- /dev/null
++++ b/tests/movement-path.test.js
+@@ -0,0 +1,33 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++
++import { MovementSession, calculateWaypointRoute } from '../src/engine/movement-path.js';
++
++test('MovementSession manages FVTT-style waypoints', () => {
++  const session = new MovementSession({ characterId: 'hero', start: { x: 0, y: 0 } });
++  session.addWaypoint({ x: 10, y: 0 });
++  session.addWaypoint({ x: 10, y: 20 });
++  assert.deepEqual(session.getControlPoints({ x: 30, y: 20 }), [
++    { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 20 }, { x: 30, y: 20 },
++  ]);
++  assert.deepEqual(session.removeLastWaypoint(), { x: 10, y: 20 });
++  assert.deepEqual(session.waypoints, [{ x: 10, y: 0 }]);
++});
++
++test('calculateWaypointRoute sums routed segments and reports the blocked leg', async () => {
++  const session = new MovementSession({ characterId: 'hero', start: { x: 0, y: 0 } });
++  session.addWaypoint({ x: 3, y: 4 });
++  const findPath = async (from, to) => ({ points: [from, to], distance: Math.hypot(to.x - from.x, to.y - from.y), destination: to });
++  const route = await calculateWaypointRoute({ session, destination: { x: 3, y: 8 }, findPath });
++  assert.equal(route.valid, true);
++  assert.equal(route.distance, 9);
++  assert.deepEqual(route.points, [{ x: 0, y: 0 }, { x: 3, y: 4 }, { x: 3, y: 8 }]);
++
++  const blocked = await calculateWaypointRoute({
++    session,
++    destination: { x: 9, y: 9 },
++    findPath: async (from, to) => (from.x === 3 ? null : { points: [from, to], distance: 5, destination: to }),
++  });
++  assert.equal(blocked.valid, false);
++  assert.equal(blocked.failedSegmentIndex, 1);
++});
