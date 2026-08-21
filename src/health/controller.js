@@ -1,5 +1,5 @@
 import { EntityStore } from '../entities/store.js';
-import { applyDamageToActor, resolveActorHealth, setActorHealthMode } from './actor.js';
+import { applyDamageToActor, applyHealingToActor, resolveActorHealth, setActorHealthMode } from './actor.js';
 
 function uniqueActorsForTokens(store, tokenIds = []) {
   const seen = new Set();
@@ -49,6 +49,19 @@ export function createHealthController() {
             actorId: actor.id,
             actorName: actor.name,
             ...applyDamageToActor(actor, damage),
+          }));
+          if (results.length) store.persist();
+          return results;
+        },
+        applyHealingToTokenIds(tokenIds, healing) {
+          const store = new EntityStore(api);
+          store.load({ migrateLegacy: false, dropMarkers: false });
+          const targets = uniqueActorsForTokens(store, tokenIds);
+          const results = targets.map(({ tokenId, actor }) => ({
+            tokenId,
+            actorId: actor.id,
+            actorName: actor.name,
+            ...applyHealingToActor(actor, healing),
           }));
           if (results.length) store.persist();
           return results;
