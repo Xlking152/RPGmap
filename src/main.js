@@ -35,6 +35,9 @@ import { createMeasurementSystem } from './measurement/index.js';
 import { createEntitySystem } from './entities/index.js';
 import { createAppShellUi } from './ui/index.js';
 import { createSelectionSystem } from './selection/index.js';
+import { createHealthSystem } from './health/index.js';
+import { createChatSystem } from './chat/index.js';
+import { createDamageSystem } from './damage/index.js';
 import { createCombatSystem } from './combat/index.js';
 import { createLanzhouMapPackage } from './maps/lanzhou.js';
 import { cleanMapPackagePresentation } from './maps/presentation-cleanup.js';
@@ -62,6 +65,9 @@ createRpgMapApp({
     createAppShellUi(),
     createMeasurementSystem(),
     selectionSystem,
+    createHealthSystem(),
+    createChatSystem(),
+    createDamageSystem({ selection: selectionSystem }),
     createCombatSystem({ selection: selectionSystem })
   ]
 });
