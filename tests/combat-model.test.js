@@ -28,6 +28,17 @@ test('manual drag order works without changing initiative values', () => {
   assert.deepEqual(combat.combatants.map(item => item.initiative), [5,20,10]);
 });
 
+test('manual order is preserved when combat starts', () => {
+  const combat = createCombat([{tokenId:'a'}, {tokenId:'b'}, {tokenId:'c'}]);
+  setCombatantInitiative(combat, 'combatant-a', 20);
+  setCombatantInitiative(combat, 'combatant-b', 10);
+  setCombatantInitiative(combat, 'combatant-c', 5);
+  moveCombatant(combat, 'combatant-c', 'combatant-a');
+  startCombat(combat);
+  assert.deepEqual(combat.combatants.map(item => item.tokenId), ['c','a','b']);
+  assert.equal(currentCombatant(combat).tokenId, 'c');
+});
+
 test('combat advances turns and rounds, and adding tokens is explicit', () => {
   const combat = createCombat([{tokenId:'a'}, {tokenId:'b'}]);
   setCombatantInitiative(combat, 'combatant-a', 10);

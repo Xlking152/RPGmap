@@ -113,7 +113,6 @@ export function addCombatants(combat, tokenRefs = []) {
     existing.add(tokenId);
     added += 1;
   }
-  sortCombatantsByInitiative(combat);
   return added;
 }
 
@@ -152,7 +151,6 @@ export function moveCombatant(combat, combatantId, targetCombatantId) {
 
 export function startCombat(combat) {
   if (!combat?.combatants?.length) return false;
-  sortCombatantsByInitiative(combat);
   combat.state = 'active';
   combat.round = 1;
   combat.turnIndex = 0;
