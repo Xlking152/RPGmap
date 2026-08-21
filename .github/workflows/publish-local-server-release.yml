@@ -2,12 +2,37 @@ name: Publish RPGmap Version Release
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feat/entity-actor-token-system
+    paths:
+      - '.github/workflows/publish-local-server-release.yml'
 
 permissions:
   contents: write
 
 jobs:
+  cleanup-legacy-s0:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove legacy S0 releases and tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tag in s0-local-server-1 s0-local-server-2 s0-local-server-3 s0-local-server-4 s0-local-server-5; do
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+            else
+              git ls-remote --exit-code --tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$tag" >/dev/null 2>&1 && \
+                git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ":refs/tags/$tag" || true
+            fi
+          done
+
   build-release:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -38,20 +63,6 @@ jobs:
           RELEASE_TAG="v${PACKAGE_VERSION}"
           echo "PACKAGE_VERSION=${PACKAGE_VERSION}" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
-
-      - name: Remove legacy S0 releases when present
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for tag in s0-local-server-1 s0-local-server-2 s0-local-server-3 s0-local-server-4 s0-local-server-5; do
-            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
-            else
-              git push origin ":refs/tags/$tag" >/dev/null 2>&1 || true
-            fi
-          done
 
       - name: Refuse duplicate version release
         env:
