@@ -71,6 +71,7 @@ jobs:
 
           cp -R dist/. "$ROOT/app/"
           cp deployment/launcher/start-rpgmap.bat "$ROOT/RPGmap.bat"
+          cp deployment/launcher/rpgmap-runtime.ps1 "$ROOT/launcher/rpgmap-runtime.ps1"
           cp deployment/launcher/launcher.mjs "$ROOT/launcher/launcher.mjs"
           cp deployment/launcher/admin-client.mjs "$ROOT/launcher/admin-client.mjs"
           cp deployment/launcher/index.html "$ROOT/launcher/index.html"
@@ -97,7 +98,7 @@ jobs:
             "commit": "${GITHUB_SHA}",
             "serverMode": "multiplayer",
             "storageMode": "portable-world-maps",
-            "launcherMode": "single-bat-web-admin-console",
+            "launcherMode": "single-bat-powershell-web-admin-console",
             "defaultPort": 30000,
             "preferredLauncherPort": 29999,
             "launcherPortMode": "dynamic-loopback"
@@ -105,6 +106,7 @@ jobs:
           EOF
 
           test -f "$ROOT/RPGmap.bat"
+          test -f "$ROOT/launcher/rpgmap-runtime.ps1"
           test -f "$ROOT/操作说明.md"
           test -f "$ROOT/app/index.html"
           test -f "$ROOT/launcher/launcher.mjs"
@@ -151,12 +153,13 @@ jobs:
           PY
           VROOT="$VERIFY/RPGmap-v${PACKAGE_VERSION}"
           test -f "$VROOT/RPGmap.bat"
+          test -f "$VROOT/launcher/rpgmap-runtime.ps1"
           test -f "$VROOT/操作说明.md"
           test -f "$VROOT/launcher/launcher.mjs"
           test -f "$VROOT/server/server.mjs"
           test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
           test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 0
-          test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "single-bat-web-admin-console"
+          test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "single-bat-powershell-web-admin-console"
           rm -rf "$VERIFY"
 
           if unzip -l "$ARCHIVE" | grep -E '(^|/)(\.git|node_modules|tests?|coverage|\.cache|npm-cache|__pycache__|playwright-report|test-results)(/|$)'; then
@@ -170,12 +173,13 @@ jobs:
           cat > release/release-notes.md <<EOF
           ## RPGmap ${PACKAGE_VERSION}
 
-          RPGmap ${PACKAGE_VERSION} provides a unified browser-based GM Control Center with one simple Windows startup file: \`RPGmap.bat\`.
+          RPGmap ${PACKAGE_VERSION} provides one Windows startup file, one PowerShell Runtime information window, and one browser-based GM Control Center.
 
           ### Startup
-          - \`RPGmap.bat\` is the only Windows launch entry in the package root.
-          - It finds Node.js and directly runs \`launcher/launcher.mjs\`.
-          - The BAT window is the runtime host and can be minimized; all GM controls remain in the browser Launcher.
+          - \`RPGmap.bat\` is the only package-root launch entry.
+          - It opens the simple \`launcher/rpgmap-runtime.ps1\` host.
+          - The PowerShell window keeps Node running and shows Launcher/Server/Tunnel output including Local/LAN/Public URLs, Join Code and GM Secret once the Server starts.
+          - All interactive GM controls remain in the browser Launcher.
           - No Native Launcher EXE is shipped.
 
           ### Dynamic local control port
@@ -184,7 +188,7 @@ jobs:
           - The browser automatically opens the actual selected address.
 
           ### Launcher / GM Admin
-          - Local/LAN/Internet lifecycle, connection information and logs in one page.
+          - Local/LAN/Internet lifecycle, connection information and logs in one browser page.
           - pending Player approve, User creation, Default Actor, NONE/OBSERVER/OWNER, Player Key rotation and User deletion.
           - World Manager, Scene Manager and Backup Center remain visible as future reserved modules.
 
