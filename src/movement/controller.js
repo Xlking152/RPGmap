@@ -105,8 +105,23 @@ export function createMovementController({ settings } = {}) {
       });
       const snapPointer = rawPoint => clampMovementPoint(snapMovementPoint(rawPoint, settings.step));
 
+      function canControlCharacter(character) {
+        const multiplayer = api.multiplayer?.getStatus?.();
+        if (!multiplayer?.connected) return true;
+        return api.multiplayer?.canControlCharacter?.(character?.id) !== false;
+      }
+
+      function permissionMessage() {
+        const multiplayer = api.multiplayer?.getStatus?.();
+        const active = api.getState()?.preferences?.combatSystem?.combat?.state === 'active';
+        return active && multiplayer?.session?.role === 'player'
+          ? '当前无法移动该角色：你需要 OWNER 权限，并且战斗中必须轮到该角色行动'
+          : '当前无法移动该角色：你没有该 Actor 的 OWNER 权限';
+      }
+
       function beginSessionForCharacter(character, { pointerId = null, client = null, phase = TokenDragPhase.PLANNING } = {}) {
         if (!character || character.location?.type !== 'map') return false;
+        if (!canControlCharacter(character)) { status(permissionMessage()); return false; }
         settings.beginSession(api.map, api.mapPackage);
         drag.begin({ characterId: character.id, start: character.location, pointerId, client, snapStep: settings.step });
         if (phase === TokenDragPhase.PLANNING) drag.continuePlanning();
@@ -242,6 +257,8 @@ export function createMovementController({ settings } = {}) {
       async function commit() {
         if (moving || drag.phase !== TokenDragPhase.READY || !drag.route?.valid) return false;
         const characterId = drag.characterId;
+        const character = mapCharacter(api.getState(), characterId);
+        if (!canControlCharacter(character)) { reset(permissionMessage()); return false; }
         const targets = drag.movementTargets();
         if (!targets.length || !drag.startMoving()) return false;
         moving = true;
@@ -269,16 +286,20 @@ export function createMovementController({ settings } = {}) {
         const point = worldPointFromPointer(event);
         const character = nearestMapCharacter(api.getState(), point);
         if (!character) return;
+        if (!canControlCharacter(character)) {
+          status(permissionMessage());
+          return;
+        }
         event.preventDefault();
         event.stopImmediatePropagation();
         previousTool = shell.querySelector?.('[data-tool].active')?.dataset.tool || 'pan';
         api.selectCharacter(character.id);
         api.setTool('character-move');
-        beginSessionForCharacter(character, {
+        if (!beginSessionForCharacter(character, {
           pointerId: event.pointerId,
           client: { x: event.clientX, y: event.clientY },
           phase: TokenDragPhase.DRAGGING,
-        });
+        })) return;
         restoreMapDragging = api.map.dragging.enabled();
         if (restoreMapDragging) api.map.dragging.disable();
         mapElement.setPointerCapture?.(event.pointerId);
