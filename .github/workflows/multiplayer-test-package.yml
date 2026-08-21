@@ -79,11 +79,12 @@ jobs:
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE/artifact/RPGmap-v${PACKAGE_VERSION}"
           rm -rf "$GITHUB_WORKSPACE/artifact"
-          mkdir -p "$ROOT/public" "$ROOT/data/worlds" "$ROOT/data/uploads" "$ROOT/data/backups" "$ROOT/docs"
+          mkdir -p "$ROOT/app" "$ROOT/map/uploads" "$ROOT/map/backups" "$ROOT/docs"
 
-          cp -R dist/. "$ROOT/public/"
+          cp -R dist/. "$ROOT/app/"
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
           cp deployment/local-server/access-control.mjs "$ROOT/access-control.mjs"
+          cp deployment/local-server/portable-storage.mjs "$ROOT/portable-storage.mjs"
           cp deployment/local-server/internet-launcher.mjs "$ROOT/internet-launcher.mjs"
           cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
           cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
@@ -92,7 +93,7 @@ jobs:
           cp deployment/local-server/run-rpgmap-public-server.bat "$ROOT/run-rpgmap-public-server.bat"
           cp deployment/local-server/README.md "$ROOT/README.md"
           cp deployment/local-server/INTERNET-TEST.md "$ROOT/INTERNET-MULTIPLAYER.md"
-          cp deployment/local-server/data/README.txt "$ROOT/data/README.txt"
+          cp deployment/local-server/map/README.txt "$ROOT/map/README.txt"
           cp '文档/联机使用说明.md' "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           cp CHANGELOG.md "$ROOT/docs/CHANGELOG.md"
           chmod +x "$ROOT/start-rpgmap.sh"
@@ -103,17 +104,24 @@ jobs:
             "version": "${PACKAGE_VERSION}",
             "commit": "${GITHUB_SHA}",
             "serverMode": "multiplayer",
+            "storageMode": "portable-map-root",
             "defaultPort": 30000
           }
           EOF
 
-          test -f "$ROOT/public/index.html"
+          test -f "$ROOT/app/index.html"
           test -f "$ROOT/server.mjs"
           test -f "$ROOT/access-control.mjs"
+          test -f "$ROOT/portable-storage.mjs"
           test -f "$ROOT/internet-launcher.mjs"
           test -f "$ROOT/start-rpgmap-internet.bat"
           test -f "$ROOT/setup-cloudflared.bat"
+          test -f "$ROOT/map/README.txt"
+          test -d "$ROOT/map/uploads"
+          test -d "$ROOT/map/backups"
           test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
+          test ! -d "$ROOT/data"
+          test ! -d "$ROOT/public"
 
           cd "$GITHUB_WORKSPACE/artifact"
           ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
