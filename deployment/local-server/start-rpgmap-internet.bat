@@ -105,6 +105,7 @@ start "" "http://127.0.0.1:30000"
 
 echo [OK] RPGmap Server is ready.
 echo [INFO] Starting Cloudflare Quick Tunnel...
+echo [INFO] Tunnel transport: HTTP/2 over TCP compatibility mode.
 echo.
 echo ============================================================
 echo  Look below for a URL like:
@@ -113,7 +114,9 @@ echo  Send that URL and Join Code !JOIN_CODE! to remote Players.
 echo ============================================================
 echo.
 
-"!CLOUDFLARED_EXE!" tunnel --no-autoupdate --url http://127.0.0.1:30000
+rem Force HTTP/2/TCP instead of QUIC/UDP. This is more reliable on networks
+rem using VPN/TUN/proxy software, campus networks, and restrictive firewalls.
+"!CLOUDFLARED_EXE!" tunnel --no-autoupdate --url http://127.0.0.1:30000 --protocol http2
 
 echo.
 echo [INFO] Internet Tunnel stopped.
