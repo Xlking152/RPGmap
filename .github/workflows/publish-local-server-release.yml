@@ -52,11 +52,11 @@ jobs:
 
           cp -R dist/. "$ROOT/public/"
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
-          cp deployment/local-server/start-rpgmap.bat "$ROOT/一键启动RPGmap.bat"
+          cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
           cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
           cp deployment/local-server/README.md "$ROOT/README.md"
           cp deployment/local-server/data/README.txt "$ROOT/data/README.txt"
-          cp '文档/未来规划.md' "$ROOT/docs/未来规划.md"
+          cp '文档/未来规划.md' "$ROOT/docs/FUTURE-ROADMAP.md"
           chmod +x "$ROOT/start-rpgmap.sh"
 
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
@@ -74,6 +74,18 @@ jobs:
           EOF
 
           test -f "$ROOT/public/index.html"
+
+          python - <<'PY'
+          from pathlib import Path
+          import sys
+          root = Path('release/RPGmap-Local-Server')
+          bad = [str(p.relative_to(root)) for p in root.rglob('*') if not str(p.relative_to(root)).isascii()]
+          if bad:
+              print('Non-ASCII release paths are forbidden to avoid Windows ZIP filename mojibake:', file=sys.stderr)
+              for path in bad:
+                  print('  ' + path, file=sys.stderr)
+              raise SystemExit(1)
+          PY
 
           cd "$GITHUB_WORKSPACE/release"
           zip -r -9 -q RPGmap-Local-Server.zip RPGmap-Local-Server
@@ -96,16 +108,20 @@ jobs:
           这是 RPGmap 服务器化路线的 **S0 Pre-release**，用于本地与局域网实际测试 MovementSystem、EntitySystem 和 Unified VTT UI。
 
           ### 使用
-          - Windows：解压后双击 \`一键启动RPGmap.bat\`
+          - Windows：解压后双击 \`start-rpgmap.bat\`
           - Linux / macOS：执行 \`./start-rpgmap.sh\`
           - 默认地址：\`http://127.0.0.1:30000\`
           - 局域网地址会在服务器控制台中显示
+
+          ### Windows 乱码修正
+          Release 内所有路径均强制使用 ASCII 文件名，BAT 脚本使用纯英文控制台文本，避免 Windows Explorer / ZIP / CMD 代码页造成文件名或脚本内容乱码。
 
           ### 包内容
           - GitHub Actions 预编译的 \`public/\`
           - 零第三方运行依赖的 Node HTTP Server
           - Windows / Linux / macOS 启动入口
           - \`data/worlds\`、\`data/uploads\`、\`data/backups\` 预留目录
+          - \`docs/FUTURE-ROADMAP.md\`
           - \`VERSION.json\` 构建信息
 
           ### 当前阶段限制
