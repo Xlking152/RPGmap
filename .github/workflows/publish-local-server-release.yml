@@ -38,7 +38,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r -d '' file; do
             node --check "$file"
-          done < <(find src deployment/local-server -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
+          done < <(find src deployment/local-server deployment/launcher -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
 
       - name: Build web client
         run: npm run build
@@ -62,24 +62,27 @@ jobs:
             exit 1
           fi
 
-      - name: Assemble clean server package
+      - name: Assemble clean package
         shell: bash
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE/release/RPGmap-v${PACKAGE_VERSION}"
           rm -rf "$GITHUB_WORKSPACE/release"
-          mkdir -p "$ROOT/app" "$ROOT/world/uploads" "$ROOT/world/backups" "$ROOT/maps" "$ROOT/docs"
+          mkdir -p "$ROOT/app" "$ROOT/launcher" "$ROOT/server" "$ROOT/world/uploads" "$ROOT/world/backups" "$ROOT/maps" "$ROOT/docs"
 
           cp -R dist/. "$ROOT/app/"
-          cp deployment/local-server/server.mjs "$ROOT/server.mjs"
-          cp deployment/local-server/access-control.mjs "$ROOT/access-control.mjs"
-          cp deployment/local-server/portable-storage.mjs "$ROOT/portable-storage.mjs"
-          cp deployment/local-server/internet-launcher.mjs "$ROOT/internet-launcher.mjs"
-          cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
-          cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
-          cp deployment/local-server/start-rpgmap-internet.bat "$ROOT/start-rpgmap-internet.bat"
-          cp deployment/local-server/setup-cloudflared.bat "$ROOT/setup-cloudflared.bat"
-          cp deployment/local-server/run-rpgmap-public-server.bat "$ROOT/run-rpgmap-public-server.bat"
+
+          cp deployment/launcher/launcher.mjs "$ROOT/launcher/launcher.mjs"
+          cp deployment/launcher/admin-client.mjs "$ROOT/launcher/admin-client.mjs"
+          cp deployment/launcher/index.html "$ROOT/launcher/index.html"
+          cp deployment/launcher/launcher.js "$ROOT/launcher/launcher.js"
+          cp deployment/launcher/launcher.css "$ROOT/launcher/launcher.css"
+          cp deployment/launcher/start-rpgmap.bat "$ROOT/启动 RPGmap.bat"
+
+          cp deployment/local-server/server.mjs "$ROOT/server/server.mjs"
+          cp deployment/local-server/access-control.mjs "$ROOT/server/access-control.mjs"
+          cp deployment/local-server/portable-storage.mjs "$ROOT/server/portable-storage.mjs"
+
           cp 'deployment/local-server/操作说明.md' "$ROOT/操作说明.md"
           cp deployment/local-server/INTERNET-TEST.md "$ROOT/docs/INTERNET-MULTIPLAYER.md"
           cp deployment/local-server/world/README.txt "$ROOT/world/README.txt"
@@ -87,7 +90,6 @@ jobs:
           cp '文档/联机使用说明.md' "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           cp '文档/未来规划.md' "$ROOT/docs/FUTURE-ROADMAP.md"
           cp CHANGELOG.md "$ROOT/docs/CHANGELOG.md"
-          chmod +x "$ROOT/start-rpgmap.sh"
 
           cat > "$ROOT/VERSION.json" <<EOF
           {
@@ -97,45 +99,55 @@ jobs:
             "commit": "${GITHUB_SHA}",
             "serverMode": "multiplayer",
             "storageMode": "portable-world-maps",
-            "defaultPort": 30000
+            "launcherMode": "unified-admin-console",
+            "defaultPort": 30000,
+            "launcherPort": 29999
           }
           EOF
 
           test -f "$ROOT/app/index.html"
-          test -f "$ROOT/server.mjs"
-          test -f "$ROOT/access-control.mjs"
-          test -f "$ROOT/portable-storage.mjs"
-          test -f "$ROOT/internet-launcher.mjs"
-          test -f "$ROOT/start-rpgmap-internet.bat"
-          test -f "$ROOT/setup-cloudflared.bat"
+          test -f "$ROOT/launcher/launcher.mjs"
+          test -f "$ROOT/launcher/admin-client.mjs"
+          test -f "$ROOT/launcher/index.html"
+          test -f "$ROOT/launcher/launcher.js"
+          test -f "$ROOT/launcher/launcher.css"
+          test -f "$ROOT/server/server.mjs"
+          test -f "$ROOT/server/access-control.mjs"
+          test -f "$ROOT/server/portable-storage.mjs"
+          test -f "$ROOT/启动 RPGmap.bat"
           test -f "$ROOT/操作说明.md"
           test -f "$ROOT/world/README.txt"
           test -d "$ROOT/world/uploads"
           test -d "$ROOT/world/backups"
           test -f "$ROOT/maps/README.txt"
           test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
+          test ! -f "$ROOT/README.md"
+          test ! -f "$ROOT/server.mjs"
+          test ! -f "$ROOT/start-rpgmap.bat"
+          test ! -f "$ROOT/start-rpgmap-internet.bat"
+          test ! -f "$ROOT/setup-cloudflared.bat"
+          test ! -f "$ROOT/run-rpgmap-public-server.bat"
           test ! -d "$ROOT/map"
           test ! -d "$ROOT/data"
           test ! -d "$ROOT/public"
-          test ! -f "$ROOT/README.md"
+          test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
 
           cd "$GITHUB_WORKSPACE/release"
           ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
           python - <<'PY'
           from pathlib import Path
           import os, zipfile
-
           release = Path(os.environ['GITHUB_WORKSPACE']) / 'release'
           version = os.environ['PACKAGE_VERSION']
           root = release / f'RPGmap-v{version}'
           archive = release / f'RPGmap-v{version}.zip'
           with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-              for path in sorted(root.rglob('*')):
-                  arcname = path.relative_to(release).as_posix()
-                  if path.is_dir():
+              for item in sorted(root.rglob('*')):
+                  arcname = item.relative_to(release).as_posix()
+                  if item.is_dir():
                       zf.writestr(arcname.rstrip('/') + '/', b'')
                   else:
-                      zf.write(path, arcname)
+                      zf.write(item, arcname)
           PY
           sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
 
@@ -153,15 +165,20 @@ jobs:
               zf.extractall(verify)
           PY
           VROOT="$VERIFY/RPGmap-v${PACKAGE_VERSION}"
+          test -f "$VROOT/启动 RPGmap.bat"
           test -f "$VROOT/操作说明.md"
+          test -f "$VROOT/launcher/launcher.mjs"
+          test -f "$VROOT/server/server.mjs"
           test -f "$VROOT/app/index.html"
           test -f "$VROOT/world/README.txt"
           test -f "$VROOT/maps/README.txt"
-          test ! -e "$VROOT/#U64cd#U4f5c#U8bf4#U660e.md"
-          test ! -d "$VROOT/map"
-          test ! -d "$VROOT/data"
-          test ! -d "$VROOT/public"
           test ! -f "$VROOT/README.md"
+          test ! -f "$VROOT/start-rpgmap.bat"
+          test ! -f "$VROOT/start-rpgmap-internet.bat"
+          test ! -f "$VROOT/setup-cloudflared.bat"
+          test ! -f "$VROOT/run-rpgmap-public-server.bat"
+          test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
+          test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "unified-admin-console"
           rm -rf "$VERIFY"
 
           if unzip -l "$ARCHIVE" | grep -E '(^|/)(\.git|node_modules|tests?|coverage|\.cache|npm-cache|__pycache__|playwright-report|test-results)(/|$)'; then
@@ -175,31 +192,31 @@ jobs:
           cat > release/release-notes.md <<EOF
           ## RPGmap ${PACKAGE_VERSION}
 
-          RPGmap ${PACKAGE_VERSION} 在 Player Identity / Actor Ownership / Combat Turn Lock 的基础上，进一步统一发布包的数据边界：\`app/\` 是程序，\`world/\` 是当前游戏状态，\`maps/\` 是真正的地图 / Scene 资源库。
+          RPGmap ${PACKAGE_VERSION} adds a unified Launcher / GM Control Center on top of the portable \`app / world / maps\` layout and Multiplayer permission system.
 
-          ### Portable Layout
-          - \`app/\`：前端程序，可随版本升级替换。
-          - \`world/state.json\`：共享 World Snapshot / revision。
-          - \`world/users.json\`：Player User、默认 Actor、Ownership 与凭证哈希。
-          - \`world/uploads/\` / \`world/backups/\`：当前 World 的上传与备份。
-          - \`maps/\`：为多地图、可破坏建筑、碰撞 / 导航、环境特效和地图变体预留的 Map Library。
-          - 默认不依赖 AppData 或其他隐藏 User Data 目录。
+          ### Unified Launcher
+          - Windows users launch RPGmap through one root entry: \`启动 RPGmap.bat\`.
+          - Local/LAN and Internet Multiplayer are started from one browser control center.
+          - The Launcher displays Local/LAN/Public URLs, Join Code, GM Secret, Player Invite, storage paths and runtime logs.
+          - Internet mode detects cloudflared and can download the official Windows binary when missing.
 
-          ### Migration
-          - V1.4.1 \`map/world.json\` 自动迁移到 \`world/state.json\`。
-          - V1.4.1 \`map/users.json\` 自动迁移到 \`world/users.json\`。
-          - 更老的 \`data/worlds/default/world.json\` / \`access.json\` 仍然支持迁移。
-          - 旧文件保留不删除，新目录存在时永远以新目录为准。
+          ### GM Admin Console
+          - Approve pending Players.
+          - Pre-create Player Users.
+          - Set Default Actor and NONE / OBSERVER / OWNER.
+          - Rotate Player Keys and delete Users.
+          - Launcher uses a hidden local GM WebSocket Session instead of editing \`world/users.json\` directly.
 
-          ### Documentation
-          - GitHub 根 \`README.md\` 只作为项目整体说明。
-          - 发布包根目录改用 \`操作说明.md\`，专门说明启动、联机、User、Ownership、备份和迁移。
+          ### Security
+          - Launcher listens only on \`127.0.0.1:29999\`.
+          - Cloudflare tunnels only the game server port.
+          - Player Invite never contains GM Secret.
 
-          ### Multiplayer Permissions
-          - Player 首次加入由 GM 批准为持久 User；也支持 GM 预创建 User + Player Key。
-          - Actor 权限：NONE / OBSERVER / OWNER。
-          - Combat active 时 Player 只能操控当前 Turn 对应的 OWNER Actor。
-          - Client 预检 + Server authoritative validation 双层权限校验。
+          ### Package Layout
+          - \`launcher/\` contains Launcher internals.
+          - \`server/\` contains Multiplayer Server internals.
+          - Root package contains only one Windows BAT launcher.
+          - \`world/\` remains the persistent Campaign data root and \`maps/\` remains the Map / Scene library.
 
           **Source commit:** \`${GITHUB_SHA}\`
           EOF
