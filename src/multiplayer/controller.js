@@ -16,6 +16,7 @@ function installStyles(documentNode) {
     .multiplayer-toolbar[data-state="online"] .multiplayer-dot { background:#3d9b63; }
     .multiplayer-toolbar[data-state="connecting"] .multiplayer-dot { background:#d99729; }
     .multiplayer-backdrop { position:fixed; inset:0; z-index:5200; background:rgba(18,23,24,.52); display:grid; place-items:center; padding:18px; }
+    .multiplayer-backdrop[hidden] { display:none !important; }
     .multiplayer-dialog { width:min(440px,94vw); background:#f8faf7; border-radius:14px; border:1px solid rgba(40,70,70,.28); box-shadow:0 22px 70px rgba(0,0,0,.32); padding:18px; display:grid; gap:13px; }
     .multiplayer-dialog h2 { margin:0; font-size:18px; }
     .multiplayer-dialog p { margin:0; color:#647174; font-size:12px; line-height:1.55; }
@@ -70,6 +71,7 @@ export function createMultiplayerController() {
       const overlay = documentNode.createElement('div');
       overlay.className = 'multiplayer-backdrop';
       overlay.hidden = true;
+      overlay.style.display = 'none';
       documentNode.body.append(overlay);
 
       function defaultRole() { return isLocalHost(documentNode.defaultView?.location) ? 'gm' : 'player'; }
@@ -93,6 +95,16 @@ export function createMultiplayerController() {
         if (node) node.textContent = message;
       }
 
+      function showDialog() {
+        overlay.hidden = false;
+        overlay.style.removeProperty('display');
+      }
+
+      function hideDialog() {
+        overlay.hidden = true;
+        overlay.style.display = 'none';
+      }
+
       function renderDialog(message = '') {
         const role = saved('role', defaultRole());
         const name = saved('name', role === 'gm' ? 'GM' : 'Player');
@@ -111,10 +123,9 @@ export function createMultiplayerController() {
           <div class="multiplayer-presence">${clients.map(item => `<span class="multiplayer-chip ${item.role === 'gm' ? 'gm' : ''}">${item.role === 'gm' ? 'GM' : 'P'} · ${safe(item.name || 'Player')}</span>`).join('')}</div>
           <div class="multiplayer-actions"><button type="button" data-mp-close>取消</button><button type="submit" class="primary">${connected ? '重新连接' : '加入游戏'}</button></div>
         </form>`;
-        overlay.hidden = false;
+        showDialog();
       }
 
-      function hideDialog() { overlay.hidden = true; }
       function socketUrl() { return multiplayerSocketUrl(documentNode.defaultView?.location); }
 
       async function applyRemoteState(state, nextRevision, reason = 'remote') {
