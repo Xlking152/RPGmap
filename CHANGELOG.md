@@ -2,6 +2,59 @@
 
 RPGmap 使用语义化版本号。这里只记录已经形成版本节点的重要变化；更细的开发过程见 `文档/工作日志.md`。
 
+## 1.4.1 — Candidate · 2026-08-21
+
+V1.4.1 在 V1.4 Multiplayer V1 的共享 World 基础上加入持久 Player Identity、Actor Ownership 和 Server-authoritative Combat Turn Lock。当前在 Draft PR #8 进行实机验收，合并前 `main` 仍保持 V1.4.0。
+
+### Player Identity / Users
+
+- Player 首次使用 Join Code 进入时先成为 pending Session，不直接取得 World 写权限。
+- GM 在“联机 / Users”面板批准玩家后，Server 创建当前 World 的持久 Player User。
+- GM 也可以提前预创建 User，并生成长期 Player Key 给指定玩家。
+- Quick Tunnel 域名变化时，Player 可使用 Player Key 在新网址恢复原 User；无需 GM 每次重新创建身份。
+- 同一网址内浏览器保存 `userId + authToken` 以自动重连。
+- Server 只保存 Browser Token 与 Player Key 的 SHA-256 哈希，不保存明文凭证。
+- GM 可重新签发 Player Key；新 Key 会使旧 Key 和旧浏览器 Token 失效。
+
+### Access Store
+
+- 新增 `data/worlds/<world-id>/access.json`。
+- `world.json` 与 `access.json` 物理分离：World Snapshot 不包含 User 凭证或权限数据库。
+- Access 数据包含 User 名称、默认 Actor、Ownership、凭证哈希、disabled 状态与时间戳。
+- Access 写入同样采用临时文件 + rename 原子替换。
+
+### Actor Ownership
+
+- Actor 权限增加 `NONE / OBSERVER / OWNER`。
+- GM 对全部 Actor 隐式拥有完整权限。
+- 每个 Player 可以有一个默认角色，并可拥有多个 OWNER / OBSERVER Actor。
+- 默认角色必须为 OWNER。
+- Player 不能创建、删除或重新绑定 Actor / Token。
+- Player 只能修改 OWNER Actor；越权 `world.push` 由 Server 返回 `world.denied` 并恢复最新 World。
+- 客户端增加相同规则的 preflight，在正常 UI 操作时尽量提前提示并回滚；Server 仍是最终权限裁决者。
+
+### Combat Turn Lock
+
+- Combatant 加入/移除、先攻、拖动排序、开始/结束战斗、Round / Turn 推进均为 GM-only。
+- Player 端 Combat Tracker 保持可查看，但管理控件直接禁用。
+- `Combat.state === active` 时，Player 只能修改当前 Turn 对应且自己拥有 OWNER 的 Actor。
+- 即使同一 Player 同时拥有多个角色，未轮到的其他 OWNER Actor 也会被锁定。
+- Token Movement 在开始拖动和最终提交前都会检查 Ownership / Turn。
+
+### Multiplayer UI
+
+- 顶栏“联机”由简单登录状态升级为 Users / Players 面板。
+- 显示在线 GM / Player、默认角色和 pending 玩家。
+- GM 可批准首次加入、预创建 User、设置默认角色、配置 NONE / OBSERVER / OWNER、重发 Player Key、删除 User。
+- Player 可查看自己的默认角色和 Ownership，并可在自己的 OWNER Actor 中修改默认角色。
+
+### Validation
+
+- 新增 Access Control 纯函数测试：凭证哈希、Player Key、Key rotation、Ownership 与 Turn Lock。
+- 新增 Client Ownership preflight 测试。
+- 重写真实 Node Server + WebSocket 测试：pending → GM approve → identity.bind → OWNER 写入 → 越权拒绝 → Combat Turn Lock → access.json 持久化 → 身份重连。
+- CI 执行 `npm test`、全部 JavaScript syntax check、Vite production build 和 V1.4.1 ZIP 组装。
+
 ## 1.4.0 — 2026-08-21
 
 V1.4.0 正式加入 Multiplayer V1，使 RPGmap 从单机 / 局域网地图工具扩展为可通过 WebSocket 共享 World 的自托管 VTT，并提供 Windows 一键远程联机入口。
@@ -21,7 +74,7 @@ V1.4.0 正式加入 Multiplayer V1，使 RPGmap 从单机 / 局域网地图工�
 - 支持 `Join Code` 控制玩家加入，以及 `GM Secret` 授予 GM 身份。
 - 修复公网模式下 GM Secret 已验证但仍被 Player Join Code 阻挡的问题。
 - GM 与 Player 登录成功后统一退出联机遮罩层，修复“已显示在线但仍卡在登录界面”的问题。
-- 当前 V1.4 默认允许 Player 写共享 World，优先满足共同移动 Token、战斗和状态更新；Actor Ownership 后续扩展。
+- V1.4 默认允许 Player 写共享 World，为 V1.4.1 的 Actor Ownership 奠定联机基础。
 
 ### Client World Sync
 
@@ -38,31 +91,14 @@ V1.4.0 正式加入 Multiplayer V1，使 RPGmap 从单机 / 局域网地图工�
 - 使用 Cloudflare Quick Tunnel 暴露 `http://127.0.0.1:30000`。
 - Tunnel 强制使用 HTTP/2 over TCP，提高 VPN / TUN、校园网和限制 UDP 环境下的兼容性。
 - 自动解析 `https://*.trycloudflare.com` 地址并注入 Server 的 `RPGMAP_PUBLIC_URL`。
-- 自动生成 6 位 Player Join Code 与随机 16 位十六进制 GM Secret。
-- Windows 公网启动时额外打开独立 `RPGmap Multiplayer Info` 信息窗口，集中显示 Public URL、Join Code、GM Secret 和本机地址，便于复制和观察。
-- 远程玩家只需要收到 Public URL + Join Code；GM Secret 只供 GM 使用。
+- 自动生成 6 位 Player Join Code 与随机 GM Secret。
+- Windows 公网启动时额外打开独立 `RPGmap Multiplayer Info` 信息窗口。
 
 ### WebSocket Robustness
 
 - 拒绝未支持的 RSV / extension frame。
 - 对控制帧长度、分片总大小、异常 continuation 和嵌套 fragment 进行校验。
-- 对最大 WebSocket payload 进行限制，降低异常帧导致的风险。
-
-### Packaging / Documentation
-
-- 应用版本提升到 `1.4.0`。
-- 正式 Release 包加入 Internet Launcher、Cloudflare 启动 / 安装脚本和 Multiplayer 使用说明。
-- 根 `README.md` 更新为 V1.4 功能、局域网 / 公网联机、GM / Player 与 World Store 说明。
-- 新增 `文档/联机使用说明.md`。
-- Release Notes 更新为 V1.4 Multiplayer 内容。
-
-### Validation
-
-- Multiplayer protocol helper 自动测试。
-- 真实 Node Server + 多个 WebSocket Client 的共享 World 测试。
-- 公网身份验证测试：GM Secret 可独立授权 GM，Player 仍要求正确 Join Code。
-- Quick Tunnel URL 解析、Join Code / GM Secret 格式和独立连接信息内容测试。
-- GitHub Actions 执行 `npm test`、JavaScript syntax check、production build 和 Release/ZIP 组装验证。
+- 对最大 WebSocket payload 进行限制。
 
 ## 1.3.0 — 2026-08-21
 
