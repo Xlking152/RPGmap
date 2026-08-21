@@ -30,48 +30,23 @@ import yamenSideHallUrl from './assets/generated/yamen-side-hall.webp';
 import yellowRiverPontoonUrl from './assets/generated/yellow-river-pontoon.webp';
 import yellowRiverUrl from './assets/generated/yellow-river.webp';
 import { createRpgMapApp } from './engine/app.js';
-import { createFvttWaypointMovementTool } from './tools/fvtt-waypoint-movement.js';
-import { createFvttTokenGhostTool } from './tools/fvtt-token-ghost.js';
-import { createFvttSegmentDistanceTool } from './tools/fvtt-segment-distance.js';
+import { createMovementSystem } from './movement/index.js';
 import { createLanzhouMapPackage } from './maps/lanzhou.js';
 
 const mapPackage = createLanzhouMapPackage({
-  chenghuangTempleUrl,
-  cityGatehouseUrl,
-  cityWallTowerUrl,
-  jinchengGatehouseUrl,
-  loessTerrainUrl,
-  marketOfficeHallUrl,
-  marketStorehouseUrl,
-  yamenHallUrl,
-  yellowRiverPontoonUrl,
-  yellowRiverUrl,
+  chenghuangTempleUrl, cityGatehouseUrl, cityWallTowerUrl, jinchengGatehouseUrl, loessTerrainUrl,
+  marketOfficeHallUrl, marketStorehouseUrl, yamenHallUrl, yellowRiverPontoonUrl, yellowRiverUrl,
   buildingSprites: {
-    yamenGate: [yamenGateUrl],
-    yamenSideHall: [yamenSideHallUrl],
-    barracks: [barracks01Url, barracks02Url],
-    granary: [granary01Url, granary02Url],
-    stable: [stable01Url, stable02Url],
-    workshop: [workshop01Url, workshop02Url],
-    marketShop: [marketShop01Url, marketShop02Url, marketShop03Url],
-    residenceHouse: [residenceHouse01Url, residenceHouse02Url, residenceHouse03Url],
+    yamenGate: [yamenGateUrl], yamenSideHall: [yamenSideHallUrl], barracks: [barracks01Url, barracks02Url],
+    granary: [granary01Url, granary02Url], stable: [stable01Url, stable02Url], workshop: [workshop01Url, workshop02Url],
+    marketShop: [marketShop01Url, marketShop02Url, marketShop03Url], residenceHouse: [residenceHouse01Url, residenceHouse02Url, residenceHouse03Url],
     residenceCourtyard: [residenceCourtyard01Url, residenceCourtyard02Url],
   },
-  rubbleAtlas: {
-    url: rubbleAtlasUrl,
-    width: 1536,
-    height: 1024,
-    columns: 3,
-    rows: 2,
-  },
+  rubbleAtlas: { url: rubbleAtlasUrl, width: 1536, height: 1024, columns: 3, rows: 2 },
 });
 
 createRpgMapApp({
   container: document.getElementById('app'),
   mapPackage,
-  tools: [
-    createFvttWaypointMovementTool(),
-    createFvttTokenGhostTool(),
-    createFvttSegmentDistanceTool({ defaultStep: 5 })
-  ]
+  tools: [createMovementSystem({ defaultStep: 5, autoStep: true })]
 });
