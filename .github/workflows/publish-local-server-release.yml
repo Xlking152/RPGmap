@@ -32,6 +32,14 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find src deployment/local-server -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
+
       - name: Build web client
         run: npm run build
 
@@ -58,17 +66,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="$GITHUB_WORKSPACE/release/RPGmap-Server-v${PACKAGE_VERSION}"
+          ROOT="$GITHUB_WORKSPACE/release/RPGmap-v${PACKAGE_VERSION}"
           rm -rf "$GITHUB_WORKSPACE/release"
           mkdir -p "$ROOT/public" "$ROOT/data/worlds" "$ROOT/data/uploads" "$ROOT/data/backups" "$ROOT/docs"
 
           cp -R dist/. "$ROOT/public/"
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
+          cp deployment/local-server/internet-launcher.mjs "$ROOT/internet-launcher.mjs"
           cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
           cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
+          cp deployment/local-server/start-rpgmap-internet.bat "$ROOT/start-rpgmap-internet.bat"
+          cp deployment/local-server/setup-cloudflared.bat "$ROOT/setup-cloudflared.bat"
+          cp deployment/local-server/run-rpgmap-public-server.bat "$ROOT/run-rpgmap-public-server.bat"
           cp deployment/local-server/README.md "$ROOT/README.md"
+          cp deployment/local-server/INTERNET-TEST.md "$ROOT/INTERNET-MULTIPLAYER.md"
           cp deployment/local-server/data/README.txt "$ROOT/data/README.txt"
+          cp '文档/联机使用说明.md' "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           cp '文档/未来规划.md' "$ROOT/docs/FUTURE-ROADMAP.md"
+          cp CHANGELOG.md "$ROOT/docs/CHANGELOG.md"
           chmod +x "$ROOT/start-rpgmap.sh"
 
           cat > "$ROOT/VERSION.json" <<EOF
@@ -77,18 +92,22 @@ jobs:
             "version": "${PACKAGE_VERSION}",
             "releaseTag": "${RELEASE_TAG}",
             "commit": "${GITHUB_SHA}",
-            "serverMode": "local-static",
+            "serverMode": "multiplayer",
             "defaultPort": 30000
           }
           EOF
 
           test -f "$ROOT/public/index.html"
-          test -f "$ROOT/README.md"
+          test -f "$ROOT/server.mjs"
+          test -f "$ROOT/internet-launcher.mjs"
+          test -f "$ROOT/start-rpgmap-internet.bat"
+          test -f "$ROOT/setup-cloudflared.bat"
+          test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
 
           python - <<'PY'
           from pathlib import Path
           import sys
-          roots = list(Path('release').glob('RPGmap-Server-v*'))
+          roots = list(Path('release').glob('RPGmap-v*'))
           root = roots[0]
           bad = [str(p.relative_to(root)) for p in root.rglob('*') if not str(p.relative_to(root)).isascii()]
           if bad:
@@ -99,8 +118,8 @@ jobs:
           PY
 
           cd "$GITHUB_WORKSPACE/release"
-          ARCHIVE="RPGmap-Server-v${PACKAGE_VERSION}.zip"
-          zip -r -9 -q "$ARCHIVE" "RPGmap-Server-v${PACKAGE_VERSION}"
+          ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
+          zip -r -9 -q "$ARCHIVE" "RPGmap-v${PACKAGE_VERSION}"
           sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
 
           if unzip -l "$ARCHIVE" | grep -E '(^|/)(\.git|node_modules|tests?|coverage|\.cache|npm-cache|__pycache__|playwright-report|test-results)(/|$)'; then
@@ -114,23 +133,28 @@ jobs:
           cat > release/release-notes.md <<EOF
           ## RPGmap ${PACKAGE_VERSION}
 
-          RPGmap ${PACKAGE_VERSION} 将角色系统、Token 框选、移动与测距、先攻战斗、Health / Damage / Healing 以及 Chat / Game Log 整合为完整的跑团工作流。
+          RPGmap ${PACKAGE_VERSION} 正式加入 Multiplayer V1：GM / Player、WebSocket 共享 World、World Store 持久化，以及 Windows 一键 Cloudflare Quick Tunnel 远程联机。
 
-          ### 主要更新
-          - Actor Sheet：技能 / 豁免、不良状态、多 Form 与 XLSX 最终值导入。
-          - Selection：Token 单选、多选、矩形框选，支持 Shift 追加、Alt 移除。
-          - Ruler：自由测距、Waypoint，以及从当前角色位置开始测距。
-          - Combat：手填先攻、拖动排序、轮次 / 当前回合与显式加入参战者。
-          - Health：保留 SimpleHP，并加入完好 / B / L / A WoundTrack。
-          - Damage / Healing：对所选 Token 应用最终伤害或实际恢复量，并写入 Game Log。
-          - Token 生命条：SimpleHP 比例条与 WoundTrack 分段生命槽可视化。
-          - Chat / Game Log：聊天、战斗、伤害、恢复记录，并预留后续投骰接口。
+          ### Multiplayer
+          - GM / Player 身份与在线人数。
+          - Player Join Code + GM Secret。
+          - Actor / Token / Health / Damage / Healing / Combat / Chat / Scene World Snapshot 同步。
+          - revision / baseRevision 冲突检查与 Server World 持久化。
+          - HTTP 自动使用 WS，HTTPS 自动使用 WSS。
+
+          ### Internet Multiplayer
+          - Windows 双击 \`start-rpgmap-internet.bat\` 一键远程联机。
+          - 自动检测 / 安装 cloudflared。
+          - Cloudflare Quick Tunnel 默认使用 HTTP/2 over TCP。
+          - 自动读取 trycloudflare.com Public URL。
+          - 自动生成 Join Code / GM Secret。
+          - 独立 \`RPGmap Multiplayer Info\` 信息窗口便于查看和复制邀请信息。
 
           ### 使用
-          - Windows：解压后双击 \`start-rpgmap.bat\`
-          - Linux / macOS：执行 \`./start-rpgmap.sh\`
-          - 默认地址：\`http://127.0.0.1:30000\`
-          - ZIP 根目录的 \`README.md\` 包含完整操作指南。
+          - 本机 / LAN：Windows 双击 \`start-rpgmap.bat\`，Linux/macOS 执行 \`./start-rpgmap.sh\`。
+          - Windows 远程：双击 \`start-rpgmap-internet.bat\`。
+          - 玩家只需要 Public URL + Join Code；GM Secret 不应分享。
+          - ZIP 内 \`README.md\` 和 \`docs/MULTIPLAYER-GUIDE.md\` 包含完整说明。
 
           **Source commit:** \`${GITHUB_SHA}\`
           EOF
@@ -140,7 +164,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          ARCHIVE="release/RPGmap-Server-v${PACKAGE_VERSION}.zip"
+          ARCHIVE="release/RPGmap-v${PACKAGE_VERSION}.zip"
           gh release create "$RELEASE_TAG" \
             "$ARCHIVE" \
             "$ARCHIVE.sha256" \

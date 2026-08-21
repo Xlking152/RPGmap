@@ -1,10 +1,10 @@
 # RPGmap
 
-RPGmap 是一个面向 TRPG / VTT 的浏览器地图工具，目标是逐步发展为类似 Foundry VTT 的可自托管跑团平台。项目本身不绑定某一张地图：地图内容通过独立 `MapPackage` 接入，当前仓库中的北宋兰州地图只是第一张可用地图包和开发验证场景。
+RPGmap 是一个面向 TRPG / VTT 的浏览器地图工具，目标是逐步发展为类似 Foundry VTT 的可自托管跑团平台。地图内容通过独立 `MapPackage` 接入；仓库中的北宋兰州地图是当前开发与验证场景。
 
-当前应用版本：**1.3.0**。
+当前应用版本：**1.4.0**。
 
-## 1.3.0 核心能力
+## 1.4.0 核心能力
 
 ```text
 RPGmap
@@ -17,26 +17,164 @@ RPGmap
 ├─ HealthSystem        SimpleHP / WoundTrack
 ├─ DamageSystem        向所选 Token 应用最终伤害
 ├─ HealingSystem       向所选 Token 应用实际恢复量
-├─ ChatSystem          聊天、战斗 / 伤害 / 恢复 Game Log、未来 Roll 接口
-├─ Path UI             Movement / Ruler 共用高层距离标签
-├─ AppShell UI         顶栏、左侧先攻表、右侧聊天 / 角色库 / Inspector
-└─ Server              本地 HTTP 测试层，后续升级正式自托管服务
+├─ ChatSystem          聊天、Combat / Damage / Healing Game Log
+├─ Multiplayer         GM / Player、WebSocket、World Snapshot 同步
+├─ World Store         revision、冲突检查、服务器持久化
+├─ Internet Launcher   Cloudflare Quick Tunnel 一键远程联机
+└─ AppShell UI         顶栏、先攻表、聊天 / 角色库 / Inspector
 ```
 
-## 操作指南
-
-### 1. 启动
+## 快速启动
 
 需要 Node.js `^20.19.0 || >=22.12.0`。
 
-发布 / 测试包：
+### 本机 / 局域网
 
-- Windows：双击 `start-rpgmap.bat`。
-- Linux / macOS：执行 `./start-rpgmap.sh`。
-- 默认地址：`http://127.0.0.1:30000`。
-- 同一局域网设备可使用启动窗口显示的 Network 地址访问。
+发布包中：
 
-源码开发：
+- Windows：双击 `start-rpgmap.bat`
+- Linux / macOS：执行 `./start-rpgmap.sh`
+- 本机默认地址：`http://127.0.0.1:30000`
+- 同一局域网设备可使用启动窗口显示的 `Network` 地址
+
+### 远程联机（Windows）
+
+双击：
+
+```text
+start-rpgmap-internet.bat
+```
+
+启动器会自动完成：
+
+1. 检查可用的 `cloudflared`；没有时尝试自动安装 / 下载。
+2. 使用 Cloudflare Quick Tunnel 创建临时 HTTPS 公网地址。
+3. 使用 HTTP/2 over TCP，提高 VPN / TUN / 校园网等环境下的兼容性。
+4. 自动生成 6 位 `Join Code` 和随机 `GM Secret`。
+5. 启动 RPGmap Multiplayer Server，并把公网 URL 注入服务器状态。
+6. 自动打开公网 RPGmap 页面。
+7. 额外打开一个独立的 **RPGmap Multiplayer Info** 窗口，集中显示公网地址、Join Code 与 GM Secret，便于复制和观察。
+
+玩家只需要收到两项：
+
+```text
+Public URL : https://xxxx-xxxx.trycloudflare.com
+Join Code  : 123456
+```
+
+**不要把 GM Secret 发给玩家。** GM 在联机窗口选择 `GM` 并填写 GM Secret；玩家选择 `Player` 并填写 Join Code。
+
+Quick Tunnel 是当前 V1.4 的便捷远程联机入口，适合个人跑团和测试。它的公网地址每次启动都会变化，关闭启动器后地址失效；长期固定公网部署后续可迁移到 Named Tunnel / 自有域名。
+
+完整说明见：`文档/联机使用说明.md`。
+
+## Multiplayer V1.4
+
+### GM / Player
+
+- 当前只区分 `GM` 与 `Player`，不要求注册、邮箱、OAuth 或 JWT。
+- 公网模式通过 `Join Code` 控制 Player 加入，通过 `GM Secret` 授予 GM 身份。
+- GM Secret 不应共享给普通玩家。
+- 当前 V1.4 默认允许 Player 写共享 World，以满足共同移动 Token、战斗和状态更新的跑团需求；更细粒度 Actor Ownership 后续继续扩展。
+
+### 实时同步
+
+浏览器使用原生 WebSocket：
+
+- HTTP 页面使用 `ws://`
+- HTTPS 页面使用 `wss://`
+
+当前以完整 World Snapshot 为第一阶段同步模型，覆盖主要持久状态，包括：
+
+- Actor / Token
+- Token 位置与生命状态
+- Damage / Healing
+- Combat / Initiative / Round / Turn
+- Chat / Game Log
+- Scene / World 状态
+
+Selection、Ruler、地图视角、Hover、打开的 UI 面板等临时界面状态不会同步。
+
+### World Store
+
+Server 保存：
+
+```text
+data/worlds/<world-id>/world.json
+```
+
+World 使用 `revision` 管理版本。客户端提交携带 `baseRevision`；如果版本已经落后，Server 会返回最新 Snapshot，避免旧状态无条件覆盖新状态。World 写入使用临时文件 + rename，Server 重启后可恢复已有 World。
+
+### 公网地址/API
+
+`/api/health` 与 `/api/multiplayer` 会返回当前多人状态；公网启动模式下还包含当前 `publicUrl`。Server 启动信息块也会显示 `Public URL`。
+
+## 主要操作
+
+### Token 选择
+
+- 左键点击 Token：单选
+- 空白地图左键拖动：矩形框选
+- `Shift + 点击 / 框选`：追加选择
+- `Alt + 点击 / 框选`：移除选择
+- `Space + 左拖`：平移地图
+
+### Token 移动
+
+- 直接拖动 Token：规划移动
+- `Ctrl/Cmd` 拖动并松开：Waypoint 模式
+- `Ctrl/Cmd + 左键` 或 `F`：添加 Waypoint
+- 右键或 `Alt + F`：撤销最近 Waypoint
+- `Enter`：确认移动
+- `Esc`：取消移动
+- 规划时滚轮：切换 5 / 10 / 20 / 50 / 100 m 吸附
+
+### 测距
+
+- `R`：开启 / 关闭 Ruler
+- `Ctrl/Cmd + 左键` 或 `F`：增加测距 Waypoint
+- 右键或 `Alt + F`：撤销 Waypoint
+- `Shift + R`：从当前所选 Token 开始测距
+- `Esc`：清除 Ruler
+
+### 战斗
+
+1. 选择参战 Token。
+2. 点击“进入战斗”。
+3. 左侧先攻表填写先攻。
+4. 可拖动排序。
+5. “开始战斗”进入第 1 轮。
+6. “下一回合”推进当前行动者。
+7. 新角色必须明确选择后点击“加入所选”。
+
+### 伤害 / 恢复
+
+右侧聊天面板包含消息、伤害与恢复入口。DamageSystem 接收已经完成防具、DR、免疫等前置计算后的最终伤害；HealingSystem 接收按规则换算后的实际恢复量。
+
+生命系统同时支持：
+
+- `SimpleHP`
+- `WoundTrack`：完好 / B 冲击 / L 严重 / A 恶性
+
+## 快捷键速查
+
+| 操作 | 快捷方式 |
+| --- | --- |
+| 单选 Token | 左键单击 |
+| 框选 Token | 空白地图左键拖动 |
+| 追加选择 | `Shift + 点击 / 框选` |
+| 移除选择 | `Alt + 点击 / 框选` |
+| 平移地图 | `Space + 左拖` |
+| 打开角色卡 | 双击 Token / 右键菜单 |
+| 添加移动 / 测距 Waypoint | `Ctrl/Cmd + 左键` / `F` |
+| 撤销 Waypoint | 右键 / `Alt + F` |
+| 确认移动 | `Enter` |
+| 取消移动 / 清除 Ruler | `Esc` |
+| 开启 / 关闭 Ruler | `R` |
+| 从所选角色测距 | `Shift + R` |
+| 切换角色 Form | `V` |
+
+## 源码开发
 
 ```bash
 npm ci
@@ -50,212 +188,54 @@ npm run dev
 npm run build
 ```
 
-### 2. 导入与查看角色
-
-- 使用顶栏“导入角色”导入 XLSX 角色卡。
-- 当前模板只读取 `角色概览` 和 `具体数值表` 中 Excel 已保存的最终缓存值，不执行公式。
-- 双击地图 Token 或通过 Token 右键菜单打开角色卡。
-- 多 Form 角色选中 Token 后按 `V` 快速切换形态。
-- `鉴定` 页显示技能鉴定与意志 / 反射 / 强韧豁免。
-- `不良状态` 页可直接修改 21 种不良状态当前点数；阈值随 Form 切换，当前点数保留。
-
-### 3. Token 选择与框选
-
-- 左键点击 Token：单选。
-- 从地图空白处左键拖动：矩形框选。
-- `Shift + 点击 / 框选`：追加选择。
-- `Alt + 点击 / 框选`：从当前选择移除。
-- 点击空白：清空选择。
-- `Space + 左拖`：平移地图。
-- 从 Token 本身开始拖动始终交给 MovementSystem，不会误触框选。
-
-SelectionSystem 是战斗、角色测距、伤害和恢复生命的统一目标来源。
-
-### 4. Token 移动
-
-- 直接拖动 Token：规划移动路线。
-- Movement 使用 A* 路线和移动成本，与纯测距 Ruler 分离。
-- `Ctrl/Cmd` 拖动并松开：进入 Waypoint 规划。
-- `Ctrl/Cmd + 左键` 或 `F`：添加 Waypoint。
-- 右键或 `Alt + F`：删除最近 Waypoint。
-- `Enter`：确认移动。
-- `Esc`：取消移动规划。
-- 规划移动时滚轮：切换 5 / 10 / 20 / 50 / 100 m 吸附档位。
-
-距离数字绘制在独立高层 `pathLabelPane`，移动路线不会遮挡数字。
-
-### 5. 测距
-
-- 点击顶栏“测量”或按 `R`：开启 / 关闭 Ruler。
-- 左键设置起点，移动鼠标实时查看距离，再次左键结束。
-- `Ctrl/Cmd + 左键` 或 `F`：增加测距 Waypoint。
-- 右键或 `Alt + F`：撤销最近 Waypoint。
-- `Esc`：清除当前 Ruler。
-- 选中 Token 后点击“角色测距”，或按 `Shift + R`：以该 Token 中心为起点开始测距。
-
-Ruler 计算纯几何距离；Movement 计算实际移动路线与移动成本。
-
-### 6. 进入战斗与先攻
-
-1. 单选或框选准备参战的 Token。
-2. 点击顶栏“进入战斗”。只有当前已经选择的 Token 会进入战斗。
-3. 左侧先攻表展开，在每个参战者旁手动输入先攻。
-4. 输入先攻后默认按数值从大到小排序；空白先攻放在末尾。
-5. 可以拖动先攻表中的拖动柄手动确定最终顺序。
-6. 点击“开始战斗”进入第 1 轮；手动拖动后的顺序不会在开战时被重新排序。
-7. 点击“下一回合”依次推进；最后一个角色结束后自动进入下一轮。
-8. 点击“结束战斗”清除当前 Combat。
-
-战斗建立以后，新出现或后来选中的 Token **不会自动加入**。需要明确选中新角色，再点击“加入所选”。点击先攻表中的角色可选中并定位其地图 Token。
-
-### 7. 聊天与 Game Log
-
-右侧栏包含：
-
-```text
-聊天 | 角色库 | 当前
-```
-
-“聊天”页支持：
-
-- 普通聊天消息。
-- Combat 事件记录。
-- 伤害记录。
-- 恢复记录。
-- 预留 `roll` 类型，后续投骰和检定结果直接复用同一 Game Log。
-
-### 8. 伤害
-
-1. 在地图上选择一个或多个 Token。
-2. 打开右侧 `聊天 → 伤害`。
-3. 输入已经完成防具、硬度、DR、免疫、临时生命等前置结算后的**最终伤害值**。
-4. WoundTrack 角色选择 `B 冲击 / L 严重 / A 恶性`。
-5. 点击应用，伤害同时作用于所有明确选择的目标，并写入 Game Log。
-
-当前规则的 WoundTrack 使用：
-
-```text
-完好 / B 冲击 / L 严重 / A 恶性
-```
-
-伤害溢出会按规则升级。没有完好生命时标记昏迷；全部生命槽成为 A 时标记死亡；无完好且存在 A 时提示伤势恶化。伤势恶化目前只提示，不自动逐轮扣除。
-
-### 9. 恢复生命
-
-1. 选择一个或多个 Token。
-2. 打开右侧 `聊天 → 恢复`。
-3. 输入已经按具体技能 / 能力规则换算好的**实际恢复生命槽数**。
-4. WoundTrack 选择要恢复的 `B / L / A` 伤势，然后应用。
-5. SimpleHP 模式直接增加当前 HP，最高不超过上限。
-
-HealingSystem 不把“治疗点数 / 医疗点数”写死成统一兑换率，因为不同规则效果可以采用不同换算比例。普通恢复也不作为复活接口：已经全部为 A、处于死亡状态的 WoundTrack 角色不会被普通恢复直接复活。
-
-### 10. Token 血条
-
-地图 Token 上方常驻生命条，并随伤害、恢复和状态变化刷新：
-
-- SimpleHP：绿色表示当前 HP / 最大 HP。
-- WoundTrack：绿色 = 完好，黄色 = B，橙色 = L，深红 = A。
-
-血条不接管鼠标事件，不会妨碍 Token 选择、拖动或框选。
-
-## 快捷键速查
-
-| 操作 | 快捷方式 |
-| --- | --- |
-| 单选 Token | 左键单击 |
-| 框选 Token | 空白地图左键拖动 |
-| 追加选择 | `Shift + 点击 / 框选` |
-| 从选择中移除 | `Alt + 点击 / 框选` |
-| 平移地图 | `Space + 左拖` |
-| 打开角色卡 | 双击 Token / 右键菜单 |
-| 普通移动 | 直接拖动 Token |
-| Movement Waypoint 模式 | `Ctrl/Cmd` 拖动并松开 |
-| 添加移动 Waypoint | `Ctrl/Cmd + 左键` / `F` |
-| 删除最近移动 Waypoint | 右键 / `Alt + F` |
-| 确认移动 | `Enter` |
-| 取消移动 | `Esc` |
-| 切换移动吸附档位 | 移动规划时滚轮 |
-| 开启 / 关闭 Ruler | `R` |
-| 从所选角色测距 | `Shift + R` |
-| 添加 Ruler Waypoint | `Ctrl/Cmd + 左键` / `F` |
-| 撤销 Ruler Waypoint | 右键 / `Alt + F` |
-| 清除 Ruler | `Esc` |
-| 切换角色 Form | `V` |
-| Token 上下文菜单 | 右键 Token |
-
-## 数据与系统边界
-
-### Actor / Token / Combatant
-
-```text
-Actor
-  ↑
-Token
-  ↑
-Combatant
-```
-
-- Actor 保存角色真实数据。
-- Token 保存地图实例状态。
-- Combatant 只保存战斗引用、先攻与顺序，不复制角色 HP、资源或属性。
-
-### HealthSystem
-
-RPGmap 保留两种生命模式：
-
-- `SimpleHP`：传统 `current / max`，用于其他游戏。
-- `WoundTrack`：完好 / B / L / A，当前 XLSX 角色默认采用。
-
-DamageSystem 与 HealingSystem 只提供通用“应用到所选目标”的能力，具体游戏规则通过 Health Adapter 扩展。
-
 ## 项目目录
 
 ```text
 src/
 ├─ app/           持久化与应用辅助
 ├─ chat/          ChatSystem / Game Log
-├─ combat/        先攻与回合 CombatSystem
+├─ combat/        CombatSystem
 ├─ damage/        DamageSystem
 ├─ engine/        地图核心、几何、导航、场景状态
 ├─ entities/      Actor / Token / Form / XLSX
 ├─ healing/       HealingSystem
 ├─ health/        SimpleHP / WoundTrack / Token 血条
-├─ maps/          独立 MapPackage
-├─ measurement/   FVTT 风格 Ruler
-├─ movement/      Token MovementSystem
-├─ path/          Movement / Ruler 共用路径显示辅助
+├─ maps/          MapPackage
+├─ measurement/   Ruler
+├─ movement/      MovementSystem
+├─ multiplayer/   Client WebSocket / GM / Player / World sync
+├─ path/          路径显示辅助
 ├─ render/        场景与地图表现
-├─ selection/     Token 单选、多选与框选
+├─ selection/     Token 选择
 └─ ui/            AppShell UI
 
 tests/            自动化测试
-deployment/       本地服务器与发布设施
-文档/             工作日志、未来规划、开发说明
+deployment/       Server、启动器与发布设施
+文档/             工作日志、联机说明、开发说明与规划
 ```
-
-## 本地服务器当前限制
-
-当前 Server 仍属于服务器化过渡阶段：
-
-- HTTP Server 已真实运行，不依赖 `vite dev` 或 `vite preview`。
-- `/api/health` 与 `/api/version` 可访问。
-- Actor / Token / Scene / Combat 等长期状态暂时仍主要使用浏览器存储。
-- World Store、WebSocket、GM / Player 权限和多人同步尚未接入。
 
 ## 文档
 
-- `文档/工作日志.md`：按应用版本记录重要更新。
-- `文档/未来规划.md`：服务器化、多地图、多人同步和后续系统路线。
-- `文档/开发说明.md`：代码结构、系统边界、MapPackage 与开发约定。
-- `deployment/local-server/README.md`：发布 / 测试包内使用的启动和操作指南；后续打包应同步携带该 README。
+- `CHANGELOG.md`：正式版本更新日志。
+- `文档/工作日志.md`：开发阶段和历史实现记录。
+- `文档/联机使用说明.md`：V1.4 GM / Player、局域网和公网联机说明。
+- `文档/未来规划.md`：后续服务器、权限与多人能力路线。
+- `文档/开发说明.md`：代码结构和开发约定。
+- `deployment/local-server/README.md`：Release ZIP 内的运行与操作说明。
+
+## V1.4 当前边界
+
+- Cloudflare Quick Tunnel 是便捷临时公网入口，不提供固定地址或生产 SLA。
+- 当前权限粒度为 GM / Player；Actor Ownership 与更细权限尚未加入。
+- 当前同步模型以完整 World Snapshot 为主；极端高频并发编辑仍可能触发 revision conflict 并回载 Server 最新状态。
+- 长期公网部署应采用固定域名 / Named Tunnel，并继续增强认证、安全与备份策略。
 
 ## 版本规则
 
 RPGmap 使用语义化版本：
 
-- Patch，例如 `1.3.1`：Bug 修复、小交互调整、兼容性修正。
-- Minor，例如 `1.4.0`：新增较完整功能或子系统，同时尽量保持已有数据兼容。
+- Patch，例如 `1.4.1`：Bug 修复、小交互调整、兼容性修正。
+- Minor，例如 `1.5.0`：新增较完整功能或子系统，同时尽量保持已有数据兼容。
 - Major，例如 `2.0.0`：存在明显不兼容的数据、服务器协议或核心架构变化。
 
-普通提交和测试包不会自动提升应用版本。GitHub Release 使用应用版本号，例如 `v1.3.0`。
+GitHub Release 使用应用版本号，例如 `v1.4.0`。
