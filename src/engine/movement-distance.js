@@ -74,13 +74,16 @@ export function splitRouteByWaypoints(routePoints, waypoints = [], metersPerUnit
   const points = (routePoints || []).map(copyPoint);
   if (points.length < 2) return [];
   const boundaries = [0];
+  const lastIndex = points.length - 1;
   let searchFrom = 1;
   for (const waypoint of waypoints) {
+    if (searchFrom >= lastIndex) break;
     const index = nearestForwardIndex(points, waypoint, searchFrom);
-    boundaries.push(Math.max(boundaries.at(-1) + 1, index));
-    searchFrom = Math.min(points.length - 1, boundaries.at(-1) + 1);
+    if (index <= boundaries.at(-1) || index >= lastIndex) continue;
+    boundaries.push(index);
+    searchFrom = index + 1;
   }
-  boundaries.push(points.length - 1);
+  boundaries.push(lastIndex);
 
   const segments = [];
   for (let index = 0; index < boundaries.length - 1; index += 1) {
