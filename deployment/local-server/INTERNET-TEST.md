@@ -6,7 +6,11 @@
 
 1. 解压完整 Multiplayer 测试包。
 2. 双击 `start-rpgmap-internet.bat`。
-3. 第一次运行如果缺少 `cloudflared.exe`，脚本会调用 `setup-cloudflared.bat` 从 Cloudflare 官方 GitHub Release 下载 Windows amd64 版本。
+3. 第一次运行如果没有可用的 `cloudflared`，脚本会按以下顺序尝试：
+   - 使用包目录中的 `cloudflared.exe`；
+   - 使用系统 PATH 中已经安装的 `cloudflared.exe`；
+   - 从 Cloudflare 官方 GitHub Release 下载 Windows amd64 版本（先尝试 curl，再尝试 PowerShell）；
+   - 如果直接下载仍失败，尝试 Windows Package Manager `winget install --id Cloudflare.cloudflared --exact`。
 4. 启动脚本会自动生成：
    - 6 位 `Player Join Code`；
    - 随机 `GM Secret`。
@@ -22,6 +26,28 @@ https://example-random.trycloudflare.com
 9. Player 在任意地区使用浏览器打开公网 HTTPS 地址，选择 `Player`，输入显示名称和 Player Join Code 后加入。
 
 浏览器通过 HTTPS 访问时，RPGmap Multiplayer Client 会自动使用 `wss://<同一域名>/ws` 连接 WebSocket。
+
+## 如果出现 cloudflared download failed
+
+这通常表示当前网络无法正常访问 GitHub Release Assets，而不是 RPGmap Server 本身故障。
+
+最直接的手动处理方法：
+
+1. 打开 Cloudflare 官方 Tunnel Downloads 页面；
+2. 下载 Windows 64-bit Executable；
+3. 如果文件名是 `cloudflared-windows-amd64.exe`，将其改名为 `cloudflared.exe`；
+4. 把 `cloudflared.exe` 放到与 `start-rpgmap-internet.bat`、`server.mjs` 相同的 RPGmap 根目录；
+5. 双击 `cloudflared.exe` 不需要进行安装；重新运行 `start-rpgmap-internet.bat` 即可。
+
+也可以先在 Windows Terminal / CMD 中安装：
+
+```text
+winget install --id Cloudflare.cloudflared --exact
+```
+
+新版启动脚本会自动识别系统 PATH 中已经安装的 `cloudflared`。
+
+如果浏览器本身也无法打开 GitHub Release 下载文件，请更换一个能够正常访问该下载资源的网络完成这一次下载；`cloudflared.exe` 下载成功后可长期保留在 RPGmap 目录中，以后启动不需要重复下载。
 
 ## 当前安全边界
 
