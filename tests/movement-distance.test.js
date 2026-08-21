@@ -36,4 +36,7 @@ test('route is split at waypoint legs and produces per-leg plus total display co
   assert.equal(summary.actualDistance, 40);
   assert.equal(summary.displayCost, 40);
   assert.deepEqual(summary.segments.map(segment => segment.displayCost), [20, 20]);
+
+  const endpointWaypoint = splitRouteByWaypoints(route, [{ x: 30, y: 10 }], 1);
+  assert.equal(endpointWaypoint.length, 1, 'a waypoint equal to the current endpoint must not create a zero-length leg');
 });
