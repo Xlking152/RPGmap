@@ -1,19 +1,7 @@
-name: Publish S0 Local Server Pre-release
+name: Publish RPGmap Version Release
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - feat/entity-actor-token-system
-    paths:
-      - '.github/workflows/publish-local-server-release.yml'
-      - 'deployment/local-server/**'
-      - 'src/**'
-      - 'index.html'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'vite.config.js'
-      - '文档/未来规划.md'
 
 permissions:
   contents: write
@@ -42,11 +30,44 @@ jobs:
       - name: Build web client
         run: npm run build
 
+      - name: Resolve release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          RELEASE_TAG="v${PACKAGE_VERSION}"
+          echo "PACKAGE_VERSION=${PACKAGE_VERSION}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Remove legacy S0 releases when present
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tag in s0-local-server-1 s0-local-server-2 s0-local-server-3 s0-local-server-4 s0-local-server-5; do
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+            else
+              git push origin ":refs/tags/$tag" >/dev/null 2>&1 || true
+            fi
+          done
+
+      - name: Refuse duplicate version release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists. Increase the application version only after confirmation." >&2
+            exit 1
+          fi
+
       - name: Assemble clean server package
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="$GITHUB_WORKSPACE/release/RPGmap-Local-Server"
+          ROOT="$GITHUB_WORKSPACE/release/RPGmap-Server-v${PACKAGE_VERSION}"
           rm -rf "$GITHUB_WORKSPACE/release"
           mkdir -p "$ROOT/public" "$ROOT/data/worlds" "$ROOT/data/uploads" "$ROOT/data/backups" "$ROOT/docs"
 
@@ -59,16 +80,13 @@ jobs:
           cp '文档/未来规划.md' "$ROOT/docs/FUTURE-ROADMAP.md"
           chmod +x "$ROOT/start-rpgmap.sh"
 
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          RELEASE_TAG="s0-local-server-${GITHUB_RUN_NUMBER}"
           cat > "$ROOT/VERSION.json" <<EOF
           {
             "app": "RPGmap",
-            "packageVersion": "${PACKAGE_VERSION}-s0.${GITHUB_RUN_NUMBER}",
+            "version": "${PACKAGE_VERSION}",
             "releaseTag": "${RELEASE_TAG}",
-            "branch": "${GITHUB_REF_NAME}",
             "commit": "${GITHUB_SHA}",
-            "serverMode": "local-static-s0",
+            "serverMode": "local-static",
             "defaultPort": 30000
           }
           EOF
@@ -78,54 +96,41 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           import sys
-          root = Path('release/RPGmap-Local-Server')
+          roots = list(Path('release').glob('RPGmap-Server-v*'))
+          root = roots[0]
           bad = [str(p.relative_to(root)) for p in root.rglob('*') if not str(p.relative_to(root)).isascii()]
           if bad:
-              print('Non-ASCII release paths are forbidden to avoid Windows ZIP filename mojibake:', file=sys.stderr)
+              print('Non-ASCII release paths are forbidden:', file=sys.stderr)
               for path in bad:
                   print('  ' + path, file=sys.stderr)
               raise SystemExit(1)
           PY
 
           cd "$GITHUB_WORKSPACE/release"
-          zip -r -9 -q RPGmap-Local-Server.zip RPGmap-Local-Server
-          sha256sum RPGmap-Local-Server.zip > RPGmap-Local-Server.zip.sha256
+          ARCHIVE="RPGmap-Server-v${PACKAGE_VERSION}.zip"
+          zip -r -9 -q "$ARCHIVE" "RPGmap-Server-v${PACKAGE_VERSION}"
+          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
 
-          if unzip -l RPGmap-Local-Server.zip | grep -E '(^|/)(\.git|node_modules|tests?|coverage|\.cache|npm-cache|__pycache__|playwright-report|test-results)(/|$)'; then
+          if unzip -l "$ARCHIVE" | grep -E '(^|/)(\.git|node_modules|tests?|coverage|\.cache|npm-cache|__pycache__|playwright-report|test-results)(/|$)'; then
             echo 'Forbidden development files detected in release ZIP.' >&2
             exit 1
           fi
-
-          echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
-          echo "PACKAGE_VERSION=${PACKAGE_VERSION}" >> "$GITHUB_ENV"
 
       - name: Write release notes
         shell: bash
         run: |
           cat > release/release-notes.md <<EOF
-          ## RPGmap S0 Local Server
+          ## RPGmap ${PACKAGE_VERSION}
 
-          这是 RPGmap 服务器化路线的 **S0 Pre-release**，用于本地与局域网实际测试 MovementSystem、EntitySystem 和 Unified VTT UI。
+          RPGmap 是面向 TRPG / VTT 的自托管地图工具。该 Release 使用应用版本号，而不是 CI 构建编号。
 
           ### 使用
           - Windows：解压后双击 \`start-rpgmap.bat\`
           - Linux / macOS：执行 \`./start-rpgmap.sh\`
           - 默认地址：\`http://127.0.0.1:30000\`
-          - 局域网地址会在服务器控制台中显示
 
-          ### Windows 乱码修正
-          Release 内所有路径均强制使用 ASCII 文件名，BAT 脚本使用纯英文控制台文本，避免 Windows Explorer / ZIP / CMD 代码页造成文件名或脚本内容乱码。
-
-          ### 包内容
-          - GitHub Actions 预编译的 \`public/\`
-          - 零第三方运行依赖的 Node HTTP Server
-          - Windows / Linux / macOS 启动入口
-          - \`data/worlds\`、\`data/uploads\`、\`data/backups\` 预留目录
-          - \`docs/FUTURE-ROADMAP.md\`
-          - \`VERSION.json\` 构建信息
-
-          ### 当前阶段限制
-          Actor / Token / Scene 长期状态仍使用浏览器 localStorage；World Store、WebSocket、GM/Player 权限与多人同步将在后续 Server 阶段接入。
+          ### 当前阶段
+          本版本已包含 MovementSystem、EntitySystem、AppShell UI 和本地 HTTP Server。World Store、WebSocket、权限与多人同步仍按未来规划继续开发。
 
           **Source commit:** \`${GITHUB_SHA}\`
           EOF
@@ -135,34 +140,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          ARCHIVE="release/RPGmap-Server-v${PACKAGE_VERSION}.zip"
           gh release create "$RELEASE_TAG" \
-            release/RPGmap-Local-Server.zip \
-            release/RPGmap-Local-Server.zip.sha256 \
+            "$ARCHIVE" \
+            "$ARCHIVE.sha256" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "RPGmap Local Server S0 · Build ${GITHUB_RUN_NUMBER}" \
+            --title "RPGmap ${PACKAGE_VERSION}" \
             --notes-file release/release-notes.md \
             --prerelease
-
-      - name: Record published release receipt
-        shell: bash
-        run: |
-          set -euo pipefail
-          RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
-          CHECKSUM=$(cut -d' ' -f1 release/RPGmap-Local-Server.zip.sha256)
-          mkdir -p release-status
-          cat > release-status/latest-s0.md <<EOF
-          # Latest S0 Local Server Release
-
-          - Tag: \`${RELEASE_TAG}\`
-          - URL: ${RELEASE_URL}
-          - Source commit: \`${GITHUB_SHA}\`
-          - ZIP SHA256: \`${CHECKSUM}\`
-          - Workflow run: \`${GITHUB_RUN_ID}\`
-          EOF
-
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add release-status/latest-s0.md
-          git commit -m "chore: record ${RELEASE_TAG} receipt"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
