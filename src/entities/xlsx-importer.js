@@ -29,7 +29,7 @@ export function guessFormName(fileName = '') {
 }
 
 export function parseCharacterSheets({ overview, detailed, fileName = '', avatarImage = null } = {}) {
-  if (!overview || !detailed) throw new Error('角色卡必须包含“角色榆览”和“具体数值表”');
+  if (!overview || !detailed) throw new Error('角色卡必须包含“角色概览”和“具体数值表”');
   const identity = {
     name: clean(value(detailed, 'C1'), '未命名角色'),
     gender: clean(value(detailed, 'C3')),
