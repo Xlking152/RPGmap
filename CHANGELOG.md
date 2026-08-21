@@ -4,7 +4,7 @@ RPGmap 使用语义化版本号。更细的开发过程见 `文档/工作日志.
 
 ## 1.4.3 — Candidate · 2026-08-22
 
-V1.4.3 在 V1.4.2 的 `app / world / maps` 便携结构上加入统一 **PowerShell Runtime + Web Launcher / GM Control Center**。
+V1.4.3 在 V1.4.2 的 `app / world / maps` 便携结构上加入统一 **PowerShell Runtime + Web Launcher / GM Control Center**，并把 `maps/` 从“预留目录”正式升级为运行时 Map Library。
 
 ### Final Windows startup
 
@@ -15,6 +15,34 @@ V1.4.3 在 V1.4.2 的 `app / world / maps` 便携结构上加入统一 **PowerSh
 - Server 启动后同一窗口直接显示 Local / LAN / Public URL、Join Code、GM Secret、World / Maps、Build、READY 和后续日志。
 - 所有交互按钮仍在浏览器 Web Launcher 中。
 - 根目录 EXE 数量固定为 0。
+
+### External Runtime MapPackages
+
+修正早期 V1.4.3 Candidate 中“根 `maps/` 已建立，但默认兰州地图仍被 Vite 编译进 `app/`”的问题。
+
+现在发布包真正生成：
+
+```text
+maps/
+├─ index.json
+└─ northern-song-lanzhou-1104/
+   ├─ map.json
+   ├─ README.txt
+   └─ assets/*.webp
+```
+
+- `maps/index.json` 成为 Runtime Map Registry；
+- `map.json` 保存地图 metadata、SVG、features、navigation、破坏规则等 MapPackage 数据；
+- 地图 WebP 资源保存在同一地图目录的 `assets/`；
+- `src/main.js` 不再静态 import 兰州地图和地图 WebP；
+- Production 前端启动时从 `/maps/index.json` 与对应 `map.json` 加载地图；
+- Vite dev 模式保留源码地图 fallback，避免开发服务器必须先生成 Runtime MapPackage；
+- PowerShell Runtime 在 Windows 建立 `app/maps -> ../maps` Junction，Game Server 通过现有静态目录读取根 `maps/`，不复制地图数据；
+- CI 会检查兰州特定地图 markup 不再烘焙进 `app/`。
+
+### World 空目录语义
+
+新发行包不会预填一场假的 Campaign，因此 `world/` 初次解压时只有 README、`uploads/`、`backups/` 属于正常情况。`state.json` / `users.json` 在运行状态首次持久化或旧数据迁移时产生。
 
 ### Native EXE Candidate 撤回
 
@@ -73,20 +101,25 @@ RPGmap-v1.4.3/
 ├─ server/
 ├─ world/
 ├─ maps/
+│  ├─ index.json
+│  └─ northern-song-lanzhou-1104/
 ├─ tools/
 ├─ docs/
 └─ VERSION.json
 ```
 
-`VERSION.json.launcherMode = single-bat-powershell-web-admin-console`。
+`VERSION.json.launcherMode = single-bat-powershell-web-admin-console`。  
+`VERSION.json.mapPackageMode = external-runtime-maps`。
 
 ### Validation
 
 - npm tests / JS syntax / Vite build；
+- MapPackage serialization test；
 - LauncherAdminClient + 真实 Server 联调；
 - ZIP 解压后二次结构检查；
 - Windows Smoke Test 直接运行最终 `RPGmap.bat`；
-- Smoke Test 故意占用 29999，要求 Launcher 自动回退到 29998。
+- Smoke Test 故意占用 29999，要求 Launcher 自动回退到 29998；
+- Windows Smoke Test 验证 `app/maps` Junction 与 `/maps/index.json` 实际可读。
 
 ## 1.4.2 — Candidate · Superseded by 1.4.3
 
