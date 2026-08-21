@@ -42,10 +42,20 @@ async function openAndHello(url, hello) {
 }
 
 async function startServer(extraEnv = {}) {
-  const mapDir = await mkdtemp(path.join(tmpdir(), 'rpgmap-map-'));
+  const packageRoot = await mkdtemp(path.join(tmpdir(), 'rpgmap-package-'));
+  const worldDir = path.join(packageRoot, 'world');
+  const mapsDir = path.join(packageRoot, 'maps');
   const serverPath = fileURLToPath(new URL('../deployment/local-server/server.mjs', import.meta.url));
   const child = spawn(process.execPath, [serverPath], {
-    env: { ...process.env, PORT: '0', RPGMAP_MAP_DIR: mapDir, RPGMAP_PUBLIC_DIR: mapDir, ...extraEnv },
+    env: {
+      ...process.env,
+      PORT: '0',
+      RPGMAP_PACKAGE_ROOT: packageRoot,
+      RPGMAP_WORLD_DIR: worldDir,
+      RPGMAP_MAPS_DIR: mapsDir,
+      RPGMAP_PUBLIC_DIR: packageRoot,
+      ...extraEnv,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stderr = '';
@@ -65,13 +75,13 @@ async function startServer(extraEnv = {}) {
       reject(new Error(`server exited ${code}\n${stderr}`));
     });
   });
-  return { child, mapDir, url: `ws://127.0.0.1:${port}/ws` };
+  return { child, packageRoot, worldDir, mapsDir, url: `ws://127.0.0.1:${port}/ws` };
 }
 
 async function stopServer(runtime) {
   runtime.child.kill('SIGTERM');
   await new Promise(resolve => setTimeout(resolve, 120));
-  await rm(runtime.mapDir, { recursive: true, force: true });
+  await rm(runtime.packageRoot, { recursive: true, force: true });
 }
 
 function initialWorld() {
@@ -187,7 +197,7 @@ test('GM approves Player identity; OWNER writes succeed while unowned and combat
     await allowedTurnSnapshot;
 
     await new Promise(resolve => setTimeout(resolve, 150));
-    const accessData = JSON.parse(await readFile(path.join(runtime.mapDir, 'users.json'), 'utf8'));
+    const accessData = JSON.parse(await readFile(path.join(runtime.worldDir, 'users.json'), 'utf8'));
     assert.equal(accessData.users.length, 1);
     assert.equal(accessData.users[0].defaultActorId, 'actor-a');
     assert.equal(accessData.users[0].ownership['actor-a'], 'owner');
@@ -195,7 +205,7 @@ test('GM approves Player identity; OWNER writes succeed while unowned and combat
     assert.match(accessData.users[0].playerKeyHash, /^[0-9a-f]{64}$/);
     assert.equal(JSON.stringify(accessData).includes(bound.authToken), false);
 
-    const worldData = JSON.parse(await readFile(path.join(runtime.mapDir, 'world.json'), 'utf8'));
+    const worldData = JSON.parse(await readFile(path.join(runtime.worldDir, 'state.json'), 'utf8'));
     assert.equal(worldData.revision, 5);
 
     player.ws.close();
