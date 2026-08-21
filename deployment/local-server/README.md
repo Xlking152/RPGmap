@@ -1,6 +1,6 @@
-# RPGmap Local Server · S0 Pre-release
+# RPGmap Local Server
 
-这是 RPGmap 自托管服务器路线的 S0 测试发布包。
+这是 RPGmap 当前自托管服务器路线的本地 / 局域网测试启动包。
 
 ## Windows
 
@@ -18,26 +18,28 @@ chmod +x start-rpgmap.sh
 ./start-rpgmap.sh
 ```
 
-## 发布包内容
+## Release 包内容
 
-Release ZIP 只包含运行所需内容：
+版本化 Release ZIP 只包含运行所需内容：
 
-- `public/`：GitHub Actions 预编译好的 Web Client。
-- `server.mjs`：零第三方运行依赖的 Node HTTP Server。
+- `public/`：GitHub Actions 预编译的 Web Client。
+- `server.mjs`：当前零第三方运行依赖的 Node HTTP Server。
 - `start-rpgmap.bat` / `start-rpgmap.sh`：启动入口。
 - `data/`：未来 World Store、上传和备份的数据目录。
 - `docs/FUTURE-ROADMAP.md`：服务器化后续规划。
-- `VERSION.json`：构建版本与 Commit 信息。
+- `VERSION.json`：应用版本与 Commit 信息。
 
-不会包含 `.git`、`node_modules`、npm cache、tests、源码、构建缓存或日志。
+不会包含 `.git`、`node_modules`、npm cache、tests、源码、构建缓存、历史参考或日志。
 
 ## 当前限制
 
-S0 仍是服务器化过渡阶段：
+当前 Server 仍属于服务器化过渡阶段：
 
 - HTTP Server 已真实运行，不依赖 `vite dev` 或 `vite preview`。
 - `/api/health` 与 `/api/version` 可访问。
-- Actor / Token / Scene 长期状态暂时仍使用浏览器 localStorage。
+- Actor / Token / Scene 长期状态暂时仍主要使用浏览器 localStorage。
 - World Store、WebSocket、GM / Player 权限和多人同步尚未接入。
 
 完整路线见仓库 `文档/未来规划.md`。
+
+GitHub Release 使用应用版本号，例如 `v1.2.0`，不再使用连续 CI / Server 构建编号作为产品版本。
