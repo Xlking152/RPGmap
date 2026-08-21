@@ -71,7 +71,9 @@ jobs:
         run: |
           set -euo pipefail
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          SOURCE_COMMIT="${{ github.event.pull_request.head.sha || github.sha }}"
           echo "PACKAGE_VERSION=${PACKAGE_VERSION}" >> "$GITHUB_ENV"
+          echo "SOURCE_COMMIT=${SOURCE_COMMIT}" >> "$GITHUB_ENV"
 
       - name: Assemble RPGmap package
         shell: bash
@@ -103,7 +105,7 @@ jobs:
           {
             "app": "RPGmap",
             "version": "${PACKAGE_VERSION}",
-            "commit": "${GITHUB_SHA}",
+            "commit": "${SOURCE_COMMIT}",
             "serverMode": "multiplayer",
             "storageMode": "portable-world-maps",
             "defaultPort": 30000
@@ -171,6 +173,7 @@ jobs:
           test ! -d "$VROOT/data"
           test ! -d "$VROOT/public"
           test ! -f "$VROOT/README.md"
+          test "$(node -p "require('$VROOT/VERSION.json').commit")" = "$SOURCE_COMMIT"
           rm -rf "$VERIFY"
 
       - name: Upload RPGmap package
