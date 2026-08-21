@@ -140,6 +140,7 @@ function attachFrameReader(socket, onText, onClose) {
   let buffer = Buffer.alloc(0);
   let fragments = [];
   let fragmentedOpcode = null;
+  let fragmentBytes = 0;
 
   socket.on('data', chunk => {
     buffer = Buffer.concat([buffer, chunk]);
@@ -152,6 +153,7 @@ function attachFrameReader(socket, onText, onClose) {
       let length = second & 0x7f;
       let offset = 2;
 
+      if (first & 0x70) return closeSocket(socket, 1002, 'extensions unsupported');
       if (length === 126) {
         if (buffer.length < 4) return;
         length = buffer.readUInt16BE(2);
@@ -164,6 +166,7 @@ function attachFrameReader(socket, onText, onClose) {
         offset = 10;
       }
       if (length > MAX_WS_PAYLOAD) return closeSocket(socket, 1009, 'payload too large');
+      if (opcode >= 0x8 && length > 125) return closeSocket(socket, 1002, 'control frame too large');
       if (!masked) return closeSocket(socket, 1002, 'client frames must be masked');
       if (buffer.length < offset + 4 + length) return;
 
@@ -181,19 +184,26 @@ function attachFrameReader(socket, onText, onClose) {
       if (opcode === 0xA) continue;
 
       if (opcode === 0x1 && !fin) {
+        if (fragmentedOpcode !== null) return closeSocket(socket, 1002, 'nested fragments');
         fragmentedOpcode = opcode;
         fragments = [payload];
+        fragmentBytes = payload.length;
         continue;
       }
       if (opcode === 0x0 && fragmentedOpcode !== null) {
+        fragmentBytes += payload.length;
+        if (fragmentBytes > MAX_WS_PAYLOAD) return closeSocket(socket, 1009, 'payload too large');
         fragments.push(payload);
         if (!fin) continue;
         const combined = Buffer.concat(fragments);
         fragments = [];
         fragmentedOpcode = null;
+        fragmentBytes = 0;
         onText(combined.toString('utf8'));
         continue;
       }
+      if (opcode === 0x0) return closeSocket(socket, 1002, 'unexpected continuation');
+      if (fragmentedOpcode !== null) return closeSocket(socket, 1002, 'fragment sequence incomplete');
       if (opcode !== 0x1) return closeSocket(socket, 1003, 'text only');
       onText(payload.toString('utf8'));
     }
@@ -316,14 +326,15 @@ server.on('upgrade', (req, socket) => {
 
     if (!joined) {
       if (message?.type !== 'hello') return closeSocket(socket, 1008, 'hello required');
-      if (PLAYER_JOIN_CODE && String(message.joinCode || '') !== PLAYER_JOIN_CODE) {
-        sendSocket(socket, { type: 'error', code: 'invalid_join_code', message: '房间码错误' });
-        return closeSocket(socket, 1008, 'invalid join code');
-      }
       const requestedRole = message.requestedRole === 'gm' ? 'gm' : 'player';
       const secretMatches = Boolean(message.gmSecret) && String(message.gmSecret) === GM_SECRET;
       const localGmAllowed = !PUBLIC_MODE && isLoopback(socket.remoteAddress);
-      const role = requestedRole === 'gm' && (secretMatches || localGmAllowed) ? 'gm' : 'player';
+      const gmAuthorized = requestedRole === 'gm' && (secretMatches || localGmAllowed);
+      if (PLAYER_JOIN_CODE && !gmAuthorized && String(message.joinCode || '') !== PLAYER_JOIN_CODE) {
+        sendSocket(socket, { type: 'error', code: 'invalid_join_code', message: '房间码错误' });
+        return closeSocket(socket, 1008, 'invalid join code');
+      }
+      const role = gmAuthorized ? 'gm' : 'player';
       const session = {
         id: randomUUID(),
         name: sanitizeName(message.name),
