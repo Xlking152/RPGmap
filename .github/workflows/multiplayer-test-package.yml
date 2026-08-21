@@ -39,7 +39,7 @@ permissions:
 jobs:
   test-and-package:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 18
 
     steps:
       - name: Checkout source
@@ -68,6 +68,26 @@ jobs:
       - name: Build web client
         run: npm run build
 
+      - name: Install Windows launcher compiler
+        shell: bash
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+
+      - name: Build native Windows Launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p native-build
+          x86_64-w64-mingw32-gcc \
+            -O2 -s -municode -mwindows \
+            -finput-charset=UTF-8 \
+            deployment/launcher/windows-launcher.c \
+            -o "native-build/RPGmap Launcher.exe" \
+            -lshell32
+          test -s "native-build/RPGmap Launcher.exe"
+          file "native-build/RPGmap Launcher.exe" | grep -E 'PE32\+ executable.*x86-64'
+
       - name: Resolve package version
         shell: bash
         run: |
@@ -87,12 +107,12 @@ jobs:
 
           cp -R dist/. "$ROOT/app/"
 
+          cp "native-build/RPGmap Launcher.exe" "$ROOT/RPGmap Launcher.exe"
           cp deployment/launcher/launcher.mjs "$ROOT/launcher/launcher.mjs"
           cp deployment/launcher/admin-client.mjs "$ROOT/launcher/admin-client.mjs"
           cp deployment/launcher/index.html "$ROOT/launcher/index.html"
           cp deployment/launcher/launcher.js "$ROOT/launcher/launcher.js"
           cp deployment/launcher/launcher.css "$ROOT/launcher/launcher.css"
-          cp deployment/launcher/start-rpgmap.bat "$ROOT/启动 RPGmap.bat"
 
           cp deployment/local-server/server.mjs "$ROOT/server/server.mjs"
           cp deployment/local-server/access-control.mjs "$ROOT/server/access-control.mjs"
@@ -103,6 +123,7 @@ jobs:
           cp deployment/local-server/world/README.txt "$ROOT/world/README.txt"
           cp deployment/local-server/maps/README.txt "$ROOT/maps/README.txt"
           cp '文档/联机使用说明.md' "$ROOT/docs/MULTIPLAYER-GUIDE.md"
+          cp '文档/未来规划.md' "$ROOT/docs/FUTURE-ROADMAP.md"
           cp CHANGELOG.md "$ROOT/docs/CHANGELOG.md"
 
           cat > "$ROOT/VERSION.json" <<EOF
@@ -112,13 +133,14 @@ jobs:
             "commit": "${SOURCE_COMMIT}",
             "serverMode": "multiplayer",
             "storageMode": "portable-world-maps",
-            "launcherMode": "unified-admin-console",
+            "launcherMode": "native-exe-web-admin-console",
             "defaultPort": 30000,
             "launcherPort": 29999
           }
           EOF
 
           test -f "$ROOT/app/index.html"
+          test -f "$ROOT/RPGmap Launcher.exe"
           test -f "$ROOT/launcher/launcher.mjs"
           test -f "$ROOT/launcher/admin-client.mjs"
           test -f "$ROOT/launcher/index.html"
@@ -127,23 +149,20 @@ jobs:
           test -f "$ROOT/server/server.mjs"
           test -f "$ROOT/server/access-control.mjs"
           test -f "$ROOT/server/portable-storage.mjs"
-          test -f "$ROOT/启动 RPGmap.bat"
           test -f "$ROOT/操作说明.md"
           test -f "$ROOT/world/README.txt"
           test -d "$ROOT/world/uploads"
           test -d "$ROOT/world/backups"
           test -f "$ROOT/maps/README.txt"
           test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
+          test -f "$ROOT/docs/FUTURE-ROADMAP.md"
           test ! -d "$ROOT/map"
           test ! -d "$ROOT/data"
           test ! -d "$ROOT/public"
           test ! -f "$ROOT/README.md"
           test ! -f "$ROOT/server.mjs"
-          test ! -f "$ROOT/start-rpgmap.bat"
-          test ! -f "$ROOT/start-rpgmap-internet.bat"
-          test ! -f "$ROOT/setup-cloudflared.bat"
-          test ! -f "$ROOT/run-rpgmap-public-server.bat"
-          test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
+          test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 0
+          test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 1
 
           cd "$GITHUB_WORKSPACE/artifact"
           ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
@@ -179,20 +198,23 @@ jobs:
               zf.extractall(verify)
           PY
           VROOT="$VERIFY/RPGmap-v${PACKAGE_VERSION}"
-          test -f "$VROOT/启动 RPGmap.bat"
+          test -f "$VROOT/RPGmap Launcher.exe"
+          file "$VROOT/RPGmap Launcher.exe" | grep -E 'PE32\+ executable.*x86-64'
           test -f "$VROOT/操作说明.md"
           test -f "$VROOT/launcher/launcher.mjs"
           test -f "$VROOT/server/server.mjs"
           test -f "$VROOT/app/index.html"
           test -f "$VROOT/world/README.txt"
           test -f "$VROOT/maps/README.txt"
+          test -f "$VROOT/docs/FUTURE-ROADMAP.md"
           test ! -d "$VROOT/map"
           test ! -d "$VROOT/data"
           test ! -d "$VROOT/public"
           test ! -f "$VROOT/README.md"
-          test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
+          test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 0
+          test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 1
           test "$(node -p "require('$VROOT/VERSION.json').commit")" = "$SOURCE_COMMIT"
-          test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "unified-admin-console"
+          test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "native-exe-web-admin-console"
           rm -rf "$VERIFY"
 
       - name: Upload RPGmap package
