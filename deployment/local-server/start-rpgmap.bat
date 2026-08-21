@@ -15,20 +15,21 @@ if not exist "%~dp0app\index.html" (
   exit /b 1
 )
 
-if not exist "%~dp0map" mkdir "%~dp0map"
-if not exist "%~dp0map\uploads" mkdir "%~dp0map\uploads"
-if not exist "%~dp0map\backups" mkdir "%~dp0map\backups"
+if not exist "%~dp0world" mkdir "%~dp0world"
+if not exist "%~dp0world\uploads" mkdir "%~dp0world\uploads"
+if not exist "%~dp0world\backups" mkdir "%~dp0world\backups"
+if not exist "%~dp0maps" mkdir "%~dp0maps"
 
 set "RPGMAP_PUBLIC_DIR=%~dp0app"
-set "RPGMAP_MAP_DIR=%~dp0map"
+set "RPGMAP_WORLD_DIR=%~dp0world"
+set "RPGMAP_MAPS_DIR=%~dp0maps"
 
 echo ============================================================
 echo  RPGmap Local Server
-
-echo  Local    : http://127.0.0.1:30000
-
-echo  Map Root : %RPGMAP_MAP_DIR%
-
+echo ============================================================
+echo  Local      : http://127.0.0.1:30000
+echo  World Data : %RPGMAP_WORLD_DIR%
+echo  Map Library: %RPGMAP_MAPS_DIR%
 echo ============================================================
 echo.
 start "" "http://127.0.0.1:30000"
