@@ -37,8 +37,9 @@ import { createAppShellUi } from './ui/index.js';
 import { createSelectionSystem } from './selection/index.js';
 import { createCombatSystem } from './combat/index.js';
 import { createLanzhouMapPackage } from './maps/lanzhou.js';
+import { cleanMapPackagePresentation } from './maps/presentation-cleanup.js';
 
-const mapPackage = createLanzhouMapPackage({
+const mapPackage = cleanMapPackagePresentation(createLanzhouMapPackage({
   chenghuangTempleUrl, cityGatehouseUrl, cityWallTowerUrl, jinchengGatehouseUrl, loessTerrainUrl,
   marketOfficeHallUrl, marketStorehouseUrl, yamenHallUrl, yellowRiverPontoonUrl, yellowRiverUrl,
   buildingSprites: {
@@ -48,7 +49,7 @@ const mapPackage = createLanzhouMapPackage({
     residenceCourtyard: [residenceCourtyard01Url, residenceCourtyard02Url],
   },
   rubbleAtlas: { url: rubbleAtlasUrl, width: 1536, height: 1024, columns: 3, rows: 2 },
-});
+}));
 
 const selectionSystem = createSelectionSystem();
 
