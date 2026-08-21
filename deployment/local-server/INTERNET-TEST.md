@@ -7,31 +7,48 @@
 Windows 双击：
 
 ```text
-RPGmap Launcher.exe
+启动 RPGmap.bat
 ```
 
-Native EXE 负责启动 `launcher/launcher.mjs`。随后在 Launcher 页面点击：
+BAT 仅负责查找 Node.js 并启动：
+
+```text
+launcher/launcher.mjs
+```
+
+随后在浏览器 Launcher 页面点击：
 
 ```text
 启动互联网联机
 ```
 
+## Launcher 本机端口
+
+Launcher 只绑定：
+
+```text
+127.0.0.1
+```
+
+首选端口 `29999`。被占用时自动尝试 `29998 / 29997 / 29996 / 29995`，仍不可用时交给 Windows 自动分配空闲 loopback 端口。
+
+Launcher 会自动打开实际地址，Internet Tunnel 永远不会转发 Launcher 端口。
+
 ## Internet 流程
 
 Launcher 自动：
 
-1. 检查 Node.js。
-2. 检查完整 `app/`、`world/`、`maps/`、`server/`。
-3. 优先使用 `tools/cloudflared.exe`。
-4. 其次使用 RPGmap 根目录或系统 PATH 中的 cloudflared。
-5. 如果 Windows 仍未找到 cloudflared，下载官方 Windows amd64 binary 到 `tools/`。
-6. 使用 `--protocol http2` 创建 Cloudflare Quick Tunnel。
-7. 自动解析 `https://*.trycloudflare.com`。
-8. 自动生成 6 位 Join Code 与 GM Secret。
-9. 启动 `server/server.mjs`。
-10. 等待 `/api/health` READY。
-11. 建立隐藏的 Launcher GM Admin WebSocket Session。
-12. Launcher 页面显示 Public URL / Join Code / GM Secret / User 后台。
+1. 检查完整 `app/`、`world/`、`maps/`、`server/`。
+2. 优先使用 `tools/cloudflared.exe`。
+3. 其次使用 RPGmap 根目录或系统 PATH 中的 cloudflared。
+4. Windows 仍未找到 cloudflared 时，下载官方 Windows amd64 binary 到 `tools/`。
+5. 使用 `--protocol http2` 创建 Cloudflare Quick Tunnel。
+6. 自动解析 `https://*.trycloudflare.com`。
+7. 自动生成 6 位 Join Code 与 GM Secret。
+8. 启动 `server/server.mjs`。
+9. 等待 `/api/health` READY。
+10. 建立隐藏的 Launcher GM Admin WebSocket Session。
+11. Launcher 页面显示 Public URL / Join Code / GM Secret / User 后台。
 
 ## 玩家邀请
 
@@ -50,7 +67,7 @@ Launcher 的“复制玩家邀请”不会包含 GM Secret。
 ## Launcher / Game Server 安全边界
 
 ```text
-Launcher  : 127.0.0.1:29999
+Launcher  : 127.0.0.1:<dynamic>
 Game      : 0.0.0.0:30000
 Cloudflare: -> 127.0.0.1:30000 only
 ```
@@ -90,15 +107,34 @@ world/    当前 Campaign 运行状态
 maps/     Map / Scene 资源库
 server/   Multiplayer Server 内部程序
 launcher/ Launcher 内部程序
+tools/    cloudflared / 可选 Portable Node
 ```
 
 Internet 和 LAN 使用同一套 `world/` / `maps/` 数据。
 
 ## Troubleshooting
 
-### Native EXE 提示未检测到 Node.js
+### BAT 提示未检测到 Node.js
 
-安装 Node.js `^20.19.0 || >=22.12.0`，然后重新双击 `RPGmap Launcher.exe`。
+安装 Node.js `^20.19.0 || >=22.12.0`，然后重新双击 `启动 RPGmap.bat`。
+
+### BAT 启动后没有浏览器页面
+
+查看：
+
+```text
+launcher-startup.log
+```
+
+或手动运行：
+
+```bat
+node launcher\launcher.mjs
+```
+
+### 29999 已被其他程序占用
+
+无需结束其他进程。Launcher 会自动切换到其他本机端口。
 
 ### `stream N canceled by remote with error code 0`
 
