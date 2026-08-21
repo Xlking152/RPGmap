@@ -85,6 +85,7 @@ jobs:
 
           cp -R dist/. "$ROOT/app/"
           cp deployment/launcher/start-rpgmap.bat "$ROOT/RPGmap.bat"
+          cp deployment/launcher/rpgmap-runtime.ps1 "$ROOT/launcher/rpgmap-runtime.ps1"
           cp deployment/launcher/launcher.mjs "$ROOT/launcher/launcher.mjs"
           cp deployment/launcher/admin-client.mjs "$ROOT/launcher/admin-client.mjs"
           cp deployment/launcher/index.html "$ROOT/launcher/index.html"
@@ -110,7 +111,7 @@ jobs:
             "commit": "${SOURCE_COMMIT}",
             "serverMode": "multiplayer",
             "storageMode": "portable-world-maps",
-            "launcherMode": "single-bat-web-admin-console",
+            "launcherMode": "single-bat-powershell-web-admin-console",
             "defaultPort": 30000,
             "preferredLauncherPort": 29999,
             "launcherPortMode": "dynamic-loopback"
@@ -119,6 +120,7 @@ jobs:
 
           test -f "$ROOT/app/index.html"
           test -f "$ROOT/RPGmap.bat"
+          test -f "$ROOT/launcher/rpgmap-runtime.ps1"
           test -f "$ROOT/launcher/launcher.mjs"
           test -f "$ROOT/server/server.mjs"
           test -f "$ROOT/操作说明.md"
@@ -164,6 +166,7 @@ jobs:
           PY
           VROOT="$VERIFY/RPGmap-v${PACKAGE_VERSION}"
           test -f "$VROOT/RPGmap.bat"
+          test -f "$VROOT/launcher/rpgmap-runtime.ps1"
           test -f "$VROOT/操作说明.md"
           test -f "$VROOT/launcher/launcher.mjs"
           test -f "$VROOT/server/server.mjs"
@@ -172,7 +175,7 @@ jobs:
           test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
           test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 0
           test "$(node -p "require('$VROOT/VERSION.json').commit")" = "$SOURCE_COMMIT"
-          test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "single-bat-web-admin-console"
+          test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "single-bat-powershell-web-admin-console"
           test "$(node -p "require('$VROOT/VERSION.json').launcherPortMode")" = "dynamic-loopback"
           rm -rf "$VERIFY"
 
