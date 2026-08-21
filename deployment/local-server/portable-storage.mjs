@@ -10,8 +10,9 @@ async function exists(filePath) {
   }
 }
 
-async function copyDirIfMissing(from, to) {
-  if (await exists(to) || !(await exists(from))) return false;
+async function mergeDirIfPresent(from, to) {
+  if (!(await exists(from))) return false;
+  await mkdir(to, { recursive: true });
   await cp(from, to, { recursive: true, errorOnExist: false, force: false });
   return true;
 }
@@ -84,15 +85,15 @@ export async function migrateLegacyStorage(layout) {
     }
   }
 
-  if (await copyDirIfMissing(layout.legacyPortableUploadsDir, layout.uploadsDir)) {
+  if (await mergeDirIfPresent(layout.legacyPortableUploadsDir, layout.uploadsDir)) {
     migrated.push({ from: layout.legacyPortableUploadsDir, to: layout.uploadsDir, type: 'uploads-v1.4.1' });
-  } else if (await copyDirIfMissing(layout.legacyUploadsDir, layout.uploadsDir)) {
+  } else if (await mergeDirIfPresent(layout.legacyUploadsDir, layout.uploadsDir)) {
     migrated.push({ from: layout.legacyUploadsDir, to: layout.uploadsDir, type: 'uploads-legacy-data' });
   }
 
-  if (await copyDirIfMissing(layout.legacyPortableBackupsDir, layout.backupsDir)) {
+  if (await mergeDirIfPresent(layout.legacyPortableBackupsDir, layout.backupsDir)) {
     migrated.push({ from: layout.legacyPortableBackupsDir, to: layout.backupsDir, type: 'backups-v1.4.1' });
-  } else if (await copyDirIfMissing(layout.legacyBackupsDir, layout.backupsDir)) {
+  } else if (await mergeDirIfPresent(layout.legacyBackupsDir, layout.backupsDir)) {
     migrated.push({ from: layout.legacyBackupsDir, to: layout.backupsDir, type: 'backups-legacy-data' });
   }
 
