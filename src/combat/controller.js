@@ -72,6 +72,30 @@ export function createCombatController({ selection } = {}) {
         if (node) node.textContent = message;
       };
 
+      function canManageCombat() {
+        const multiplayer = api.multiplayer?.getStatus?.();
+        if (!multiplayer?.connected) return true;
+        return multiplayer.permissions?.combatManage !== false;
+      }
+
+      function requireCombatManager() {
+        if (canManageCombat()) return true;
+        status('战斗流程由 GM 管理：Player 只能查看先攻与当前回合');
+        return false;
+      }
+
+      function applyPermissionUi() {
+        const readonly = !canManageCombat();
+        tracker.classList.toggle('combat-player-readonly', readonly);
+        top.querySelectorAll('[data-combat-action]').forEach(node => { node.disabled = readonly; });
+        tracker.querySelectorAll('[data-combat-initiative],[data-combat-remove]').forEach(node => { node.disabled = readonly; });
+        tracker.querySelectorAll('.combatant-drag').forEach(node => {
+          node.draggable = !readonly;
+          node.setAttribute('aria-disabled', readonly ? 'true' : 'false');
+          if (readonly) node.title = '先攻顺序由 GM 管理';
+        });
+      }
+
       function addableSelectedCount() {
         const combat = store.state.combat;
         const existing = new Set((combat?.combatants || []).map(item => String(item.tokenId)));
@@ -104,6 +128,7 @@ export function createCombatController({ selection } = {}) {
         renderCombatTracker(tracker, combat, appState);
         renderCombatTopbar(top, combat, appState, selectedIds().length, addableSelectedCount());
         renderTurn();
+        applyPermissionUi();
       }
 
       function persist(message = '') {
@@ -113,6 +138,7 @@ export function createCombatController({ selection } = {}) {
       }
 
       function enterCombat() {
+        if (!requireCombatManager()) return false;
         const ids = selectedIds();
         if (!ids.length) {
           status('进入战斗：请先单选或框选至少一个 Token');
@@ -130,6 +156,7 @@ export function createCombatController({ selection } = {}) {
       }
 
       function addSelected() {
+        if (!requireCombatManager()) return false;
         const combat = store.state.combat;
         if (!combat) return enterCombat();
         const refs = entityTokenRefs(api.getState(), selectedIds());
@@ -148,6 +175,7 @@ export function createCombatController({ selection } = {}) {
       }
 
       function beginCombat() {
+        if (!requireCombatManager()) return false;
         const combat = store.state.combat;
         if (!combat?.combatants?.length) {
           status('开始战斗：先攻表中没有参战者');
@@ -162,6 +190,7 @@ export function createCombatController({ selection } = {}) {
       }
 
       function advanceTurn() {
+        if (!requireCombatManager()) return false;
         const combat = store.state.combat;
         const current = nextTurn(combat);
         if (!current) return false;
@@ -172,12 +201,14 @@ export function createCombatController({ selection } = {}) {
       }
 
       function endCombat() {
+        if (!requireCombatManager()) return false;
         if (!store.state.combat) return;
         if (!window.confirm('结束当前战斗并清空先攻表？')) return;
         combatLog('战斗结束', { event: 'end', combatId: store.state.combat.id });
         store.clear();
         render();
         status('战斗已结束');
+        return true;
       }
 
       function focusToken(tokenId, { center = true } = {}) {
@@ -199,6 +230,7 @@ export function createCombatController({ selection } = {}) {
       top.addEventListener('click', event => {
         const action = event.target.closest?.('[data-combat-action]')?.dataset.combatAction;
         if (!action) return;
+        if (!requireCombatManager()) { event.preventDefault(); return; }
         if (action === 'enter') enterCombat();
         else if (action === 'add') addSelected();
         else if (action === 'start') beginCombat();
@@ -209,6 +241,7 @@ export function createCombatController({ selection } = {}) {
       tracker.addEventListener('click', event => {
         const remove = event.target.closest?.('[data-combat-remove]');
         if (remove) {
+          if (!requireCombatManager()) { event.preventDefault(); return; }
           const combat = store.state.combat;
           if (!combat) return;
           const id = remove.dataset.combatRemove;
@@ -233,6 +266,7 @@ export function createCombatController({ selection } = {}) {
       tracker.addEventListener('change', event => {
         const input = event.target.closest?.('[data-combat-initiative]');
         if (!input) return;
+        if (!requireCombatManager()) { render(); return; }
         const combat = store.state.combat;
         if (!combat) return;
         if (setCombatantInitiative(combat, input.dataset.combatInitiative, input.value)) {
@@ -241,6 +275,7 @@ export function createCombatController({ selection } = {}) {
       });
 
       tracker.addEventListener('dragstart', event => {
+        if (!requireCombatManager()) { event.preventDefault(); return; }
         const handle = event.target.closest?.('.combatant-drag');
         const row = handle?.closest?.('[data-combatant-id]');
         if (!row) return;
@@ -250,7 +285,7 @@ export function createCombatController({ selection } = {}) {
       });
 
       tracker.addEventListener('dragover', event => {
-        if (!draggingCombatantId) return;
+        if (!canManageCombat() || !draggingCombatantId) return;
         const row = event.target.closest?.('[data-combatant-id]');
         if (!row || row.dataset.combatantId === draggingCombatantId) return;
         event.preventDefault();
@@ -264,6 +299,7 @@ export function createCombatController({ selection } = {}) {
       });
 
       tracker.addEventListener('drop', event => {
+        if (!requireCombatManager()) { event.preventDefault(); draggingCombatantId = null; return; }
         const target = event.target.closest?.('[data-combatant-id]');
         if (!draggingCombatantId || !target) return;
         event.preventDefault();
