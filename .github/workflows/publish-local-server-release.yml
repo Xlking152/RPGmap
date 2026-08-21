@@ -1,0 +1,129 @@
+name: Publish S0 Local Server Pre-release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/entity-actor-token-system
+    paths:
+      - '.github/workflows/publish-local-server-release.yml'
+      - 'deployment/local-server/**'
+      - 'src/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
+      - '文档/未来规划.md'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: npm
+
+      - name: Install clean dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build web client
+        run: npm run build
+
+      - name: Assemble clean server package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE/release/RPGmap-Local-Server"
+          rm -rf "$GITHUB_WORKSPACE/release"
+          mkdir -p "$ROOT/public" "$ROOT/data/worlds" "$ROOT/data/uploads" "$ROOT/data/backups" "$ROOT/docs"
+
+          cp -R dist/. "$ROOT/public/"
+          cp deployment/local-server/server.mjs "$ROOT/server.mjs"
+          cp deployment/local-server/start-rpgmap.bat "$ROOT/一键启动RPGmap.bat"
+          cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
+          cp deployment/local-server/README.md "$ROOT/README.md"
+          cp deployment/local-server/data/README.txt "$ROOT/data/README.txt"
+          cp '文档/未来规划.md' "$ROOT/docs/未来规划.md"
+          chmod +x "$ROOT/start-rpgmap.sh"
+
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          RELEASE_TAG="s0-local-server-${GITHUB_RUN_NUMBER}"
+          cat > "$ROOT/VERSION.json" <<EOF
+          {
+            "app": "RPGmap",
+            "packageVersion": "${PACKAGE_VERSION}-s0.${GITHUB_RUN_NUMBER}",
+            "releaseTag": "${RELEASE_TAG}",
+            "branch": "${GITHUB_REF_NAME}",
+            "commit": "${GITHUB_SHA}",
+            "serverMode": "local-static-s0",
+            "defaultPort": 30000
+          }
+          EOF
+
+          test -f "$ROOT/public/index.html"
+
+          cd "$GITHUB_WORKSPACE/release"
+          zip -r -9 -q RPGmap-Local-Server.zip RPGmap-Local-Server
+          sha256sum RPGmap-Local-Server.zip > RPGmap-Local-Server.zip.sha256
+
+          if unzip -l RPGmap-Local-Server.zip | grep -E '(^|/)(\.git|node_modules|tests?|coverage|\.cache|npm-cache|__pycache__|playwright-report|test-results)(/|$)'; then
+            echo 'Forbidden development files detected in release ZIP.' >&2
+            exit 1
+          fi
+
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
+          echo "PACKAGE_VERSION=${PACKAGE_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          cat > release/release-notes.md <<EOF
+          ## RPGmap S0 Local Server
+
+          这是 RPGmap 服务器化路线的 **S0 Pre-release**，用于本地与局域网实际测试 MovementSystem、EntitySystem 和 Unified VTT UI。
+
+          ### 使用
+          - Windows：解压后双击 \`一键启动RPGmap.bat\`
+          - Linux / macOS：执行 \`./start-rpgmap.sh\`
+          - 默认地址：\`http://127.0.0.1:30000\`
+          - 局域网地址会在服务器控制台中显示
+
+          ### 包内容
+          - GitHub Actions 预编译的 \`public/\`
+          - 零第三方运行依赖的 Node HTTP Server
+          - Windows / Linux / macOS 启动入口
+          - \`data/worlds\`、\`data/uploads\`、\`data/backups\` 预留目录
+          - \`VERSION.json\` 构建信息
+
+          ### 当前阶段限制
+          Actor / Token / Scene 长期状态仍使用浏览器 localStorage；World Store、WebSocket、GM/Player 权限与多人同步将在后续 Server 阶段接入。
+
+          **Source commit:** \`${GITHUB_SHA}\`
+          EOF
+
+      - name: Publish GitHub Pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "$RELEASE_TAG" \
+            release/RPGmap-Local-Server.zip \
+            release/RPGmap-Local-Server.zip.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "RPGmap Local Server S0 · Build ${GITHUB_RUN_NUMBER}" \
+            --notes-file release/release-notes.md \
+            --prerelease
