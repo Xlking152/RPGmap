@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r -d '' file; do
             node --check "$file"
-          done < <(find src deployment/local-server deployment/launcher -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
+          done < <(find src deployment/local-server deployment/launcher scripts -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
 
       - name: Build web client
         run: npm run build
@@ -82,10 +82,12 @@ jobs:
           cp deployment/local-server/access-control.mjs "$ROOT/server/access-control.mjs"
           cp deployment/local-server/portable-storage.mjs "$ROOT/server/portable-storage.mjs"
 
+          node scripts/export-maps.mjs "$ROOT/maps"
+          cp deployment/local-server/maps/README.txt "$ROOT/maps/README.txt"
+
           cp 'deployment/local-server/操作说明.md' "$ROOT/操作说明.md"
           cp deployment/local-server/INTERNET-TEST.md "$ROOT/docs/INTERNET-MULTIPLAYER.md"
           cp deployment/local-server/world/README.txt "$ROOT/world/README.txt"
-          cp deployment/local-server/maps/README.txt "$ROOT/maps/README.txt"
           cp '文档/联机使用说明.md' "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           cp '文档/未来规划.md' "$ROOT/docs/FUTURE-ROADMAP.md"
           cp CHANGELOG.md "$ROOT/docs/CHANGELOG.md"
@@ -98,6 +100,8 @@ jobs:
             "commit": "${GITHUB_SHA}",
             "serverMode": "multiplayer",
             "storageMode": "portable-world-maps",
+            "mapPackageMode": "external-runtime-maps",
+            "defaultMapId": "northern-song-lanzhou-1104",
             "launcherMode": "single-bat-powershell-web-admin-console",
             "defaultPort": 30000,
             "preferredLauncherPort": 29999,
@@ -113,6 +117,16 @@ jobs:
           test -f "$ROOT/server/server.mjs"
           test -f "$ROOT/world/README.txt"
           test -f "$ROOT/maps/README.txt"
+          test -f "$ROOT/maps/index.json"
+          test -f "$ROOT/maps/northern-song-lanzhou-1104/map.json"
+          test -f "$ROOT/maps/northern-song-lanzhou-1104/assets/yellow-river.webp"
+          test -f "$ROOT/maps/northern-song-lanzhou-1104/assets/rubble-atlas.webp"
+          test "$(node -p "require('$ROOT/maps/index.json').defaultMapId")" = "northern-song-lanzhou-1104"
+          test "$(node -p "require('$ROOT/maps/northern-song-lanzhou-1104/map.json').runtimeSource")" = "external-maps-directory"
+          if grep -R -F '崇宁三年（1104）· 游戏比例地图' "$ROOT/app" >/dev/null 2>&1; then
+            echo 'Map-specific Lanzhou markup is still bundled into app/.' >&2
+            exit 1
+          fi
           test -f "$ROOT/docs/FUTURE-ROADMAP.md"
           test ! -f "$ROOT/README.md"
           test ! -d "$ROOT/map"
@@ -157,9 +171,13 @@ jobs:
           test -f "$VROOT/操作说明.md"
           test -f "$VROOT/launcher/launcher.mjs"
           test -f "$VROOT/server/server.mjs"
+          test -f "$VROOT/maps/index.json"
+          test -f "$VROOT/maps/northern-song-lanzhou-1104/map.json"
+          test -f "$VROOT/maps/northern-song-lanzhou-1104/assets/yellow-river.webp"
           test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
           test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 0
           test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "single-bat-powershell-web-admin-console"
+          test "$(node -p "require('$VROOT/VERSION.json').mapPackageMode")" = "external-runtime-maps"
           rm -rf "$VERIFY"
 
           if unzip -l "$ARCHIVE" | grep -E '(^|/)(\.git|node_modules|tests?|coverage|\.cache|npm-cache|__pycache__|playwright-report|test-results)(/|$)'; then
@@ -181,6 +199,12 @@ jobs:
           - The PowerShell window keeps Node running and shows Launcher/Server/Tunnel output including Local/LAN/Public URLs, Join Code and GM Secret once the Server starts.
           - All interactive GM controls remain in the browser Launcher.
           - No Native Launcher EXE is shipped.
+
+          ### External MapPackages
+          - Real map content now lives under \`maps/\`, not inside the built web client.
+          - The default map is \`maps/northern-song-lanzhou-1104/map.json\` with its assets under the same map folder.
+          - \`maps/index.json\` is the runtime map registry and already reserves the boundary needed by future Scene Manager work.
+          - Windows Runtime mounts the root \`maps/\` directory into the static app path through a directory junction, without duplicating map data.
 
           ### Dynamic local control port
           - Preferred Launcher port is \`29999\`.
