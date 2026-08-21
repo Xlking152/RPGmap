@@ -23,6 +23,30 @@ function Find-RPGmapNode {
     return $null
 }
 
+function Ensure-RPGmapMapMount {
+    $appDir = Join-Path $root 'app'
+    $mapsDir = Join-Path $root 'maps'
+    $mount = Join-Path $appDir 'maps'
+
+    if (-not (Test-Path $appDir)) { throw 'app\ directory was not found.' }
+    if (-not (Test-Path $mapsDir)) { throw 'maps\ directory was not found.' }
+
+    if (Test-Path $mount) {
+        $existing = Get-Item -LiteralPath $mount -Force
+        if (($existing.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            Remove-Item -LiteralPath $mount -Force
+        } else {
+            $backupName = 'maps.legacy-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+            $backupPath = Join-Path $appDir $backupName
+            Move-Item -LiteralPath $mount -Destination $backupPath
+            Write-Host "[Runtime] Existing app\maps was preserved as app\$backupName"
+        }
+    }
+
+    New-Item -ItemType Junction -Path $mount -Target $mapsDir | Out-Null
+    return $mount
+}
+
 Clear-Host
 Write-Host '============================================================'
 Write-Host '                    RPGmap Runtime'
@@ -52,15 +76,31 @@ if (-not $node) {
     exit 1
 }
 
+try {
+    $mapMount = Ensure-RPGmapMapMount
+} catch {
+    Write-Host "[ERROR] Failed to mount maps directory: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ''
+    Write-Host 'RPGmap keeps real map files in the package-root maps\ directory.'
+    Write-Host 'The runtime creates app\maps as a Windows junction so the game server can serve those files.'
+    Write-Host ''
+    Read-Host 'Press Enter to close'
+    exit 4
+}
+
 $startupLog = Join-Path $root 'launcher-startup.log'
 @(
     "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RPGmap Runtime bootstrap",
     "Node: $node",
-    "Launcher: $launcherScript"
+    "Launcher: $launcherScript",
+    "Maps: $(Join-Path $root 'maps')",
+    "MapMount: $mapMount"
 ) | Set-Content -Path $startupLog -Encoding UTF8
 
 Write-Host "Node      : $node"
 Write-Host "Package   : $root"
+Write-Host "Maps      : $(Join-Path $root 'maps')"
+Write-Host "Map mount : $mapMount -> $(Join-Path $root 'maps')"
 Write-Host "Start info: $startupLog"
 Write-Host ''
 Write-Host 'Starting Web Launcher...'
