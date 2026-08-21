@@ -192,6 +192,14 @@ export function createSelectionController(state, notify) {
         setMarqueeBox(startClient, startClient);
       }, true);
 
+      documentNode.addEventListener('click', event => {
+        if (!mapElement.contains(event.target)) return;
+        if (!event.target.closest?.('.rpg-character, .rpg-character-core')) return;
+        if (!event.shiftKey && !event.altKey) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, true);
+
       documentNode.addEventListener('pointermove', event => {
         if (!marquee || event.pointerId !== marquee.pointerId) return;
         event.preventDefault();
