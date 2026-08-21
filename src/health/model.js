@@ -56,17 +56,8 @@ export function resolveHealth(runtime, { max = 0, simpleCurrent = max } = {}) {
   if (mode === HEALTH_MODE_SIMPLE) {
     const current = clamp(nonNegativeInt(simpleCurrent, limit), 0, limit);
     return {
-      mode,
-      max: limit,
-      current,
-      healthy: current,
-      bashing: 0,
-      lethal: 0,
-      aggravated: 0,
-      status: current > 0 ? 'normal' : 'depleted',
-      deteriorating: false,
-      dead: current <= 0,
-      unconscious: current <= 0,
+      mode, max: limit, current, healthy: current, bashing: 0, lethal: 0, aggravated: 0,
+      status: current > 0 ? 'normal' : 'depleted', deteriorating: false, dead: current <= 0, unconscious: current <= 0,
     };
   }
   const wounds = normalizeWounds(runtime?.wounds, limit);
@@ -75,28 +66,10 @@ export function resolveHealth(runtime, { max = 0, simpleCurrent = max } = {}) {
   const unconscious = limit > 0 && healthy === 0 && !dead;
   const deteriorating = unconscious && wounds.aggravated > 0;
   const weightedDamage = wounds.bashing + wounds.lethal * 2 + wounds.aggravated * 3;
-  const injury = dead || limit <= 0
-    ? (dead ? 'dead' : 'unharmed')
-    : weightedDamage <= 0
-      ? 'unharmed'
-      : weightedDamage <= limit
-        ? 'minor'
-        : weightedDamage <= limit * 2
-          ? 'moderate'
-          : 'severe';
-  return {
-    mode,
-    max: limit,
-    current: healthy,
-    healthy,
-    ...wounds,
-    weightedDamage,
-    injury,
-    status: dead ? 'dead' : unconscious ? 'unconscious' : 'normal',
-    deteriorating,
-    dead,
-    unconscious,
-  };
+  const injury = dead || limit <= 0 ? (dead ? 'dead' : 'unharmed')
+    : weightedDamage <= 0 ? 'unharmed' : weightedDamage <= limit ? 'minor' : weightedDamage <= limit * 2 ? 'moderate' : 'severe';
+  return { mode, max: limit, current: healthy, healthy, ...wounds, weightedDamage, injury,
+    status: dead ? 'dead' : unconscious ? 'unconscious' : 'normal', deteriorating, dead, unconscious };
 }
 
 function applySingleWoundPoint(wounds, type, max) {
@@ -136,13 +109,10 @@ export function applyWoundDamage(runtime, damage, { max = 0 } = {}) {
     [DAMAGE_LETHAL]: nonNegativeInt(damage?.lethal ?? (damage?.type === DAMAGE_LETHAL ? damage?.amount : 0)),
     [DAMAGE_AGGRAVATED]: nonNegativeInt(damage?.aggravated ?? (damage?.type === DAMAGE_AGGRAVATED ? damage?.amount : 0)),
   };
-  let applied = 0;
-  let overflow = 0;
-  // Rules require simultaneous mixed damage to resolve from the least severe type upward: B -> L -> A.
+  let applied = 0; let overflow = 0;
   for (const type of [DAMAGE_BASHING, DAMAGE_LETHAL, DAMAGE_AGGRAVATED]) {
     for (let index = 0; index < amounts[type]; index += 1) {
-      if (applySingleWoundPoint(wounds, type, limit)) applied += 1;
-      else overflow += 1;
+      if (applySingleWoundPoint(wounds, type, limit)) applied += 1; else overflow += 1;
     }
   }
   next.wounds = normalizeWounds(wounds, limit);
@@ -157,25 +127,38 @@ export function applySimpleDamage(current, amount, max) {
   return { current: after, applied: before - after, overflow: Math.max(0, requested - before) };
 }
 
+export function applyWoundHealing(runtime, healing, { max = 0 } = {}) {
+  const limit = nonNegativeInt(max);
+  const next = normalizeHealthRuntime(runtime, { defaultMode: HEALTH_MODE_WOUND_TRACK, max: limit });
+  next.mode = HEALTH_MODE_WOUND_TRACK;
+  const wounds = { ...next.wounds };
+  const type = [DAMAGE_BASHING, DAMAGE_LETHAL, DAMAGE_AGGRAVATED].includes(healing?.type)
+    ? healing.type
+    : DAMAGE_LETHAL;
+  const requested = nonNegativeInt(healing?.amount);
+  const key = type === DAMAGE_BASHING ? 'bashing' : type === DAMAGE_AGGRAVATED ? 'aggravated' : 'lethal';
+  const applied = Math.min(requested, wounds[key]);
+  wounds[key] -= applied;
+  next.wounds = normalizeWounds(wounds, limit);
+  return { runtime: next, state: resolveHealth(next, { max: limit }), applied, overflow: Math.max(0, requested - applied) };
+}
+
+export function applySimpleHealing(current, amount, max) {
+  const limit = nonNegativeInt(max);
+  const before = clamp(nonNegativeInt(current, limit), 0, limit);
+  const requested = nonNegativeInt(amount);
+  const after = Math.min(limit, before + requested);
+  return { current: after, applied: after - before, overflow: Math.max(0, requested - (after - before)) };
+}
+
 export function switchHealthMode(runtime, nextMode, { max = 0, simpleCurrent = max } = {}) {
   const limit = nonNegativeInt(max);
   const currentState = resolveHealth(runtime, { max: limit, simpleCurrent });
   if (nextMode === HEALTH_MODE_WOUND_TRACK) {
-    const healthy = currentState.mode === HEALTH_MODE_WOUND_TRACK
-      ? currentState.healthy
-      : currentState.current;
-    return {
-      runtime: {
-        mode: HEALTH_MODE_WOUND_TRACK,
-        wounds: { bashing: Math.max(0, limit - healthy), lethal: 0, aggravated: 0 },
-      },
-      simpleCurrent: healthy,
-    };
+    const healthy = currentState.mode === HEALTH_MODE_WOUND_TRACK ? currentState.healthy : currentState.current;
+    return { runtime: { mode: HEALTH_MODE_WOUND_TRACK, wounds: { bashing: Math.max(0, limit - healthy), lethal: 0, aggravated: 0 } }, simpleCurrent: healthy };
   }
-  return {
-    runtime: { mode: HEALTH_MODE_SIMPLE, wounds: { bashing: currentState.bashing || 0, lethal: currentState.lethal || 0, aggravated: currentState.aggravated || 0 } },
-    simpleCurrent: currentState.healthy,
-  };
+  return { runtime: { mode: HEALTH_MODE_SIMPLE, wounds: { bashing: currentState.bashing || 0, lethal: currentState.lethal || 0, aggravated: currentState.aggravated || 0 } }, simpleCurrent: currentState.healthy };
 }
 
 export function injuryStateLabel(state) {
@@ -203,6 +186,12 @@ export function formatHealthSummary(state) {
 }
 
 export function damageTypeLabel(type) {
+  if (type === DAMAGE_BASHING) return '冲击 B';
+  if (type === DAMAGE_AGGRAVATED) return '恶性 A';
+  return '严重 L';
+}
+
+export function healingTypeLabel(type) {
   if (type === DAMAGE_BASHING) return '冲击 B';
   if (type === DAMAGE_AGGRAVATED) return '恶性 A';
   return '严重 L';
