@@ -41,6 +41,12 @@ export class TokenDragPlan {
   setRoute(route) { this.route = route || null; return this.route; }
   addWaypoint(point = this.route?.destination || this.current) {
     if (!this.session || !point) return false;
+    if (this.phase === MovementPhase.DRAGGING) {
+      this.current = copyPoint(point);
+      this.route = null;
+      this.phase = MovementPhase.PLANNING;
+      return false;
+    }
     this.session.addWaypoint(point);
     this.current = copyPoint(point);
     this.route = null;
