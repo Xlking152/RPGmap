@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-title RPGmap Launcher Bootstrap
+title RPGmap Launcher Runtime
 
 set "RPGMAP_ROOT=%CD%"
 set "NODE_EXE="
@@ -11,9 +11,8 @@ set "STARTUP_LOG=%RPGMAP_ROOT%\launcher-startup.log"
 if exist "%RPGMAP_ROOT%\tools\node\node.exe" set "NODE_EXE=%RPGMAP_ROOT%\tools\node\node.exe"
 if not defined NODE_EXE if exist "%RPGMAP_ROOT%\node.exe" set "NODE_EXE=%RPGMAP_ROOT%\node.exe"
 if not defined NODE_EXE (
-  for /f "delims=" %%I in ('where node.exe 2^>nul') do (
-    if not defined NODE_EXE set "NODE_EXE=%%I"
-  )
+  where node.exe >nul 2>nul
+  if not errorlevel 1 set "NODE_EXE=node.exe"
 )
 
 if not defined NODE_EXE (
@@ -40,18 +39,26 @@ if not exist "%LAUNCHER_SCRIPT%" (
 >> "%STARTUP_LOG%" echo Node: %NODE_EXE%
 >> "%STARTUP_LOG%" echo Script: %LAUNCHER_SCRIPT%
 
-echo Starting RPGmap Launcher...
-echo The GM Control Center will open in your browser automatically.
+echo ============================================================
+echo  RPGmap Launcher Runtime
+echo ============================================================
+echo  The GM Control Center will open in your browser.
+echo  Keep this window open while using RPGmap.
+echo  You can minimize this window.
+echo  Startup info: launcher-startup.log
+echo ============================================================
+echo.
 
-start "RPGmap Launcher Runtime" /min cmd /d /c ""%NODE_EXE%" "%LAUNCHER_SCRIPT%" >> "%STARTUP_LOG%" 2^>^&1"
-if errorlevel 1 (
+"%NODE_EXE%" "%LAUNCHER_SCRIPT%"
+set "RPGMAP_EXIT=%ERRORLEVEL%"
+
+if not "%RPGMAP_EXIT%"=="0" (
   echo.
-  echo [ERROR] RPGmap Launcher could not be started.
-  echo See: %STARTUP_LOG%
+  echo [ERROR] RPGmap Launcher stopped unexpectedly. Exit code: %RPGMAP_EXIT%
+  echo You can also run manually:
+  echo   node launcher\launcher.mjs
   echo.
   pause
-  exit /b 3
 )
 
-timeout /t 2 /nobreak >nul
-exit /b 0
+exit /b %RPGMAP_EXIT%
