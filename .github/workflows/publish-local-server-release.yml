@@ -72,6 +72,7 @@ jobs:
 
           cp -R dist/. "$ROOT/public/"
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
+          cp deployment/local-server/access-control.mjs "$ROOT/access-control.mjs"
           cp deployment/local-server/internet-launcher.mjs "$ROOT/internet-launcher.mjs"
           cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
           cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
@@ -99,6 +100,7 @@ jobs:
 
           test -f "$ROOT/public/index.html"
           test -f "$ROOT/server.mjs"
+          test -f "$ROOT/access-control.mjs"
           test -f "$ROOT/internet-launcher.mjs"
           test -f "$ROOT/start-rpgmap-internet.bat"
           test -f "$ROOT/setup-cloudflared.bat"
@@ -133,28 +135,30 @@ jobs:
           cat > release/release-notes.md <<EOF
           ## RPGmap ${PACKAGE_VERSION}
 
-          RPGmap ${PACKAGE_VERSION} 正式加入 Multiplayer V1：GM / Player、WebSocket 共享 World、World Store 持久化，以及 Windows 一键 Cloudflare Quick Tunnel 远程联机。
+          RPGmap ${PACKAGE_VERSION} 在 Multiplayer V1 上加入持久 Player Identity、Actor Ownership 与 Server-authoritative Combat Turn Lock。
 
-          ### Multiplayer
-          - GM / Player 身份与在线人数。
-          - Player Join Code + GM Secret。
-          - Actor / Token / Health / Damage / Healing / Combat / Chat / Scene World Snapshot 同步。
-          - revision / baseRevision 冲突检查与 Server World 持久化。
-          - HTTP 自动使用 WS，HTTPS 自动使用 WSS。
+          ### User / Identity
+          - Player 首次加入后由 GM 批准为当前 World 的持久 User。
+          - GM 也可预创建 User，并生成 Player Key。
+          - Quick Tunnel 域名变化后，Player 可使用 Player Key 恢复原 User。
+          - User / Ownership 持久化在 \`data/worlds/<world-id>/access.json\`；服务器只保存凭证哈希。
+
+          ### Actor Ownership
+          - Actor 权限：NONE / OBSERVER / OWNER。
+          - 每个 Player 可有一个默认角色，并可拥有多个 OWNER / OBSERVER Actor。
+          - Player 只能修改 OWNER Actor；Actor / Token 创建、删除、重新绑定由 GM 管理。
+          - GM 在“联机 / Users”面板中批准玩家和分配角色权限。
+
+          ### Combat Turn Lock
+          - 参战者、先攻、排序、Round、Turn 与战斗开始/结束均由 GM 管理。
+          - Combat active 时，Player 只能操控当前 Turn 对应且自己拥有 OWNER 的 Actor。
+          - 客户端提前拦截无权移动/战斗操作，Server 再做最终强制校验。
 
           ### Internet Multiplayer
-          - Windows 双击 \`start-rpgmap-internet.bat\` 一键远程联机。
-          - 自动检测 / 安装 cloudflared。
-          - Cloudflare Quick Tunnel 默认使用 HTTP/2 over TCP。
-          - 自动读取 trycloudflare.com Public URL。
-          - 自动生成 Join Code / GM Secret。
-          - 独立 \`RPGmap Multiplayer Info\` 信息窗口便于查看和复制邀请信息。
-
-          ### 使用
-          - 本机 / LAN：Windows 双击 \`start-rpgmap.bat\`，Linux/macOS 执行 \`./start-rpgmap.sh\`。
-          - Windows 远程：双击 \`start-rpgmap-internet.bat\`。
-          - 玩家只需要 Public URL + Join Code；GM Secret 不应分享。
-          - ZIP 内 \`README.md\` 和 \`docs/MULTIPLAYER-GUIDE.md\` 包含完整说明。
+          - Windows 双击 \`start-rpgmap-internet.bat\`。
+          - 玩家首次加入：Public URL + Join Code；GM 批准后取得持久身份。
+          - 已有 User 在新的 Quick Tunnel 地址上：Public URL + Join Code + Player Key。
+          - GM Secret 仅供 GM 使用。
 
           **Source commit:** \`${GITHUB_SHA}\`
           EOF
