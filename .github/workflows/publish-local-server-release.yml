@@ -3,8 +3,7 @@ name: Publish RPGmap Version Release
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - '.github/workflows/publish-local-server-release.yml'
 
@@ -71,8 +70,7 @@ jobs:
           mkdir -p "$ROOT/app" "$ROOT/launcher" "$ROOT/server" "$ROOT/world/uploads" "$ROOT/world/backups" "$ROOT/maps" "$ROOT/docs" "$ROOT/tools"
 
           cp -R dist/. "$ROOT/app/"
-
-          cp deployment/launcher/start-rpgmap.bat "$ROOT/启动 RPGmap.bat"
+          cp deployment/launcher/start-rpgmap.bat "$ROOT/RPGmap.bat"
           cp deployment/launcher/launcher.mjs "$ROOT/launcher/launcher.mjs"
           cp deployment/launcher/admin-client.mjs "$ROOT/launcher/admin-client.mjs"
           cp deployment/launcher/index.html "$ROOT/launcher/index.html"
@@ -106,26 +104,15 @@ jobs:
           }
           EOF
 
-          test -f "$ROOT/app/index.html"
-          test -f "$ROOT/启动 RPGmap.bat"
-          test -f "$ROOT/launcher/launcher.mjs"
-          test -f "$ROOT/launcher/admin-client.mjs"
-          test -f "$ROOT/launcher/index.html"
-          test -f "$ROOT/launcher/launcher.js"
-          test -f "$ROOT/launcher/launcher.css"
-          test -f "$ROOT/server/server.mjs"
-          test -f "$ROOT/server/access-control.mjs"
-          test -f "$ROOT/server/portable-storage.mjs"
+          test -f "$ROOT/RPGmap.bat"
           test -f "$ROOT/操作说明.md"
+          test -f "$ROOT/app/index.html"
+          test -f "$ROOT/launcher/launcher.mjs"
+          test -f "$ROOT/server/server.mjs"
           test -f "$ROOT/world/README.txt"
-          test -d "$ROOT/world/uploads"
-          test -d "$ROOT/world/backups"
           test -f "$ROOT/maps/README.txt"
-          test -d "$ROOT/tools"
-          test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           test -f "$ROOT/docs/FUTURE-ROADMAP.md"
           test ! -f "$ROOT/README.md"
-          test ! -f "$ROOT/server.mjs"
           test ! -d "$ROOT/map"
           test ! -d "$ROOT/data"
           test ! -d "$ROOT/public"
@@ -159,21 +146,14 @@ jobs:
           import os, zipfile
           release = Path(os.environ['GITHUB_WORKSPACE']) / 'release'
           version = os.environ['PACKAGE_VERSION']
-          archive = release / f'RPGmap-v{version}.zip'
-          verify = release / 'verify'
-          with zipfile.ZipFile(archive) as zf:
-              zf.extractall(verify)
+          with zipfile.ZipFile(release / f'RPGmap-v{version}.zip') as zf:
+              zf.extractall(release / 'verify')
           PY
           VROOT="$VERIFY/RPGmap-v${PACKAGE_VERSION}"
-          test -f "$VROOT/启动 RPGmap.bat"
+          test -f "$VROOT/RPGmap.bat"
           test -f "$VROOT/操作说明.md"
           test -f "$VROOT/launcher/launcher.mjs"
           test -f "$VROOT/server/server.mjs"
-          test -f "$VROOT/app/index.html"
-          test -f "$VROOT/world/README.txt"
-          test -f "$VROOT/maps/README.txt"
-          test -f "$VROOT/docs/FUTURE-ROADMAP.md"
-          test ! -f "$VROOT/README.md"
           test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
           test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 0
           test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "single-bat-web-admin-console"
@@ -190,27 +170,23 @@ jobs:
           cat > release/release-notes.md <<EOF
           ## RPGmap ${PACKAGE_VERSION}
 
-          RPGmap ${PACKAGE_VERSION} provides a unified browser-based GM Control Center with a single Windows BAT bootstrap on top of the portable \`app / world / maps\` layout.
+          RPGmap ${PACKAGE_VERSION} provides a unified browser-based GM Control Center with one simple Windows startup file: \`RPGmap.bat\`.
 
-          ### Single BAT entry
-          - Windows package root contains only \`启动 RPGmap.bat\` as the startup entry.
-          - The BAT only finds Node.js and launches \`launcher/launcher.mjs\`; all GM controls live in the web Launcher.
-          - No native EXE launcher is shipped.
-          - Launcher runtime output is written to \`launcher-startup.log\` for troubleshooting.
-
-          ### Launcher / GM Admin
-          - Start Local/LAN or Internet Multiplayer from one interface.
-          - Display Local/LAN/Public URLs, Join Code, GM Secret, Player Invite and logs.
-          - Approve pending Players, create Users, assign Default Actor / NONE / OBSERVER / OWNER, rotate Player Keys and delete Users.
-          - Launcher reuses a hidden local GM WebSocket Session instead of directly editing \`world/users.json\`.
+          ### Startup
+          - \`RPGmap.bat\` is the only Windows launch entry in the package root.
+          - It finds Node.js and directly runs \`launcher/launcher.mjs\`.
+          - The BAT window is the runtime host and can be minimized; all GM controls remain in the browser Launcher.
+          - No Native Launcher EXE is shipped.
 
           ### Dynamic local control port
           - Preferred Launcher port is \`29999\`.
-          - If occupied, Launcher automatically tries nearby fallback ports and finally lets Windows allocate a free loopback port.
-          - The browser is opened on the actual selected port automatically.
+          - If occupied, Launcher tries nearby fallback ports and finally lets Windows allocate a free loopback port.
+          - The browser automatically opens the actual selected address.
 
-          ### Future management slots
-          - Launcher reserves UI modules for World Manager, Scene Manager and Backup Center.
+          ### Launcher / GM Admin
+          - Local/LAN/Internet lifecycle, connection information and logs in one page.
+          - pending Player approve, User creation, Default Actor, NONE/OBSERVER/OWNER, Player Key rotation and User deletion.
+          - World Manager, Scene Manager and Backup Center remain visible as future reserved modules.
 
           **Source commit:** \`${GITHUB_SHA}\`
           EOF
