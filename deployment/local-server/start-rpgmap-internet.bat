@@ -15,6 +15,12 @@ if not exist "%~dp0public\index.html" (
   exit /b 1
 )
 
+if not exist "%~dp0internet-launcher.mjs" (
+  echo [ERROR] internet-launcher.mjs is missing. Use a complete Multiplayer test/release package.
+  pause
+  exit /b 1
+)
+
 set "CLOUDFLARED_EXE="
 if exist "%~dp0cloudflared.exe" set "CLOUDFLARED_EXE=%~dp0cloudflared.exe"
 if not defined CLOUDFLARED_EXE (
@@ -46,79 +52,20 @@ if errorlevel 1 (
   exit /b 1
 )
 
-for /f %%I in ('node -e "console.log(require('node:crypto').randomInt(100000,1000000))"') do set "JOIN_CODE=%%I"
-for /f %%I in ('node -e "console.log(require('node:crypto').randomBytes(8).toString('hex').toUpperCase())"') do set "GM_SECRET=%%I"
-
-if not defined JOIN_CODE (
-  echo [ERROR] Could not generate Player Join Code.
-  pause
-  exit /b 1
-)
-if not defined GM_SECRET (
-  echo [ERROR] Could not generate GM Secret.
-  pause
-  exit /b 1
-)
-
-set "RPGMAP_PUBLIC=1"
-set "RPGMAP_JOIN_CODE=!JOIN_CODE!"
-set "RPGMAP_GM_SECRET=!GM_SECRET!"
+set "RPGMAP_CLOUDFLARED_EXE=!CLOUDFLARED_EXE!"
 set "RPGMAP_PLAYER_WRITE=1"
 
-echo ============================================================
-echo  RPGmap Internet Multiplayer Test
-echo  Player Join Code: !JOIN_CODE!
-echo  GM Secret:        !GM_SECRET!
-echo ============================================================
 echo.
-echo [IMPORTANT]
-echo  Share with Players: the HTTPS trycloudflare.com URL + Join Code.
-echo  DO NOT share the GM Secret with Players.
-echo.
-echo  The GM browser should use:
-echo    Role      : GM
-echo    GM Secret : !GM_SECRET!
+echo [INFO] Starting integrated Internet Multiplayer flow...
+echo [INFO] The launcher will create the Quick Tunnel first, attach its
+echo        public URL to RPGmap Server, then open the public page.
 echo.
 
-rem Launch Node directly in a new cmd window. Environment variables above
-rem are inherited by the child process. This avoids nested BAT quoting issues
-rem when RPGmap lives under a path containing spaces or non-ASCII characters.
-start "RPGmap Internet Server" /D "%~dp0" cmd.exe /D /K node server.mjs
-
-set "READY="
-for /l %%N in (1,1,20) do (
-  if not defined READY (
-    powershell -NoProfile -Command "try { $r=Invoke-RestMethod -TimeoutSec 1 http://127.0.0.1:30000/api/health; if ($r.status -eq 'ok') { exit 0 } } catch {}; exit 1" >nul 2>nul
-    if not errorlevel 1 set "READY=1"
-    if not defined READY timeout /t 1 /nobreak >nul
-  )
-)
-
-if not defined READY (
-  echo [ERROR] RPGmap Server did not become ready on port 30000.
-  echo Check the separate RPGmap Internet Server window.
-  pause
-  exit /b 1
-)
-
-start "" "http://127.0.0.1:30000"
-
-echo [OK] RPGmap Server is ready.
-echo [INFO] Starting Cloudflare Quick Tunnel...
-echo [INFO] Tunnel transport: HTTP/2 over TCP compatibility mode.
-echo.
-echo ============================================================
-echo  Look below for a URL like:
-echo  https://xxxx-xxxx.trycloudflare.com
-echo  Send that URL and Join Code !JOIN_CODE! to remote Players.
-echo ============================================================
-echo.
-
-rem Force HTTP/2/TCP instead of QUIC/UDP. This is more reliable on networks
-rem using VPN/TUN/proxy software, campus networks, and restrictive firewalls.
-"!CLOUDFLARED_EXE!" tunnel --no-autoupdate --url http://127.0.0.1:30000 --protocol http2
+node "%~dp0internet-launcher.mjs"
+set "EXIT_CODE=!ERRORLEVEL!"
 
 echo.
-echo [INFO] Internet Tunnel stopped.
-echo The RPGmap Server may still be running in its separate window.
+if not "!EXIT_CODE!"=="0" echo [ERROR] RPGmap Internet Multiplayer exited with code !EXIT_CODE!.
+if "!EXIT_CODE!"=="0" echo [INFO] RPGmap Internet Multiplayer stopped.
 pause
+exit /b !EXIT_CODE!
