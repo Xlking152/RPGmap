@@ -9,6 +9,14 @@ function validateMapPackage(mapPackage) {
   return mapPackage;
 }
 
+function hydrateExternalMapPackage(raw) {
+  const mapPackage = validateMapPackage(raw);
+  return {
+    ...mapPackage,
+    createSvg: () => mapPackage.svg,
+  };
+}
+
 async function fetchJson(url) {
   const response = await fetch(url, { cache: 'no-store' });
   if (!response.ok) throw new Error(`地图资源读取失败：${url} · HTTP ${response.status}`);
@@ -24,7 +32,7 @@ async function loadExternalMapPackage() {
     // Older packages may not have a registry yet. Fall back to the built-in default ID.
   }
   const mapPackage = await fetchJson(`/maps/${encodeURIComponent(mapId)}/map.json`);
-  return validateMapPackage(mapPackage);
+  return hydrateExternalMapPackage(mapPackage);
 }
 
 async function loadDevelopmentFallback() {
@@ -32,8 +40,7 @@ async function loadDevelopmentFallback() {
     import('./lanzhou.js'),
     import('./presentation-cleanup.js'),
   ]);
-  const source = cleanMapPackagePresentation(createLanzhouMapPackage());
-  return source;
+  return cleanMapPackagePresentation(createLanzhouMapPackage());
 }
 
 export async function loadRuntimeMapPackage() {
