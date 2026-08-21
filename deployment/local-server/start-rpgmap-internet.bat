@@ -36,9 +36,13 @@ if not defined GM_SECRET (
   exit /b 1
 )
 
+set "RPGMAP_PUBLIC=1"
+set "RPGMAP_JOIN_CODE=!JOIN_CODE!"
+set "RPGMAP_GM_SECRET=!GM_SECRET!"
+set "RPGMAP_PLAYER_WRITE=1"
+
 echo ============================================================
 echo  RPGmap Internet Multiplayer Test
-
 echo  Player Join Code: !JOIN_CODE!
 echo  GM Secret:        !GM_SECRET!
 echo ============================================================
@@ -49,11 +53,13 @@ echo  DO NOT share the GM Secret with Players.
 echo.
 echo  The GM browser should use:
 echo    Role      : GM
-
 echo    GM Secret : !GM_SECRET!
 echo.
 
-start "RPGmap Internet Server" "%~dp0run-rpgmap-public-server.bat" "!JOIN_CODE!" "!GM_SECRET!"
+rem Launch Node directly in a new cmd window. Environment variables above
+rem are inherited by the child process. This avoids nested BAT quoting issues
+rem when RPGmap lives under a path containing spaces or non-ASCII characters.
+start "RPGmap Internet Server" /D "%~dp0" cmd.exe /D /K node server.mjs
 
 set "READY="
 for /l %%N in (1,1,20) do (
