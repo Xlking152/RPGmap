@@ -1,5 +1,7 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,6 +17,24 @@ export function createInternetCredentials() {
     joinCode: String(randomInt(100000, 1000000)),
     gmSecret: randomBytes(8).toString('hex').toUpperCase(),
   };
+}
+
+function networkUrls(port) {
+  const urls = [];
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const item of entries || []) {
+      if (item.family === 'IPv4' && !item.internal) urls.push(`http://${item.address}:${port}`);
+    }
+  }
+  return [...new Set(urls)];
+}
+
+async function readVersion() {
+  try {
+    return JSON.parse(await readFile(path.join(ROOT, 'VERSION.json'), 'utf8'));
+  } catch {
+    return { app: 'RPGmap', version: '1.3.0-multiplayer-test', commit: 'unknown' };
+  }
 }
 
 function delay(ms) {
@@ -91,6 +111,37 @@ async function waitForServer(port, timeoutMs = 20000) {
   throw new Error(`RPGmap Server did not become ready at ${url}.`);
 }
 
+function printServerBanner({ port, publicUrl, credentials, health, version }) {
+  const multiplayer = health?.multiplayer || {};
+  const dataDir = path.resolve(process.env.RPGMAP_DATA_DIR || path.join(ROOT, 'data'));
+  const packageVersion = version?.version || version?.packageVersion || health?.version || 'unknown';
+
+  console.log('');
+  console.log('============================================================');
+  console.log(` RPGmap Multiplayer Server  |  ${packageVersion}`);
+  console.log('============================================================');
+  console.log(` Local     : http://127.0.0.1:${port}`);
+  for (const url of networkUrls(port)) console.log(` Network   : ${url}`);
+  console.log(` Public URL: ${publicUrl}`);
+  console.log(` World     : ${multiplayer.worldId || 'default'} · revision ${multiplayer.revision ?? 0}`);
+  console.log(` Data      : ${dataDir}`);
+  console.log(` Players   : ${multiplayer.playerWriteEnabled === false ? 'read-only' : 'write-enabled (test mode)'}`);
+  console.log(' Public    : ON');
+  console.log(` JoinCode  : ${credentials.joinCode}`);
+  console.log(` GMSecret  : ${credentials.gmSecret}`);
+  console.log(` Build     : ${version?.commit || 'unknown'}`);
+  console.log(' Status    : READY');
+  console.log('============================================================');
+  console.log('');
+  console.log(' PLAYER INVITE - send only these two items:');
+  console.log(`   URL      : ${publicUrl}`);
+  console.log(`   JoinCode : ${credentials.joinCode}`);
+  console.log('');
+  console.log(' GM Secret is for the GM only. Do not send it to Players.');
+  console.log(' Press Ctrl+C to stop the server and tunnel.');
+  console.log('');
+}
+
 async function main() {
   const cloudflaredExe = String(process.env.RPGMAP_CLOUDFLARED_EXE || '').trim();
   if (!cloudflaredExe) throw new Error('RPGMAP_CLOUDFLARED_EXE is not set. Run start-rpgmap-internet.bat.');
@@ -98,6 +149,7 @@ async function main() {
   const port = Math.max(1, Number(process.env.PORT || 30000) || 30000);
   const originUrl = `http://127.0.0.1:${port}`;
   const credentials = createInternetCredentials();
+  const version = await readVersion();
 
   console.log('============================================================');
   console.log(' RPGmap Internet Multiplayer Launcher');
@@ -144,30 +196,18 @@ async function main() {
 
     console.log('');
     console.log(`[OK] Quick Tunnel created: ${publicUrl}`);
-    console.log('[INFO] Starting RPGmap Server with the public URL attached...');
-    console.log('');
+    console.log('[INFO] Starting RPGmap Server...');
 
     server = spawn(process.execPath, [path.join(ROOT, 'server.mjs')], {
       cwd: ROOT,
       env: serverEnv,
-      stdio: 'inherit',
+      stdio: ['inherit', 'ignore', 'inherit'],
       windowsHide: false,
     });
 
     server.once('error', error => console.error('[RPGmap] Server process error:', error));
-    await waitForServer(port);
-
-    console.log('============================================================');
-    console.log(' RPGmap Player Invite');
-    console.log('============================================================');
-    console.log(` Public URL : ${publicUrl}`);
-    console.log(` Join Code  : ${credentials.joinCode}`);
-    console.log('');
-    console.log(' Send ONLY the Public URL + Join Code to Players.');
-    console.log(` GM Secret  : ${credentials.gmSecret}  (GM only - do not share)`);
-    console.log('============================================================');
-    console.log('');
-
+    const health = await waitForServer(port);
+    printServerBanner({ port, publicUrl, credentials, health, version });
     openBrowser(publicUrl);
 
     const result = await Promise.race([
