@@ -1,125 +1,127 @@
-# RPGmap 1.4.2 Internet Multiplayer
+# RPGmap 1.4.3 Internet Multiplayer
 
-本文件记录 V1.4.2 Windows 公网联机入口的技术说明。普通用户优先阅读发布包根目录 `操作说明.md`；更完整的身份 / Ownership 说明见 `docs/MULTIPLAYER-GUIDE.md`。
+本文件记录 V1.4.3 Internet Multiplayer 的技术说明。普通用户优先阅读发布包根目录 `操作说明.md`。
 
-## 一键启动
+## 统一启动入口
 
-双击：
-
-```text
-start-rpgmap-internet.bat
-```
-
-流程：
-
-1. 检查 Node.js。
-2. 检查完整 `app/` 发布内容。
-3. 创建 / 检查 `world/` 与 `maps/`。
-4. 优先使用包目录中的 `cloudflared.exe`。
-5. 其次使用系统 PATH 中的 `cloudflared.exe`。
-6. 如果仍不存在，调用 `setup-cloudflared.bat` 尝试官方下载或 `winget` 安装。
-7. 启动 `internet-launcher.mjs`。
-8. Launcher 使用 `--protocol http2` 创建 Cloudflare Quick Tunnel。
-9. 自动解析 `https://*.trycloudflare.com`。
-10. 自动生成 6 位 Join Code 与 GM Secret。
-11. 启动 `server.mjs`，注入 Public URL、Join Code 和 GM Secret。
-12. 等待 `/api/health` 返回 READY。
-13. 自动打开公网 RPGmap 页面。
-14. Windows 额外打开独立 `RPGmap Multiplayer Info` 信息窗口。
-
-## V1.4.2 便携目录
+Windows 只需要双击：
 
 ```text
-app/     程序前端
-world/   当前 World / Campaign 的运行数据
-maps/    真正的 Map / Scene 资源库
+启动 RPGmap.bat
 ```
 
-公网联机和局域网联机使用同一套 `world/` / `maps/` 数据，不会另外在 AppData、用户主目录或隐藏目录再保存一份 RPGmap World/User 数据。
+浏览器打开本机 Launcher：
 
-## 玩家邀请
+```text
+http://127.0.0.1:29999
+```
 
-首次加入的普通 Player 通常只需要：
+点击“启动互联网联机”后，Launcher 自动：
+
+1. 检测 cloudflared；
+2. Windows 缺失时下载官方 Windows amd64 binary 到包内 `tools/`；
+3. 创建 Cloudflare Quick Tunnel；
+4. 使用 `--protocol http2`；
+5. 解析 `https://*.trycloudflare.com`；
+6. 生成 6 位 Join Code 和 GM Secret；
+7. 启动 RPGmap Game Server；
+8. 等待 `/api/health` READY；
+9. 建立隐藏 Launcher GM Admin Session；
+10. 在 Launcher 页面显示公网地址、房间号、GM Secret 和日志。
+
+V1.4.3 不再要求用户运行独立的 `setup-cloudflared.bat` 或 `start-rpgmap-internet.bat`。
+
+## Player Invite
+
+Launcher 的“玩家邀请”只包含：
 
 ```text
 Public URL + Join Code
 ```
 
-GM Secret 只供 GM 使用。
+GM Secret 永远不会进入邀请文本。
 
-已存在的 Player User 在 Quick Tunnel 域名变化后恢复身份时，还需要自己的 Player Key。
+已有 Persistent User 在新的 Quick Tunnel 域名恢复身份时，还需要自己的 Player Key。
 
-## User / 权限
+## Launcher / Game Port
 
-- Player 首次加入后进入 pending，由 GM 批准为持久 User。
-- GM 可以预创建 User + Player Key。
-- Actor 权限分为 NONE / OBSERVER / OWNER。
-- Combat active 时，Player 只能操控当前 Turn 对应且自己拥有 OWNER 的 Actor。
-- Client 负责友好预检，Server 负责最终权限裁决。
-- User / Ownership / 凭证哈希保存在 `world/users.json`。
+```text
+Launcher: 127.0.0.1:29999
+Game:     0.0.0.0:30000
+Tunnel:   -> http://127.0.0.1:30000
+```
+
+Launcher 只绑定 loopback；Cloudflare 只代理 Game Port，因此远程 Player 不会经过 Launcher Admin Console。
 
 ## HTTP/2 / TCP
 
-Quick Tunnel 默认：
+Quick Tunnel：
 
 ```text
 cloudflared tunnel --no-autoupdate --url http://127.0.0.1:30000 --protocol http2
 ```
 
-这样可以提高 VPN / TUN、校园网、防火墙限制 UDP 环境下的兼容性。
+用于提高 VPN / TUN、校园网和限制 UDP 环境下的兼容性。
 
-## cloudflared 自动安装
+## cloudflared
 
-`setup-cloudflared.bat` 会尝试：
+优先顺序：
 
-- 本地 `cloudflared.exe`
-- 系统 PATH
-- Cloudflare 官方 GitHub Release Windows amd64 binary
-- `winget install --id Cloudflare.cloudflared --exact`
+1. `RPGMAP_CLOUDFLARED_EXE`；
+2. RPGmap 包内 `tools/cloudflared.exe`；
+3. RPGmap 根目录兼容位置；
+4. 系统 PATH 中的 `cloudflared`；
+5. Windows 自动下载 Cloudflare 官方 Release。
 
-如果自动下载失败，可手动将 Windows 64-bit `cloudflared.exe` 放在 RPGmap 根目录。
+自动下载的文件留在 RPGmap 包内，不写入 AppData。
 
-## 安全边界
+## User / Ownership
 
-- Player 使用 Join Code。
-- GM 使用 GM Secret。
-- Player User 通过 Browser Token / Player Key 恢复身份。
-- Server 不保存明文 Player Key / Browser Token，只保存哈希。
-- Join Code 与 GM Secret 每次公网启动重新生成。
-- 不要把 GM Secret 发给 Player。
-- Player Key 只发给对应 Player。
-- Quick Tunnel URL 是临时地址，Launcher 停止后失效。
+Launcher 通过隐藏 GM WebSocket Session 管理：
+
+- pending Player 批准；
+- User 预创建；
+- 默认 Actor；
+- NONE / OBSERVER / OWNER；
+- Player Key rotation；
+- User 删除。
+
+它不直接改 `world/users.json`，因此运行中的 Server 内存状态和持久化状态保持一致。
+
+## Portable Data
+
+```text
+app/     程序
+world/   当前 Campaign 数据
+maps/    Map / Scene 资源库
+```
+
+Internet 和 LAN 模式使用同一个 `world/` / `maps/`。
+
+## Security
+
+- Player：Join Code。
+- GM：GM Secret。
+- Persistent User：Browser Token / Player Key。
+- Launcher：127.0.0.1 + 本机随机 Browser Token。
+- Server 不保存明文 Player Key / Browser Token。
+- Join Code / GM Secret 每次启动重新生成。
+- Player Key 只发给对应玩家。
 
 ## Troubleshooting
 
+### Public URL 无法访问
+
+先使用手机关闭 Wi-Fi、改用移动网络测试。若仍不可访问，再查看 Launcher 的 Tunnel 日志，并检查本机 VPN / TUN / 代理。
+
 ### `stream N canceled by remote with error code 0`
 
-单条日志不一定代表 Tunnel 故障，可能只是客户端取消 HTTP 请求。应以页面和 WebSocket 是否正常连接为准。
-
-### Player 打不开 Public URL
-
-GM 可先用手机关闭 Wi-Fi、使用 4G/5G 测试 Public URL。如果移动网络也无法访问，再检查 Cloudflare 日志和本机代理 / VPN / TUN 设置。
+单条日志不一定代表 Tunnel 故障，应以页面和 WebSocket 是否正常为准。
 
 ### `198.18.x.x`
 
-该地址属于保留测试网段，常见于某些代理 / TUN 软件的虚拟网络路径。RPGmap 默认 HTTP/2/TCP 模式用于提高这类环境的兼容性。
-
-## 手动模式
-
-高级用户可以手动设置：
-
-```text
-RPGMAP_PUBLIC=1
-RPGMAP_PUBLIC_URL=https://example.trycloudflare.com
-RPGMAP_JOIN_CODE=123456
-RPGMAP_GM_SECRET=ABCDEF0123456789
-RPGMAP_PUBLIC_DIR=<package>/app
-RPGMAP_WORLD_DIR=<package>/world
-RPGMAP_MAPS_DIR=<package>/maps
-```
-
-然后分别运行 Server 和 Tunnel。
+常见于代理 / TUN 虚拟网络。HTTP/2/TCP 模式用于提高此类环境兼容性。
 
 ## Quick Tunnel 定位
 
-Quick Tunnel 是便捷个人联机入口，不是固定公网部署方案。需要长期固定 URL、域名和更严格访问策略时，应迁移到 Named Tunnel / 自有域名。
+Quick Tunnel 适合便捷个人联机，不是固定生产部署。需要固定域名和长期服务时，后续应迁移到 Named Tunnel / 自有域名。
