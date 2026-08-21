@@ -68,7 +68,7 @@ jobs:
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE/release/RPGmap-v${PACKAGE_VERSION}"
           rm -rf "$GITHUB_WORKSPACE/release"
-          mkdir -p "$ROOT/app" "$ROOT/map/uploads" "$ROOT/map/backups" "$ROOT/docs"
+          mkdir -p "$ROOT/app" "$ROOT/world/uploads" "$ROOT/world/backups" "$ROOT/maps" "$ROOT/docs"
 
           cp -R dist/. "$ROOT/app/"
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
@@ -80,9 +80,10 @@ jobs:
           cp deployment/local-server/start-rpgmap-internet.bat "$ROOT/start-rpgmap-internet.bat"
           cp deployment/local-server/setup-cloudflared.bat "$ROOT/setup-cloudflared.bat"
           cp deployment/local-server/run-rpgmap-public-server.bat "$ROOT/run-rpgmap-public-server.bat"
-          cp deployment/local-server/README.md "$ROOT/README.md"
-          cp deployment/local-server/INTERNET-TEST.md "$ROOT/INTERNET-MULTIPLAYER.md"
-          cp deployment/local-server/map/README.txt "$ROOT/map/README.txt"
+          cp 'deployment/local-server/操作说明.md' "$ROOT/操作说明.md"
+          cp deployment/local-server/INTERNET-TEST.md "$ROOT/docs/INTERNET-MULTIPLAYER.md"
+          cp deployment/local-server/world/README.txt "$ROOT/world/README.txt"
+          cp deployment/local-server/maps/README.txt "$ROOT/maps/README.txt"
           cp '文档/联机使用说明.md' "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           cp '文档/未来规划.md' "$ROOT/docs/FUTURE-ROADMAP.md"
           cp CHANGELOG.md "$ROOT/docs/CHANGELOG.md"
@@ -95,7 +96,7 @@ jobs:
             "releaseTag": "${RELEASE_TAG}",
             "commit": "${GITHUB_SHA}",
             "serverMode": "multiplayer",
-            "storageMode": "portable-map-root",
+            "storageMode": "portable-world-maps",
             "defaultPort": 30000
           }
           EOF
@@ -107,25 +108,16 @@ jobs:
           test -f "$ROOT/internet-launcher.mjs"
           test -f "$ROOT/start-rpgmap-internet.bat"
           test -f "$ROOT/setup-cloudflared.bat"
-          test -f "$ROOT/map/README.txt"
-          test -d "$ROOT/map/uploads"
-          test -d "$ROOT/map/backups"
+          test -f "$ROOT/操作说明.md"
+          test -f "$ROOT/world/README.txt"
+          test -d "$ROOT/world/uploads"
+          test -d "$ROOT/world/backups"
+          test -f "$ROOT/maps/README.txt"
           test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
+          test ! -d "$ROOT/map"
           test ! -d "$ROOT/data"
           test ! -d "$ROOT/public"
-
-          python - <<'PY'
-          from pathlib import Path
-          import sys
-          roots = list(Path('release').glob('RPGmap-v*'))
-          root = roots[0]
-          bad = [str(p.relative_to(root)) for p in root.rglob('*') if not str(p.relative_to(root)).isascii()]
-          if bad:
-              print('Non-ASCII release paths are forbidden:', file=sys.stderr)
-              for path in bad:
-                  print('  ' + path, file=sys.stderr)
-              raise SystemExit(1)
-          PY
+          test ! -f "$ROOT/README.md"
 
           cd "$GITHUB_WORKSPACE/release"
           ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
@@ -143,38 +135,31 @@ jobs:
           cat > release/release-notes.md <<EOF
           ## RPGmap ${PACKAGE_VERSION}
 
-          RPGmap ${PACKAGE_VERSION} 加入持久 Player Identity、Actor Ownership、Combat Turn Lock，并将发布包整理为完全便携的 \`app/ + map/\` 数据布局。
+          RPGmap ${PACKAGE_VERSION} 在 Player Identity / Actor Ownership / Combat Turn Lock 的基础上，进一步统一发布包的数据边界：\`app/\` 是程序，\`world/\` 是当前游戏状态，\`maps/\` 是真正的地图 / Scene 资源库。
 
-          ### Portable Map Root
-          - 前端程序放在 \`app/\`。
-          - 所有默认可写跑团数据集中在 \`map/\`。
-          - \`map/world.json\` 保存共享 World。
-          - \`map/users.json\` 保存 Player User、默认 Actor、Ownership 与凭证哈希。
-          - \`map/uploads/\` 与 \`map/backups/\` 跟随地图工程一起保存。
+          ### Portable Layout
+          - \`app/\`：前端程序，可随版本升级替换。
+          - \`world/state.json\`：共享 World Snapshot / revision。
+          - \`world/users.json\`：Player User、默认 Actor、Ownership 与凭证哈希。
+          - \`world/uploads/\` / \`world/backups/\`：当前 World 的上传与备份。
+          - \`maps/\`：为多地图、可破坏建筑、碰撞 / 导航、环境特效和地图变体预留的 Map Library。
           - 默认不依赖 AppData 或其他隐藏 User Data 目录。
-          - 可从旧版 \`data/worlds/default/world.json\` / \`access.json\` 自动迁移，旧文件保留不删除。
 
-          ### User / Identity
-          - Player 首次加入后由 GM 批准为当前 World 的持久 User。
-          - GM 也可预创建 User，并生成 Player Key。
-          - Quick Tunnel 域名变化后，Player 可使用 Player Key 恢复原 User。
-          - Server 只保存凭证哈希。
+          ### Migration
+          - V1.4.1 \`map/world.json\` 自动迁移到 \`world/state.json\`。
+          - V1.4.1 \`map/users.json\` 自动迁移到 \`world/users.json\`。
+          - 更老的 \`data/worlds/default/world.json\` / \`access.json\` 仍然支持迁移。
+          - 旧文件保留不删除，新目录存在时永远以新目录为准。
 
-          ### Actor Ownership
+          ### Documentation
+          - GitHub 根 \`README.md\` 只作为项目整体说明。
+          - 发布包根目录改用 \`操作说明.md\`，专门说明启动、联机、User、Ownership、备份和迁移。
+
+          ### Multiplayer Permissions
+          - Player 首次加入由 GM 批准为持久 User；也支持 GM 预创建 User + Player Key。
           - Actor 权限：NONE / OBSERVER / OWNER。
-          - 每个 Player 可有一个默认角色，并可拥有多个 OWNER / OBSERVER Actor。
-          - Player 只能修改 OWNER Actor；Actor / Token 创建、删除、重新绑定由 GM 管理。
-
-          ### Combat Turn Lock
-          - 参战者、先攻、排序、Round、Turn 与战斗开始/结束均由 GM 管理。
-          - Combat active 时，Player 只能操控当前 Turn 对应且自己拥有 OWNER 的 Actor。
-          - Client 提前拦截，Server 再做最终强制校验。
-
-          ### Internet Multiplayer
-          - Windows 双击 \`start-rpgmap-internet.bat\`。
-          - 玩家首次加入：Public URL + Join Code；GM 批准后取得持久身份。
-          - 已有 User 在新的 Quick Tunnel 地址上：Public URL + Join Code + Player Key。
-          - GM Secret 仅供 GM 使用。
+          - Combat active 时 Player 只能操控当前 Turn 对应的 OWNER Actor。
+          - Client 预检 + Server authoritative validation 双层权限校验。
 
           **Source commit:** \`${GITHUB_SHA}\`
           EOF
