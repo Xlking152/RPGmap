@@ -183,7 +183,11 @@ export function createMovementController({ settings } = {}) {
         draw(route, mapCharacter(api.getState(), drag.characterId));
         if (route.valid) {
           if (ready) drag.ready(route);
-          const action = drag.phase === TokenDragPhase.READY ? ' · 点击“确认移动”或按 Enter' : ' · Ctrl/Cmd+点击或 F 添加拐点';
+          const action = drag.phase === TokenDragPhase.READY
+            ? ' · 点击“确认移动”或按 Enter'
+            : drag.nextClickCreatesWaypoint
+              ? ' · 左键点击设置第 1 个拐点'
+              : ' · Ctrl/Cmd+点击或 F 添加拐点';
           status('拖动路线 ' + formatDistance(route.distance) + ' · 吸附 ' + settings.step + ' m · ' + drag.session.waypoints.length + ' 个拐点' + action);
         } else {
           status('第 ' + (route.failedSegmentIndex + 1) + ' 段无法通行 · 右键或 Alt+F 撤销拐点');
@@ -280,7 +284,7 @@ export function createMovementController({ settings } = {}) {
         mapElement.setPointerCapture?.(event.pointerId);
         mapElement.classList.add('fvtt-token-dragging');
         mapElement.style.cursor = 'grabbing';
-        status('拖动角色规划路线 · Ctrl/Cmd+松开保留拐点 · F 添加拐点 · Esc 取消');
+        status('拖动角色规划路线 · Ctrl/Cmd+松开进入拐点规划 · F 添加拐点 · Esc 取消');
       }
 
       function moveTokenDrag(event) {
@@ -309,17 +313,22 @@ export function createMovementController({ settings } = {}) {
         suppressClickUntil = performance.now() + 250;
         const dragged = drag.draggedPixels({ x: event.clientX, y: event.clientY });
         if (dragged < DRAG_THRESHOLD_PX) { reset('已选择角色 · 拖动 Token 可直接规划移动'); return; }
+        const waypointPlanning = event.ctrlKey || event.metaKey;
         const point = worldPointFromPointer(event);
         const route = await calculate(point);
         if (!route?.valid) {
-          drag.continuePlanning();
-          status('当前位置不可通行 · 移动鼠标重选终点，Esc 取消');
+          drag.continuePlanning({ nextClickCreatesWaypoint: waypointPlanning });
+          status(waypointPlanning
+            ? '已进入拐点规划 · 松开位置不计为拐点；移动到可通行位置后左键设置第 1 个拐点'
+            : '当前位置不可通行 · 移动鼠标重选终点，Esc 取消');
           return;
         }
-        if (event.ctrlKey || event.metaKey) {
-          drag.addWaypoint(route.destination);
+        if (waypointPlanning) {
+          drag.continuePlanning({ nextClickCreatesWaypoint: true });
+          drag.setRoute(route);
           draw(route, mapCharacter(api.getState(), drag.characterId));
-          status('已保留拐点 ' + drag.session.waypoints.length + ' · 松开鼠标后继续移动光标规划；普通点击设最终终点');
+          showControls(false);
+          status('已进入拐点规划 · 松开位置只是预览，不计为拐点；下一次左键点击设置第 1 个拐点');
           return;
         }
         drag.ready(route);
@@ -349,10 +358,14 @@ export function createMovementController({ settings } = {}) {
         if (!pointInside(point, api.mapPackage)) return;
         const route = await calculate(point);
         if (!route?.valid) return;
-        if (event.ctrlKey || event.metaKey) {
+        const firstPostDragWaypoint = drag.nextClickCreatesWaypoint;
+        if (firstPostDragWaypoint || event.ctrlKey || event.metaKey) {
           drag.addWaypoint(route.destination);
+          draw(route, mapCharacter(api.getState(), drag.characterId));
           showControls(false);
-          status('已添加拐点 ' + drag.session.waypoints.length + ' · 继续移动光标规划');
+          status(firstPostDragWaypoint
+            ? '已设置第 1 个拐点 · 继续移动光标规划；Ctrl/Cmd+点击或 F 可继续添加拐点，普通点击设置最终终点'
+            : '已添加拐点 ' + drag.session.waypoints.length + ' · 继续移动光标规划');
         } else {
           drag.ready(route);
           draw(route, mapCharacter(api.getState(), drag.characterId));
