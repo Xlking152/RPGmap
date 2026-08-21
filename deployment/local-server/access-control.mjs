@@ -135,12 +135,20 @@ function chatAppendOnly(before, next) {
   return true;
 }
 
+function newPlayerKey() {
+  return randomBytes(8).toString('hex').toUpperCase();
+}
+
+function newAuthToken() {
+  return randomBytes(32).toString('base64url');
+}
+
 export function hashCredential(value) {
   return createHash('sha256').update(String(value || '')).digest('hex');
 }
 
 export function createAccessState() {
-  return { schemaVersion: 1, users: [] };
+  return { schemaVersion: 2, users: [] };
 }
 
 export function normalizeOwnership(raw) {
@@ -165,6 +173,7 @@ export function normalizeAccessState(raw) {
     const ownership = normalizeOwnership(item.ownership);
     let defaultActorId = cleanActorId(item.defaultActorId);
     if (defaultActorId && ownership[defaultActorId] !== OWNERSHIP.OWNER) defaultActorId = null;
+    const legacyClaimHash = typeof item.claimHash === 'string' && item.claimHash.length === 64 ? item.claimHash : null;
     users.push({
       id,
       name: cleanName(item.name),
@@ -172,13 +181,13 @@ export function normalizeAccessState(raw) {
       defaultActorId,
       ownership,
       tokenHash: typeof item.tokenHash === 'string' && item.tokenHash.length === 64 ? item.tokenHash : null,
-      claimHash: typeof item.claimHash === 'string' && item.claimHash.length === 64 ? item.claimHash : null,
+      playerKeyHash: typeof item.playerKeyHash === 'string' && item.playerKeyHash.length === 64 ? item.playerKeyHash : legacyClaimHash,
       disabled: item.disabled === true,
       createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
       updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString(),
     });
   }
-  return { schemaVersion: 1, users };
+  return { schemaVersion: 2, users };
 }
 
 function baseUser({ name, defaultActorId = null, ownership = {} } = {}) {
@@ -193,7 +202,7 @@ function baseUser({ name, defaultActorId = null, ownership = {} } = {}) {
     defaultActorId: actorId,
     ownership: normalizedOwnership,
     tokenHash: null,
-    claimHash: null,
+    playerKeyHash: null,
     disabled: false,
     createdAt: now,
     updatedAt: now,
@@ -201,17 +210,19 @@ function baseUser({ name, defaultActorId = null, ownership = {} } = {}) {
 }
 
 export function createBoundUser(options = {}) {
-  const authToken = randomBytes(32).toString('base64url');
+  const authToken = newAuthToken();
+  const playerKey = newPlayerKey();
   const user = baseUser(options);
   user.tokenHash = hashCredential(authToken);
-  return { user, authToken };
+  user.playerKeyHash = hashCredential(playerKey);
+  return { user, authToken, playerKey };
 }
 
 export function createClaimableUser(options = {}) {
-  const claimCode = randomBytes(5).toString('hex').toUpperCase();
+  const playerKey = newPlayerKey();
   const user = baseUser(options);
-  user.claimHash = hashCredential(claimCode);
-  return { user, claimCode };
+  user.playerKeyHash = hashCredential(playerKey);
+  return { user, playerKey };
 }
 
 export function verifyUserCredential(user, authToken) {
@@ -219,23 +230,26 @@ export function verifyUserCredential(user, authToken) {
   return user.tokenHash === hashCredential(authToken);
 }
 
-export function claimUser(user, claimCode) {
-  if (!user || user.disabled || !user.claimHash || !claimCode) return null;
-  if (user.claimHash !== hashCredential(claimCode)) return null;
-  const authToken = randomBytes(32).toString('base64url');
+export function verifyPlayerKey(user, playerKey) {
+  if (!user || user.disabled || !user.playerKeyHash || !playerKey) return false;
+  return user.playerKeyHash === hashCredential(String(playerKey).trim().toUpperCase());
+}
+
+export function bindWithPlayerKey(user, playerKey) {
+  if (!verifyPlayerKey(user, playerKey)) return null;
+  const authToken = newAuthToken();
   user.tokenHash = hashCredential(authToken);
-  user.claimHash = null;
   user.updatedAt = new Date().toISOString();
   return authToken;
 }
 
-export function resetUserClaim(user) {
+export function resetUserPlayerKey(user) {
   if (!user) return null;
-  const claimCode = randomBytes(5).toString('hex').toUpperCase();
-  user.claimHash = hashCredential(claimCode);
+  const playerKey = newPlayerKey();
+  user.playerKeyHash = hashCredential(playerKey);
   user.tokenHash = null;
   user.updatedAt = new Date().toISOString();
-  return claimCode;
+  return playerKey;
 }
 
 export function updateUserRecord(user, patch = {}) {
@@ -263,7 +277,7 @@ export function publicUser(user) {
     ownership: { ...user.ownership },
     disabled: user.disabled === true,
     claimed: Boolean(user.tokenHash),
-    claimPending: Boolean(user.claimHash),
+    hasPlayerKey: Boolean(user.playerKeyHash),
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
