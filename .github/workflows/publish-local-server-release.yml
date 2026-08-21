@@ -14,7 +14,7 @@ permissions:
 jobs:
   build-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 18
 
     steps:
       - name: Checkout source
@@ -42,6 +42,26 @@ jobs:
 
       - name: Build web client
         run: npm run build
+
+      - name: Install Windows launcher compiler
+        shell: bash
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+
+      - name: Build native Windows Launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p native-build
+          x86_64-w64-mingw32-gcc \
+            -O2 -s -municode -mwindows \
+            -finput-charset=UTF-8 \
+            deployment/launcher/windows-launcher.c \
+            -o "native-build/RPGmap Launcher.exe" \
+            -lshell32
+          test -s "native-build/RPGmap Launcher.exe"
+          file "native-build/RPGmap Launcher.exe" | grep -E 'PE32\+ executable.*x86-64'
 
       - name: Resolve release version
         shell: bash
@@ -72,12 +92,12 @@ jobs:
 
           cp -R dist/. "$ROOT/app/"
 
+          cp "native-build/RPGmap Launcher.exe" "$ROOT/RPGmap Launcher.exe"
           cp deployment/launcher/launcher.mjs "$ROOT/launcher/launcher.mjs"
           cp deployment/launcher/admin-client.mjs "$ROOT/launcher/admin-client.mjs"
           cp deployment/launcher/index.html "$ROOT/launcher/index.html"
           cp deployment/launcher/launcher.js "$ROOT/launcher/launcher.js"
           cp deployment/launcher/launcher.css "$ROOT/launcher/launcher.css"
-          cp deployment/launcher/start-rpgmap.bat "$ROOT/启动 RPGmap.bat"
 
           cp deployment/local-server/server.mjs "$ROOT/server/server.mjs"
           cp deployment/local-server/access-control.mjs "$ROOT/server/access-control.mjs"
@@ -99,13 +119,14 @@ jobs:
             "commit": "${GITHUB_SHA}",
             "serverMode": "multiplayer",
             "storageMode": "portable-world-maps",
-            "launcherMode": "unified-admin-console",
+            "launcherMode": "native-exe-web-admin-console",
             "defaultPort": 30000,
             "launcherPort": 29999
           }
           EOF
 
           test -f "$ROOT/app/index.html"
+          test -f "$ROOT/RPGmap Launcher.exe"
           test -f "$ROOT/launcher/launcher.mjs"
           test -f "$ROOT/launcher/admin-client.mjs"
           test -f "$ROOT/launcher/index.html"
@@ -114,23 +135,20 @@ jobs:
           test -f "$ROOT/server/server.mjs"
           test -f "$ROOT/server/access-control.mjs"
           test -f "$ROOT/server/portable-storage.mjs"
-          test -f "$ROOT/启动 RPGmap.bat"
           test -f "$ROOT/操作说明.md"
           test -f "$ROOT/world/README.txt"
           test -d "$ROOT/world/uploads"
           test -d "$ROOT/world/backups"
           test -f "$ROOT/maps/README.txt"
           test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
+          test -f "$ROOT/docs/FUTURE-ROADMAP.md"
           test ! -f "$ROOT/README.md"
           test ! -f "$ROOT/server.mjs"
-          test ! -f "$ROOT/start-rpgmap.bat"
-          test ! -f "$ROOT/start-rpgmap-internet.bat"
-          test ! -f "$ROOT/setup-cloudflared.bat"
-          test ! -f "$ROOT/run-rpgmap-public-server.bat"
           test ! -d "$ROOT/map"
           test ! -d "$ROOT/data"
           test ! -d "$ROOT/public"
-          test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
+          test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 0
+          test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 1
 
           cd "$GITHUB_WORKSPACE/release"
           ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
@@ -165,20 +183,19 @@ jobs:
               zf.extractall(verify)
           PY
           VROOT="$VERIFY/RPGmap-v${PACKAGE_VERSION}"
-          test -f "$VROOT/启动 RPGmap.bat"
+          test -f "$VROOT/RPGmap Launcher.exe"
+          file "$VROOT/RPGmap Launcher.exe" | grep -E 'PE32\+ executable.*x86-64'
           test -f "$VROOT/操作说明.md"
           test -f "$VROOT/launcher/launcher.mjs"
           test -f "$VROOT/server/server.mjs"
           test -f "$VROOT/app/index.html"
           test -f "$VROOT/world/README.txt"
           test -f "$VROOT/maps/README.txt"
+          test -f "$VROOT/docs/FUTURE-ROADMAP.md"
           test ! -f "$VROOT/README.md"
-          test ! -f "$VROOT/start-rpgmap.bat"
-          test ! -f "$VROOT/start-rpgmap-internet.bat"
-          test ! -f "$VROOT/setup-cloudflared.bat"
-          test ! -f "$VROOT/run-rpgmap-public-server.bat"
-          test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
-          test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "unified-admin-console"
+          test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 0
+          test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 1
+          test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "native-exe-web-admin-console"
           rm -rf "$VERIFY"
 
           if unzip -l "$ARCHIVE" | grep -E '(^|/)(\.git|node_modules|tests?|coverage|\.cache|npm-cache|__pycache__|playwright-report|test-results)(/|$)'; then
@@ -192,31 +209,28 @@ jobs:
           cat > release/release-notes.md <<EOF
           ## RPGmap ${PACKAGE_VERSION}
 
-          RPGmap ${PACKAGE_VERSION} adds a unified Launcher / GM Control Center on top of the portable \`app / world / maps\` layout and Multiplayer permission system.
+          RPGmap ${PACKAGE_VERSION} adds a native Windows Launcher entry and a unified local GM Control Center on top of the portable \`app / world / maps\` layout.
 
-          ### Unified Launcher
-          - Windows users launch RPGmap through one root entry: \`启动 RPGmap.bat\`.
-          - Local/LAN and Internet Multiplayer are started from one browser control center.
-          - The Launcher displays Local/LAN/Public URLs, Join Code, GM Secret, Player Invite, storage paths and runtime logs.
-          - Internet mode detects cloudflared and can download the official Windows binary when missing.
+          ### Native Windows Launcher
+          - Windows package root contains \`RPGmap Launcher.exe\` as the single launch entry.
+          - The EXE is a lightweight native shell; it starts the existing Node Launcher without Electron.
+          - Node.js remains the runtime requirement. If Node is missing, the EXE provides a clear install prompt.
+          - No BAT files are exposed in the release root.
 
-          ### GM Admin Console
-          - Approve pending Players.
-          - Pre-create Player Users.
-          - Set Default Actor and NONE / OBSERVER / OWNER.
-          - Rotate Player Keys and delete Users.
-          - Launcher uses a hidden local GM WebSocket Session instead of editing \`world/users.json\` directly.
+          ### Launcher / GM Admin
+          - Start Local/LAN or Internet Multiplayer from one interface.
+          - Display Local/LAN/Public URLs, Join Code, GM Secret, Player Invite and logs.
+          - Approve pending Players, create Users, assign Default Actor / NONE / OBSERVER / OWNER, rotate Player Keys and delete Users.
+          - Launcher reuses a hidden local GM WebSocket Session instead of directly editing \`world/users.json\`.
+
+          ### Future management slots
+          - Launcher reserves UI modules for World Manager, Scene Manager and Backup Center.
+          - The roadmap marks already-completed architecture phases and distinguishes planned work.
 
           ### Security
           - Launcher listens only on \`127.0.0.1:29999\`.
           - Cloudflare tunnels only the game server port.
           - Player Invite never contains GM Secret.
-
-          ### Package Layout
-          - \`launcher/\` contains Launcher internals.
-          - \`server/\` contains Multiplayer Server internals.
-          - Root package contains only one Windows BAT launcher.
-          - \`world/\` remains the persistent Campaign data root and \`maps/\` remains the Map / Scene library.
 
           **Source commit:** \`${GITHUB_SHA}\`
           EOF
