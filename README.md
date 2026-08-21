@@ -2,13 +2,9 @@
 
 RPGmap 是一个面向 TRPG / VTT 的浏览器地图工具，目标是逐步发展为类似 Foundry VTT 的可自托管跑团平台。项目本身不绑定某一张地图：地图内容通过独立 `MapPackage` 接入，当前仓库中的北宋兰州地图只是第一张可用地图包和开发验证场景。
 
-当前应用版本：**1.2.0**。
+当前应用版本：**1.3.0**。
 
-## 当前定位
-
-RPGmap 目前已经具备地图交互、Actor / Token、FVTT 风格路径移动、Ruler、Token 多选与框选、先攻 / 回合战斗、范围、场景破坏和本地服务器测试能力。
-
-核心结构：
+## 1.3.0 核心能力
 
 ```text
 RPGmap
@@ -16,142 +12,31 @@ RPGmap
 ├─ EntitySystem        Actor / Token / Form / Runtime / Effects
 ├─ SelectionSystem     单选、多选、矩形框选
 ├─ MovementSystem      Token 拖动、Waypoint、A*、移动成本与 Ghost
-├─ MeasurementSystem   Ruler、Waypoint、纯几何距离
+├─ MeasurementSystem   Ruler、角色测距、Waypoint、纯几何距离
 ├─ CombatSystem        参战者、先攻、顺序、轮次与当前回合
-├─ Path UI             Movement / Ruler 共用距离标签层
-├─ AppShell UI         顶栏、角色库、Inspector 与战斗入口
-└─ Server              当前为本地 HTTP 测试层，后续升级为正式自托管服务
+├─ HealthSystem        SimpleHP / WoundTrack
+├─ DamageSystem        向所选 Token 应用最终伤害
+├─ HealingSystem       向所选 Token 应用实际恢复量
+├─ ChatSystem          聊天、战斗 / 伤害 / 恢复 Game Log、未来 Roll 接口
+├─ Path UI             Movement / Ruler 共用高层距离标签
+├─ AppShell UI         顶栏、左侧先攻表、右侧聊天 / 角色库 / Inspector
+└─ Server              本地 HTTP 测试层，后续升级正式自托管服务
 ```
 
-## 主要功能
+## 操作指南
 
-### 地图与场景
+### 1. 启动
 
-- Leaflet + SVG 地图画布，支持平移、缩放与地图坐标。
-- 地图包与通用引擎分离，后续可继续接入其他地图。
-- 地物检查、建筑详情、可进入建筑、场景破坏、恢复与撤销。
-- 圆形 / 扇形 / 矩形范围工具。
-- 弹坑、液体连通等现有场景规则作为地图能力保留。
+需要 Node.js `^20.19.0 || >=22.12.0`。
 
-### Actor / Token
+发布 / 测试包：
 
-- `Actor` 保存角色身份、头像、属性、资源、技能 / 豁免、Forms、Runtime 与 Effects。
-- `Token` 负责地图上的位置、选择、移动、锁定、隐藏等场景状态。
-- 一个 Actor 可以拥有多个 Form，例如“变身前 / 变身后”。
-- HP、精力、意志、自定义资源槽和不良状态当前值均可实时修改。
-- 不良状态页显示当前值、轻度、重度和毁灭标准；当前值属于 Actor Runtime，形态切换只切换阈值。
-- XLSX 角色卡导入目前只读取 `角色概览` 与 `具体数值表` 的最终缓存值，不执行 Excel 公式。
+- Windows：双击 `start-rpgmap.bat`。
+- Linux / macOS：执行 `./start-rpgmap.sh`。
+- 默认地址：`http://127.0.0.1:30000`。
+- 同一局域网设备可使用启动窗口显示的 Network 地址访问。
 
-### SelectionSystem
-
-- 左键点击 Token：单选。
-- 从地图空白处按住左键拖动：矩形框选 Token。
-- `Shift + 点击 / 框选`：追加到当前选择。
-- `Alt + 点击 / 框选`：从当前选择移除。
-- 点击地图空白处：清空当前选择。
-- `Space + 左拖`：平移地图，避免框选模式占用基础导航。
-- 从 Token 本身开始拖动仍交给 MovementSystem，不会误触框选。
-- 多选结果可直接作为“进入战斗 / 加入所选”的参战者来源。
-
-### MovementSystem
-
-- 直接拖动 Token 规划路线。
-- EasyStar A* 路径规划与道路优先移动。
-- Ghost Token 预览。
-- Waypoint 分段路线。
-- 5 / 10 / 20 / 50 / 100 m 移动吸附档位。
-- 分段移动成本与总移动成本显示。
-- `Ctrl/Cmd` 拖动松开的地点只进入 waypoint 规划，不自动成为第一个拐点。
-- Movement 路线绘制在较低图层，距离标签统一绘制在独立高层 `pathLabelPane`，路线不会遮挡数字。
-
-### MeasurementSystem
-
-- 原“两点测距 / 路线测距”合并为一个 Ruler。
-- `R` 可快速开启 / 关闭距离尺，也可以点击顶部“测量”。
-- 第一次左键设置起点，移动鼠标实时预览，普通左键结束。
-- `Ctrl/Cmd + 左键` 或 `F` 添加 waypoint。
-- 右键或 `Alt + F` 撤销最近 waypoint。
-- `Esc` 清除当前尺子。
-- 0 waypoint 是普通两点测距；1 个以上 waypoint 自动成为折线路线测距。
-- Ruler 计算纯几何距离；Movement 计算 A* 路线与移动成本，两者规则分离。
-- Ruler 与 Movement 共用高层距离标签，因此测量线和移动路线都不会遮挡距离数字。
-
-### CombatSystem
-
-- 先单选或框选 Token，再点击顶栏“进入战斗”；只有当时已选择的 Token 会进入先攻表。
-- 战斗创建后，新选择或新出现的 Token **不会自动加入**，需要选中后点击“加入所选”。
-- 先攻由操作者手动输入，输入完成后自动按数值从大到小排列；空白先攻位于末尾。
-- 左侧先攻表支持拖动参战者手动调整顺序，不会修改其先攻数值。
-- “开始战斗”后进入第 1 轮；顶栏提供“下一回合”和“结束战斗”。
-- 当前回合在先攻表和地图 Token 上同时高亮。
-- 点击先攻表中的参战者可选择并定位对应 Token。
-- 战斗状态保存在应用存档中；Combatant 只引用 Token / Actor，不复制角色属性和资源。
-
-## 常用操作与快捷键
-
-| 操作 | 快捷方式 |
-| --- | --- |
-| 单选 Token | 左键单击 |
-| 框选 Token | 从地图空白处按住左键拖动 |
-| 追加选择 | `Shift + 点击 / 框选` |
-| 从选择中移除 | `Alt + 点击 / 框选` |
-| 平移地图 | `Space + 左拖` |
-| 打开角色卡 | 双击 Token，或右键菜单 |
-| 普通移动 | 直接拖动 Token，松开后确认 |
-| 进入 Movement Waypoint 规划 | 按住 `Ctrl` / macOS `Cmd` 拖动并松开 |
-| 添加移动 Waypoint | `Ctrl/Cmd + 左键`，或 `F` |
-| 删除最近移动 Waypoint | 右键，或 `Alt + F` |
-| 确认移动 | `Enter` |
-| 取消移动规划 | `Esc` |
-| 切换移动吸附档位 | 规划移动时滚轮 |
-| 开启 / 关闭距离尺 | `R`，或点击顶部“测量” |
-| 设置 Ruler 起点 / 终点 | 左键 |
-| 添加 Ruler Waypoint | `Ctrl/Cmd + 左键`，或 `F` |
-| 撤销 Ruler Waypoint | 右键，或 `Alt + F` |
-| 清除当前 Ruler | `Esc` |
-| 切换角色 Form / 变身 | 选中多 Form Token 后按 `V` |
-| Token 上下文菜单 | 右键 Token |
-| 建立战斗 | 选择 Token 后点击顶部“进入战斗” |
-| 新增参战者 | 选择新 Token 后点击“加入所选” |
-| 调整先攻顺序 | 拖动左侧先攻表中的拖动柄 |
-| 推进回合 | 顶部“下一回合” |
-
-## 战斗流程
-
-```text
-单选 / 框选 Token
-        ↓
-顶部“进入战斗”
-        ↓
-左侧先攻表出现
-        ↓
-手动填写先攻
-        ↓
-自动按高 → 低排列
-（仍可拖动手动调整）
-        ↓
-顶部“开始战斗”
-        ↓
-第 1 轮 / 当前回合
-        ↓
-“下一回合”
-```
-
-已经建立战斗后，新 Token 必须再次明确选择并点击“加入所选”，不会自动进入先攻表。
-
-## 界面结构
-
-顶层 UI 目前收口为：
-
-```text
-选择 | 测量 | 战斗控制 | 范围 | 场景 | 导入角色 | 存档
-```
-
-右侧主要使用“角色库 / 当前对象”两种上下文；完整 Actor Sheet 独立打开。战斗存在时，左侧显示可拖动的先攻表。Movement 相关吸附与确认 UI 只在移动规划期间显示。
-
-## 本地开发
-
-需要 Node.js：`^20.19.0 || >=22.12.0`。
+源码开发：
 
 ```bash
 npm ci
@@ -165,24 +50,177 @@ npm run dev
 npm run build
 ```
 
-## 本地服务器测试
+### 2. 导入与查看角色
 
-仓库的 `deployment/local-server/` 提供当前服务器化过渡阶段的启动器。GitHub Release 发布包会包含预编译的 Web Client 与零第三方运行依赖的 Node HTTP Server。
+- 使用顶栏“导入角色”导入 XLSX 角色卡。
+- 当前模板只读取 `角色概览` 和 `具体数值表` 中 Excel 已保存的最终缓存值，不执行公式。
+- 双击地图 Token 或通过 Token 右键菜单打开角色卡。
+- 多 Form 角色选中 Token 后按 `V` 快速切换形态。
+- `鉴定` 页显示技能鉴定与意志 / 反射 / 强韧豁免。
+- `不良状态` 页可直接修改 21 种不良状态当前点数；阈值随 Form 切换，当前点数保留。
 
-Windows：`start-rpgmap.bat`
+### 3. Token 选择与框选
 
-Linux / macOS：`./start-rpgmap.sh`
+- 左键点击 Token：单选。
+- 从地图空白处左键拖动：矩形框选。
+- `Shift + 点击 / 框选`：追加选择。
+- `Alt + 点击 / 框选`：从当前选择移除。
+- 点击空白：清空选择。
+- `Space + 左拖`：平移地图。
+- 从 Token 本身开始拖动始终交给 MovementSystem，不会误触框选。
 
-默认地址：`http://127.0.0.1:30000`。当前服务器层仍属于过渡阶段：Actor / Token / Scene / Combat 的长期状态暂时仍以浏览器存储为主。正式 World Store、REST、WebSocket、GM / Player 权限和多人同步见未来规划。
+SelectionSystem 是战斗、角色测距、伤害和恢复生命的统一目标来源。
+
+### 4. Token 移动
+
+- 直接拖动 Token：规划移动路线。
+- Movement 使用 A* 路线和移动成本，与纯测距 Ruler 分离。
+- `Ctrl/Cmd` 拖动并松开：进入 Waypoint 规划。
+- `Ctrl/Cmd + 左键` 或 `F`：添加 Waypoint。
+- 右键或 `Alt + F`：删除最近 Waypoint。
+- `Enter`：确认移动。
+- `Esc`：取消移动规划。
+- 规划移动时滚轮：切换 5 / 10 / 20 / 50 / 100 m 吸附档位。
+
+距离数字绘制在独立高层 `pathLabelPane`，移动路线不会遮挡数字。
+
+### 5. 测距
+
+- 点击顶栏“测量”或按 `R`：开启 / 关闭 Ruler。
+- 左键设置起点，移动鼠标实时查看距离，再次左键结束。
+- `Ctrl/Cmd + 左键` 或 `F`：增加测距 Waypoint。
+- 右键或 `Alt + F`：撤销最近 Waypoint。
+- `Esc`：清除当前 Ruler。
+- 选中 Token 后点击“角色测距”，或按 `Shift + R`：以该 Token 中心为起点开始测距。
+
+Ruler 计算纯几何距离；Movement 计算实际移动路线与移动成本。
+
+### 6. 进入战斗与先攻
+
+1. 单选或框选准备参战的 Token。
+2. 点击顶栏“进入战斗”。只有当前已经选择的 Token 会进入战斗。
+3. 左侧先攻表展开，在每个参战者旁手动输入先攻。
+4. 输入先攻后默认按数值从大到小排序；空白先攻放在末尾。
+5. 可以拖动先攻表中的拖动柄手动确定最终顺序。
+6. 点击“开始战斗”进入第 1 轮；手动拖动后的顺序不会在开战时被重新排序。
+7. 点击“下一回合”依次推进；最后一个角色结束后自动进入下一轮。
+8. 点击“结束战斗”清除当前 Combat。
+
+战斗建立以后，新出现或后来选中的 Token **不会自动加入**。需要明确选中新角色，再点击“加入所选”。点击先攻表中的角色可选中并定位其地图 Token。
+
+### 7. 聊天与 Game Log
+
+右侧栏包含：
+
+```text
+聊天 | 角色库 | 当前
+```
+
+“聊天”页支持：
+
+- 普通聊天消息。
+- Combat 事件记录。
+- 伤害记录。
+- 恢复记录。
+- 预留 `roll` 类型，后续投骰和检定结果直接复用同一 Game Log。
+
+### 8. 伤害
+
+1. 在地图上选择一个或多个 Token。
+2. 打开右侧 `聊天 → 伤害`。
+3. 输入已经完成防具、硬度、DR、免疫、临时生命等前置结算后的**最终伤害值**。
+4. WoundTrack 角色选择 `B 冲击 / L 严重 / A 恶性`。
+5. 点击应用，伤害同时作用于所有明确选择的目标，并写入 Game Log。
+
+当前规则的 WoundTrack 使用：
+
+```text
+完好 / B 冲击 / L 严重 / A 恶性
+```
+
+伤害溢出会按规则升级。没有完好生命时标记昏迷；全部生命槽成为 A 时标记死亡；无完好且存在 A 时提示伤势恶化。伤势恶化目前只提示，不自动逐轮扣除。
+
+### 9. 恢复生命
+
+1. 选择一个或多个 Token。
+2. 打开右侧 `聊天 → 恢复`。
+3. 输入已经按具体技能 / 能力规则换算好的**实际恢复生命槽数**。
+4. WoundTrack 选择要恢复的 `B / L / A` 伤势，然后应用。
+5. SimpleHP 模式直接增加当前 HP，最高不超过上限。
+
+HealingSystem 不把“治疗点数 / 医疗点数”写死成统一兑换率，因为不同规则效果可以采用不同换算比例。普通恢复也不作为复活接口：已经全部为 A、处于死亡状态的 WoundTrack 角色不会被普通恢复直接复活。
+
+### 10. Token 血条
+
+地图 Token 上方常驻生命条，并随伤害、恢复和状态变化刷新：
+
+- SimpleHP：绿色表示当前 HP / 最大 HP。
+- WoundTrack：绿色 = 完好，黄色 = B，橙色 = L，深红 = A。
+
+血条不接管鼠标事件，不会妨碍 Token 选择、拖动或框选。
+
+## 快捷键速查
+
+| 操作 | 快捷方式 |
+| --- | --- |
+| 单选 Token | 左键单击 |
+| 框选 Token | 空白地图左键拖动 |
+| 追加选择 | `Shift + 点击 / 框选` |
+| 从选择中移除 | `Alt + 点击 / 框选` |
+| 平移地图 | `Space + 左拖` |
+| 打开角色卡 | 双击 Token / 右键菜单 |
+| 普通移动 | 直接拖动 Token |
+| Movement Waypoint 模式 | `Ctrl/Cmd` 拖动并松开 |
+| 添加移动 Waypoint | `Ctrl/Cmd + 左键` / `F` |
+| 删除最近移动 Waypoint | 右键 / `Alt + F` |
+| 确认移动 | `Enter` |
+| 取消移动 | `Esc` |
+| 切换移动吸附档位 | 移动规划时滚轮 |
+| 开启 / 关闭 Ruler | `R` |
+| 从所选角色测距 | `Shift + R` |
+| 添加 Ruler Waypoint | `Ctrl/Cmd + 左键` / `F` |
+| 撤销 Ruler Waypoint | 右键 / `Alt + F` |
+| 清除 Ruler | `Esc` |
+| 切换角色 Form | `V` |
+| Token 上下文菜单 | 右键 Token |
+
+## 数据与系统边界
+
+### Actor / Token / Combatant
+
+```text
+Actor
+  ↑
+Token
+  ↑
+Combatant
+```
+
+- Actor 保存角色真实数据。
+- Token 保存地图实例状态。
+- Combatant 只保存战斗引用、先攻与顺序，不复制角色 HP、资源或属性。
+
+### HealthSystem
+
+RPGmap 保留两种生命模式：
+
+- `SimpleHP`：传统 `current / max`，用于其他游戏。
+- `WoundTrack`：完好 / B / L / A，当前 XLSX 角色默认采用。
+
+DamageSystem 与 HealingSystem 只提供通用“应用到所选目标”的能力，具体游戏规则通过 Health Adapter 扩展。
 
 ## 项目目录
 
 ```text
 src/
 ├─ app/           持久化与应用辅助
+├─ chat/          ChatSystem / Game Log
 ├─ combat/        先攻与回合 CombatSystem
+├─ damage/        DamageSystem
 ├─ engine/        地图核心、几何、导航、场景状态
 ├─ entities/      Actor / Token / Form / XLSX
+├─ healing/       HealingSystem
+├─ health/        SimpleHP / WoundTrack / Token 血条
 ├─ maps/          独立 MapPackage
 ├─ measurement/   FVTT 风格 Ruler
 ├─ movement/      Token MovementSystem
@@ -196,20 +234,28 @@ deployment/       本地服务器与发布设施
 文档/             工作日志、未来规划、开发说明
 ```
 
+## 本地服务器当前限制
+
+当前 Server 仍属于服务器化过渡阶段：
+
+- HTTP Server 已真实运行，不依赖 `vite dev` 或 `vite preview`。
+- `/api/health` 与 `/api/version` 可访问。
+- Actor / Token / Scene / Combat 等长期状态暂时仍主要使用浏览器存储。
+- World Store、WebSocket、GM / Player 权限和多人同步尚未接入。
+
 ## 文档
 
-- `文档/工作日志.md`：按应用版本记录重要更新，不记录每次小提交或 CI 构建编号。
+- `文档/工作日志.md`：按应用版本记录重要更新。
 - `文档/未来规划.md`：服务器化、多地图、多人同步和后续系统路线。
 - `文档/开发说明.md`：代码结构、系统边界、MapPackage 与开发约定。
+- `deployment/local-server/README.md`：发布 / 测试包内使用的启动和操作指南；后续打包应同步携带该 README。
 
 ## 版本规则
 
-RPGmap 使用语义化的 `1.x.x` 应用版本：
+RPGmap 使用语义化版本：
 
-- Patch，例如 `1.2.1`：Bug 修复、小交互调整、兼容性修正。
-- Minor，例如 `1.3.0`：新增较完整功能或子系统，同时尽量保持已有数据兼容。
+- Patch，例如 `1.3.1`：Bug 修复、小交互调整、兼容性修正。
+- Minor，例如 `1.4.0`：新增较完整功能或子系统，同时尽量保持已有数据兼容。
 - Major，例如 `2.0.0`：存在明显不兼容的数据、服务器协议或核心架构变化。
 
-**版本号不会因普通提交或测试包自动增长。** 当开发内容达到新的版本节点时，先提出建议版本和理由，经确认后再修改版本号并写入工作日志。
-
-GitHub Release 也以应用版本为准，例如 `v1.2.0`，不再使用连续的 Server 构建编号作为产品版本。
+普通提交和测试包不会自动提升应用版本。GitHub Release 使用应用版本号，例如 `v1.3.0`。
