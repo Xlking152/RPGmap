@@ -19,7 +19,7 @@ export function createInternetCredentials() {
   };
 }
 
-export function buildConnectionInfo({ publicUrl, joinCode, gmSecret, version = '1.4.0', port = 30000 }) {
+export function buildConnectionInfo({ publicUrl, joinCode, gmSecret, version = '1.4.1', port = 30000 }) {
   return [
     '============================================================',
     ` RPGmap Multiplayer Connection Info  |  ${version}`,
@@ -37,6 +37,7 @@ export function buildConnectionInfo({ publicUrl, joinCode, gmSecret, version = '
     ' GM Secret is for the GM only. Do not send it to Players.',
     ' The public URL is temporary and expires when this launcher stops.',
     '',
+    ' All RPGmap World/User data stays inside this package map/ folder.',
     ' You may close this information window manually at any time.',
   ];
 }
@@ -55,7 +56,7 @@ async function readVersion() {
   try {
     return JSON.parse(await readFile(path.join(ROOT, 'VERSION.json'), 'utf8'));
   } catch {
-    return { app: 'RPGmap', version: '1.4.0', commit: 'unknown' };
+    return { app: 'RPGmap', version: '1.4.1', commit: 'unknown' };
   }
 }
 
@@ -87,7 +88,7 @@ function openConnectionInfoWindow(lines) {
       'chcp 65001>nul',
       'title RPGmap Multiplayer Info',
       'color 0A',
-      'mode con cols=100 lines=24',
+      'mode con cols=100 lines=25',
       'cls',
       ...echoCommands,
       'echo.',
@@ -165,7 +166,7 @@ async function waitForServer(port, timeoutMs = 20000) {
 
 function printServerBanner({ port, publicUrl, credentials, health, version }) {
   const multiplayer = health?.multiplayer || {};
-  const dataDir = path.resolve(process.env.RPGMAP_DATA_DIR || path.join(ROOT, 'data'));
+  const mapDir = path.resolve(process.env.RPGMAP_MAP_DIR || path.join(ROOT, 'map'));
   const packageVersion = version?.version || version?.packageVersion || health?.version || 'unknown';
 
   console.log('');
@@ -176,8 +177,9 @@ function printServerBanner({ port, publicUrl, credentials, health, version }) {
   for (const url of networkUrls(port)) console.log(` Network   : ${url}`);
   console.log(` Public URL: ${publicUrl}`);
   console.log(` World     : ${multiplayer.worldId || 'default'} · revision ${multiplayer.revision ?? 0}`);
-  console.log(` Data      : ${dataDir}`);
-  console.log(` Players   : ${multiplayer.playerWriteEnabled === false ? 'read-only' : 'write-enabled'}`);
+  console.log(` Map Root  : ${mapDir}`);
+  console.log(` Users     : ${multiplayer.users ?? 0} persistent Player identities`);
+  console.log(` Storage   : ${multiplayer.storageMode || 'portable-map-root'}`);
   console.log(' Public    : ON');
   console.log(` JoinCode  : ${credentials.joinCode}`);
   console.log(` GMSecret  : ${credentials.gmSecret}`);
@@ -190,6 +192,7 @@ function printServerBanner({ port, publicUrl, credentials, health, version }) {
   console.log(`   JoinCode : ${credentials.joinCode}`);
   console.log('');
   console.log(' GM Secret is for the GM only. Do not send it to Players.');
+  console.log(' World/User data stays inside map/ beside this launcher.');
   console.log(' A separate connection-info window has been opened for quick reference.');
   console.log(' Press Ctrl+C to stop the server and tunnel.');
   console.log('');
@@ -210,6 +213,7 @@ async function main() {
   console.log(` Cloudflare : ${cloudflaredExe}`);
   console.log(' Transport  : HTTP/2 over TCP');
   console.log(` Origin     : ${originUrl}`);
+  console.log(` Map Root   : ${path.resolve(process.env.RPGMAP_MAP_DIR || path.join(ROOT, 'map'))}`);
   console.log(' Status     : creating Quick Tunnel...');
   console.log('============================================================');
   console.log('');
@@ -246,6 +250,8 @@ async function main() {
       RPGMAP_JOIN_CODE: credentials.joinCode,
       RPGMAP_GM_SECRET: credentials.gmSecret,
       RPGMAP_PLAYER_WRITE: process.env.RPGMAP_PLAYER_WRITE || '1',
+      RPGMAP_PUBLIC_DIR: process.env.RPGMAP_PUBLIC_DIR || path.join(ROOT, 'app'),
+      RPGMAP_MAP_DIR: process.env.RPGMAP_MAP_DIR || path.join(ROOT, 'map'),
       PORT: String(port),
     };
 
@@ -268,7 +274,7 @@ async function main() {
       publicUrl,
       joinCode: credentials.joinCode,
       gmSecret: credentials.gmSecret,
-      version: version?.version || version?.packageVersion || '1.4.0',
+      version: version?.version || version?.packageVersion || '1.4.1',
       port,
     });
     infoWindow = openConnectionInfoWindow(connectionInfo);
