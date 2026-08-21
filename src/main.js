@@ -40,6 +40,7 @@ import { createChatSystem } from './chat/index.js';
 import { createDamageSystem } from './damage/index.js';
 import { createHealingSystem } from './healing/index.js';
 import { createCombatSystem } from './combat/index.js';
+import { createMultiplayerSystem } from './multiplayer/index.js';
 import { createLanzhouMapPackage } from './maps/lanzhou.js';
 import { cleanMapPackagePresentation } from './maps/presentation-cleanup.js';
 
@@ -70,6 +71,7 @@ createRpgMapApp({
     createChatSystem({ selection: selectionSystem }),
     createDamageSystem({ selection: selectionSystem }),
     createHealingSystem({ selection: selectionSystem }),
-    createCombatSystem({ selection: selectionSystem })
+    createCombatSystem({ selection: selectionSystem }),
+    createMultiplayerSystem()
   ]
 });
