@@ -31,6 +31,7 @@ import yellowRiverPontoonUrl from './assets/generated/yellow-river-pontoon.webp'
 import yellowRiverUrl from './assets/generated/yellow-river.webp';
 import { createRpgMapApp } from './engine/app.js';
 import { createMovementSystem } from './movement/index.js';
+import { createMeasurementSystem } from './measurement/index.js';
 import { createEntitySystem } from './entities/index.js';
 import { createAppShellUi } from './ui/index.js';
 import { createLanzhouMapPackage } from './maps/lanzhou.js';
@@ -53,6 +54,7 @@ createRpgMapApp({
   tools: [
     createMovementSystem({ defaultStep: 5, autoStep: true }),
     createEntitySystem({ dropLegacyMarkers: true }),
-    createAppShellUi()
+    createAppShellUi(),
+    createMeasurementSystem()
   ]
 });
