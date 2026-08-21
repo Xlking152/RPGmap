@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RPGmap Launcher</title>
+  <link rel="stylesheet" href="./launcher.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">RPGmap Control Center</div>
+        <h1>RPGmap Launcher <span id="version">V1.4.3</span></h1>
+        <p>启动、联机信息与 GM 后台管理统一入口</p>
+      </div>
+      <div class="status-pill" id="status-pill"><span></span><b>未启动</b></div>
+    </header>
+
+    <section class="grid primary-grid">
+      <article class="card server-card">
+        <div class="card-title"><h2>服务器</h2><span id="mode-badge" class="badge">STOPPED</span></div>
+        <div class="action-row">
+          <button class="primary" data-action="start-local">启动本机 / 局域网</button>
+          <button class="primary" data-action="start-internet">启动互联网联机</button>
+          <button data-action="open-game">打开 RPGmap</button>
+          <button class="danger" data-action="stop">停止服务器</button>
+        </div>
+        <div class="info-list">
+          <div><span>本机地址</span><code id="local-url">—</code><button class="mini" data-copy="local-url">复制</button></div>
+          <div><span>局域网地址</span><code id="lan-url">—</code><button class="mini" data-copy="lan-url">复制</button></div>
+          <div><span>互联网地址</span><code id="public-url">—</code><button class="mini" data-copy="public-url">复制</button></div>
+        </div>
+      </article>
+
+      <article class="card invite-card">
+        <div class="card-title"><h2>玩家邀请</h2><span class="badge safe">可分享</span></div>
+        <div class="credential-row"><span>房间号</span><strong id="join-code">—— ——</strong><button class="mini" data-copy="join-code">复制</button></div>
+        <textarea id="invite-text" readonly placeholder="启动服务器后自动生成玩家邀请信息"></textarea>
+        <button class="primary wide" data-action="copy-invite">复制玩家邀请信息</button>
+      </article>
+
+      <article class="card gm-card">
+        <div class="card-title"><h2>GM 安全区</h2><span class="badge secret">不要分享</span></div>
+        <div class="credential-row"><span>GM Secret</span><strong id="gm-secret" data-secret="">••••••••••••••••</strong></div>
+        <div class="action-row compact">
+          <button data-action="toggle-secret">显示 / 隐藏</button>
+          <button data-action="copy-secret">复制 GM Secret</button>
+        </div>
+        <p class="hint">Launcher 只在本机运行。GM Secret 不会进入“玩家邀请”文本。</p>
+      </article>
+    </section>
+
+    <section class="card admin-card">
+      <div class="card-title">
+        <div><h2>Users / Actor Ownership</h2><p>Launcher 以本机 GM Session 调用服务器权限逻辑，不直接修改 users.json。</p></div>
+        <button data-action="refresh-admin">刷新</button>
+      </div>
+
+      <div id="key-result" class="key-result" hidden></div>
+
+      <div class="admin-columns">
+        <div>
+          <h3>待批准玩家</h3>
+          <div id="pending-users" class="stack empty">服务器启动后显示</div>
+        </div>
+        <div>
+          <h3>预创建 User</h3>
+          <form id="create-user" class="inline-form">
+            <input name="name" maxlength="40" placeholder="玩家名称" required>
+            <select name="defaultActorId" id="create-default"><option value="">默认角色：未分配</option></select>
+            <button class="primary" type="submit">创建 User</button>
+          </form>
+          <p class="hint">创建后会显示 Player Key，只显示在本机 Launcher。</p>
+        </div>
+      </div>
+
+      <h3>正式 Player Users</h3>
+      <div id="users" class="stack empty">服务器启动后显示</div>
+    </section>
+
+    <section class="grid footer-grid">
+      <article class="card">
+        <div class="card-title"><h2>World / Maps</h2></div>
+        <div class="path-row"><span>World</span><code id="world-path">—</code></div>
+        <div class="path-row"><span>Maps</span><code id="maps-path">—</code></div>
+        <div class="path-row"><span>Build</span><code id="build">—</code></div>
+      </article>
+      <article class="card logs-card">
+        <div class="card-title"><h2>运行日志</h2><button data-action="refresh-logs">刷新</button></div>
+        <pre id="logs">Launcher ready.</pre>
+      </article>
+    </section>
+
+    <footer>
+      <span>Launcher 仅监听 127.0.0.1，不通过 Cloudflare Tunnel 暴露。</span>
+      <button class="text-button" data-action="shutdown">关闭 Launcher</button>
+    </footer>
+  </main>
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="./launcher.js"></script>
+</body>
+</html>
