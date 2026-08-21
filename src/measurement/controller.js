@@ -21,7 +21,16 @@ function createRulerButton(documentNode) {
   button.className = 'ui-primary-tool ui-ruler-tool';
   button.dataset.uiMainTool = 'ruler';
   button.textContent = '测量';
-  button.title = '距离尺（R）';
+  button.title = '距离尺 · R';
+  return button;
+}
+
+function createCharacterRulerButton(documentNode) {
+  const button = documentNode.createElement('button');
+  button.type = 'button';
+  button.className = 'ui-primary-tool ui-character-ruler-tool';
+  button.textContent = '角色测距';
+  button.title = '从当前主选择 Token 的位置开始测距 · Shift+R';
   return button;
 }
 
@@ -110,6 +119,35 @@ export function createRulerController() {
         if (message) status(message);
       }
 
+      function mapCharacter(characterId) {
+        return (api.getState().characters || []).find(character =>
+          String(character?.id) === String(characterId) &&
+          character?.visible !== false &&
+          character?.location?.type === 'map') || null;
+      }
+
+      function startFromCharacter(characterId) {
+        const character = mapCharacter(characterId);
+        if (!character) {
+          status('无法从该角色测距：Token 当前不在地图上');
+          return false;
+        }
+        if (!enabled) activate();
+        session.begin(character.location);
+        render();
+        status(`从 ${character.name || '所选角色'} 开始测距 · 移动鼠标预览；Ctrl/Cmd+左键或 F 添加拐点，普通左键结束`);
+        return true;
+      }
+
+      function startFromPrimarySelection() {
+        const characterId = api.selection?.getPrimaryTokenId?.();
+        if (!characterId) {
+          status('请先选择一个 Token，再使用角色测距');
+          return false;
+        }
+        return startFromCharacter(characterId);
+      }
+
       function activate() {
         if (enabled) return;
         enabled = true;
@@ -149,12 +187,44 @@ export function createRulerController() {
         return baseSetTool(tool);
       };
 
+      api.measurement = {
+        activate,
+        toggle,
+        clear,
+        startFromCharacter,
+        startFromPrimarySelection,
+        isActive: () => enabled,
+      };
+
       const oldMeasure = menuByLabel(shell, '测量');
       const toolbar = shell.querySelector('.toolbar');
       const rulerButton = createRulerButton(documentNode);
+      const characterRulerButton = createCharacterRulerButton(documentNode);
       rulerButton.addEventListener('click', toggle);
-      if (oldMeasure) oldMeasure.replaceWith(rulerButton);
-      else toolbar?.append(rulerButton);
+      characterRulerButton.addEventListener('click', startFromPrimarySelection);
+      if (oldMeasure) {
+        oldMeasure.replaceWith(rulerButton);
+        rulerButton.insertAdjacentElement('afterend', characterRulerButton);
+      } else {
+        toolbar?.append(rulerButton, characterRulerButton);
+      }
+
+      queueMicrotask(() => {
+        const selection = api.selection;
+        const syncCharacterButton = () => {
+          const selectedId = selection?.getPrimaryTokenId?.();
+          const available = Boolean(selectedId && mapCharacter(selectedId));
+          characterRulerButton.disabled = !available;
+          characterRulerButton.title = available
+            ? '从当前主选择 Token 的位置开始测距 · Shift+R'
+            : '先选择一个位于地图上的 Token';
+        };
+        selection?.subscribe?.(syncCharacterButton);
+        api.on?.('character:move', syncCharacterButton);
+        api.on?.('character:delete', syncCharacterButton);
+        api.on?.('state:import', syncCharacterButton);
+        syncCharacterButton();
+      });
 
       shell.querySelector('[data-panel="measure"]')?.remove();
 
@@ -210,7 +280,8 @@ export function createRulerController() {
         const key = event.key.toLowerCase();
         if (key === 'r' && !event.ctrlKey && !event.metaKey && !event.altKey) {
           event.preventDefault();
-          toggle();
+          if (event.shiftKey) startFromPrimarySelection();
+          else toggle();
           return;
         }
         if (!enabled) return;
@@ -234,7 +305,7 @@ export function createRulerController() {
       }, true);
 
       toolbar?.addEventListener('click', event => {
-        if (!enabled || event.target.closest('.ui-ruler-tool')) return;
+        if (!enabled || event.target.closest('.ui-ruler-tool, .ui-character-ruler-tool')) return;
         if (event.target.closest('.ui-primary-tool, .ui-menu-popover button')) deactivate({ clearRuler: true });
       }, true);
 
