@@ -3,7 +3,10 @@ RPGmap portable World data folder
 
 This folder stores mutable state for the current RPGmap game World.
 
-Generated files:
+Important:
+A fresh release intentionally does NOT ship a pre-filled campaign save. Therefore world/ may initially contain only this README plus uploads/ and backups/. Runtime files appear when the current World/User state is first persisted or when legacy data is migrated.
+
+Generated runtime files:
 - state.json   Shared World snapshot and revision
 - users.json   Persistent Player Users, default Actor, Ownership and credential hashes
 
@@ -26,3 +29,5 @@ and from older layouts:
 - data/worlds/default/world.json
 - data/worlds/default/access.json
 Legacy files are left untouched after migration.
+
+Do not copy a base map into world/. The map template belongs in maps/; only the campaign's mutable state belongs here.
