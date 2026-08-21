@@ -9,16 +9,26 @@ where node >nul 2>nul || (
   exit /b 1
 )
 
-if not exist "%~dp0public\index.html" (
-  echo [ERROR] public\index.html is missing. Download the complete GitHub Release package again.
+if not exist "%~dp0app\index.html" (
+  echo [ERROR] app\index.html is missing. Download the complete GitHub Release package again.
   pause
   exit /b 1
 )
 
+if not exist "%~dp0map" mkdir "%~dp0map"
+if not exist "%~dp0map\uploads" mkdir "%~dp0map\uploads"
+if not exist "%~dp0map\backups" mkdir "%~dp0map\backups"
+
+set "RPGMAP_PUBLIC_DIR=%~dp0app"
+set "RPGMAP_MAP_DIR=%~dp0map"
+
 echo ============================================================
 echo  RPGmap Local Server
-echo ============================================================
-echo  Local:   http://127.0.0.1:30000
+
+echo  Local    : http://127.0.0.1:30000
+
+echo  Map Root : %RPGMAP_MAP_DIR%
+
 echo ============================================================
 echo.
 start "" "http://127.0.0.1:30000"
