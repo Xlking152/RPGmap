@@ -34,6 +34,8 @@ import { createMovementSystem } from './movement/index.js';
 import { createMeasurementSystem } from './measurement/index.js';
 import { createEntitySystem } from './entities/index.js';
 import { createAppShellUi } from './ui/index.js';
+import { createSelectionSystem } from './selection/index.js';
+import { createCombatSystem } from './combat/index.js';
 import { createLanzhouMapPackage } from './maps/lanzhou.js';
 
 const mapPackage = createLanzhouMapPackage({
@@ -48,6 +50,8 @@ const mapPackage = createLanzhouMapPackage({
   rubbleAtlas: { url: rubbleAtlasUrl, width: 1536, height: 1024, columns: 3, rows: 2 },
 });
 
+const selectionSystem = createSelectionSystem();
+
 createRpgMapApp({
   container: document.getElementById('app'),
   mapPackage,
@@ -55,6 +59,8 @@ createRpgMapApp({
     createMovementSystem({ defaultStep: 5, autoStep: true }),
     createEntitySystem({ dropLegacyMarkers: true }),
     createAppShellUi(),
-    createMeasurementSystem()
+    createMeasurementSystem(),
+    selectionSystem,
+    createCombatSystem({ selection: selectionSystem })
   ]
 });
