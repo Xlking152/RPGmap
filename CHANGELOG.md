@@ -4,11 +4,20 @@ RPGmap 使用语义化版本号。这里记录版本级的重要变化；更细�
 
 ## 1.4.3 — Candidate · 2026-08-22
 
-V1.4.3 在 V1.4.2 的 `app / world / maps` 便携结构上加入统一 **RPGmap Launcher / GM Control Center**，把过去分散的本机、LAN、Internet、cloudflared、连接信息和 User 管理入口整合为一个本机控制台。
+V1.4.3 在 V1.4.2 的 `app / world / maps` 便携结构上加入统一 **RPGmap Launcher / GM Control Center**，并进一步把 Windows 根入口从 BAT 收口为轻量原生 `RPGmap Launcher.exe`。
+
+### Native Windows Launcher
+
+- Windows 发布包唯一启动入口改为 `RPGmap Launcher.exe`。
+- Native Launcher 使用一个很小的 Windows C 启动壳，不引入 Electron。
+- EXE 依次查找包内 `tools/node/node.exe`、根目录 `node.exe`、系统 PATH 中 `node.exe`。
+- 找到 Node 后启动 `launcher/launcher.mjs`。
+- 当前 Node.js 仍是运行前提：`^20.19.0 || >=22.12.0`。
+- 未检测到 Node 时 EXE 会提示并可打开 Node.js 官网。
+- 最终发布 ZIP 根目录不再包含 BAT 文件。
 
 ### Unified Launcher
 
-- Windows 发布包只保留一个启动入口：`启动 RPGmap.bat`。
 - Launcher 本机地址：`http://127.0.0.1:29999`。
 - 一个界面统一启动 / 停止本机、LAN 和 Internet Multiplayer。
 - 显示 Local URL、LAN URL、Cloudflare Public URL、Join Code、GM Secret、World / Maps 路径与运行日志。
@@ -31,6 +40,16 @@ V1.4.3 在 V1.4.2 的 `app / world / maps` 便携结构上加入统一 **RPGmap 
 
 Launcher **不直接修改 `world/users.json`**。它建立隐藏的本机 GM WebSocket Session，复用 Multiplayer Server 已有 `access.*` 协议，因此 Launcher 与游戏内“联机 / Users”始终共享同一套权限、内存状态和持久化逻辑。
 
+### Future Manager Slots
+
+Launcher 首页新增三个明确的未来管理入口，当前按钮保持禁用：
+
+- `World Manager`：World 选择 / 创建 / 复制 / 归档 / 启动。
+- `Scene Manager`：Map Registry / MapPackage / Scene 切换与管理。
+- `Backup Center`：World Snapshot / 自动备份 / 恢复 / 导入导出。
+
+`文档/未来规划.md` 已重新整理，并使用“已实现 / 部分实现 / 计划中 / Launcher 已预留”状态标记现有路线。
+
 ### Security Boundary
 
 - Launcher HTTP Server 只绑定 `127.0.0.1`。
@@ -45,7 +64,7 @@ V1.4.3 发布包：
 
 ```text
 RPGmap-v1.4.3/
-├─ 启动 RPGmap.bat
+├─ RPGmap Launcher.exe
 ├─ 操作说明.md
 ├─ app/
 ├─ launcher/
@@ -58,16 +77,18 @@ RPGmap-v1.4.3/
 
 - `server.mjs / access-control.mjs / portable-storage.mjs` 收入内部 `server/`。
 - Launcher 文件收入 `launcher/`。
-- 根目录不再暴露 `start-rpgmap.bat`、`start-rpgmap-internet.bat`、`setup-cloudflared.bat`、`run-rpgmap-public-server.bat`。
-- CI 强制检查发布包根目录 `.bat` 数量为 1。
-- `VERSION.json.launcherMode = unified-admin-console`。
+- 根目录不再暴露任何 BAT。
+- CI 使用 MinGW 编译 Windows x64 Native Launcher，并验证最终文件是 PE32+ x86-64 executable。
+- CI 强制检查发布包根目录 BAT 数量为 0、EXE 数量为 1。
+- `VERSION.json.launcherMode = native-exe-web-admin-console`。
+- `docs/FUTURE-ROADMAP.md` 随发布包一起提供。
 
 ### Validation
 
 - 新增 `LauncherAdminClient` 与真实 Node Server 联调测试。
 - 自动测试 Launcher GM Session 创建 / 修改 / 删除 User、重发 Player Key、pending Player 批准。
 - JavaScript syntax check 扩展到 `deployment/launcher/`。
-- CI 对最终 ZIP 解压后二次验证单一 BAT、Launcher / Server 内部目录和 UTF-8 `操作说明.md`。
+- CI 对最终 ZIP 解压后二次验证 Native EXE、Launcher / Server 内部目录与 UTF-8 文档。
 
 ## 1.4.2 — Candidate · Superseded by 1.4.3
 
