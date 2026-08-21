@@ -16,6 +16,32 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: feat/entity-actor-token-system
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+
+      - name: Sync package-lock metadata
+        shell: bash
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
+      - name: Commit lockfile metadata when changed
+        shell: bash
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- package-lock.json
+          git commit -m 'chore: sync package lock for RPGmap 1.2.0'
+          git push origin HEAD:feat/entity-actor-token-system
+
       - name: Remove legacy S0 releases and tags
         env:
           GH_TOKEN: ${{ github.token }}
