@@ -127,3 +127,26 @@ jobs:
             --title "RPGmap Local Server S0 · Build ${GITHUB_RUN_NUMBER}" \
             --notes-file release/release-notes.md \
             --prerelease
+
+      - name: Record published release receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
+          CHECKSUM=$(cut -d' ' -f1 release/RPGmap-Local-Server.zip.sha256)
+          mkdir -p release-status
+          cat > release-status/latest-s0.md <<EOF
+          # Latest S0 Local Server Release
+
+          - Tag: \`${RELEASE_TAG}\`
+          - URL: ${RELEASE_URL}
+          - Source commit: \`${GITHUB_SHA}\`
+          - ZIP SHA256: \`${CHECKSUM}\`
+          - Workflow run: \`${GITHUB_RUN_ID}\`
+          EOF
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add release-status/latest-s0.md
+          git commit -m "chore: record ${RELEASE_TAG} receipt"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
