@@ -2,6 +2,17 @@ name: Build Multiplayer Test Package
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'deployment/local-server/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
+      - '.github/workflows/multiplayer-test-package.yml'
   push:
     branches:
       - feat/multiplayer-v1
