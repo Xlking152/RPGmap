@@ -121,8 +121,48 @@ jobs:
 
           cd "$GITHUB_WORKSPACE/release"
           ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
-          zip -r -9 -q "$ARCHIVE" "RPGmap-v${PACKAGE_VERSION}"
+          python - <<'PY'
+          from pathlib import Path
+          import os, zipfile
+
+          release = Path(os.environ['GITHUB_WORKSPACE']) / 'release'
+          version = os.environ['PACKAGE_VERSION']
+          root = release / f'RPGmap-v{version}'
+          archive = release / f'RPGmap-v{version}.zip'
+          with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+              for path in sorted(root.rglob('*')):
+                  arcname = path.relative_to(release).as_posix()
+                  if path.is_dir():
+                      zf.writestr(arcname.rstrip('/') + '/', b'')
+                  else:
+                      zf.write(path, arcname)
+          PY
           sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+
+          VERIFY="$GITHUB_WORKSPACE/release/verify"
+          rm -rf "$VERIFY"
+          mkdir -p "$VERIFY"
+          python - <<'PY'
+          from pathlib import Path
+          import os, zipfile
+          release = Path(os.environ['GITHUB_WORKSPACE']) / 'release'
+          version = os.environ['PACKAGE_VERSION']
+          archive = release / f'RPGmap-v{version}.zip'
+          verify = release / 'verify'
+          with zipfile.ZipFile(archive) as zf:
+              zf.extractall(verify)
+          PY
+          VROOT="$VERIFY/RPGmap-v${PACKAGE_VERSION}"
+          test -f "$VROOT/操作说明.md"
+          test -f "$VROOT/app/index.html"
+          test -f "$VROOT/world/README.txt"
+          test -f "$VROOT/maps/README.txt"
+          test ! -e "$VROOT/#U64cd#U4f5c#U8bf4#U660e.md"
+          test ! -d "$VROOT/map"
+          test ! -d "$VROOT/data"
+          test ! -d "$VROOT/public"
+          test ! -f "$VROOT/README.md"
+          rm -rf "$VERIFY"
 
           if unzip -l "$ARCHIVE" | grep -E '(^|/)(\.git|node_modules|tests?|coverage|\.cache|npm-cache|__pycache__|playwright-report|test-results)(/|$)'; then
             echo 'Forbidden development files detected in release ZIP.' >&2
