@@ -1,3 +1,4 @@
+import { createHealthRuntime, defaultHealthMode, normalizeHealthRuntime } from '../health/model.js';
 const CORE_RESOURCE_DEFS = Object.freeze([
   { id: 'hp', name: '生命', kind: 'hp' },
   { id: 'stamina', name: '精力', kind: 'stamina' },
@@ -135,6 +136,11 @@ export function createActorFromImport(imported, { id = uid('actor'), formId, for
       customResources: [],
       attributeAdjustments: {},
       badStatuses,
+      health: createHealthRuntime({
+        mode: defaultHealthMode(imported.source?.type),
+        max: form.resourceBases.hp?.baseMax || 0,
+        simpleCurrent: resources.hp?.current ?? form.resourceBases.hp?.baseMax ?? 0,
+      }),
     },
     effects: [],
     notes: '',
@@ -182,14 +188,23 @@ export function normalizeEntityState(raw) {
         if (badStatuses[status.id] === undefined) badStatuses[status.id] = 0;
       }
     }
+    const resources = clone(actor.runtime?.resources || {});
+    const activeForm = forms.find(form => form.id === actor.currentFormId) || forms[0] || null;
+    const hpMax = Math.max(0, finite(activeForm?.resourceBases?.hp?.baseMax));
+    const hpCurrent = finite(resources?.hp?.current, hpMax);
     return {
       ...clone(actor),
       forms,
       runtime: {
-        resources: clone(actor.runtime?.resources || {}),
+        resources,
         customResources: Array.isArray(actor.runtime?.customResources) ? clone(actor.runtime.customResources) : [],
         attributeAdjustments: clone(actor.runtime?.attributeAdjustments || {}),
         badStatuses,
+        health: normalizeHealthRuntime(actor.runtime?.health, {
+          defaultMode: defaultHealthMode(activeForm?.source?.type),
+          max: hpMax,
+          simpleCurrent: hpCurrent,
+        }),
       },
       effects: Array.isArray(actor.effects) ? clone(actor.effects) : [],
     };
