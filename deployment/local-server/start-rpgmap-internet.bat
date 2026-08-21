@@ -15,11 +15,35 @@ if not exist "%~dp0public\index.html" (
   exit /b 1
 )
 
-if not exist "%~dp0cloudflared.exe" (
-  echo [INFO] cloudflared.exe is not installed yet.
+set "CLOUDFLARED_EXE="
+if exist "%~dp0cloudflared.exe" set "CLOUDFLARED_EXE=%~dp0cloudflared.exe"
+if not defined CLOUDFLARED_EXE (
+  for /f "delims=" %%I in ('where cloudflared.exe 2^>nul') do if not defined CLOUDFLARED_EXE set "CLOUDFLARED_EXE=%%I"
+)
+
+if not defined CLOUDFLARED_EXE (
+  echo [INFO] cloudflared is not available yet.
   echo [INFO] Running setup-cloudflared.bat ...
   call "%~dp0setup-cloudflared.bat"
-  if errorlevel 1 exit /b 1
+  if exist "%~dp0cloudflared.exe" set "CLOUDFLARED_EXE=%~dp0cloudflared.exe"
+  if not defined CLOUDFLARED_EXE (
+    for /f "delims=" %%I in ('where cloudflared.exe 2^>nul') do if not defined CLOUDFLARED_EXE set "CLOUDFLARED_EXE=%%I"
+  )
+)
+
+if not defined CLOUDFLARED_EXE (
+  echo [ERROR] cloudflared is still unavailable.
+  echo See setup-cloudflared.bat output or place cloudflared.exe beside this BAT.
+  pause
+  exit /b 1
+)
+
+echo [OK] Using cloudflared: !CLOUDFLARED_EXE!
+"!CLOUDFLARED_EXE!" --version
+if errorlevel 1 (
+  echo [ERROR] cloudflared exists but could not run.
+  pause
+  exit /b 1
 )
 
 for /f %%I in ('node -e "console.log(require('node:crypto').randomInt(100000,1000000))"') do set "JOIN_CODE=%%I"
@@ -85,12 +109,11 @@ echo.
 echo ============================================================
 echo  Look below for a URL like:
 echo  https://xxxx-xxxx.trycloudflare.com
-
 echo  Send that URL and Join Code !JOIN_CODE! to remote Players.
 echo ============================================================
 echo.
 
-"%~dp0cloudflared.exe" tunnel --no-autoupdate --url http://127.0.0.1:30000
+"!CLOUDFLARED_EXE!" tunnel --no-autoupdate --url http://127.0.0.1:30000
 
 echo.
 echo [INFO] Internet Tunnel stopped.
