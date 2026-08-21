@@ -280,7 +280,7 @@ export function createMovementController({ settings } = {}) {
         mapElement.setPointerCapture?.(event.pointerId);
         mapElement.classList.add('fvtt-token-dragging');
         mapElement.style.cursor = 'grabbing';
-        status('拖动角色规划路线 · Ctrl/Cmd+松开保留拐点 · F 添加拐点 · Esc 取消');
+        status('拖动角色规划路线 · Ctrl/Cmd+松开进入拐点规划 · F 添加拐点 · Esc 取消');
       }
 
       function moveTokenDrag(event) {
@@ -317,9 +317,11 @@ export function createMovementController({ settings } = {}) {
           return;
         }
         if (event.ctrlKey || event.metaKey) {
-          drag.addWaypoint(route.destination);
+          drag.continuePlanning();
+          drag.setRoute(route);
           draw(route, mapCharacter(api.getState(), drag.characterId));
-          status('已保留拐点 ' + drag.session.waypoints.length + ' · 松开鼠标后继续移动光标规划；普通点击设最终终点');
+          showControls(false);
+          status('已进入拐点规划 · 松开位置不计为拐点；Ctrl/Cmd+左键或 F 设置第一个拐点');
           return;
         }
         drag.ready(route);
