@@ -39,7 +39,7 @@ permissions:
 jobs:
   test-and-package:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 15
 
     steps:
       - name: Checkout source
@@ -68,26 +68,6 @@ jobs:
       - name: Build web client
         run: npm run build
 
-      - name: Install Windows launcher compiler
-        shell: bash
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
-
-      - name: Build native Windows Launcher
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p native-build
-          x86_64-w64-mingw32-gcc \
-            -O2 -s -municode -mwindows \
-            -finput-charset=UTF-8 \
-            deployment/launcher/windows-launcher.c \
-            -o "native-build/RPGmap Launcher.exe" \
-            -lshell32
-          test -s "native-build/RPGmap Launcher.exe"
-          file "native-build/RPGmap Launcher.exe" | grep -E 'PE32\+ executable.*x86-64'
-
       - name: Resolve package version
         shell: bash
         run: |
@@ -103,11 +83,11 @@ jobs:
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE/artifact/RPGmap-v${PACKAGE_VERSION}"
           rm -rf "$GITHUB_WORKSPACE/artifact"
-          mkdir -p "$ROOT/app" "$ROOT/launcher" "$ROOT/server" "$ROOT/world/uploads" "$ROOT/world/backups" "$ROOT/maps" "$ROOT/docs"
+          mkdir -p "$ROOT/app" "$ROOT/launcher" "$ROOT/server" "$ROOT/world/uploads" "$ROOT/world/backups" "$ROOT/maps" "$ROOT/docs" "$ROOT/tools"
 
           cp -R dist/. "$ROOT/app/"
 
-          cp "native-build/RPGmap Launcher.exe" "$ROOT/RPGmap Launcher.exe"
+          cp deployment/launcher/start-rpgmap.bat "$ROOT/启动 RPGmap.bat"
           cp deployment/launcher/launcher.mjs "$ROOT/launcher/launcher.mjs"
           cp deployment/launcher/admin-client.mjs "$ROOT/launcher/admin-client.mjs"
           cp deployment/launcher/index.html "$ROOT/launcher/index.html"
@@ -133,14 +113,15 @@ jobs:
             "commit": "${SOURCE_COMMIT}",
             "serverMode": "multiplayer",
             "storageMode": "portable-world-maps",
-            "launcherMode": "native-exe-web-admin-console",
+            "launcherMode": "single-bat-web-admin-console",
             "defaultPort": 30000,
-            "launcherPort": 29999
+            "preferredLauncherPort": 29999,
+            "launcherPortMode": "dynamic-loopback"
           }
           EOF
 
           test -f "$ROOT/app/index.html"
-          test -f "$ROOT/RPGmap Launcher.exe"
+          test -f "$ROOT/启动 RPGmap.bat"
           test -f "$ROOT/launcher/launcher.mjs"
           test -f "$ROOT/launcher/admin-client.mjs"
           test -f "$ROOT/launcher/index.html"
@@ -154,6 +135,7 @@ jobs:
           test -d "$ROOT/world/uploads"
           test -d "$ROOT/world/backups"
           test -f "$ROOT/maps/README.txt"
+          test -d "$ROOT/tools"
           test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           test -f "$ROOT/docs/FUTURE-ROADMAP.md"
           test ! -d "$ROOT/map"
@@ -161,8 +143,8 @@ jobs:
           test ! -d "$ROOT/public"
           test ! -f "$ROOT/README.md"
           test ! -f "$ROOT/server.mjs"
-          test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 0
-          test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 1
+          test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
+          test "$(find "$ROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 0
 
           cd "$GITHUB_WORKSPACE/artifact"
           ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
@@ -198,8 +180,7 @@ jobs:
               zf.extractall(verify)
           PY
           VROOT="$VERIFY/RPGmap-v${PACKAGE_VERSION}"
-          test -f "$VROOT/RPGmap Launcher.exe"
-          file "$VROOT/RPGmap Launcher.exe" | grep -E 'PE32\+ executable.*x86-64'
+          test -f "$VROOT/启动 RPGmap.bat"
           test -f "$VROOT/操作说明.md"
           test -f "$VROOT/launcher/launcher.mjs"
           test -f "$VROOT/server/server.mjs"
@@ -211,10 +192,11 @@ jobs:
           test ! -d "$VROOT/data"
           test ! -d "$VROOT/public"
           test ! -f "$VROOT/README.md"
-          test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 0
-          test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 1
+          test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.bat' | wc -l)" -eq 1
+          test "$(find "$VROOT" -maxdepth 1 -type f -iname '*.exe' | wc -l)" -eq 0
           test "$(node -p "require('$VROOT/VERSION.json').commit")" = "$SOURCE_COMMIT"
-          test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "native-exe-web-admin-console"
+          test "$(node -p "require('$VROOT/VERSION.json').launcherMode")" = "single-bat-web-admin-console"
+          test "$(node -p "require('$VROOT/VERSION.json').launcherPortMode")" = "dynamic-loopback"
           rm -rf "$VERIFY"
 
       - name: Upload RPGmap package
@@ -227,7 +209,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  windows-launcher-smoke:
+  windows-bat-smoke:
     needs: test-and-package
     runs-on: windows-latest
     timeout-minutes: 8
@@ -244,29 +226,30 @@ jobs:
           name: RPGmap-v1.4.3
           path: smoke
 
-      - name: Launch native EXE and verify control center
+      - name: Launch BAT with preferred port occupied
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           Expand-Archive -Path 'smoke/RPGmap-v1.4.3.zip' -DestinationPath 'smoke/package' -Force
           $root = (Resolve-Path 'smoke/package/RPGmap-v1.4.3').Path
-          $exe = Join-Path $root 'RPGmap Launcher.exe'
-          $startupLog = Join-Path $root 'launcher-startup.log'
+          $bat = Join-Path $root '启动 RPGmap.bat'
+          $log = Join-Path $root 'launcher-startup.log'
+          $blockerScript = Join-Path $root 'block-port.js'
+          Set-Content -Path $blockerScript -Encoding UTF8 -Value 'const net=require("net"); const s=net.createServer(()=>{}); s.listen(29999,"127.0.0.1"); setInterval(()=>{},1000);'
 
-          $native = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru
-          if (-not $native.WaitForExit(10000)) {
-            Stop-Process -Id $native.Id -Force -ErrorAction SilentlyContinue
-            throw 'Native Launcher did not return after handing off to Node.js.'
-          }
-          if ($native.ExitCode -ne 0) {
-            if (Test-Path $startupLog) { Get-Content $startupLog }
-            throw "Native Launcher exited with code $($native.ExitCode)."
+          $blocker = Start-Process -FilePath 'node.exe' -ArgumentList @($blockerScript) -WorkingDirectory $root -PassThru
+          Start-Sleep -Milliseconds 700
+
+          $bootstrap = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d','/c',('"' + $bat + '"')) -WorkingDirectory $root -PassThru -Wait
+          if ($bootstrap.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log }
+            throw "BAT bootstrap exited with code $($bootstrap.ExitCode)."
           }
 
           $ready = $false
-          for ($i = 0; $i -lt 40; $i++) {
+          for ($i = 0; $i -lt 50; $i++) {
             try {
-              $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:29999/' -TimeoutSec 1
+              $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:29998/' -TimeoutSec 1
               if ($response.StatusCode -eq 200 -and $response.Content -match 'RPGmap Launcher') {
                 $ready = $true
                 break
@@ -275,11 +258,9 @@ jobs:
             Start-Sleep -Milliseconds 250
           }
 
-          if (Test-Path $startupLog) {
-            Write-Host '--- launcher-startup.log ---'
-            Get-Content $startupLog
-          }
-          if (-not $ready) { throw 'RPGmap Launcher control center did not become reachable on 127.0.0.1:29999.' }
+          Write-Host '--- launcher-startup.log ---'
+          if (Test-Path $log) { Get-Content $log }
+          if (-not $ready) { throw 'BAT Launcher did not fall back from occupied 29999 to 29998.' }
 
-          $listener = Get-NetTCPConnection -LocalPort 29999 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($listener) { Stop-Process -Id $listener.OwningProcess -Force -ErrorAction SilentlyContinue }
+          Stop-Process -Id $blocker.Id -Force -ErrorAction SilentlyContinue
+          Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
