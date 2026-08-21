@@ -1,4 +1,4 @@
-name: Build RPGmap 1.4.1 Package
+name: Build RPGmap 1.4.2 Package
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ on:
       - '.github/workflows/multiplayer-test-package.yml'
   push:
     branches:
-      - feat/v1.4.1-player-identity
+      - feat/v1.4.2-world-maps-layout
     paths:
       - 'src/**'
       - 'tests/**'
@@ -79,7 +79,7 @@ jobs:
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE/artifact/RPGmap-v${PACKAGE_VERSION}"
           rm -rf "$GITHUB_WORKSPACE/artifact"
-          mkdir -p "$ROOT/app" "$ROOT/map/uploads" "$ROOT/map/backups" "$ROOT/docs"
+          mkdir -p "$ROOT/app" "$ROOT/world/uploads" "$ROOT/world/backups" "$ROOT/maps" "$ROOT/docs"
 
           cp -R dist/. "$ROOT/app/"
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
@@ -91,9 +91,10 @@ jobs:
           cp deployment/local-server/start-rpgmap-internet.bat "$ROOT/start-rpgmap-internet.bat"
           cp deployment/local-server/setup-cloudflared.bat "$ROOT/setup-cloudflared.bat"
           cp deployment/local-server/run-rpgmap-public-server.bat "$ROOT/run-rpgmap-public-server.bat"
-          cp deployment/local-server/README.md "$ROOT/README.md"
-          cp deployment/local-server/INTERNET-TEST.md "$ROOT/INTERNET-MULTIPLAYER.md"
-          cp deployment/local-server/map/README.txt "$ROOT/map/README.txt"
+          cp 'deployment/local-server/操作说明.md' "$ROOT/操作说明.md"
+          cp deployment/local-server/INTERNET-TEST.md "$ROOT/docs/INTERNET-MULTIPLAYER.md"
+          cp deployment/local-server/world/README.txt "$ROOT/world/README.txt"
+          cp deployment/local-server/maps/README.txt "$ROOT/maps/README.txt"
           cp '文档/联机使用说明.md' "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           cp CHANGELOG.md "$ROOT/docs/CHANGELOG.md"
           chmod +x "$ROOT/start-rpgmap.sh"
@@ -104,7 +105,7 @@ jobs:
             "version": "${PACKAGE_VERSION}",
             "commit": "${GITHUB_SHA}",
             "serverMode": "multiplayer",
-            "storageMode": "portable-map-root",
+            "storageMode": "portable-world-maps",
             "defaultPort": 30000
           }
           EOF
@@ -116,12 +117,16 @@ jobs:
           test -f "$ROOT/internet-launcher.mjs"
           test -f "$ROOT/start-rpgmap-internet.bat"
           test -f "$ROOT/setup-cloudflared.bat"
-          test -f "$ROOT/map/README.txt"
-          test -d "$ROOT/map/uploads"
-          test -d "$ROOT/map/backups"
+          test -f "$ROOT/操作说明.md"
+          test -f "$ROOT/world/README.txt"
+          test -d "$ROOT/world/uploads"
+          test -d "$ROOT/world/backups"
+          test -f "$ROOT/maps/README.txt"
           test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
+          test ! -d "$ROOT/map"
           test ! -d "$ROOT/data"
           test ! -d "$ROOT/public"
+          test ! -f "$ROOT/README.md"
 
           cd "$GITHUB_WORKSPACE/artifact"
           ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
