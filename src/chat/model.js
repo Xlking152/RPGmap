@@ -23,7 +23,7 @@ export function normalizeChatState(raw) {
   if (!raw || typeof raw !== 'object') return createEmptyChatState();
   const messages = Array.isArray(raw.messages) ? raw.messages.filter(Boolean).slice(-MAX_MESSAGES).map(item => ({
     id: String(item.id || uid('message')),
-    type: ['chat', 'system', 'combat', 'damage', 'roll'].includes(item.type) ? item.type : 'system',
+    type: ['chat', 'system', 'combat', 'damage', 'healing', 'roll'].includes(item.type) ? item.type : 'system',
     text: text(item.text),
     createdAt: Number.isFinite(Date.parse(item.createdAt)) ? item.createdAt : new Date().toISOString(),
     data: safeData(item.data),
@@ -34,7 +34,7 @@ export function normalizeChatState(raw) {
 export function appendMessage(state, { type = 'system', text: message = '', data = null } = {}) {
   const item = {
     id: uid('message'),
-    type: ['chat', 'system', 'combat', 'damage', 'roll'].includes(type) ? type : 'system',
+    type: ['chat', 'system', 'combat', 'damage', 'healing', 'roll'].includes(type) ? type : 'system',
     text: text(message),
     createdAt: new Date().toISOString(),
     data: safeData(data),
