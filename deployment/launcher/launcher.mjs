@@ -12,7 +12,7 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(process.env.RPGMAP_PACKAGE_ROOT || path.join(ROOT, '..'));
 const UI_DIR = ROOT;
 const GAME_PORT = Math.max(1, Number(process.env.RPGMAP_GAME_PORT || 30000) || 30000);
-const LAUNCHER_PORT = Math.max(1, Number(process.env.RPGMAP_LAUNCHER_PORT || 29999) || 29999);
+const PREFERRED_LAUNCHER_PORT = Math.max(1, Number(process.env.RPGMAP_LAUNCHER_PORT || 29999) || 29999);
 const LAUNCHER_HOST = '127.0.0.1';
 const APP_DIR = path.resolve(process.env.RPGMAP_PUBLIC_DIR || path.join(PACKAGE_ROOT, 'app'));
 const WORLD_DIR = path.resolve(process.env.RPGMAP_WORLD_DIR || path.join(PACKAGE_ROOT, 'world'));
@@ -23,6 +23,15 @@ const VERSION_FILE = path.join(PACKAGE_ROOT, 'VERSION.json');
 const AUTH_TOKEN = randomBytes(32).toString('hex');
 const MAX_BODY = 1024 * 1024;
 const MAX_LOG_LINES = 400;
+const LAUNCHER_PORT_CANDIDATES = [...new Set([
+  PREFERRED_LAUNCHER_PORT,
+  29998,
+  29997,
+  29996,
+  29995,
+])].filter(port => port > 0 && port <= 65535 && port !== GAME_PORT);
+let launcherPortIndex = 0;
+let launcherPort = LAUNCHER_PORT_CANDIDATES[0] || PREFERRED_LAUNCHER_PORT;
 
 const MIME = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -104,7 +113,7 @@ export function buildPlayerInvite({ mode, publicUrl, lanUrls = [], joinCode } = 
 }
 
 function launcherUrl() {
-  return `http://${LAUNCHER_HOST}:${LAUNCHER_PORT}/?token=${AUTH_TOKEN}`;
+  return `http://${LAUNCHER_HOST}:${launcherPort}/?token=${AUTH_TOKEN}`;
 }
 
 function gameLocalUrl() {
@@ -355,6 +364,7 @@ function statusPayload() {
     app: version.app || 'RPGmap',
     version: version.version || '1.4.3',
     build: version.commit || 'unknown',
+    launcher: { host: LAUNCHER_HOST, port: launcherPort, url: `http://${LAUNCHER_HOST}:${launcherPort}/` },
     running: processAlive(runtime.server),
     starting: runtime.starting,
     mode,
@@ -443,7 +453,7 @@ async function adminAction(route, body) {
 
 const launcherServer = http.createServer(async (req, res) => {
   try {
-    const url = new URL(req.url || '/', `http://${LAUNCHER_HOST}:${LAUNCHER_PORT}`);
+    const url = new URL(req.url || '/', `http://${LAUNCHER_HOST}:${launcherPort}`);
     if (!url.pathname.startsWith('/api/')) return serveUi(req, res);
     if (!authorized(req)) return json(res, 403, { error: 'launcher_token_required' });
 
@@ -482,22 +492,40 @@ const launcherServer = http.createServer(async (req, res) => {
   }
 });
 
-launcherServer.on('error', error => {
-  if (error?.code === 'EADDRINUSE') {
-    openBrowser(`http://${LAUNCHER_HOST}:${LAUNCHER_PORT}/`);
-    process.exit(0);
-  }
-  console.error(error);
-  process.exit(1);
-});
-
-launcherServer.listen(LAUNCHER_PORT, LAUNCHER_HOST, async () => {
+async function launcherReady() {
   log('Launcher', `RPGmap Launcher ${version.version || '1.4.3'} 已启动`);
+  if (launcherPort !== PREFERRED_LAUNCHER_PORT) {
+    log('Launcher', `默认端口 ${PREFERRED_LAUNCHER_PORT} 被占用，已自动改用 ${launcherPort}`);
+  }
+  log('Launcher', `Control: http://${LAUNCHER_HOST}:${launcherPort}`);
   log('Launcher', `World: ${WORLD_DIR}`);
   log('Launcher', `Maps : ${MAPS_DIR}`);
   runtime.cloudflaredPath = await resolveCloudflared().catch(() => null);
   openBrowser(launcherUrl());
+}
+
+function listenLauncher() {
+  launcherServer.listen(launcherPort, LAUNCHER_HOST, launcherReady);
+}
+
+launcherServer.on('error', error => {
+  if (error?.code === 'EADDRINUSE' && launcherPortIndex + 1 < LAUNCHER_PORT_CANDIDATES.length) {
+    const occupiedPort = launcherPort;
+    launcherPortIndex += 1;
+    launcherPort = LAUNCHER_PORT_CANDIDATES[launcherPortIndex];
+    console.warn(`[Launcher] 端口 ${occupiedPort} 已被占用，正在尝试 ${launcherPort}…`);
+    setTimeout(listenLauncher, 50);
+    return;
+  }
+  if (error?.code === 'EADDRINUSE') {
+    console.error(`[Launcher] Launcher 端口全部被占用：${LAUNCHER_PORT_CANDIDATES.join(', ')}`);
+  } else {
+    console.error(error);
+  }
+  process.exit(1);
 });
+
+listenLauncher();
 
 const cleanup = () => {
   runtime.admin?.close();
