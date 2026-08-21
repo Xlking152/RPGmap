@@ -1,6 +1,5 @@
 @echo off
 setlocal EnableExtensions
-chcp 65001 >nul
 cd /d "%~dp0"
 title RPGmap Local Server
 
@@ -16,7 +15,12 @@ if not exist "%~dp0public\index.html" (
   exit /b 1
 )
 
-echo Starting RPGmap at http://127.0.0.1:30000 ...
+echo ============================================================
+echo  RPGmap Local Server
+echo ============================================================
+echo  Local:   http://127.0.0.1:30000
+echo ============================================================
+echo.
 start "" "http://127.0.0.1:30000"
 node "%~dp0server.mjs"
 
