@@ -1,270 +1,248 @@
 # RPGmap
 
-RPGmap 是一个面向 TRPG / VTT 的浏览器地图工具，目标是逐步发展为类似 Foundry VTT 的可自托管跑团平台。地图内容通过独立 `MapPackage` 接入；仓库中的北宋兰州地图是当前开发与验证场景。
+RPGmap 是一个面向 TRPG / VTT 的浏览器端自托管跑团平台，目标是逐步发展为类似 Foundry VTT 的可扩展地图、角色、战斗与多人联机系统。当前仓库中的北宋兰州地图用于主要开发和验证。
 
-当前 V1.4.1 Candidate 正在 Draft PR #8 中进行实机验收；稳定 `main` 在该 PR 合并前仍为 V1.4.0。
+当前开发版本：**V1.4.2 Candidate**。稳定 `main` 在该 Candidate 合并前仍保持 V1.4.0；V1.4.1 的身份 / Ownership 工作已经被 V1.4.2 继续继承和整理。
 
-## V1.4.1 核心能力
+> 本 README 只作为**项目整体说明**。发布 ZIP 内不会再放项目 README；实际使用者请阅读发布包根目录 `操作说明.md`。
+
+## 项目目标
+
+RPGmap 希望形成一套可自托管、可携带、可扩展的 VTT 架构：
 
 ```text
 RPGmap
-├─ MapPackage          地图与场景内容
-├─ EntitySystem        Actor / Token / Form / Runtime / Effects
-├─ SelectionSystem     单选、多选、矩形框选
-├─ MovementSystem      Token 拖动、Waypoint、A*、移动成本与 Ghost
-├─ MeasurementSystem   Ruler、角色测距、Waypoint、纯几何距离
-├─ CombatSystem        先攻、轮次、当前回合 + GM Turn Control
-├─ Health / Damage     HP、伤害与恢复
-├─ ChatSystem          聊天与 Game Log
-├─ Multiplayer         WebSocket、GM / Player、Presence
-├─ Player Identity     Persistent User + Player Key
-├─ Actor Ownership     NONE / OBSERVER / OWNER
-├─ Combat Turn Lock    仅当前 Turn 的 OWNER Actor 可由 Player 修改
-├─ Portable Storage    app/ 程序 + map/ 跑团数据
-└─ Internet Launcher   Cloudflare Quick Tunnel 一键远程联机
+├─ App / UI
+├─ Map / Scene System
+├─ Actor / Token / Form
+├─ Selection / Movement / Measurement
+├─ Health / Damage / Healing
+├─ Combat / Initiative / Turn
+├─ Chat / Game Log
+├─ Multiplayer / Presence
+├─ Player Identity / Ownership
+├─ Portable World Storage
+└─ Internet Multiplayer
 ```
 
-## 发布包：完全便携的数据布局
+现阶段重点是把“地图资源”“跑团运行状态”“程序本身”三者边界做清楚，为后续多地图、可破坏建筑、环境特效和更复杂 Scene System 奠定基础。
 
-V1.4.1 把程序文件和地图可写数据明确分开：
+## V1.4.2：三层便携结构
+
+V1.4.2 将发布包统一为：
 
 ```text
-RPGmap-v1.4.1/
-├─ app/                    前端程序
-├─ map/                    当前跑团全部默认可写数据
-│  ├─ world.json
-│  ├─ users.json
-│  ├─ uploads/
-│  ├─ backups/
-│  └─ README.txt
+RPGmap-v1.4.2/
+├─ app/                 RPGmap 前端程序
+├─ world/               当前 World / Campaign 的持久运行状态
+├─ maps/                真正的 Map / Scene 资源库
 ├─ docs/
 ├─ server.mjs
 ├─ access-control.mjs
 ├─ portable-storage.mjs
 ├─ internet-launcher.mjs
-├─ start-rpgmap.bat
-└─ start-rpgmap-internet.bat
+└─ start scripts
 ```
 
-默认情况下，RPGmap 的 World / User / Ownership / 上传资源**不会写入 AppData 或其他隐藏 User Data 目录**，而是跟当前 RPGmap 文件夹一起保存在 `map/`。
+一句话区分：
 
-因此：
+- **`app/`：程序是什么。**
+- **`maps/`：地图 / Scene 本身是什么。**
+- **`world/`：这一场游戏里发生了什么。**
 
-- 备份当前跑团：备份整个 `map/`。
-- 搬到另一块硬盘 / 另一台电脑：复制整个 RPGmap 文件夹。
-- 升级程序：保留旧 `map/`，替换程序文件即可。
+### `world/`
 
-旧 V1.4.x 测试结构 `data/worlds/default/world.json` / `access.json` 在新 `map/` 文件不存在时会自动迁移，旧文件不会自动删除。
-
-## 快速启动
-
-需要 Node.js `^20.19.0 || >=22.12.0`。
-
-### 本机 / 局域网
-
-- Windows：双击 `start-rpgmap.bat`
-- Linux / macOS：执行 `./start-rpgmap.sh`
-- 本机：`http://127.0.0.1:30000`
-- LAN：使用启动窗口显示的 `Network` 地址
-
-### Windows 远程联机
-
-双击：
+保存当前跑团实例的可写状态：
 
 ```text
-start-rpgmap-internet.bat
+world/
+├─ state.json
+├─ users.json
+├─ uploads/
+└─ backups/
 ```
 
-启动器自动创建 Cloudflare Quick Tunnel、生成 Join Code / GM Secret、启动 Server 并打开公网页面。
+其中：
 
-新玩家通常只需要：
+- `state.json`：World Snapshot、Actor / Token、Combat、Chat、Scene 运行状态等。
+- `users.json`：持久 Player User、默认 Actor、Ownership、凭证哈希。
+- `uploads/`：当前 World 上传资源。
+- `backups/`：本地备份。
+
+RPGmap 默认不会再把这些 World / User 数据写到 AppData、用户主目录或其他隐藏目录。
+
+### `maps/`
+
+`maps/` 从 V1.4.2 起专门保留给真正的地图 / Scene 资源：
 
 ```text
-Public URL + Join Code
+maps/
+├─ lanzhou/
+├─ inn-01/
+├─ dungeon-01/
+└─ battlefield-01/
 ```
 
-GM Secret 只供 GM 使用。
+未来一个地图包可以继续扩展：
 
-## User / Identity
+- 地图 manifest / metadata；
+- 背景层；
+- 建筑 / 墙体；
+- 可破坏对象；
+- 碰撞 / Navigation；
+- 环境特效；
+- 损坏 / 摧毁变体；
+- 地图专属资源。
+
+例如一栋可破坏建筑的“模板、模型、碰撞、破坏阶段”属于 `maps/`；某次跑团里它当前 HP、燃烧、墙体坍塌等实例状态属于 `world/state.json`。
+
+V1.4.2 先确立目录与数据边界，真正的多地图切换 / 可破坏建筑逻辑将在后续版本实现。
+
+## Player Identity / User
+
+多人联机不再只有临时 WebSocket Session，而是：
 
 ```text
 Session → Persistent User → Default Actor / Ownership
 ```
 
-推荐流程：
+默认 User 流程：
 
-1. Player 用 Join Code 首次加入。
-2. Player 进入 pending，等待 GM 批准。
-3. GM 在“联机 / Users”中指定 User 名称和默认角色。
-4. GM 批准后 Server 创建持久 User，并给默认角色 OWNER。
-5. Player 保存第一次获得的 Player Key。
+1. Player 首次使用 Join Code 加入；
+2. 进入 pending；
+3. GM 在“联机 / Users”中批准；
+4. GM 分配默认 Actor 和 Ownership；
+5. Server 创建持久 User；
+6. Player 保存 Player Key。
 
-GM 也可以预创建 Player User，然后私下把 Player Key 发给对应玩家。
+GM 也可以在开团前预创建 Player User，再把 Player Key 私下发给对应玩家。
 
-### Player Key
-
-Quick Tunnel 每次重启通常会换域名，而浏览器 localStorage 不能跨域共享。
-
-因此：
-
-- `authToken`：同一网址内自动重连。
-- `Player Key`：在新的 Quick Tunnel 地址恢复原 User。
-
-Server 只保存 Token / Player Key 的 SHA-256 哈希，不保存明文凭证。
-
-## 数据保存
-
-共享 World：
-
-```text
-map/world.json
-```
-
-Player User / 权限：
-
-```text
-map/users.json
-```
-
-上传与备份：
-
-```text
-map/uploads/
-map/backups/
-```
-
-`users.json` 与 World Snapshot 分离，Player 不能通过 World 更新修改自己的 Ownership。
+Quick Tunnel 域名变化时，Player Key 用于在新 URL 恢复同一个持久 User。Server 只保存凭证哈希，不保存明文 Player Key / Browser Token。
 
 ## Actor Ownership
 
-| 权限 | 作用 |
-| --- | --- |
-| NONE | 无控制权 |
-| OBSERVER | 观察 / 查看，不允许修改 Actor |
-| OWNER | 可操控和修改 Actor |
+V1.4.2 继承 V1.4.1 的三档权限：
 
-每个 Player 可以有一个默认 Actor、多个 OWNER Actor 和多个 OBSERVER Actor。默认 Actor 必须属于 OWNER。GM 对全部 Actor 隐式拥有完整权限。
+| 权限 | 含义 |
+| --- | --- |
+| `NONE` | 无控制权 |
+| `OBSERVER` | 观察 / 查看，不允许修改 Actor |
+| `OWNER` | 可完整操控 Actor |
+
+GM 对全部 Actor 隐式拥有完整权限。每个 Player 可以拥有一个默认 Actor，以及多个 OWNER / OBSERVER Actor；默认 Actor 必须属于 OWNER。
 
 ## Combat Turn Lock
 
-Combat 管理由 GM 负责：
+Combat 管理由 GM 负责，包括：
 
-- 参战者加入 / 移出
-- Initiative
-- 拖动先攻排序
-- 开始 / 结束 Combat
-- Round / Turn 推进
+- 参战者加入 / 移出；
+- Initiative；
+- 先攻排序；
+- 开始 / 结束 Combat；
+- Round / Turn 推进。
 
-Player 可以查看 Combat Tracker，但管理控件为只读。
+Player 可以查看 Combat Tracker，但管理控件只读。
 
-`Combat.state === active` 时，Player 即使拥有多个 OWNER Actor，也只能修改当前 Turn 对应的 OWNER Actor。
+当 Combat active 时，Player 即使拥有多个 OWNER Actor，也只能修改**当前 Turn 对应的 OWNER Actor**。
 
-Movement 会在 Token 开始拖动和最终提交前主动检查；Server 还会对所有 World 更新做最终权限校验。
-
-## Server-authoritative 权限
+权限检查采用两层结构：
 
 ```text
 UI Action
   ↓
-Client Ownership Preflight
+Client Preflight
   ↓
 world.push
   ↓
-Server Diff + Ownership + Combat Validation
+Server authoritative validation
   ↓
 accept / world.denied
 ```
 
-因此 Player 不能通过手动构造 WebSocket 消息来修改非 OWNER Actor、Combat 流程或 User / Ownership 数据。
+因此前端隐藏按钮不是安全边界；Server 仍会拒绝越权 World 更新。
 
-## 联机面板
+## Multiplayer
 
-### GM
+RPGmap 当前 Multiplayer V1 使用：
 
-- 在线 GM / Player
-- 待批准 Player
-- 预创建 Player User
-- 默认角色
-- NONE / OBSERVER / OWNER
-- Player Key 重发
-- User 删除
+- 原生 WebSocket `/ws`；
+- World Snapshot；
+- `revision / baseRevision` 冲突保护；
+- GM / Player；
+- Presence；
+- Persistent User；
+- Actor Ownership；
+- Combat Turn Lock；
+- Cloudflare Quick Tunnel 一键公网入口。
 
-### Player
+主要共享：Actor / Token、位置、Health / Damage / Healing、Combat、Chat / Game Log、Scene / World 状态。
 
-- 在线 User / GM
-- 自己的默认角色
-- OWNER / OBSERVER 列表
-- 在自己的 OWNER Actor 中切换默认角色
+个人瞬时 UI，例如 Selection、Ruler、地图视角 / Zoom、Hover、当前打开窗口，不进入共享 World。
 
-## World 同步
+## 便携迁移
 
-V1.4.1 仍使用完整 World Snapshot + `revision / baseRevision` 作为第一阶段同步模型，并在 Server 增加权限 diff 校验。
+V1.4.2 会在新文件不存在时兼容迁移前两代目录：
 
-共享：Actor / Token、位置、Health / Damage / Healing、Combat、Chat / Game Log、Scene / World 状态。
+```text
+V1.4.1
+map/world.json  → world/state.json
+map/users.json  → world/users.json
 
-不共享个人瞬时 UI：Selection、Ruler、地图视角 / Zoom、Hover、当前打开的窗口。
+更旧版本
+data/worlds/default/world.json  → world/state.json
+data/worlds/default/access.json → world/users.json
+```
 
-## 主要操作
+旧文件保留不删除；如果新的 `world/` 文件已经存在，则永远以新目录为准。
 
-- Token 单选：左键
-- 框选：空白地图左拖
-- Shift：追加选择
-- Alt：移除选择
-- Token 移动：直接拖动
-- Waypoint：Ctrl/Cmd + 点击或 `F`
-- 确认移动：Enter
-- 取消：Esc
-- Ruler：`R`
-- 从角色测距：`Shift + R`
-- 切换 Form：`V`
-
-Player 的 Actor 操作受 Ownership / Combat Turn Lock 约束。
-
-## V1.4.1 实机验收建议
-
-1. GM 登录。
-2. Player A / B 首次申请并由 GM 批准。
-3. A 只能操作 A，B 只能操作 B。
-4. 测试额外 OWNER 与 OBSERVER。
-5. 开始 Combat，验证控制权随 Turn 切换。
-6. Player 验证无法修改 Initiative / 排序 / Turn。
-7. 重启 Quick Tunnel，用新 URL + Join Code + Player Key 恢复 User。
-8. 重启 Server，验证 `map/world.json` + `map/users.json` 恢复。
-9. 将整个 RPGmap 文件夹复制到另一目录，确认 `map/` 数据跟随迁移。
-10. 重发 Player Key，确认旧身份失效。
-11. 在含旧 `data/worlds/default/` 的目录中启动，验证自动迁移。
-
-完整联机说明：`文档/联机使用说明.md`。
-
-## 项目目录
+## 源码结构
 
 ```text
 src/
 ├─ app/
 ├─ chat/
 ├─ combat/
+├─ damage/
 ├─ engine/
 ├─ entities/
+├─ healing/
+├─ health/
+├─ maps/
+├─ measurement/
 ├─ movement/
 ├─ multiplayer/
-└─ ...
+├─ render/
+├─ selection/
+└─ ui/
 
 deployment/local-server/
 ├─ server.mjs
 ├─ access-control.mjs
 ├─ portable-storage.mjs
 ├─ internet-launcher.mjs
-├─ map/README.txt
+├─ 操作说明.md
+├─ world/README.txt
+├─ maps/README.txt
 └─ start / cloudflared scripts
 
 tests/
 文档/
 ```
 
+## 文档职责
+
+- `README.md`：项目整体介绍、架构和能力边界。
+- `CHANGELOG.md`：版本级更新摘要。
+- `文档/工作日志.md`：更详细的版本开发记录。
+- `文档/联机使用说明.md`：User / Ownership / Combat Lock / 公网联机。
+- `deployment/local-server/操作说明.md`：发布 ZIP 内面向 GM / Player 的实际操作说明。
+
 ## 版本规则
 
-- Patch：Bug 修复、权限增强、小交互与兼容性，例如 `1.4.1`
-- Minor：较完整的新子系统，例如 `1.5.0`
-- Major：明显不兼容的数据 / 协议 / 架构变化，例如 `2.0.0`
+RPGmap 使用 `MAJOR.MINOR.PATCH`：
 
-V1.4.1 当前保持 Draft 测试状态，真实设备验收完成后再合并到 `main`。
+- Patch：Bug、权限、小型架构整理、兼容性，例如 `1.4.2`。
+- Minor：完整新子系统，例如真正的多地图 / Scene System 可以进入后续 Minor 版本。
+- Major：明显不兼容的 World、协议或核心架构变化。
+
+V1.4.2 当前保持 Candidate / Draft 测试状态，完成实际设备验证后再进入 `main`。
