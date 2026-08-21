@@ -29,7 +29,8 @@ const PORT = Number(process.env.PORT || 30000);
 const WORLD_ID = String(process.env.RPGMAP_WORLD_ID || 'default').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'default';
 const STORAGE = createPortableStorage({ root: ROOT, worldId: WORLD_ID, env: process.env });
 const PUBLIC_DIR = STORAGE.appDir;
-const MAP_DIR = STORAGE.mapDir;
+const WORLD_DIR = STORAGE.worldDir;
+const MAPS_DIR = STORAGE.mapsDir;
 const WORLD_FILE = STORAGE.worldFile;
 const ACCESS_FILE = STORAGE.usersFile;
 const PUBLIC_MODE = process.env.RPGMAP_PUBLIC === '1';
@@ -372,7 +373,7 @@ function multiplayerInfo() {
   return {
     enabled: true,
     identityMode: 'user-ownership',
-    storageMode: 'portable-map-root',
+    storageMode: 'portable-world-maps',
     worldId: WORLD_ID,
     revision: world.revision,
     clients: sessions.size,
@@ -656,21 +657,22 @@ server.listen(PORT, HOST, () => {
   console.log('============================================================');
   console.log(` RPGmap Multiplayer Server  |  ${packageVersion}`);
   console.log('============================================================');
-  console.log(` Local     : http://127.0.0.1:${actualPort}`);
-  for (const url of networkUrls(actualPort)) console.log(` Network   : ${url}`);
-  if (PUBLIC_URL) console.log(` Public URL: ${PUBLIC_URL}`);
-  console.log(` World     : ${WORLD_ID} · revision ${world.revision}`);
-  console.log(` Users     : ${access.users.length} persistent Player identities`);
-  console.log(` Map Root  : ${MAP_DIR}`);
-  console.log(` World File: ${WORLD_FILE}`);
-  console.log(` Users File: ${ACCESS_FILE}`);
-  console.log(' Players   : Actor Ownership + Combat Turn Lock');
-  console.log(` Public    : ${PUBLIC_MODE ? 'ON' : 'OFF'}`);
-  if (PLAYER_JOIN_CODE) console.log(` JoinCode  : ${PLAYER_JOIN_CODE}`);
-  console.log(` GMSecret  : ${GM_SECRET}`);
-  console.log(` Build     : ${version.commit || 'unknown'}`);
-  if (legacyMigrations.length) console.log(` Migrated  : ${legacyMigrations.map(item => item.type).join(', ')} from legacy data/`);
-  console.log(' Status    : READY');
+  console.log(` Local      : http://127.0.0.1:${actualPort}`);
+  for (const url of networkUrls(actualPort)) console.log(` Network    : ${url}`);
+  if (PUBLIC_URL) console.log(` Public URL : ${PUBLIC_URL}`);
+  console.log(` World      : ${WORLD_ID} · revision ${world.revision}`);
+  console.log(` Users      : ${access.users.length} persistent Player identities`);
+  console.log(` World Data : ${WORLD_DIR}`);
+  console.log(` Map Library: ${MAPS_DIR}`);
+  console.log(` World File : ${WORLD_FILE}`);
+  console.log(` Users File : ${ACCESS_FILE}`);
+  console.log(' Players    : Actor Ownership + Combat Turn Lock');
+  console.log(` Public     : ${PUBLIC_MODE ? 'ON' : 'OFF'}`);
+  if (PLAYER_JOIN_CODE) console.log(` JoinCode   : ${PLAYER_JOIN_CODE}`);
+  console.log(` GMSecret   : ${GM_SECRET}`);
+  console.log(` Build      : ${version.commit || 'unknown'}`);
+  if (legacyMigrations.length) console.log(` Migrated   : ${legacyMigrations.map(item => item.type).join(', ')} from legacy map/data layout`);
+  console.log(' Status     : READY');
   console.log('============================================================');
   console.log(' Press Ctrl+C to stop the server.');
   console.log('');
