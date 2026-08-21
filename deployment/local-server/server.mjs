@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { readFile, stat, mkdir, writeFile, rename } from 'node:fs/promises';
+import { readFile, stat, writeFile, rename } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -21,16 +21,17 @@ import {
   validatePlayerWorldPush,
   verifyUserCredential,
 } from './access-control.mjs';
+import { createPortableStorage, ensurePortableStorage, migrateLegacyStorage } from './portable-storage.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const PUBLIC_DIR = path.resolve(process.env.RPGMAP_PUBLIC_DIR || path.join(ROOT, 'public'));
-const DATA_DIR = path.resolve(process.env.RPGMAP_DATA_DIR || path.join(ROOT, 'data'));
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 30000);
 const WORLD_ID = String(process.env.RPGMAP_WORLD_ID || 'default').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'default';
-const WORLD_DIR = path.join(DATA_DIR, 'worlds', WORLD_ID);
-const WORLD_FILE = path.join(WORLD_DIR, 'world.json');
-const ACCESS_FILE = path.join(WORLD_DIR, 'access.json');
+const STORAGE = createPortableStorage({ root: ROOT, worldId: WORLD_ID, env: process.env });
+const PUBLIC_DIR = STORAGE.appDir;
+const MAP_DIR = STORAGE.mapDir;
+const WORLD_FILE = STORAGE.worldFile;
+const ACCESS_FILE = STORAGE.usersFile;
 const PUBLIC_MODE = process.env.RPGMAP_PUBLIC === '1';
 const PLAYER_JOIN_CODE = String(process.env.RPGMAP_JOIN_CODE || '').trim();
 const GM_SECRET = String(process.env.RPGMAP_GM_SECRET || randomBytes(4).toString('hex').toUpperCase());
@@ -46,11 +47,7 @@ const MIME = new Map([
 ]);
 
 async function ensureRuntimeDirs() {
-  await Promise.all([
-    mkdir(WORLD_DIR, { recursive: true }),
-    mkdir(path.join(DATA_DIR, 'uploads'), { recursive: true }),
-    mkdir(path.join(DATA_DIR, 'backups'), { recursive: true }),
-  ]);
+  await ensurePortableStorage(STORAGE);
 }
 
 function json(res, status, body) {
@@ -231,8 +228,12 @@ function attachFrameReader(socket, onText, onClose) {
 }
 
 await ensureRuntimeDirs();
+const legacyMigrations = await migrateLegacyStorage(STORAGE);
 let version = { app: 'RPGmap', version: 'unknown', serverMode: 'multiplayer' };
-try { version = JSON.parse(await readFile(path.join(ROOT, 'VERSION.json'), 'utf8')); } catch {}
+try { version = JSON.parse(await readFile(path.join(STORAGE.packageRoot, 'VERSION.json'), 'utf8')); }
+catch {
+  try { version = JSON.parse(await readFile(path.join(ROOT, 'VERSION.json'), 'utf8')); } catch {}
+}
 const packageVersion = version.version || version.packageVersion || 'unknown';
 
 let world = { schemaVersion: 1, worldId: WORLD_ID, revision: 0, updatedAt: null, state: null };
@@ -371,6 +372,7 @@ function multiplayerInfo() {
   return {
     enabled: true,
     identityMode: 'user-ownership',
+    storageMode: 'portable-map-root',
     worldId: WORLD_ID,
     revision: world.revision,
     clients: sessions.size,
@@ -659,13 +661,15 @@ server.listen(PORT, HOST, () => {
   if (PUBLIC_URL) console.log(` Public URL: ${PUBLIC_URL}`);
   console.log(` World     : ${WORLD_ID} · revision ${world.revision}`);
   console.log(` Users     : ${access.users.length} persistent Player identities`);
-  console.log(` Access    : ${ACCESS_FILE}`);
-  console.log(` Data      : ${DATA_DIR}`);
+  console.log(` Map Root  : ${MAP_DIR}`);
+  console.log(` World File: ${WORLD_FILE}`);
+  console.log(` Users File: ${ACCESS_FILE}`);
   console.log(' Players   : Actor Ownership + Combat Turn Lock');
   console.log(` Public    : ${PUBLIC_MODE ? 'ON' : 'OFF'}`);
   if (PLAYER_JOIN_CODE) console.log(` JoinCode  : ${PLAYER_JOIN_CODE}`);
   console.log(` GMSecret  : ${GM_SECRET}`);
   console.log(` Build     : ${version.commit || 'unknown'}`);
+  if (legacyMigrations.length) console.log(` Migrated  : ${legacyMigrations.map(item => item.type).join(', ')} from legacy data/`);
   console.log(' Status    : READY');
   console.log('============================================================');
   console.log(' Press Ctrl+C to stop the server.');
