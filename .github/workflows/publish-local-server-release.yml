@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - feat/entity-actor-token-system
+      - main
     paths:
       - '.github/workflows/publish-local-server-release.yml'
 
@@ -12,53 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  cleanup-legacy-s0:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-        with:
-          ref: feat/entity-actor-token-system
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22.12.0'
-
-      - name: Sync package-lock metadata
-        shell: bash
-        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-
-      - name: Commit lockfile metadata when changed
-        shell: bash
-        run: |
-          if git diff --quiet -- package-lock.json; then
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- package-lock.json
-          git commit -m 'chore: sync package lock for RPGmap 1.2.0'
-          git push origin HEAD:feat/entity-actor-token-system
-
-      - name: Remove legacy S0 releases and tags
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for tag in s0-local-server-1 s0-local-server-2 s0-local-server-3 s0-local-server-4 s0-local-server-5; do
-            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
-            else
-              git ls-remote --exit-code --tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$tag" >/dev/null 2>&1 && \
-                git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ":refs/tags/$tag" || true
-            fi
-          done
-
   build-release:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -96,7 +50,7 @@ jobs:
         shell: bash
         run: |
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists. Increase the application version only after confirmation." >&2
+            echo "Release $RELEASE_TAG already exists. Increase the application version before publishing another release." >&2
             exit 1
           fi
 
@@ -129,6 +83,7 @@ jobs:
           EOF
 
           test -f "$ROOT/public/index.html"
+          test -f "$ROOT/README.md"
 
           python - <<'PY'
           from pathlib import Path
@@ -159,20 +114,28 @@ jobs:
           cat > release/release-notes.md <<EOF
           ## RPGmap ${PACKAGE_VERSION}
 
-          RPGmap 是面向 TRPG / VTT 的自托管地图工具。该 Release 使用应用版本号，而不是 CI 构建编号。
+          RPGmap ${PACKAGE_VERSION} 将角色系统、Token 框选、移动与测距、先攻战斗、Health / Damage / Healing 以及 Chat / Game Log 整合为完整的跑团工作流。
+
+          ### 主要更新
+          - Actor Sheet：技能 / 豁免、不良状态、多 Form 与 XLSX 最终值导入。
+          - Selection：Token 单选、多选、矩形框选，支持 Shift 追加、Alt 移除。
+          - Ruler：自由测距、Waypoint，以及从当前角色位置开始测距。
+          - Combat：手填先攻、拖动排序、轮次 / 当前回合与显式加入参战者。
+          - Health：保留 SimpleHP，并加入完好 / B / L / A WoundTrack。
+          - Damage / Healing：对所选 Token 应用最终伤害或实际恢复量，并写入 Game Log。
+          - Token 生命条：SimpleHP 比例条与 WoundTrack 分段生命槽可视化。
+          - Chat / Game Log：聊天、战斗、伤害、恢复记录，并预留后续投骰接口。
 
           ### 使用
           - Windows：解压后双击 \`start-rpgmap.bat\`
           - Linux / macOS：执行 \`./start-rpgmap.sh\`
           - 默认地址：\`http://127.0.0.1:30000\`
-
-          ### 当前阶段
-          本版本已包含 MovementSystem、EntitySystem、AppShell UI 和本地 HTTP Server。World Store、WebSocket、权限与多人同步仍按未来规划继续开发。
+          - ZIP 根目录的 \`README.md\` 包含完整操作指南。
 
           **Source commit:** \`${GITHUB_SHA}\`
           EOF
 
-      - name: Publish GitHub Pre-release
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -184,5 +147,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "RPGmap ${PACKAGE_VERSION}" \
-            --notes-file release/release-notes.md \
-            --prerelease
+            --notes-file release/release-notes.md
