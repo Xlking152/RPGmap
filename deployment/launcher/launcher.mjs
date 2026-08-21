@@ -32,6 +32,7 @@ const LAUNCHER_PORT_CANDIDATES = [...new Set([
 ])].filter(port => port > 0 && port <= 65535 && port !== GAME_PORT);
 let launcherPortIndex = 0;
 let launcherPort = LAUNCHER_PORT_CANDIDATES[0] || PREFERRED_LAUNCHER_PORT;
+let usingAutomaticLauncherPort = false;
 
 const MIME = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -493,9 +494,15 @@ const launcherServer = http.createServer(async (req, res) => {
 });
 
 async function launcherReady() {
+  const address = launcherServer.address();
+  if (address && typeof address === 'object') launcherPort = address.port;
   log('Launcher', `RPGmap Launcher ${version.version || '1.4.3'} 已启动`);
   if (launcherPort !== PREFERRED_LAUNCHER_PORT) {
-    log('Launcher', `默认端口 ${PREFERRED_LAUNCHER_PORT} 被占用，已自动改用 ${launcherPort}`);
+    if (usingAutomaticLauncherPort) {
+      log('Launcher', `预设 Launcher 端口均被占用，Windows 已自动分配空闲端口 ${launcherPort}`);
+    } else {
+      log('Launcher', `默认端口 ${PREFERRED_LAUNCHER_PORT} 被占用，已自动改用 ${launcherPort}`);
+    }
   }
   log('Launcher', `Control: http://${LAUNCHER_HOST}:${launcherPort}`);
   log('Launcher', `World: ${WORLD_DIR}`);
@@ -509,7 +516,7 @@ function listenLauncher() {
 }
 
 launcherServer.on('error', error => {
-  if (error?.code === 'EADDRINUSE' && launcherPortIndex + 1 < LAUNCHER_PORT_CANDIDATES.length) {
+  if (error?.code === 'EADDRINUSE' && !usingAutomaticLauncherPort && launcherPortIndex + 1 < LAUNCHER_PORT_CANDIDATES.length) {
     const occupiedPort = launcherPort;
     launcherPortIndex += 1;
     launcherPort = LAUNCHER_PORT_CANDIDATES[launcherPortIndex];
@@ -517,11 +524,14 @@ launcherServer.on('error', error => {
     setTimeout(listenLauncher, 50);
     return;
   }
-  if (error?.code === 'EADDRINUSE') {
-    console.error(`[Launcher] Launcher 端口全部被占用：${LAUNCHER_PORT_CANDIDATES.join(', ')}`);
-  } else {
-    console.error(error);
+  if (error?.code === 'EADDRINUSE' && !usingAutomaticLauncherPort) {
+    console.warn(`[Launcher] 预设端口均被占用，改由 Windows 自动选择空闲端口…`);
+    usingAutomaticLauncherPort = true;
+    launcherPort = 0;
+    setTimeout(listenLauncher, 50);
+    return;
   }
+  console.error(error);
   process.exit(1);
 });
 
