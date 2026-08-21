@@ -1,16 +1,17 @@
 RPGmap Map Library
 ==================
 
-This folder is reserved for real map/scene resources and templates.
+This folder stores real map/scene resources and templates used by RPGmap at runtime.
 
-Future examples:
-- maps/lanzhou/
-- maps/inn-01/
-- maps/dungeon-01/
+V1.4.3 default layout:
+- index.json                                  Runtime map registry
+- northern-song-lanzhou-1104/map.json        Default MapPackage definition
+- northern-song-lanzhou-1104/assets/          Map-specific WebP resources
+- northern-song-lanzhou-1104/README.txt       Per-map notes
 
-A map package may contain:
+MapPackage content may include:
 - map metadata / manifest
-- background layers
+- SVG/background layers
 - buildings and walls
 - destructible objects
 - collision / navigation data
@@ -19,7 +20,14 @@ A map package may contain:
 - map-specific assets
 
 Important distinction:
-- maps/ describes what a map or scene is.
+- maps/ describes what a map or scene IS.
 - world/ stores what happened to it in the current game World.
 
-Example: a destructible building template belongs in maps/, while its current HP, burning state and destroyed state belong in world/state.json.
+Example:
+- building geometry, base art and destruction templates belong in maps/.
+- current building damage, fire state, destroyed parts and campaign history belong in world/state.json.
+
+Runtime note for Windows packages:
+RPGmap.bat starts the PowerShell Runtime, which creates app/maps as a Windows directory junction pointing back to this root maps/ folder. The files are NOT duplicated. The browser therefore reads these real map files while app/ remains replaceable program code.
+
+Future Scene Manager / World Manager work should build on index.json instead of hard-coding map content back into the web bundle.
