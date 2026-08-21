@@ -1,4 +1,4 @@
-name: Build RPGmap 1.4 Package
+name: Build RPGmap 1.4.1 Package
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ on:
       - '.github/workflows/multiplayer-test-package.yml'
   push:
     branches:
-      - feat/multiplayer-v1
+      - feat/v1.4.1-player-identity
     paths:
       - 'src/**'
       - 'tests/**'
@@ -83,6 +83,7 @@ jobs:
 
           cp -R dist/. "$ROOT/public/"
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
+          cp deployment/local-server/access-control.mjs "$ROOT/access-control.mjs"
           cp deployment/local-server/internet-launcher.mjs "$ROOT/internet-launcher.mjs"
           cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
           cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
@@ -108,6 +109,7 @@ jobs:
 
           test -f "$ROOT/public/index.html"
           test -f "$ROOT/server.mjs"
+          test -f "$ROOT/access-control.mjs"
           test -f "$ROOT/internet-launcher.mjs"
           test -f "$ROOT/start-rpgmap-internet.bat"
           test -f "$ROOT/setup-cloudflared.bat"
