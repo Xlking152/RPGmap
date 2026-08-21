@@ -4,5 +4,16 @@ export * from './model.js';
 export { ChatStore } from './store.js';
 
 export function createChatSystem(options = {}) {
-  return createChatController(options);
+  const controller = createChatController(options);
+  return {
+    register(api) {
+      controller.register(api);
+      if (!api.chat) return;
+      api.chat.addSystem = api.chat.system;
+      api.chat.addCombat = api.chat.combat;
+      api.chat.addDamage = api.chat.damage;
+      api.chat.addRoll = api.chat.roll;
+      api.chat.open = api.chat.activate;
+    },
+  };
 }
