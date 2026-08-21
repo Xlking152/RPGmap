@@ -1,6 +1,6 @@
-# RPGmap 1.4.0 · Server / 操作指南
+# RPGmap 1.4.1 · Server / 操作指南
 
-这是 RPGmap 1.4.0 发布包内的运行说明。V1.4 已包含 Multiplayer Server、World Store、GM / Player 与 Windows 一键公网联机。
+这是 RPGmap V1.4.1 测试 / 发布包内的运行说明。V1.4.1 在 V1.4 Multiplayer 的基础上加入持久 Player User、Actor Ownership 和 Combat Turn Lock。
 
 ## 一、启动方式
 
@@ -12,13 +12,7 @@
 start-rpgmap.bat
 ```
 
-默认本机地址：
-
-```text
-http://127.0.0.1:30000
-```
-
-同一局域网设备可使用启动窗口显示的 `Network` 地址。
+本机默认：`http://127.0.0.1:30000`。同一局域网设备使用启动窗口显示的 `Network` 地址。
 
 ### Windows：远程公网联机
 
@@ -28,151 +22,160 @@ http://127.0.0.1:30000
 start-rpgmap-internet.bat
 ```
 
-启动器会自动检测 `cloudflared`，创建 Cloudflare Quick Tunnel，生成 Join Code / GM Secret，启动 Multiplayer Server，并自动打开公网页面。
+启动器会自动检测 `cloudflared`、创建 Quick Tunnel、生成 Join Code / GM Secret、启动 Server，并打开公网网页与独立 `RPGmap Multiplayer Info` 信息窗口。
 
-随后还会打开一个独立的 `RPGmap Multiplayer Info` 信息窗口，其中集中显示：
+GM 首次发给普通新玩家：
 
-- Public URL
-- Join Code
-- GM Secret
-- Local URL
-- 当前版本
-
-玩家只需要 **Public URL + Join Code**。不要把 GM Secret 发给 Player。
-
-### Linux / macOS
-
-```bash
-chmod +x start-rpgmap.sh
-./start-rpgmap.sh
+```text
+Public URL + Join Code
 ```
 
-当前一键 Cloudflare Internet Launcher 主要面向 Windows；其他系统可以自行运行 Server 并配置反向代理 / Tunnel。
+不要发送 GM Secret。
 
-## 二、联机身份
+已有持久 User 在 Quick Tunnel 地址变化后恢复身份时，玩家还需要自己保存的：
 
-### GM
+```text
+Player Key
+```
 
-- 身份选择 `GM`
-- 公网模式填写 `GM Secret`
-- Join Code 可留空
+## 二、User 创建：推荐流程
 
-### Player
+1. Player 打开地址，选择 `Player`，填写名称 + Join Code。
+2. Player 进入“等待 GM 批准”。此时没有 World 写权限。
+3. GM 点击顶栏“联机”。
+4. 在“待批准 Player”中设置正式 User 名称和默认角色。
+5. 点击“批准并绑定”。
+6. Server 创建持久 User；默认角色自动获得 OWNER。
+7. Player 保存第一次显示的 Player Key。
 
-- 身份选择 `Player`
-- 填写 6 位 Join Code
-- GM Secret 留空
+GM 也可以在“预创建 Player User”中提前建立 User，并把生成的 Player Key 私发给玩家。
 
-成功后顶栏显示身份与在线人数。
+## 三、Player Key 与自动登录
 
-## 三、共享 World
+RPGmap 使用两种 Player 凭证：
 
-默认 World Store：
+- Browser Auth Token：同一网址刷新 / 重连时自动使用。
+- Player Key：长期恢复身份；新的 Quick Tunnel 域名上手动输入。
+
+Cloudflare Quick Tunnel 的域名通常每次启动都会变化，因此 **Player Key 是跨新公网地址恢复同一个 User 的必要补充**。
+
+Server 只保存凭证哈希，不保存明文 Player Key / Token。
+
+GM 点击“重发 Player Key”会使旧 Player Key 和旧浏览器 Token 同时失效。
+
+## 四、User / World 数据
 
 ```text
 data/worlds/default/world.json
+data/worlds/default/access.json
 ```
 
-当前同步内容主要包括 Actor、Token、位置、Health、Damage、Healing、Combat、Chat / Game Log 与 Scene 状态。
+- `world.json`：Actor / Token / Scene / Combat / Chat 等共享 World。
+- `access.json`：持久 Player User、默认角色、Ownership 和凭证哈希。
 
-Selection、Ruler、地图视角和其他瞬时 UI 不同步。
+Access 数据不进入 World Snapshot，Player 不能通过修改 World 获得更多权限。
 
-World 使用 revision 管理冲突；Server 重启后会恢复持久化 World。
+## 五、Actor Ownership
 
-## 四、Token / Movement / Ruler
+权限：
 
-- 左键 Token：单选
-- 空白地图左拖：框选
-- `Shift`：追加选择
-- `Alt`：移除选择
-- `Space + 左拖`：平移地图
-- 直接拖动 Token：移动规划
-- `Ctrl/Cmd + 左键` 或 `F`：添加 Waypoint
-- 右键或 `Alt + F`：撤销 Waypoint
-- `Enter`：确认移动
-- `Esc`：取消移动
-- `R`：Ruler 开关
-- `Shift + R`：从所选角色测距
+- `NONE`：无控制权。
+- `OBSERVER`：观察 / 查看，不允许修改 Actor。
+- `OWNER`：可操控 Actor。
 
-## 五、Combat
+GM 对全部 Actor 隐式拥有完整权限。
 
-1. 选择参战 Token。
-2. 点击“进入战斗”。
-3. 左侧填写先攻。
-4. 可拖动调整顺序。
-5. 点击“开始战斗”。
-6. 使用“下一回合”推进轮次。
-7. 新角色需要选择后点击“加入所选”。
-
-Combat 状态会进入 Multiplayer World 同步。
-
-## 六、Damage / Healing / Health
-
-RPGmap 支持：
-
-- `SimpleHP`
-- `WoundTrack`：完好 / B 冲击 / L 严重 / A 恶性
-
-右侧聊天页可应用最终伤害和实际恢复量，并写入 Game Log。Token 上方生命条会随状态变化刷新。
-
-## 七、Chat / Game Log
-
-右侧聊天页记录：
-
-- 普通聊天
-- Combat 事件
-- Damage
-- Healing
-- 后续可扩展 Roll / Check
-
-这些持久消息会随 World 同步。
-
-## 八、公网联机说明
-
-`start-rpgmap-internet.bat` 使用 Cloudflare Quick Tunnel。当前启动器强制 `HTTP/2 over TCP`，用于提高 VPN / TUN、校园网和限制 UDP 网络下的兼容性。
-
-Quick Tunnel：
-
-- 无需 Cloudflare 账号
-- 无需自有域名
-- 每次启动随机生成 `trycloudflare.com` URL
-- 启动器关闭后 URL 失效
-- 适合个人跑团与便捷联机
-- 长期固定服务器后续建议 Named Tunnel / 自有域名
-
-详细流程见 `docs/MULTIPLAYER-GUIDE.md` 或仓库 `文档/联机使用说明.md`。
-
-## 九、Release 包主要内容
+每个 Player 可有：
 
 ```text
-public/                     预编译 Web Client
-server.mjs                  Multiplayer Server
-internet-launcher.mjs       公网一体化启动器
-start-rpgmap.bat            本机 / LAN 启动
-start-rpgmap.sh             Linux / macOS 启动
-start-rpgmap-internet.bat   Windows 一键公网联机
-setup-cloudflared.bat       cloudflared 检测 / 安装
-run-rpgmap-public-server.bat 手动公网 Server 入口
-data/                       World / uploads / backups
-VERSION.json                版本 / Build 信息
-docs/MULTIPLAYER-GUIDE.md   联机使用说明
-README.md                   本文件
+默认角色：1 个
+OWNER：多个
+OBSERVER：多个
 ```
 
-## 十、服务器 API
+默认角色必须属于 OWNER。
 
-- `/api/health`
-- `/api/version`
-- `/api/multiplayer`
-- `/ws`
+GM 在“联机 / Users”面板中可为每个 Player 调整所有 Actor 的权限。
 
-公网启动时 `/api/health` 和 `/api/multiplayer` 的 Multiplayer 信息包含当前 `publicUrl`。
+## 六、Player 的控制范围
 
-## 十一、当前边界
+战斗外，Player 可以正常操控自己的 OWNER Actor，例如：
 
-- 当前权限模型为 GM / Player，没有 Actor Ownership。
-- Player 默认可写共享 World。
-- 当前同步主要使用完整 World Snapshot；高频并发编辑可能触发 revision conflict，并回载 Server 最新状态。
-- Quick Tunnel 不提供固定公网地址或生产 SLA。
+- 移动 Token
+- 修改角色资源 / 状态
+- 切换 Form
+- 使用与自己角色有关的常规操作
+- 聊天、测距和个人 UI
 
-应用版本：**1.4.0**。
+Player 不能创建 / 删除 / 重绑 Actor 或 Token，不能修改其他人的 Actor，也不能改已有 Chat / Game Log 历史。
+
+客户端会先进行权限预检；Server 会对每次 `world.push` 再进行最终校验。
+
+## 七、Combat Turn Lock
+
+以下 Combat 操作是 GM-only：
+
+- 建立 / 加入 / 移出 Combatant
+- 修改 Initiative
+- 拖动先攻顺序
+- 开始 / 结束 Combat
+- 推进 Round / Turn
+
+Player 可以查看 Combat Tracker。
+
+Combat active 后，即使 Player 有多个 OWNER Actor，也只能操控**当前 Turn 对应的那个 Actor**。GM 始终不受 Turn Lock 限制。
+
+Token 移动在开始拖动和提交前都会检查 Ownership / Turn；不满足条件时直接提示。
+
+## 八、联机面板
+
+### GM 看到
+
+- 当前在线 GM / Player
+- 每个 User 的默认角色
+- 待批准 Player
+- 预创建 User
+- NONE / OBSERVER / OWNER
+- Player Key 重发
+- User 删除
+
+### Player 看到
+
+- 在线 User 与默认角色
+- 自己的默认角色
+- 自己的 OWNER / OBSERVER 列表
+- 在自己 OWNER Actor 中切换默认角色
+
+## 九、角色 / Token / 战斗基本操作
+
+原有 V1.4 操作保持不变：
+
+- Token 单选：左键
+- 框选：空白地图左拖
+- Shift：追加选择
+- Alt：移除选择
+- Token 移动：直接拖动
+- Movement Waypoint：Ctrl/Cmd + 点击或 `F`
+- 确认移动：Enter
+- 取消：Esc
+- Ruler：`R`
+- 从角色测距：`Shift + R`
+- 切换 Form：`V`
+
+Player 的这些 Actor 操作会受到 Ownership / Combat Turn Lock 限制。
+
+## 十、实机验收建议
+
+建议至少 GM + 两个 Player：
+
+1. 两个 Player 分别首次申请并由 GM 批准。
+2. A 只能移动 A 的角色，B 只能移动 B 的角色。
+3. GM 给 A 额外 OWNER Actor，确认可操控多个角色。
+4. 将一个 Actor 改成 OBSERVER，确认 Player 不能修改。
+5. 开始 Combat，确认只有当前 Turn 的对应 Player/Actor 可操作。
+6. Player 确认不能修改先攻、排序或推进 Turn。
+7. 重启 Quick Tunnel，用新 URL + Join Code + Player Key 恢复原 User。
+8. 重启 Server，确认 `world.json` 与 `access.json` 均恢复。
+9. 重发 Player Key，确认旧身份失效。
+
+完整说明：`docs/MULTIPLAYER-GUIDE.md`。
