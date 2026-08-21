@@ -32,15 +32,9 @@ PowerShell 只承担最简单、最稳定的 Runtime Host：
 
 - 查找 Node.js；
 - 保持 Launcher Node 进程运行；
+- 将根目录 `maps/` 挂载到运行时静态路径 `app/maps`；
 - 显示 Launcher / Server / Tunnel 实时输出；
-- Server 启动后直接显示：
-  - Local URL；
-  - LAN / Network URL；
-  - Internet Public URL；
-  - Join Code / 房间号；
-  - GM Secret；
-  - World / Maps 路径；
-  - Build / READY；
+- Server 启动后直接显示 Local / LAN / Public URL、Join Code、GM Secret、World / Maps 路径、Build / READY；
 - 显示后续 Server / Tunnel 日志。
 
 该窗口可以最小化，但运行 RPGmap 时应保持打开。
@@ -119,6 +113,38 @@ Game Server 默认仍为：
 
 Cloudflare Tunnel 只转发 Game Server，不转发 Launcher 管理端口。
 
+## V1.4.3：MapPackage 真正外置
+
+早期 Candidate 虽然建立了根目录 `maps/`，但兰州地图仍由 `src/maps/lanzhou.js` 和 `src/assets/generated/` 在 Vite build 时编译进 `app/`。因此发布包里的 `maps/` 看起来几乎是空目录。
+
+V1.4.3 当前修正为：
+
+```text
+maps/
+├─ README.txt
+├─ index.json
+└─ northern-song-lanzhou-1104/
+   ├─ map.json
+   ├─ README.txt
+   └─ assets/
+      └─ *.webp
+```
+
+其中：
+
+- `maps/index.json`：运行时 Map Registry；
+- `map.json`：地图 metadata、SVG、地物、Navigation、破坏规则等 MapPackage 数据；
+- `assets/`：该地图真正使用的 WebP 资源；
+- 前端 `app/` 只保留引擎和 UI，不再把兰州地图定义作为应用数据烘焙进去。
+
+Windows Runtime 会创建：
+
+```text
+app/maps  ──Junction──>  ../maps
+```
+
+这是目录联接，不是复制。因此实际地图只保存一份，仍然位于包根 `maps/`。当前 Game Server 通过现有静态目录读取这个联接；未来正式 Map Service / Scene Manager 可以直接接管同一个根 `maps/`。
+
 ## 未来管理中心
 
 Launcher 首页已经预留三个禁用模块：
@@ -146,6 +172,8 @@ RPGmap-v1.4.3/
 ├─ server/
 ├─ world/
 ├─ maps/
+│  ├─ index.json
+│  └─ northern-song-lanzhou-1104/
 ├─ tools/
 ├─ docs/
 └─ VERSION.json
@@ -163,10 +191,12 @@ RPGmap-v1.4.3/
 
 ### world/
 
+新发布包不会预置一场假的 Campaign，因此初次解压时 `world/` 可能只有 README、`uploads/` 和 `backups/`。`state.json` / `users.json` 会在运行状态首次持久化或旧数据迁移时产生。
+
 ```text
 world/
-├─ state.json
-├─ users.json
+├─ state.json        # 运行后产生
+├─ users.json        # 有持久 User 后产生
 ├─ uploads/
 └─ backups/
 ```
@@ -175,7 +205,7 @@ World / User 默认不会写入 AppData 或其他隐藏用户目录。
 
 ### maps/
 
-`maps/` 留给真实 Map / Scene 资源。地图模板中的建筑、碰撞、破坏阶段属于 `maps/`；某场 Campaign 中建筑当前 HP、燃烧、坍塌等实例状态属于 `world/state.json`。
+`maps/` 现在已经是真正的 Runtime Map Library。地图模板中的建筑、碰撞、Navigation、破坏阶段和地图素材属于 `maps/`；某场 Campaign 中建筑当前 HP、燃烧、坍塌等实例状态属于 `world/state.json`。
 
 ## Player Identity / Ownership
 
