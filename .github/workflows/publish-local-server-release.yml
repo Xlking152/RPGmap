@@ -68,11 +68,12 @@ jobs:
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE/release/RPGmap-v${PACKAGE_VERSION}"
           rm -rf "$GITHUB_WORKSPACE/release"
-          mkdir -p "$ROOT/public" "$ROOT/data/worlds" "$ROOT/data/uploads" "$ROOT/data/backups" "$ROOT/docs"
+          mkdir -p "$ROOT/app" "$ROOT/map/uploads" "$ROOT/map/backups" "$ROOT/docs"
 
-          cp -R dist/. "$ROOT/public/"
+          cp -R dist/. "$ROOT/app/"
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
           cp deployment/local-server/access-control.mjs "$ROOT/access-control.mjs"
+          cp deployment/local-server/portable-storage.mjs "$ROOT/portable-storage.mjs"
           cp deployment/local-server/internet-launcher.mjs "$ROOT/internet-launcher.mjs"
           cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
           cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
@@ -81,7 +82,7 @@ jobs:
           cp deployment/local-server/run-rpgmap-public-server.bat "$ROOT/run-rpgmap-public-server.bat"
           cp deployment/local-server/README.md "$ROOT/README.md"
           cp deployment/local-server/INTERNET-TEST.md "$ROOT/INTERNET-MULTIPLAYER.md"
-          cp deployment/local-server/data/README.txt "$ROOT/data/README.txt"
+          cp deployment/local-server/map/README.txt "$ROOT/map/README.txt"
           cp '文档/联机使用说明.md' "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           cp '文档/未来规划.md' "$ROOT/docs/FUTURE-ROADMAP.md"
           cp CHANGELOG.md "$ROOT/docs/CHANGELOG.md"
@@ -94,17 +95,24 @@ jobs:
             "releaseTag": "${RELEASE_TAG}",
             "commit": "${GITHUB_SHA}",
             "serverMode": "multiplayer",
+            "storageMode": "portable-map-root",
             "defaultPort": 30000
           }
           EOF
 
-          test -f "$ROOT/public/index.html"
+          test -f "$ROOT/app/index.html"
           test -f "$ROOT/server.mjs"
           test -f "$ROOT/access-control.mjs"
+          test -f "$ROOT/portable-storage.mjs"
           test -f "$ROOT/internet-launcher.mjs"
           test -f "$ROOT/start-rpgmap-internet.bat"
           test -f "$ROOT/setup-cloudflared.bat"
+          test -f "$ROOT/map/README.txt"
+          test -d "$ROOT/map/uploads"
+          test -d "$ROOT/map/backups"
           test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
+          test ! -d "$ROOT/data"
+          test ! -d "$ROOT/public"
 
           python - <<'PY'
           from pathlib import Path
@@ -135,24 +143,32 @@ jobs:
           cat > release/release-notes.md <<EOF
           ## RPGmap ${PACKAGE_VERSION}
 
-          RPGmap ${PACKAGE_VERSION} 在 Multiplayer V1 上加入持久 Player Identity、Actor Ownership 与 Server-authoritative Combat Turn Lock。
+          RPGmap ${PACKAGE_VERSION} 加入持久 Player Identity、Actor Ownership、Combat Turn Lock，并将发布包整理为完全便携的 \`app/ + map/\` 数据布局。
+
+          ### Portable Map Root
+          - 前端程序放在 \`app/\`。
+          - 所有默认可写跑团数据集中在 \`map/\`。
+          - \`map/world.json\` 保存共享 World。
+          - \`map/users.json\` 保存 Player User、默认 Actor、Ownership 与凭证哈希。
+          - \`map/uploads/\` 与 \`map/backups/\` 跟随地图工程一起保存。
+          - 默认不依赖 AppData 或其他隐藏 User Data 目录。
+          - 可从旧版 \`data/worlds/default/world.json\` / \`access.json\` 自动迁移，旧文件保留不删除。
 
           ### User / Identity
           - Player 首次加入后由 GM 批准为当前 World 的持久 User。
           - GM 也可预创建 User，并生成 Player Key。
           - Quick Tunnel 域名变化后，Player 可使用 Player Key 恢复原 User。
-          - User / Ownership 持久化在 \`data/worlds/<world-id>/access.json\`；服务器只保存凭证哈希。
+          - Server 只保存凭证哈希。
 
           ### Actor Ownership
           - Actor 权限：NONE / OBSERVER / OWNER。
           - 每个 Player 可有一个默认角色，并可拥有多个 OWNER / OBSERVER Actor。
           - Player 只能修改 OWNER Actor；Actor / Token 创建、删除、重新绑定由 GM 管理。
-          - GM 在“联机 / Users”面板中批准玩家和分配角色权限。
 
           ### Combat Turn Lock
           - 参战者、先攻、排序、Round、Turn 与战斗开始/结束均由 GM 管理。
           - Combat active 时，Player 只能操控当前 Turn 对应且自己拥有 OWNER 的 Actor。
-          - 客户端提前拦截无权移动/战斗操作，Server 再做最终强制校验。
+          - Client 提前拦截，Server 再做最终强制校验。
 
           ### Internet Multiplayer
           - Windows 双击 \`start-rpgmap-internet.bat\`。
