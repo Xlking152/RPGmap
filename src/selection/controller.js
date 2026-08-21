@@ -71,6 +71,7 @@ export function createSelectionController(state, notify) {
       let currentTool = 'pan';
       let marquee = null;
       let restoreDragging = false;
+      let spaceHeld = false;
 
       api.setTool = tool => {
         currentTool = String(tool || 'pan');
@@ -169,6 +170,7 @@ export function createSelectionController(state, notify) {
           return;
         }
 
+        if (spaceHeld) return;
         if (shell.querySelector?.('.ui-ruler-tool.active')) return;
         if (currentTool !== 'pan') return;
         event.preventDefault();
@@ -232,6 +234,16 @@ export function createSelectionController(state, notify) {
         if (!marquee || event.pointerId !== marquee.pointerId) return;
         cleanupMarquee();
       }, true);
+
+      documentNode.addEventListener('keydown', event => {
+        if (event.code !== 'Space' || editableTarget(event.target)) return;
+        spaceHeld = true;
+        event.preventDefault();
+      }, true);
+      documentNode.addEventListener('keyup', event => {
+        if (event.code === 'Space') spaceHeld = false;
+      }, true);
+      globalThis.addEventListener?.('blur', () => { spaceHeld = false; });
 
       api.on('character:select', event => {
         const id = event.detail?.id;
