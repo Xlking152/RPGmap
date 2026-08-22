@@ -36,7 +36,7 @@ export {
   featureControlTitle,
 } from './control-model.js';
 
-export { createFeatureControlLayer } from './control-layer.js';
+export { createFeatureControlLayer };
 export { createFeatureOperations } from './operations.js';
 
 /**
