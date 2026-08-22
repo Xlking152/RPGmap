@@ -2,6 +2,25 @@
 
 RPGmap 使用语义化版本号。更细的开发过程见 `文档/工作日志.md`。
 
+## 1.5.1 — Candidate · 2026-08-22
+
+V1.5.1 是 V1.5.0 MapPackage / Feature Interaction / Elevation Candidate 的人工验收修订版，保持 V1.5 架构边界不变。
+
+### Token UI / Elevation
+
+- Token 名称固定在正上方。
+- HealthSystem 保持唯一 HP 条并放在 Token 下方。
+- `elevationFt` 标签移到 Token 右上角，避免与名称 / 血条冲突。
+- Character Marker 直接绑定 `contextmenu`，同时保留 DOM capture 与 Map fallback；右键高度 HUD 不再依赖某一次 DOM 扫描时序。
+- 高度 HUD 保持直接输入与 `-5 / +5 ft` 调整。
+
+### Packaging / Validation
+
+- Package version 更新为 `1.5.1`。
+- Windows package smoke 使用 Linux package job 输出的实际版本，不再写死 `1.5.0`。
+- `VERSION.json`、归档目录、ZIP 与 Artifact 的版本一致性继续由 CI 验证。
+- 继续执行 Node、JavaScript syntax、源码独立性、Vite build、Linux no-reference Runtime、Windows BAT no-reference Runtime 全链路验证。
+
 ## 1.5.0 — Candidate · 2026-08-22
 
 V1.5.0 从 V1.4.1 已验证的 Multiplayer / User / Ownership / Portable Runtime 基线上重新建立地图框架，目标是让“换地图”只替换 MapPackage，不复制 Damage / Movement / Scene / Multiplayer 逻辑。
