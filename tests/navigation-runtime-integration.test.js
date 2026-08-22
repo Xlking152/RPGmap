@@ -7,6 +7,8 @@ import { MovementSession } from '../src/movement/session.js';
 import { applyLanzhouCapabilities } from '../reference/maps/lanzhou/capabilities.js';
 import { createLanzhouMapPackage } from '../reference/maps/lanzhou/package.js';
 
+const CITY_GATE_IDS = Object.freeze(['gate-north', 'gate-east', 'gate-south', 'gate-west']);
+
 function genericBarrierMap() {
   return {
     width: 100,
@@ -42,6 +44,18 @@ function appState(open = false) {
       featureStates: {
         'generic-height-barrier': { open },
       },
+    },
+  };
+}
+
+function cityGateState(openGateId = null) {
+  return {
+    sceneEvents: [],
+    preferences: {
+      featureStates: Object.fromEntries(CITY_GATE_IDS.map((featureId) => [
+        featureId,
+        { open: featureId === openGateId },
+      ])),
     },
   };
 }
@@ -139,11 +153,11 @@ test('real Lanzhou city-gate grids block EasyStar routes when closed and restore
   const map = lanzhouWithCapabilities();
   const gateways = new Map((map.navigation.gateways || []).map((gateway) => [String(gateway.featureId), gateway]));
 
-  for (const featureId of ['gate-north', 'gate-east', 'gate-south', 'gate-west']) {
+  for (const featureId of CITY_GATE_IDS) {
     const gateway = gateways.get(featureId);
     const crossing = gatewayCrossing(gateway);
-    const closedState = { sceneEvents: [], preferences: { featureStates: { [featureId]: { open: false } } } };
-    const openState = { sceneEvents: [], preferences: { featureStates: { [featureId]: { open: true } } } };
+    const closedState = cityGateState();
+    const openState = cityGateState(featureId);
 
     const closedFull = createNavigationGrid(map, {}, null, {
       appState: closedState,
@@ -166,4 +180,29 @@ test('real Lanzhou city-gate grids block EasyStar routes when closed and restore
       `${featureId}: opened gate must restore the real EasyStar path`,
     );
   }
+});
+
+test('Lanzhou city perimeter is globally sealed with all city gates closed and becomes enterable through an opened north gate', async () => {
+  const map = lanzhouWithCapabilities();
+  const outsideNorth = { x: 3364, y: 1332 };
+  const cityCenter = { x: 3268, y: 2195 };
+
+  const sealed = createNavigationGrid(map, {}, null, {
+    appState: cityGateState(),
+    moverContext: { characterId: 'ground', elevationFt: 0 },
+  });
+  assert.equal(
+    await findNavigationPath(sealed, outsideNorth, cityCenter),
+    null,
+    'all four closed city gates must seal the city perimeter for a ground mover',
+  );
+
+  const northOpen = createNavigationGrid(map, {}, null, {
+    appState: cityGateState('gate-north'),
+    moverContext: { characterId: 'ground', elevationFt: 0 },
+  });
+  assert.ok(
+    await findNavigationPath(northOpen, outsideNorth, cityCenter),
+    'opening the north gate must create an actual outside-to-city-center route',
+  );
 });
