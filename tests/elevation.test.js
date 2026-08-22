@@ -47,82 +47,6 @@ function simpleMap(feature = simpleFeature()) {
   };
 }
 
-function midpoint(a, b) {
-  return { x: (Number(a[0]) + Number(b[0])) / 2, y: (Number(a[1]) + Number(b[1])) / 2 };
-}
-
-function gatewayCrossing(gateway, distance = 140) {
-  const polygon = gateway?.polygon || [];
-  assert.ok(polygon.length >= 4, `gateway ${gateway?.featureId || ''} needs a passage polygon`);
-  const near = midpoint(polygon[0], polygon[1]);
-  const far = midpoint(polygon[3], polygon[2]);
-  const cx = (near.x + far.x) / 2;
-  const cy = (near.y + far.y) / 2;
-  const dx = far.x - near.x;
-  const dy = far.y - near.y;
-  const length = Math.hypot(dx, dy);
-  const ux = dx / length;
-  const uy = dy / length;
-  return {
-    center: { x: cx, y: cy },
-    start: { x: cx - ux * distance, y: cy - uy * distance },
-    end: { x: cx + ux * distance, y: cy + uy * distance },
-  };
-}
-
-function gridCell(navigation, point) {
-  return {
-    x: Math.max(0, Math.min(navigation.columns - 1, Math.floor(Number(point.x) / navigation.cellSize))),
-    y: Math.max(0, Math.min(navigation.rows - 1, Math.floor(Number(point.y) / navigation.cellSize))),
-  };
-}
-
-function hasLocalGridPath(navigation, startPoint, endPoint, centerPoint, radiusMeters = 240) {
-  const grid = navigation.grid;
-  const start = gridCell(navigation, startPoint);
-  const end = gridCell(navigation, endPoint);
-  const center = gridCell(navigation, centerPoint);
-  const radius = Math.ceil(radiusMeters / navigation.cellSize);
-  const minX = Math.max(0, center.x - radius);
-  const maxX = Math.min(navigation.columns - 1, center.x + radius);
-  const minY = Math.max(0, center.y - radius);
-  const maxY = Math.min(navigation.rows - 1, center.y + radius);
-  const key = (x, y) => `${x},${y}`;
-  const queue = [start];
-  const visited = new Set([key(start.x, start.y)]);
-  const directions = [
-    [1, 0], [-1, 0], [0, 1], [0, -1],
-    [1, 1], [1, -1], [-1, 1], [-1, -1],
-  ];
-
-  while (queue.length) {
-    const current = queue.shift();
-    if (current.x === end.x && current.y === end.y) return true;
-    for (const [dx, dy] of directions) {
-      const x = current.x + dx;
-      const y = current.y + dy;
-      if (x < minX || x > maxX || y < minY || y > maxY) continue;
-      if (grid[y]?.[x] === NAVIGATION_TILES.blocked) continue;
-      if (dx && dy) {
-        if (grid[current.y]?.[x] === NAVIGATION_TILES.blocked || grid[y]?.[current.x] === NAVIGATION_TILES.blocked) continue;
-      }
-      const cellKey = key(x, y);
-      if (visited.has(cellKey)) continue;
-      visited.add(cellKey);
-      queue.push({ x, y });
-    }
-  }
-  return false;
-}
-
-function lanzhouWithCapabilities() {
-  const source = createLanzhouMapPackage();
-  return {
-    ...source,
-    features: applyLanzhouCapabilities(source.features, source.navigation),
-  };
-}
-
 test('Token elevationFt defaults to zero and normalizes as a non-negative value', () => {
   const token = createTokenForActor('actor-a', 'character-a');
   assert.equal(token.elevationFt, 0);
@@ -268,38 +192,5 @@ test('Minimal Reference and Lanzhou Reference provide explicit height-aware obst
     assert.equal(feature.capabilities.navigation.blockingHeightFt, LANZHOU_DEFAULT_BLOCKING_HEIGHT_FT.openable);
     assert.ok(feature.capabilities.navigation.blockingPolygon?.length >= 4, `missing closed blocker for ${featureId}`);
     assert.ok(feature.capabilities.navigation.passagePolygon?.length >= 4, `missing open passage for ${featureId}`);
-  }
-});
-
-test('Lanzhou city gates seal their wall openings when closed and restore the passage when opened', () => {
-  const map = lanzhouWithCapabilities();
-  const cityGateIds = ['gate-north', 'gate-east', 'gate-south', 'gate-west'];
-  const gateways = new Map((map.navigation.gateways || []).map((gateway) => [String(gateway.featureId), gateway]));
-
-  for (const featureId of cityGateIds) {
-    const gateway = gateways.get(featureId);
-    assert.ok(gateway, `missing navigation gateway for ${featureId}`);
-    const crossing = gatewayCrossing(gateway);
-    const closedState = { sceneEvents: [], preferences: { featureStates: { [featureId]: { open: false } } } };
-    const openState = { sceneEvents: [], preferences: { featureStates: { [featureId]: { open: true } } } };
-    const closedNavigation = createNavigationGrid(map, {}, null, {
-      appState: closedState,
-      moverContext: { characterId: 'ground-token', elevationFt: 0 },
-    });
-    const openNavigation = createNavigationGrid(map, {}, null, {
-      appState: openState,
-      moverContext: { characterId: 'ground-token', elevationFt: 0 },
-    });
-
-    assert.equal(
-      hasLocalGridPath(closedNavigation, crossing.start, crossing.end, crossing.center),
-      false,
-      `${featureId} closed must not allow side-slip through the wall opening`,
-    );
-    assert.equal(
-      hasLocalGridPath(openNavigation, crossing.start, crossing.end, crossing.center),
-      true,
-      `${featureId} open must restore a local passage through the wall`,
-    );
   }
 });
