@@ -34,9 +34,6 @@ export function createPlacementContextGuard() {
 
       shell.addEventListener('click', onClickCapture, true);
 
-      // Existing V1.5 tools use app:destroy as their cleanup port. Keep the
-      // same boundary here; the future AppCore lifecycle work will make this
-      // port authoritative for every runtime adapter.
       api.on?.('app:destroy', () => {
         shell.removeEventListener('click', onClickCapture, true);
       });
