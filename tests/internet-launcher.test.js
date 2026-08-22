@@ -4,7 +4,7 @@ import {
   buildConnectionInfo,
   createInternetCredentials,
   parseQuickTunnelUrl,
-} from '../deployment/local-server/internet-launcher.mjs';
+} from '../deployment/local-server/launcher.mjs';
 
 test('parseQuickTunnelUrl extracts Cloudflare Quick Tunnel URL from mixed logs', () => {
   const log = [
@@ -35,11 +35,11 @@ test('buildConnectionInfo keeps player invite and GM secret visibly separated', 
     publicUrl: 'https://example-room.trycloudflare.com',
     joinCode: '123456',
     gmSecret: 'ABCDEF0123456789',
-    version: '1.4.0',
+    version: '1.5.3',
     port: 30000,
   });
   const text = lines.join('\n');
-  assert.match(text, /RPGmap Multiplayer Connection Info\s+\|\s+1\.4\.0/);
+  assert.match(text, /RPGmap Internet Multiplayer\s+\|\s+1\.5\.3/);
   assert.match(text, /Public URL\s+: https:\/\/example-room\.trycloudflare\.com/);
   assert.match(text, /Join Code\s+: 123456/);
   assert.match(text, /GM Secret\s+: ABCDEF0123456789/);
