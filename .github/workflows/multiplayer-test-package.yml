@@ -1,4 +1,4 @@
-name: Build RPGmap 1.5.1 Candidate
+name: Build RPGmap 1.5.2 Candidate
 
 on:
   workflow_dispatch:
