@@ -1,100 +1,111 @@
-# RPGmap 1.4.0 Internet Multiplayer
+# RPGmap 1.5.3 Internet Multiplayer
 
-本文件记录 V1.4 Windows 公网联机入口的技术说明。普通用户优先阅读 `README.md` 或 `文档/联机使用说明.md`。
-
-## 一键启动
-
-双击：
+V1.5.3 不再提供单独的 Internet BAT。Windows 公网联机与本地 / 局域网统一从：
 
 ```text
-start-rpgmap-internet.bat
+start-rpgmap.bat
 ```
 
-流程：
+启动，然后选择：
 
-1. 检查 Node.js。
-2. 检查完整 `public/` 发布内容。
-3. 优先使用包目录中的 `cloudflared.exe`。
-4. 其次使用系统 PATH 中已安装的 `cloudflared.exe`。
-5. 如果仍不存在，调用 `setup-cloudflared.bat` 尝试官方下载或 `winget` 安装。
-6. 启动 `internet-launcher.mjs`。
-7. Launcher 以 `--protocol http2` 创建 Cloudflare Quick Tunnel。
-8. 自动解析 `https://*.trycloudflare.com`。
-9. 自动生成 6 位 Join Code 与 16 位十六进制 GM Secret。
-10. 启动 `server.mjs`，注入 `RPGMAP_PUBLIC_URL`、Join Code 和 GM Secret。
-11. 等待 `/api/health` 返回 READY。
-12. 自动打开公网 RPGmap 页面。
-13. Windows 额外打开独立 `RPGmap Multiplayer Info` 信息窗口。
+```text
+2. Internet / Public
+```
+
+也可直接运行：
+
+```text
+start-rpgmap.bat internet
+```
+
+## Internet 模式流程
+
+统一 `launcher.mjs` 会：
+
+1. 检查 `30000` 端口，拒绝与已有 Local/LAN 或 Internet Server 并行启动；
+2. 查找 RPGmap 目录中的 `cloudflared.exe`；
+3. 其次查找系统 PATH；
+4. Windows 若仍缺少，则自动尝试下载 Cloudflare 官方 portable executable；
+5. 官方下载失败时尝试 Winget；
+6. 创建 `HTTP/2 over TCP` Quick Tunnel；
+7. 解析 `https://*.trycloudflare.com`；
+8. 生成 6 位 Join Code 和 16 位十六进制 GM Secret；
+9. 以 Public 模式启动同一个 `server.mjs`；
+10. 等待 `/api/health` READY，并确认 `publicMode=true`；
+11. 在当前窗口打印 Local / Network / Public 地址与凭据；
+12. 打开 Public URL。
+
+不会再启动：
+
+```text
+setup-cloudflared.bat
+run-rpgmap-public-server.bat
+internet-launcher.mjs
+额外 Multiplayer Info 命令行窗口
+```
 
 ## 玩家邀请
 
-只发送：
+普通 Player 首次加入只发送：
 
 ```text
 Public URL + Join Code
 ```
 
+已有 User 在新的 Quick Tunnel 地址恢复身份时使用：
+
+```text
+Public URL + Join Code + Player Key
+```
+
 GM Secret 只供 GM 使用。
 
-## HTTP/2 / TCP
+## Internet 模式也包含 LAN
 
-V1.4 Quick Tunnel 默认：
+选择 Internet / Public 后，同一个 Server 会同时输出：
+
+```text
+Local URL
+Network URL
+Public URL
+```
+
+因此同一局域网设备仍可直接使用 Network URL；不要再启动第二个 Local Server。
+
+## Cloudflared
+
+默认 Quick Tunnel 命令仍为：
 
 ```text
 cloudflared tunnel --no-autoupdate --url http://127.0.0.1:30000 --protocol http2
 ```
 
-这样可以绕开部分 VPN / TUN、校园网、防火墙对 QUIC / UDP 的限制。
+HTTP/2/TCP 用于提高 VPN / TUN / 校园网 / 防火墙环境下的兼容性。
 
-## cloudflared 自动安装
+如果自动安装失败，可手动下载 Windows 64-bit `cloudflared.exe` 并放在 `start-rpgmap.bat` 同目录，再重新选择 Internet 模式。
 
-`setup-cloudflared.bat` 会尝试：
+## 故障定位
 
-- 本地 `cloudflared.exe`
-- 系统 PATH
-- Cloudflare 官方 GitHub Release Windows amd64 binary
-- `winget install --id Cloudflare.cloudflared --exact`
+### 启动后端口占用
 
-如果自动下载失败，可手动将 Windows 64-bit `cloudflared.exe` 放在 RPGmap 根目录。
+Launcher 会区分：
 
-## 安全边界
+- 已有 RPGmap Local/LAN；
+- 已有 RPGmap Internet/Public；
+- 其他程序占用端口。
 
-- Player 使用 Join Code。
-- GM 使用 GM Secret。
-- 不使用注册、邮箱、OAuth、JWT。
-- 当前默认允许 Player 写共享 World。
-- Join Code 与 GM Secret 每次公网启动重新生成。
-- 不要把 GM Secret 发布给玩家或公开到论坛。
-- Quick Tunnel URL 是临时地址，Launcher 停止后失效。
-
-## Troubleshooting
-
-### `stream N canceled by remote with error code 0`
-
-单条日志不一定代表 Tunnel 故障，可能只是客户端取消 HTTP 请求。应以页面和 WebSocket 是否能正常连接为准。
+应先关闭对应进程，不要同时启动两个 RPGmap Server。
 
 ### 玩家打不开 Public URL
 
-GM 可先用手机关闭 Wi-Fi、使用 4G/5G 测试 Public URL。如果移动网络也无法访问，再检查 Cloudflare 日志和本机代理 / VPN / TUN 设置。
+先在主机确认：
 
-### `198.18.x.x`
+- `/api/health` 已 READY；
+- Public URL 已打印；
+- cloudflared 没有退出。
 
-该地址属于保留测试网段，常见于某些代理 / TUN 软件的虚拟网络路径。V1.4 默认 HTTP/2/TCP 模式用于提高这类环境的兼容性。
+再用手机关闭 Wi-Fi、通过 4G/5G 测试 Public URL，以区分本机 LAN 问题和公网 Tunnel 问题。
 
-## 手动模式
+### Quick Tunnel 定位
 
-高级用户也可以手动设置：
-
-```text
-RPGMAP_PUBLIC=1
-RPGMAP_PUBLIC_URL=https://example.trycloudflare.com
-RPGMAP_JOIN_CODE=123456
-RPGMAP_GM_SECRET=ABCDEF0123456789
-RPGMAP_PLAYER_WRITE=1
-```
-
-然后分别运行 Server 和 Tunnel。
-
-## Quick Tunnel 定位
-
-Quick Tunnel 是 V1.4 的便捷个人联机入口，不是固定公网部署方案。需要长期固定 URL、域名和更严格访问策略时，应迁移到 Named Tunnel / 自有域名。
+Quick Tunnel 是便捷个人联机入口，不是固定公网部署方案。需要固定域名、长期运行和更严格访问策略时，再迁移到 Named Tunnel / 自有域名。
