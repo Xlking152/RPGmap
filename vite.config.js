@@ -1,5 +1,4 @@
 import { defineConfig } from 'vite';
-import { viteSingleFile } from 'vite-plugin-singlefile';
 
 function stripUnusedLeafletRasterCss() {
   return {
@@ -16,12 +15,19 @@ function stripUnusedLeafletRasterCss() {
 
 export default defineConfig({
   base: './',
-  plugins: [stripUnusedLeafletRasterCss(), viteSingleFile()],
+  plugins: [stripUnusedLeafletRasterCss()],
   build: {
     target: 'es2020',
     outDir: 'dist',
     emptyOutDir: true,
-    cssCodeSplit: false,
-    assetsInlineLimit: 100_000_000
+    cssCodeSplit: true,
+    assetsInlineLimit: 4096,
+    rollupOptions: {
+      output: {
+        assetFileNames: 'assets/[name]-[hash][extname]',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        entryFileNames: 'assets/[name]-[hash].js'
+      }
+    }
   }
 });
