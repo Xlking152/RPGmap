@@ -22,9 +22,14 @@ function relativeSourcePath(file) {
 }
 
 test('only explicit build/compatibility adapters may import Lanzhou reference sources', async () => {
+  // These are intentionally outside generic Core semantics:
+  // - default-map.js bundles the selected built-in map at build time;
+  // - the two src/maps files are legacy import shims kept for old callers/tests.
+  // Runtime packages are separately verified after deleting reference/ entirely.
   const allowed = new Set([
     'map-package/default-map.js',
     'maps/lanzhou.js',
+    'maps/presentation-cleanup.js',
   ]);
   const importers = [];
 
@@ -36,6 +41,11 @@ test('only explicit build/compatibility adapters may import Lanzhou reference so
   }
 
   assert.deepEqual(importers.sort(), [...allowed].sort());
+
+  const lanzhouShim = await readFile(path.join(SRC_ROOT, 'maps/lanzhou.js'), 'utf8');
+  const presentationShim = await readFile(path.join(SRC_ROOT, 'maps/presentation-cleanup.js'), 'utf8');
+  assert.match(lanzhouShim, /Compatibility shim/);
+  assert.match(presentationShim, /Compatibility shim/);
 });
 
 test('generic Core movement/interaction/elevation/navigation source contains no Lanzhou identity or Feature IDs', async () => {
