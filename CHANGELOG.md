@@ -2,6 +2,24 @@
 
 RPGmap 使用语义化版本号。更细的开发过程见 `文档/工作日志.md`。
 
+## 1.5.4 — Candidate · 2026-08-22
+
+V1.5.4 继续收口单入口 Launcher 的主机体验，不改变 MapPackage / Feature / Elevation / Navigation 数据模型。
+
+### Startup / Multiplayer UX
+
+- Local/LAN 与 Internet/Public 两种模式都会生成并显示 Join Code（房间号）与 GM Secret（GM 密码）。
+- READY 信息集中显示本机地址、可用 LAN 地址、Internet 模式的 Cloudflare Public URL、Join Code 与 GM Secret。
+- Internet 模式下主机不再通过 Public URL 访问自己的地图，而是直接打开 `127.0.0.1`，减少 Tunnel 往返和公网波动对主机加载的影响。
+- Launcher 打开的 localhost URL 使用 hash 携带一次性 GM bootstrap；Client 读取后立即清除 hash，并自动以 GM 身份连接。
+- GM bootstrap 只允许 localhost / 127.0.0.1 消费，不把 GM Secret 放进玩家使用的 Public URL 或普通 HTTP 查询参数。
+- LAN Player 现在同样使用 Join Code 进入房间，使 Local/LAN 与 Internet/Public 的加入流程保持一致。
+
+### CI
+
+- Candidate workflow 名称改为版本无关的 `Build RPGmap Candidate`，实际 ZIP / VERSION.json 继续从 `package.json` 动态读取版本。
+- Windows BAT smoke 额外验证 Local/LAN Server 已启用 Join Code。
+
 ## 1.5.3 — Candidate · 2026-08-22
 
 V1.5.3 在 V1.5.2 端口互斥修复基础上进一步收口启动架构，不改变 MapPackage、Feature Interaction、Elevation 或 Navigation 数据模型。
@@ -87,6 +105,7 @@ V1.5.0 从 V1.4.1 已验证的 Multiplayer / User / Ownership / Portable Runtime
 reference/maps/lanzhou/
 ├─ manifest.js
 ├─ package.js
+├─ capabilities.js
 ├─ assets.js
 ├─ presentation.js
 ├─ assets/
