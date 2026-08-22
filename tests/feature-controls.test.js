@@ -13,7 +13,7 @@ import {
 import { createLanzhouMapPackage } from '../reference/maps/lanzhou/package.js';
 import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
 
-test('openable Features receive a default map toggle without category rules', () => {
+test('openable Features receive a compact default map toggle without category rules', () => {
   const feature = {
     id: 'portal-a',
     name: 'Portal A',
@@ -29,7 +29,7 @@ test('openable Features receive a default map toggle without category rules', ()
     anchor: [50, 60],
     style: 'door',
     label: 'Portal A',
-    size: 28,
+    size: 24,
   });
 });
 
