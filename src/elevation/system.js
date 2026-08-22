@@ -23,7 +23,7 @@ function installStyles(documentNode) {
   style.id = STYLE_ID;
   style.textContent = `
     .rpg-character { overflow:visible !important; }
-    .token-elevation-label { position:absolute; left:calc(100% + 5px); top:50%; transform:translateY(-50%); min-width:30px; padding:1px 5px; border:1px solid rgba(18,24,28,.78); border-radius:5px; background:rgba(24,30,34,.88); color:#f4f0df; box-shadow:0 1px 4px rgba(0,0,0,.28); font:700 10px/1.35 system-ui,sans-serif; text-align:center; white-space:nowrap; pointer-events:none; }
+    .token-elevation-label { position:absolute; left:calc(100% + 3px); top:-3px; min-width:30px; padding:1px 5px; border:1px solid rgba(18,24,28,.78); border-radius:5px; background:rgba(24,30,34,.88); color:#f4f0df; box-shadow:0 1px 4px rgba(0,0,0,.28); font:700 10px/1.35 system-ui,sans-serif; text-align:center; white-space:nowrap; pointer-events:none; }
     .character-tooltip { margin-top:0 !important; }
     .token-elevation-hud { position:fixed; z-index:5000; width:190px; padding:10px; border:1px solid rgba(225,218,194,.25); border-radius:9px; background:rgba(28,32,35,.97); box-shadow:0 10px 28px rgba(0,0,0,.38); color:#f5f1e6; font:12px/1.4 system-ui,sans-serif; }
     .token-elevation-hud strong { display:block; margin-bottom:7px; font-size:12px; }
@@ -118,6 +118,7 @@ export function createElevationSystem() {
       let tokenSyncQueued = false;
       let featureSyncQueued = false;
       let destroyed = false;
+      const boundCharacterLayers = new WeakSet();
 
       configureElevationNavigationRuntime({ getState: () => api.getState() });
 
@@ -204,6 +205,29 @@ export function createElevationSystem() {
         return true;
       }
 
+      function openTokenContextMenuForCharacter(event, characterId) {
+        if (!characterId) return false;
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        selectedCharacterId = String(characterId);
+        api.selectCharacter?.(characterId);
+        syncActiveMover(characterId);
+        openTokenElevationHud(event, characterId);
+        return true;
+      }
+
+      function bindCharacterLayer(layer, characterId) {
+        if (!layer || !characterId) return;
+        const id = String(characterId);
+        const icon = layer.getElement?.() || layer._icon;
+        if (icon) icon.dataset.characterId = id;
+        if (boundCharacterLayers.has(layer)) return;
+        boundCharacterLayers.add(layer);
+        layer.on?.('contextmenu', (leafletEvent) => {
+          openTokenContextMenuForCharacter(leafletEvent?.originalEvent || leafletEvent, id);
+        });
+      }
+
       function identifyCharacterIcons() {
         const state = api.getState();
         const visibleCharacters = (state.characters || []).filter((character) => (
@@ -214,11 +238,12 @@ export function createElevationSystem() {
         const pending = [];
 
         api.map.eachLayer?.((layer) => {
-          const icon = layer?._icon;
+          const icon = layer?.getElement?.() || layer?._icon;
           if (!icon?.classList?.contains('rpg-character')) return;
           orientCharacterTooltip(layer);
           const existingId = String(icon.dataset.characterId || '');
           if (existingId && characterIds.has(existingId) && !used.has(existingId)) {
+            bindCharacterLayer(layer, existingId);
             used.add(existingId);
             return;
           }
@@ -244,7 +269,7 @@ export function createElevationSystem() {
             }
           }
           if (!best) continue;
-          entry.icon.dataset.characterId = String(best.id);
+          bindCharacterLayer(entry.layer, best.id);
           used.add(String(best.id));
         }
       }
@@ -344,14 +369,7 @@ export function createElevationSystem() {
         // Character ↔ DOM association before requiring data-character-id.
         identifyCharacterIcons();
         const characterId = icon.dataset.characterId;
-        if (!characterId) return false;
-        event.preventDefault?.();
-        event.stopPropagation?.();
-        selectedCharacterId = characterId;
-        api.selectCharacter?.(characterId);
-        syncActiveMover(characterId);
-        openTokenElevationHud(event, characterId);
-        return true;
+        return openTokenContextMenuForCharacter(event, characterId);
       }
 
       function mapTokenContextMenu(event) {
