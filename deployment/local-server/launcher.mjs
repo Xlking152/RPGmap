@@ -153,6 +153,9 @@ export function normalizeLaunchMode(value) {
 }
 
 async function validateRuntime() {
+  if (process.platform !== 'win32') {
+    throw new Error('This RPGmap package is Windows-only. Use start-rpgmap.bat on Windows.');
+  }
   for (const relative of ['server.mjs', path.join('app', 'index.html')]) {
     try {
       await access(path.join(ROOT, relative));
@@ -164,64 +167,97 @@ async function validateRuntime() {
   await mkdir(path.join(ROOT, 'map', 'backups'), { recursive: true });
 }
 
-export function browserLaunchCandidates(url, platform = process.platform) {
+export function browserLaunchCandidates(url, platform = process.platform, env = process.env) {
   const target = String(url || '').trim();
-  if (!target) return [];
-  if (platform === 'win32') {
-    const cmdTarget = target.replace(/"/g, '%22');
-    return [
-      { command: 'explorer.exe', args: [target] },
-      { command: 'rundll32.exe', args: ['url.dll,FileProtocolHandler', target] },
-      { command: 'cmd.exe', args: ['/D', '/S', '/C', `start "" "${cmdTarget}"`] },
-    ];
+  if (!target || platform !== 'win32') return [];
+  const cmdTarget = target.replace(/"/g, '%22');
+  const candidates = [
+    {
+      command: 'cmd.exe',
+      args: ['/D', '/S', '/C', `start "" "${cmdTarget}"`],
+      waitForExit: true,
+      label: 'Windows start',
+    },
+  ];
+
+  const edgeRoots = [env['ProgramFiles(x86)'], env.ProgramFiles, env.LOCALAPPDATA].filter(Boolean);
+  for (const root of edgeRoots) {
+    candidates.push({
+      command: path.join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+      args: [target],
+      waitForExit: false,
+      label: 'Microsoft Edge',
+    });
   }
-  if (platform === 'darwin') return [{ command: 'open', args: [target] }];
-  return [{ command: 'xdg-open', args: [target] }];
+
+  candidates.push({
+    command: 'rundll32.exe',
+    args: ['url.dll,FileProtocolHandler', target],
+    waitForExit: true,
+    label: 'Windows URL handler',
+  });
+  return candidates;
 }
 
-export function openBrowser(url, {
+function waitForLaunch(child, { waitForExit, timeoutMs = 5000 } = {}) {
+  return new Promise(resolve => {
+    let settled = false;
+    const timer = setTimeout(() => finish({ ok: !waitForExit, code: null, timedOut: true }), timeoutMs);
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    child.once('error', error => finish({ ok: false, error }));
+    child.once('spawn', () => {
+      if (!waitForExit) finish({ ok: true, code: null });
+    });
+    if (waitForExit) {
+      child.once('exit', code => finish({ ok: code === 0, code }));
+    }
+  });
+}
+
+export async function openBrowser(url, {
   platform = process.platform,
   spawnImpl = spawn,
+  env = process.env,
 } = {}) {
-  const candidates = browserLaunchCandidates(url, platform);
-  let index = 0;
+  if (env.RPGMAP_NO_BROWSER === '1') {
+    console.log('[INFO] Browser auto-open disabled by RPGMAP_NO_BROWSER=1.');
+    return false;
+  }
 
-  const tryNext = lastError => {
-    const candidate = candidates[index++];
-    if (!candidate) {
-      const detail = lastError?.message ? ` (${lastError.message})` : '';
-      console.warn(`[WARN] Browser could not be opened automatically${detail}. Open this URL manually: ${url}`);
-      return;
-    }
-
+  const candidates = browserLaunchCandidates(url, platform, env);
+  let lastError = null;
+  for (const candidate of candidates) {
     let child;
     try {
       child = spawnImpl(candidate.command, candidate.args, {
         cwd: ROOT,
-        detached: true,
+        detached: !candidate.waitForExit,
         stdio: 'ignore',
         windowsHide: true,
       });
     } catch (error) {
-      tryNext(error);
-      return;
+      lastError = error;
+      continue;
     }
 
-    let settled = false;
-    child.once('spawn', () => {
-      if (settled) return;
-      settled = true;
-      child.unref?.();
-      console.log(`[OK] Opening host browser via ${candidate.command}.`);
-    });
-    child.once('error', error => {
-      if (settled) return;
-      settled = true;
-      tryNext(error);
-    });
-  };
+    const result = await waitForLaunch(child, { waitForExit: candidate.waitForExit });
+    if (result.ok) {
+      if (!candidate.waitForExit) child.unref?.();
+      console.log(`[OK] Browser launch requested via ${candidate.label}.`);
+      return true;
+    }
+    lastError = result.error || new Error(`${candidate.label} exited with code ${result.code ?? 'unknown'}`);
+  }
 
-  tryNext();
+  const detail = lastError?.message ? ` (${lastError.message})` : '';
+  console.warn(`[WARN] Browser could not be opened automatically${detail}.`);
+  console.warn(`[WARN] Open this URL manually: ${url}`);
+  return false;
 }
 
 function stopChild(child) {
@@ -274,9 +310,8 @@ async function executableWorks(command) {
 
 async function findCommand(command) {
   if (path.isAbsolute(command)) return (await executableWorks(command)) ? command : null;
-  const lookup = process.platform === 'win32' ? 'where.exe' : 'which';
   try {
-    const child = spawn(lookup, [command], {
+    const child = spawn('where.exe', [command], {
       cwd: ROOT,
       stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true,
@@ -339,15 +374,13 @@ async function resolveCloudflared() {
     throw new Error(`Configured cloudflared could not run: ${configured}`);
   }
 
-  const localName = process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
-  const local = path.join(ROOT, localName);
+  const local = path.join(ROOT, 'cloudflared.exe');
   if (await executableWorks(local)) return local;
 
-  const system = await findCommand(localName);
+  const system = await findCommand('cloudflared.exe');
   if (system) return system;
 
-  if (process.platform === 'win32') return installCloudflaredWindows();
-  throw new Error('cloudflared is required for Internet mode. Install it in PATH or place it beside launcher.mjs.');
+  return installCloudflaredWindows();
 }
 
 function tunnelDiagnostic(text) {
@@ -451,7 +484,7 @@ async function runLocal(port) {
   try {
     const health = await waitForServer(port, server, { publicMode: false });
     printReady({ health, mode: 'local', port, credentials });
-    openBrowser(buildHostLaunchUrl({ port, gmSecret: credentials.gmSecret }));
+    await openBrowser(buildHostLaunchUrl({ port, gmSecret: credentials.gmSecret }));
     const code = await new Promise(resolve => server.once('exit', resolve));
     if (!shuttingDown && code) process.exitCode = Number(code) || 1;
   } finally {
@@ -502,7 +535,7 @@ async function runInternet(port) {
     printReady({ health, mode: 'internet', port, publicUrl, credentials });
 
     // The host stays on loopback for speed/reliability. The public URL is for players.
-    openBrowser(buildHostLaunchUrl({ port, gmSecret: credentials.gmSecret }));
+    await openBrowser(buildHostLaunchUrl({ port, gmSecret: credentials.gmSecret }));
 
     const result = await Promise.race([
       new Promise(resolve => server.once('exit', code => resolve({ source: 'server', code }))),
@@ -523,7 +556,7 @@ async function chooseMode() {
 
   console.log('');
   console.log(SEPARATOR);
-  console.log(' RPGmap Launcher');
+  console.log(' RPGmap Launcher · Windows');
   console.log(SEPARATOR);
   console.log('  1. Local / LAN');
   console.log('  2. Internet / Public');
