@@ -25,6 +25,25 @@ const features = Object.freeze([
     }),
   }),
   Object.freeze({
+    id: 'demo-door',
+    name: '示例木门',
+    category: 'door',
+    subtype: 'door',
+    importance: 'primary',
+    mode: 'object',
+    renderType: 'door',
+    layer: 'structures',
+    geometry: Object.freeze({ type: 'polygon', points: Object.freeze([[470, 452], [530, 452], [530, 478], [470, 478]]) }),
+    center: Object.freeze([500, 465]),
+    capabilities: Object.freeze({
+      inspectable: true,
+      interactive: true,
+      openable: true,
+      actions: Object.freeze({ inspect: true, open: true, close: true }),
+    }),
+    interaction: Object.freeze({ initialOpen: false }),
+  }),
+  Object.freeze({
     id: 'demo-wall',
     name: '示例墙体',
     category: 'wall',
@@ -45,6 +64,7 @@ export const MINIMAL_LAYER_PLAN = Object.freeze([
   { id: 'base', role: 'base', sourceLayers: ['base'] },
   { id: 'terrain', role: 'terrain', sourceLayers: ['terrain'] },
   { id: 'liquid', role: 'liquid', sourceLayers: ['liquid'] },
+  { id: 'structure', role: 'structure', sourceLayers: ['structure'] },
   { id: 'special', role: 'special', sourceLayers: ['special', 'damage', 'flood'] },
   { id: 'destructible', role: 'destructible', sourceLayers: ['destructible'] },
   { id: 'labels', role: 'labels', sourceLayers: ['labels'] },
@@ -55,6 +75,9 @@ export function createMinimalReferenceSvg() {
     <g id="layer-base" data-layer="base"><rect width="1000" height="800" fill="#eee5cf"/></g>
     <g id="layer-terrain" data-layer="terrain"><path d="M0 520 Q250 440 500 520 T1000 520 V800 H0Z" fill="#cdbb8d"/></g>
     <g id="layer-liquid" data-layer="liquid"><ellipse cx="170" cy="190" rx="110" ry="70" fill="#83aeb8"/></g>
+    <g id="layer-structure" data-layer="structure">
+      <g id="feature-demo-door" data-feature-id="demo-door" data-category="door"><rect x="470" y="452" width="60" height="26" fill="#6f4a2d" stroke="#3e2a1b" stroke-width="4"/></g>
+    </g>
     <g id="layer-special" data-layer="special"></g>
     <g id="layer-destructible" data-layer="destructible">
       <g id="feature-demo-house" data-feature-id="demo-house" data-category="building" class="destructible"><rect x="350" y="270" width="300" height="200" fill="#b88a59" stroke="#5e4631" stroke-width="8"/></g>
@@ -72,15 +95,15 @@ export function createMinimalReferencePackage() {
     id: 'rpgmap-minimal-reference',
     title: 'RPGmap Minimal Reference Map',
     name: '最小参考地图',
-    version: '1.0.0',
-    compatibleMapVersions: Object.freeze([]),
+    version: '1.1.0',
+    compatibleMapVersions: Object.freeze(['1.0.0']),
     width: WIDTH,
     height: HEIGHT,
     metersPerUnit: 1,
     viewBox: `0 0 ${WIDTH} ${HEIGHT}`,
     initialView: Object.freeze([0, 0, WIDTH, HEIGHT]),
     defaultPreferences: Object.freeze({ snapMeters: 5, gridVisible: true }),
-    layers: Object.freeze(['base', 'terrain', 'liquid', 'special', 'destructible', 'damage', 'flood', 'labels']),
+    layers: Object.freeze(['base', 'terrain', 'liquid', 'structure', 'special', 'destructible', 'damage', 'flood', 'labels']),
     layerPlan: MINIMAL_LAYER_PLAN,
     features,
     featureCount: features.length,
