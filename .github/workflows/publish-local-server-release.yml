@@ -14,7 +14,7 @@ permissions:
 jobs:
   build-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout source
@@ -38,7 +38,20 @@ jobs:
           set -euo pipefail
           while IFS= read -r -d '' file; do
             node --check "$file"
-          done < <(find src deployment/local-server -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
+          done < <(find src reference deployment/local-server -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
+
+      - name: Verify launcher consolidation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f deployment/local-server/launcher.mjs
+          test -f deployment/local-server/start-rpgmap.bat
+          test ! -e deployment/local-server/start-rpgmap-internet.bat
+          test ! -e deployment/local-server/setup-cloudflared.bat
+          test ! -e deployment/local-server/run-rpgmap-public-server.bat
+          test ! -e deployment/local-server/local-launcher.mjs
+          test ! -e deployment/local-server/internet-launcher.mjs
+          test ! -e deployment/local-server/launcher-guard.mjs
 
       - name: Build web client
         run: npm run build
@@ -71,15 +84,13 @@ jobs:
           mkdir -p "$ROOT/app" "$ROOT/map/uploads" "$ROOT/map/backups" "$ROOT/docs"
 
           cp -R dist/. "$ROOT/app/"
+          cp -R reference "$ROOT/reference"
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
           cp deployment/local-server/access-control.mjs "$ROOT/access-control.mjs"
           cp deployment/local-server/portable-storage.mjs "$ROOT/portable-storage.mjs"
-          cp deployment/local-server/internet-launcher.mjs "$ROOT/internet-launcher.mjs"
+          cp deployment/local-server/launcher.mjs "$ROOT/launcher.mjs"
           cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
           cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
-          cp deployment/local-server/start-rpgmap-internet.bat "$ROOT/start-rpgmap-internet.bat"
-          cp deployment/local-server/setup-cloudflared.bat "$ROOT/setup-cloudflared.bat"
-          cp deployment/local-server/run-rpgmap-public-server.bat "$ROOT/run-rpgmap-public-server.bat"
           cp deployment/local-server/README.md "$ROOT/README.md"
           cp deployment/local-server/INTERNET-TEST.md "$ROOT/INTERNET-MULTIPLAYER.md"
           cp deployment/local-server/map/README.txt "$ROOT/map/README.txt"
@@ -96,6 +107,9 @@ jobs:
             "commit": "${GITHUB_SHA}",
             "serverMode": "multiplayer",
             "storageMode": "portable-map-root",
+            "mapPackageApiVersion": 1,
+            "runtimeMapMode": "bundled-at-build-time",
+            "launcherMode": "single-entry-v1",
             "defaultPort": 30000
           }
           EOF
@@ -104,9 +118,10 @@ jobs:
           test -f "$ROOT/server.mjs"
           test -f "$ROOT/access-control.mjs"
           test -f "$ROOT/portable-storage.mjs"
-          test -f "$ROOT/internet-launcher.mjs"
-          test -f "$ROOT/start-rpgmap-internet.bat"
-          test -f "$ROOT/setup-cloudflared.bat"
+          test -f "$ROOT/launcher.mjs"
+          test -f "$ROOT/start-rpgmap.bat"
+          test "$(find "$ROOT" -maxdepth 1 -type f -name '*.bat' | wc -l)" -eq 1
+          test -f "$ROOT/reference/README.md"
           test -f "$ROOT/map/README.txt"
           test -d "$ROOT/map/uploads"
           test -d "$ROOT/map/backups"
@@ -132,6 +147,7 @@ jobs:
           zip -r -9 -q "$ARCHIVE" "RPGmap-v${PACKAGE_VERSION}"
           sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
 
+          ! unzip -l "$ARCHIVE" | grep -E 'start-rpgmap-internet\.bat|setup-cloudflared\.bat|run-rpgmap-public-server\.bat|local-launcher\.mjs|internet-launcher\.mjs|launcher-guard\.mjs'
           if unzip -l "$ARCHIVE" | grep -E '(^|/)(\.git|node_modules|tests?|coverage|\.cache|npm-cache|__pycache__|playwright-report|test-results)(/|$)'; then
             echo 'Forbidden development files detected in release ZIP.' >&2
             exit 1
@@ -143,38 +159,27 @@ jobs:
           cat > release/release-notes.md <<EOF
           ## RPGmap ${PACKAGE_VERSION}
 
-          RPGmap ${PACKAGE_VERSION} 加入持久 Player Identity、Actor Ownership、Combat Turn Lock，并将发布包整理为完全便携的 \`app/ + map/\` 数据布局。
+          RPGmap ${PACKAGE_VERSION} uses the V1.5 MapPackage / Feature Interaction / Elevation architecture and a simplified single-entry Runtime launcher.
+
+          ### Startup
+          - Windows exposes one entry: \`start-rpgmap.bat\`.
+          - Choose \`1. Local / LAN\` or \`2. Internet / Public\`.
+          - Both modes share \`launcher.mjs\` and \`server.mjs\`.
+          - Internet mode already provides Local + LAN + Public URLs.
+          - Port conflicts are detected before another RPGmap Server is started.
+          - Internet mode finds or installs cloudflared automatically on Windows.
 
           ### Portable Map Root
-          - 前端程序放在 \`app/\`。
-          - 所有默认可写跑团数据集中在 \`map/\`。
-          - \`map/world.json\` 保存共享 World。
-          - \`map/users.json\` 保存 Player User、默认 Actor、Ownership 与凭证哈希。
-          - \`map/uploads/\` 与 \`map/backups/\` 跟随地图工程一起保存。
-          - 默认不依赖 AppData 或其他隐藏 User Data 目录。
-          - 可从旧版 \`data/worlds/default/world.json\` / \`access.json\` 自动迁移，旧文件保留不删除。
+          - Browser client: \`app/\`.
+          - World/User data: \`map/\`.
+          - DIY MapPackage references: \`reference/\`.
+          - Runtime does not read \`reference/\` after build.
 
-          ### User / Identity
-          - Player 首次加入后由 GM 批准为当前 World 的持久 User。
-          - GM 也可预创建 User，并生成 Player Key。
-          - Quick Tunnel 域名变化后，Player 可使用 Player Key 恢复原 User。
-          - Server 只保存凭证哈希。
-
-          ### Actor Ownership
-          - Actor 权限：NONE / OBSERVER / OWNER。
-          - 每个 Player 可有一个默认角色，并可拥有多个 OWNER / OBSERVER Actor。
-          - Player 只能修改 OWNER Actor；Actor / Token 创建、删除、重新绑定由 GM 管理。
-
-          ### Combat Turn Lock
-          - 参战者、先攻、排序、Round、Turn 与战斗开始/结束均由 GM 管理。
-          - Combat active 时，Player 只能操控当前 Turn 对应且自己拥有 OWNER 的 Actor。
-          - Client 提前拦截，Server 再做最终强制校验。
-
-          ### Internet Multiplayer
-          - Windows 双击 \`start-rpgmap-internet.bat\`。
-          - 玩家首次加入：Public URL + Join Code；GM 批准后取得持久身份。
-          - 已有 User 在新的 Quick Tunnel 地址上：Public URL + Join Code + Player Key。
-          - GM Secret 仅供 GM 使用。
+          ### Multiplayer
+          - Persistent Player User / Player Key.
+          - Actor Ownership: NONE / OBSERVER / OWNER.
+          - Combat Turn Lock and server-authoritative validation.
+          - Quick Tunnel uses Public URL + Join Code; GM Secret remains GM-only.
 
           **Source commit:** \`${GITHUB_SHA}\`
           EOF
