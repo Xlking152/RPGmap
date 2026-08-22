@@ -1,0 +1,1 @@
+export { MOVEMENT_DISTANCE_STEPS, normalizeMovementDistanceStep, movementDisplayCost, polylineDistance, pointAlongPolyline, splitRouteByWaypoints, summarizeMovementSegments } from '../movement/distance.js';

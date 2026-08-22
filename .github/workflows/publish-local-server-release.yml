@@ -1,0 +1,199 @@
+name: Publish RPGmap Version Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/publish-local-server-release.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: npm
+
+      - name: Install clean dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find src reference deployment/local-server -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
+
+      - name: Verify launcher consolidation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f deployment/local-server/launcher.mjs
+          test -f deployment/local-server/start-rpgmap.bat
+          test ! -e deployment/local-server/start-rpgmap-internet.bat
+          test ! -e deployment/local-server/setup-cloudflared.bat
+          test ! -e deployment/local-server/run-rpgmap-public-server.bat
+          test ! -e deployment/local-server/local-launcher.mjs
+          test ! -e deployment/local-server/internet-launcher.mjs
+          test ! -e deployment/local-server/launcher-guard.mjs
+
+      - name: Build web client
+        run: npm run build
+
+      - name: Resolve release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          RELEASE_TAG="v${PACKAGE_VERSION}"
+          echo "PACKAGE_VERSION=${PACKAGE_VERSION}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Refuse duplicate version release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists. Increase the application version before publishing another release." >&2
+            exit 1
+          fi
+
+      - name: Assemble clean server package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE/release/RPGmap-v${PACKAGE_VERSION}"
+          rm -rf "$GITHUB_WORKSPACE/release"
+          mkdir -p "$ROOT/app" "$ROOT/map/uploads" "$ROOT/map/backups" "$ROOT/docs"
+
+          cp -R dist/. "$ROOT/app/"
+          cp -R reference "$ROOT/reference"
+          cp deployment/local-server/server.mjs "$ROOT/server.mjs"
+          cp deployment/local-server/access-control.mjs "$ROOT/access-control.mjs"
+          cp deployment/local-server/portable-storage.mjs "$ROOT/portable-storage.mjs"
+          cp deployment/local-server/launcher.mjs "$ROOT/launcher.mjs"
+          cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
+          cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
+          cp deployment/local-server/README.md "$ROOT/README.md"
+          cp deployment/local-server/INTERNET-TEST.md "$ROOT/INTERNET-MULTIPLAYER.md"
+          cp deployment/local-server/map/README.txt "$ROOT/map/README.txt"
+          cp '文档/联机使用说明.md' "$ROOT/docs/MULTIPLAYER-GUIDE.md"
+          cp '文档/未来规划.md' "$ROOT/docs/FUTURE-ROADMAP.md"
+          cp CHANGELOG.md "$ROOT/docs/CHANGELOG.md"
+          chmod +x "$ROOT/start-rpgmap.sh"
+
+          cat > "$ROOT/VERSION.json" <<EOF
+          {
+            "app": "RPGmap",
+            "version": "${PACKAGE_VERSION}",
+            "releaseTag": "${RELEASE_TAG}",
+            "commit": "${GITHUB_SHA}",
+            "serverMode": "multiplayer",
+            "storageMode": "portable-map-root",
+            "mapPackageApiVersion": 1,
+            "runtimeMapMode": "bundled-at-build-time",
+            "launcherMode": "single-entry-v1",
+            "defaultPort": 30000
+          }
+          EOF
+
+          test -f "$ROOT/app/index.html"
+          test -f "$ROOT/server.mjs"
+          test -f "$ROOT/access-control.mjs"
+          test -f "$ROOT/portable-storage.mjs"
+          test -f "$ROOT/launcher.mjs"
+          test -f "$ROOT/start-rpgmap.bat"
+          test "$(find "$ROOT" -maxdepth 1 -type f -name '*.bat' | wc -l)" -eq 1
+          test -f "$ROOT/reference/README.md"
+          test -f "$ROOT/map/README.txt"
+          test -d "$ROOT/map/uploads"
+          test -d "$ROOT/map/backups"
+          test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
+          test ! -d "$ROOT/data"
+          test ! -d "$ROOT/public"
+
+          python - <<'PY'
+          from pathlib import Path
+          import sys
+          roots = list(Path('release').glob('RPGmap-v*'))
+          root = roots[0]
+          bad = [str(p.relative_to(root)) for p in root.rglob('*') if not str(p.relative_to(root)).isascii()]
+          if bad:
+              print('Non-ASCII release paths are forbidden:', file=sys.stderr)
+              for path in bad:
+                  print('  ' + path, file=sys.stderr)
+              raise SystemExit(1)
+          PY
+
+          cd "$GITHUB_WORKSPACE/release"
+          ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
+          zip -r -9 -q "$ARCHIVE" "RPGmap-v${PACKAGE_VERSION}"
+          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+
+          ! unzip -l "$ARCHIVE" | grep -E 'start-rpgmap-internet\.bat|setup-cloudflared\.bat|run-rpgmap-public-server\.bat|local-launcher\.mjs|internet-launcher\.mjs|launcher-guard\.mjs'
+          if unzip -l "$ARCHIVE" | grep -E '(^|/)(\.git|node_modules|tests?|coverage|\.cache|npm-cache|__pycache__|playwright-report|test-results)(/|$)'; then
+            echo 'Forbidden development files detected in release ZIP.' >&2
+            exit 1
+          fi
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          cat > release/release-notes.md <<EOF
+          ## RPGmap ${PACKAGE_VERSION}
+
+          RPGmap ${PACKAGE_VERSION} uses the V1.5 MapPackage / Feature Interaction / Elevation architecture and a simplified single-entry Runtime launcher.
+
+          ### Startup
+          - Windows exposes one entry: \`start-rpgmap.bat\`.
+          - Choose \`1. Local / LAN\` or \`2. Internet / Public\`.
+          - Both modes share \`launcher.mjs\` and \`server.mjs\`.
+          - Internet mode already provides Local + LAN + Public URLs.
+          - Port conflicts are detected before another RPGmap Server is started.
+          - Internet mode finds or installs cloudflared automatically on Windows.
+
+          ### Portable Map Root
+          - Browser client: \`app/\`.
+          - World/User data: \`map/\`.
+          - DIY MapPackage references: \`reference/\`.
+          - Runtime does not read \`reference/\` after build.
+
+          ### Multiplayer
+          - Persistent Player User / Player Key.
+          - Actor Ownership: NONE / OBSERVER / OWNER.
+          - Combat Turn Lock and server-authoritative validation.
+          - Quick Tunnel uses Public URL + Join Code; GM Secret remains GM-only.
+
+          **Source commit:** \`${GITHUB_SHA}\`
+          EOF
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          ARCHIVE="release/RPGmap-v${PACKAGE_VERSION}.zip"
+          gh release create "$RELEASE_TAG" \
+            "$ARCHIVE" \
+            "$ARCHIVE.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "RPGmap ${PACKAGE_VERSION}" \
+            --notes-file release/release-notes.md

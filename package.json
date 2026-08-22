@@ -1,0 +1,24 @@
+{
+  "name": "rpgmap",
+  "version": "1.5.5",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "easystarjs": "^0.4.4",
+    "leaflet": "1.9.4",
+    "lucide": "1.30.0",
+    "polygon-clipping": "0.15.7"
+  },
+  "devDependencies": {
+    "vite": "8.2.1",
+    "vite-plugin-singlefile": "2.3.3"
+  }
+}
