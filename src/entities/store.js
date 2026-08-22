@@ -65,7 +65,17 @@ export class EntityStore {
   bindToken(actorId, characterId) {
     const existing = this.token(characterId);
     if (existing) existing.actorId = actorId;
-    else this.state.tokens.push({ id: String(characterId), characterId: String(characterId), actorId: String(actorId), size: 1, rotation: 0, hidden: false, locked: false, showName: true });
+    else this.state.tokens.push({
+      id: String(characterId),
+      characterId: String(characterId),
+      actorId: String(actorId),
+      size: 1,
+      rotation: 0,
+      elevationFt: 0,
+      hidden: false,
+      locked: false,
+      showName: true,
+    });
     return this.token(characterId);
   }
 

@@ -1,6 +1,12 @@
 import EasyStar from 'easystarjs';
 import { deriveFloodRegions } from './state.js';
 import { runtimeFeatureInteractionEffects } from '../interaction/effects.js';
+import { getFeatureState } from '../interaction/feature-state.js';
+import { featureBlocksMover } from '../elevation/model.js';
+import {
+  elevationNavigationAppState,
+  getActiveMoverContext,
+} from '../elevation/runtime-context.js';
 
 const TILE_BLOCKED = 0;
 const TILE_ROAD = 1;
@@ -67,18 +73,27 @@ function navigationCapability(feature) {
   let passageTile = null;
   if (declared.passageTile === 'road') passageTile = TILE_ROAD;
   if (declared.passageTile === 'open') passageTile = TILE_OPEN;
+  const height = Number(declared.blockingHeightFt);
   return Object.freeze({
     blocks: declared.blocks === true,
     passableWhenOpen: declared.passableWhenOpen === true,
     passableWhenDestroyed: declared.passableWhenDestroyed === true,
     damageCreatesPassage: declared.damageCreatesPassage === true,
+    blockingHeightFt: Number.isFinite(height) && height >= 0 ? height : null,
     passageTile,
     passagePolygon: Array.isArray(declared.passagePolygon) ? declared.passagePolygon : null,
   });
 }
 
-function interactionOpen(feature) {
-  return Boolean(runtimeFeatureInteractionEffects(feature).open);
+function featureRuntimeState(feature, appState) {
+  if (appState) {
+    try {
+      return getFeatureState(appState, feature);
+    } catch (_error) {
+      // Fall through to the lightweight runtime effects adapter for legacy callers.
+    }
+  }
+  return runtimeFeatureInteractionEffects(feature);
 }
 
 function restorePassage(grid, baseGrid, polygon, cellSize, passageTile) {
@@ -113,7 +128,14 @@ export function createNavigationBase(mapPackage) {
   });
 }
 
-export function createNavigationGrid(mapPackage, scene = {}, staticBase = null) {
+/**
+ * Build a mover-aware navigation grid.
+ *
+ * Existing callers may keep using the first three arguments. The Elevation
+ * Runtime Adapter supplies app state + mover context for the current Token.
+ * Tests/new callers may pass them explicitly in options.
+ */
+export function createNavigationGrid(mapPackage, scene = {}, staticBase = null, options = {}) {
   const base = staticBase || createNavigationBase(mapPackage);
   const { cellSize, columns, rows } = base;
   if (base.width !== mapPackage.width || base.height !== mapPackage.height) {
@@ -121,21 +143,29 @@ export function createNavigationGrid(mapPackage, scene = {}, staticBase = null) 
   }
   const grid = base.grid.map((row) => row.slice());
   const destroyed = new Set((scene.destroyedObjectIds || []).map(String));
+  const appState = options.appState ?? elevationNavigationAppState();
+  const moverContext = options.moverContext ?? getActiveMoverContext();
 
   for (const feature of mapPackage.features || []) {
     const navigation = navigationCapability(feature);
     if (!navigation?.blocks) continue;
-    if (navigation.passableWhenDestroyed && destroyed.has(String(feature.id))) continue;
-    if (navigation.passableWhenOpen && interactionOpen(feature)) continue;
+    const featureState = featureRuntimeState(feature, appState);
+    const isDestroyed = Boolean(featureState?.destroyed) || destroyed.has(String(feature.id));
+    if (navigation.passableWhenDestroyed && isDestroyed) continue;
+    if (navigation.passableWhenOpen && featureState?.open) continue;
+    if (!featureBlocksMover(feature, featureState, moverContext)) continue;
     rasterizePolygon(grid, featurePolygon(feature), cellSize, TILE_BLOCKED);
   }
 
   for (const feature of mapPackage.features || []) {
     const navigation = navigationCapability(feature);
     if (!navigation) continue;
+    const featureState = featureRuntimeState(feature, appState);
     const passagePolygon = navigation.passagePolygon || featurePolygon(feature);
-    const openPassage = navigation.passableWhenOpen && interactionOpen(feature);
-    const destroyedPassage = navigation.passableWhenDestroyed && destroyed.has(String(feature.id));
+    const openPassage = navigation.passableWhenOpen && Boolean(featureState?.open);
+    const destroyedPassage = navigation.passableWhenDestroyed && (
+      Boolean(featureState?.destroyed) || destroyed.has(String(feature.id))
+    );
     if (openPassage || destroyedPassage) {
       restorePassage(grid, base.grid, passagePolygon, cellSize, navigation.passageTile);
     }
@@ -164,6 +194,8 @@ export function createNavigationGrid(mapPackage, scene = {}, staticBase = null) 
     ));
   }
 
+  // V1.5 height bypass applies to Feature navigation obstacles only. Liquid,
+  // crater and flood vertical semantics remain explicit future 2.5D work.
   for (const crater of scene.craterRegions || []) {
     rasterizePolygon(grid, crater.polygon, cellSize, TILE_BLOCKED);
   }
@@ -183,6 +215,10 @@ export function createNavigationGrid(mapPackage, scene = {}, staticBase = null) 
     columns,
     rows,
     grid,
+    moverContext: Object.freeze({
+      characterId: moverContext?.characterId == null ? null : String(moverContext.characterId),
+      elevationFt: Number(moverContext?.elevationFt) || 0,
+    }),
   });
 }
 

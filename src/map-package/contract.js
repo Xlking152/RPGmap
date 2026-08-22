@@ -37,6 +37,15 @@ function asPositiveNumber(value, label) {
   return number;
 }
 
+function asOptionalNonNegativeNumber(value, label) {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) {
+    throw new TypeError(`Invalid MapPackage: ${label} must be a non-negative finite number`);
+  }
+  return number;
+}
+
 function defaultLayerRole(id) {
   if (ROLE_SET.has(id)) return id;
   if (id === 'damage' || id === 'flood' || id === 'effects') return 'special';
@@ -116,6 +125,7 @@ function normalizeNavigationCapability(feature, declared) {
     passableWhenOpen: source.passableWhenOpen === true,
     passableWhenDestroyed: source.passableWhenDestroyed === true,
     damageCreatesPassage: source.damageCreatesPassage === true,
+    blockingHeightFt: asOptionalNonNegativeNumber(source.blockingHeightFt, 'feature navigation blockingHeightFt'),
     passageTile,
     passagePolygon: normalizePassagePolygon(source.passagePolygon),
   });
@@ -224,5 +234,6 @@ export function mapPackageCapabilities(mapPackage) {
     enterableCount: features.filter((feature) => feature.capabilities?.enterable).length,
     openableCount: features.filter((feature) => feature.capabilities?.openable).length,
     navigationObstacleCount: features.filter((feature) => feature.capabilities?.navigation?.blocks).length,
+    heightAwareObstacleCount: features.filter((feature) => Number.isFinite(feature.capabilities?.navigation?.blockingHeightFt)).length,
   });
 }

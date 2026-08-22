@@ -7,6 +7,7 @@ import { createEntitySystem } from './entities/index.js';
 import { createAppShellUi } from './ui/index.js';
 import { createSelectionSystem } from './selection/index.js';
 import { createFeatureInteractionSystem } from './interaction/index.js';
+import { createElevationSystem } from './elevation/index.js';
 import { createHealthSystem } from './health/index.js';
 import { createChatSystem } from './chat/index.js';
 import { createDamageSystem } from './damage/index.js';
@@ -28,6 +29,7 @@ createRpgMapApp({
     createMeasurementSystem(),
     selectionSystem,
     createFeatureInteractionSystem(),
+    createElevationSystem(),
     createHealthSystem(),
     createChatSystem({ selection: selectionSystem }),
     createDamageSystem({ selection: selectionSystem }),

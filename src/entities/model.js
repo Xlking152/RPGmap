@@ -1,4 +1,5 @@
 import { createHealthRuntime, defaultHealthMode, normalizeHealthRuntime } from '../health/model.js';
+import { normalizeElevationFt } from '../elevation/model.js';
 const CORE_RESOURCE_DEFS = Object.freeze([
   { id: 'hp', name: '生命', kind: 'hp' },
   { id: 'stamina', name: '精力', kind: 'stamina' },
@@ -172,6 +173,7 @@ export function createTokenForActor(actorId, characterId, overrides = {}) {
     characterId: String(characterId),
     size: finite(overrides.size, 1) || 1,
     rotation: finite(overrides.rotation, 0),
+    elevationFt: normalizeElevationFt(overrides.elevationFt, 0),
     hidden: Boolean(overrides.hidden),
     locked: Boolean(overrides.locked),
     showName: overrides.showName !== false,
@@ -210,7 +212,11 @@ export function normalizeEntityState(raw) {
     };
   }) : [];
   const actorIds = new Set(actors.map(actor => String(actor.id)));
-  const tokens = Array.isArray(raw.tokens) ? raw.tokens.filter(token => token && actorIds.has(String(token.actorId))).map(clone) : [];
+  const tokens = Array.isArray(raw.tokens)
+    ? raw.tokens
+      .filter(token => token && actorIds.has(String(token.actorId)))
+      .map(token => ({ ...clone(token), elevationFt: normalizeElevationFt(token.elevationFt, 0) }))
+    : [];
   return { schemaVersion: 1, actors, tokens };
 }
 
