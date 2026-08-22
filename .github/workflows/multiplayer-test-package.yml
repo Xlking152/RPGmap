@@ -1,4 +1,4 @@
-name: Build RPGmap 1.5.2 Candidate
+name: Build RPGmap 1.5.3 Candidate
 
 on:
   workflow_dispatch:
@@ -83,6 +83,19 @@ jobs:
           ! grep -Eq 'lanzhou|Lanzhou|assets/generated' src/main.js
           grep -q 'createDefaultMapPackage' src/main.js
 
+      - name: Verify launcher consolidation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f deployment/local-server/launcher.mjs
+          test -f deployment/local-server/start-rpgmap.bat
+          test ! -e deployment/local-server/local-launcher.mjs
+          test ! -e deployment/local-server/internet-launcher.mjs
+          test ! -e deployment/local-server/launcher-guard.mjs
+          test ! -e deployment/local-server/start-rpgmap-internet.bat
+          test ! -e deployment/local-server/setup-cloudflared.bat
+          test ! -e deployment/local-server/run-rpgmap-public-server.bat
+
       - name: Build web client
         run: npm run build
 
@@ -118,14 +131,9 @@ jobs:
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
           cp deployment/local-server/access-control.mjs "$ROOT/access-control.mjs"
           cp deployment/local-server/portable-storage.mjs "$ROOT/portable-storage.mjs"
-          cp deployment/local-server/launcher-guard.mjs "$ROOT/launcher-guard.mjs"
-          cp deployment/local-server/local-launcher.mjs "$ROOT/local-launcher.mjs"
-          cp deployment/local-server/internet-launcher.mjs "$ROOT/internet-launcher.mjs"
+          cp deployment/local-server/launcher.mjs "$ROOT/launcher.mjs"
           cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
           cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
-          cp deployment/local-server/start-rpgmap-internet.bat "$ROOT/start-rpgmap-internet.bat"
-          cp deployment/local-server/setup-cloudflared.bat "$ROOT/setup-cloudflared.bat"
-          cp deployment/local-server/run-rpgmap-public-server.bat "$ROOT/run-rpgmap-public-server.bat"
           cp deployment/local-server/README.md "$ROOT/README.md"
           cp deployment/local-server/INTERNET-TEST.md "$ROOT/INTERNET-MULTIPLAYER.md"
           cp deployment/local-server/map/README.txt "$ROOT/map/README.txt"
@@ -143,6 +151,7 @@ jobs:
             "mapPackageApiVersion": 1,
             "defaultMapSource": "reference/maps/lanzhou",
             "runtimeMapMode": "bundled-at-build-time",
+            "launcherMode": "single-entry-v1",
             "defaultPort": 30000
           }
           EOF
@@ -152,8 +161,12 @@ jobs:
           test -f "$ROOT/reference/maps/lanzhou/package.js"
           test -f "$ROOT/reference/maps/minimal/package.js"
           test -f "$ROOT/server.mjs"
-          test -f "$ROOT/launcher-guard.mjs"
-          test -f "$ROOT/local-launcher.mjs"
+          test -f "$ROOT/launcher.mjs"
+          test -f "$ROOT/start-rpgmap.bat"
+          test "$(find "$ROOT" -maxdepth 1 -type f -name '*.bat' | wc -l)" -eq 1
+          test ! -e "$ROOT/start-rpgmap-internet.bat"
+          test ! -e "$ROOT/setup-cloudflared.bat"
+          test ! -e "$ROOT/run-rpgmap-public-server.bat"
           test -f "$ROOT/map/README.txt"
           test -d "$ROOT/map/uploads"
           test -d "$ROOT/map/backups"
@@ -212,8 +225,9 @@ jobs:
           unzip -l "$ARCHIVE" | grep 'reference/maps/lanzhou/package.js'
           unzip -l "$ARCHIVE" | grep 'reference/maps/minimal/package.js'
           unzip -l "$ARCHIVE" | grep 'app/index.html'
-          unzip -l "$ARCHIVE" | grep 'launcher-guard.mjs'
-          unzip -l "$ARCHIVE" | grep 'local-launcher.mjs'
+          unzip -l "$ARCHIVE" | grep 'launcher.mjs'
+          unzip -l "$ARCHIVE" | grep 'start-rpgmap.bat'
+          ! unzip -l "$ARCHIVE" | grep -E 'start-rpgmap-internet\.bat|setup-cloudflared\.bat|run-rpgmap-public-server\.bat|local-launcher\.mjs|internet-launcher\.mjs|launcher-guard\.mjs'
 
       - name: Upload RPGmap package
         uses: actions/upload-artifact@v4
@@ -242,7 +256,7 @@ jobs:
           name: RPGmap-v${{ needs.test-package-runtime.outputs.package_version }}
           path: smoke
 
-      - name: Run packaged BAT without reference sources
+      - name: Run single packaged BAT in Local mode
         shell: powershell
         env:
           PACKAGE_VERSION: ${{ needs.test-package-runtime.outputs.package_version }}
@@ -254,11 +268,13 @@ jobs:
           $root = (Resolve-Path $packageDir).Path
           $version = Get-Content (Join-Path $root 'VERSION.json') -Raw | ConvertFrom-Json
           if ($version.version -ne $env:PACKAGE_VERSION) { throw 'VERSION.json does not match workflow package version' }
+          $bats = @(Get-ChildItem -Path $root -Filter '*.bat' -File)
+          if ($bats.Count -ne 1 -or $bats[0].Name -ne 'start-rpgmap.bat') { throw 'Package must expose exactly one Windows BAT: start-rpgmap.bat' }
           $reference = Join-Path $root 'reference'
           if (Test-Path $reference) { Remove-Item $reference -Recurse -Force }
           if (Test-Path $reference) { throw 'reference directory still exists before Windows runtime smoke' }
 
-          $bootstrap = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d','/c','call start-rpgmap.bat') -WorkingDirectory $root -PassThru
+          $bootstrap = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d','/c','call start-rpgmap.bat local') -WorkingDirectory $root -PassThru
           $ready = $false
           for ($i = 0; $i -lt 60; $i++) {
             try {
@@ -276,12 +292,9 @@ jobs:
 
           if (-not $ready) {
             if ($bootstrap.HasExited) { Write-Host "BAT exit code: $($bootstrap.ExitCode)" }
-            throw 'Packaged start-rpgmap.bat did not serve the bundled Lanzhou client in Local/LAN mode after reference/ was removed.'
+            throw 'Single packaged start-rpgmap.bat did not serve the bundled client in Local/LAN mode.'
           }
 
-          # Runtime success was already established above. Process-tree cleanup is
-          # best-effort because Windows may report a child as unkillable after it
-          # has already exited between task enumeration and termination.
           $previousPreference = $ErrorActionPreference
           $ErrorActionPreference = 'SilentlyContinue'
           & taskkill.exe /PID $bootstrap.Id /T /F *> $null
