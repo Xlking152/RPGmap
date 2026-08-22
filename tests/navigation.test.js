@@ -9,10 +9,11 @@ import {
   nearestWalkablePoint,
 } from '../src/engine/navigation.js';
 import { createInitialState, deriveSceneState } from '../src/engine/state.js';
-import { createDefaultMapPackage } from '../src/map-package/default-map.js';
 import { prepareMapPackage } from '../src/map-package/contract.js';
 import { getFeatureInteractionState, setFeatureOpenState } from '../src/interaction/model.js';
 import { recordFeatureInteractionEffects } from '../src/interaction/effects.js';
+import { applyLanzhouCapabilities } from '../reference/maps/lanzhou/capabilities.js';
+import { createLanzhouMapPackage } from '../reference/maps/lanzhou/package.js';
 import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
 
 test('A* prefers road tiles, avoids blocked cells and snaps within 30 metres', async () => {
@@ -98,7 +99,11 @@ test('Minimal Reference door open/close state is projected into navigation', () 
 });
 
 test('Lanzhou navigation closes gates by default, opens them by Interaction state and preserves wall breaches', () => {
-  const lanzhouMapPackage = createDefaultMapPackage();
+  const source = createLanzhouMapPackage();
+  const lanzhouMapPackage = prepareMapPackage({
+    ...source,
+    features: applyLanzhouCapabilities(source.features, source.navigation),
+  }, { source: 'test:lanzhou-no-art' });
   const staticBase = createNavigationBase(lanzhouMapPackage);
   const initialState = createInitialState(lanzhouMapPackage);
   const northGate = lanzhouMapPackage.features.find((feature) => feature.id === 'gate-north');
