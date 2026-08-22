@@ -71,19 +71,24 @@ jobs:
           test ! -d src/assets/generated
           ! grep -Eq 'lanzhou|Lanzhou|assets/generated' src/main.js
           grep -q 'createDefaultMapPackage' src/main.js
+          grep -q 'createMemoryStorage' src/main.js
+          grep -q '/api/health' src/main.js
 
-      - name: Verify launcher consolidation
+      - name: Verify Windows launcher consolidation
         shell: bash
         run: |
           set -euo pipefail
           test -f deployment/local-server/launcher.mjs
           test -f deployment/local-server/start-rpgmap.bat
+          test ! -e deployment/local-server/start-rpgmap.sh
           test ! -e deployment/local-server/local-launcher.mjs
           test ! -e deployment/local-server/internet-launcher.mjs
           test ! -e deployment/local-server/launcher-guard.mjs
           test ! -e deployment/local-server/start-rpgmap-internet.bat
           test ! -e deployment/local-server/setup-cloudflared.bat
           test ! -e deployment/local-server/run-rpgmap-public-server.bat
+          grep -q 'cmd.exe' deployment/local-server/launcher.mjs
+          grep -q 'start ""' deployment/local-server/launcher.mjs
 
       - name: Build web client
         run: npm run build
@@ -96,6 +101,7 @@ jobs:
           test -d dist/assets
           test "$(wc -c < dist/index.html)" -lt 100000
           grep -R -q 'northern-song-lanzhou-1104' dist/assets
+          grep -R -q '正在检查 Windows RPGmap Server' dist/assets
           find dist/assets -type f | grep -Eq '\.(js|css|webp)$'
 
       - name: Resolve package metadata
@@ -109,7 +115,7 @@ jobs:
           echo "SOURCE_COMMIT=${SOURCE_COMMIT}" >> "$GITHUB_ENV"
           echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Assemble RPGmap package
+      - name: Assemble Windows RPGmap package
         shell: bash
         run: |
           set -euo pipefail
@@ -124,13 +130,11 @@ jobs:
           cp deployment/local-server/portable-storage.mjs "$ROOT/portable-storage.mjs"
           cp deployment/local-server/launcher.mjs "$ROOT/launcher.mjs"
           cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
-          cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
           cp deployment/local-server/README.md "$ROOT/README.md"
           cp deployment/local-server/INTERNET-TEST.md "$ROOT/INTERNET-MULTIPLAYER.md"
           cp deployment/local-server/map/README.txt "$ROOT/map/README.txt"
           cp '文档/联机使用说明.md' "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           cp CHANGELOG.md "$ROOT/docs/CHANGELOG.md"
-          chmod +x "$ROOT/start-rpgmap.sh"
 
           cat > "$ROOT/VERSION.json" <<EOF
           {
@@ -138,11 +142,12 @@ jobs:
             "version": "${PACKAGE_VERSION}",
             "commit": "${SOURCE_COMMIT}",
             "serverMode": "multiplayer",
-            "storageMode": "portable-map-root-v1.4.1-compatible",
+            "platform": "windows",
+            "storageMode": "portable-map-root-server-authoritative",
             "mapPackageApiVersion": 1,
             "defaultMapSource": "reference/maps/lanzhou",
             "runtimeMapMode": "bundled-at-build-time-split-assets",
-            "launcherMode": "single-entry-host-bootstrap-v3",
+            "launcherMode": "windows-cmd-start-host-bootstrap-v4",
             "defaultPort": 30000
           }
           EOF
@@ -156,6 +161,7 @@ jobs:
           test -f "$ROOT/launcher.mjs"
           test -f "$ROOT/start-rpgmap.bat"
           test "$(find "$ROOT" -maxdepth 1 -type f -name '*.bat' | wc -l)" -eq 1
+          test "$(find "$ROOT" -maxdepth 1 -type f -name '*.sh' | wc -l)" -eq 0
           test ! -e "$ROOT/start-rpgmap-internet.bat"
           test ! -e "$ROOT/setup-cloudflared.bat"
           test ! -e "$ROOT/run-rpgmap-public-server.bat"
@@ -166,6 +172,7 @@ jobs:
           test ! -d "$ROOT/maps"
           test "$(node -p "require('$ROOT/VERSION.json').commit")" = "$SOURCE_COMMIT"
           test "$(node -p "require('$ROOT/VERSION.json').version")" = "$PACKAGE_VERSION"
+          test "$(node -p "require('$ROOT/VERSION.json').platform")" = "windows"
 
       - name: Runtime smoke without reference sources
         shell: bash
@@ -205,12 +212,13 @@ jobs:
           test -n "$ASSET_PATH"
           curl -fsS "http://127.0.0.1:${PORT}/${ASSET_PATH}" > "$GITHUB_WORKSPACE/runtime-app.js"
           grep -q 'northern-song-lanzhou-1104' "$GITHUB_WORKSPACE/runtime-app.js"
+          grep -q '/api/health' "$GITHUB_WORKSPACE/runtime-app.js"
           node -e "const h=require('fs').readFileSync(process.env.GITHUB_WORKSPACE+'/health.json','utf8'); const j=JSON.parse(h); if(j.status!=='ok') process.exit(1)"
           cleanup
           trap - EXIT
           rm -rf "$SMOKE"
 
-      - name: Archive and verify package
+      - name: Archive and verify Windows package
         shell: bash
         run: |
           set -euo pipefail
@@ -224,9 +232,9 @@ jobs:
           unzip -l "$ARCHIVE" | grep 'app/assets/'
           unzip -l "$ARCHIVE" | grep 'launcher.mjs'
           unzip -l "$ARCHIVE" | grep 'start-rpgmap.bat'
-          ! unzip -l "$ARCHIVE" | grep -E 'start-rpgmap-internet\.bat|setup-cloudflared\.bat|run-rpgmap-public-server\.bat|local-launcher\.mjs|internet-launcher\.mjs|launcher-guard\.mjs'
+          ! unzip -l "$ARCHIVE" | grep -E '\.sh$|start-rpgmap-internet\.bat|setup-cloudflared\.bat|run-rpgmap-public-server\.bat|local-launcher\.mjs|internet-launcher\.mjs|launcher-guard\.mjs'
 
-      - name: Upload RPGmap package
+      - name: Upload Windows RPGmap package
         uses: actions/upload-artifact@v4
         with:
           name: RPGmap-v${{ env.PACKAGE_VERSION }}
@@ -239,7 +247,7 @@ jobs:
   windows-bat-smoke:
     needs: test-package-runtime
     runs-on: windows-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
 
     steps:
       - name: Setup Node.js
@@ -253,7 +261,7 @@ jobs:
           name: RPGmap-v${{ needs.test-package-runtime.outputs.package_version }}
           path: smoke
 
-      - name: Run single packaged BAT in Local mode
+      - name: Run packaged BAT and render client in Edge
         shell: powershell
         env:
           PACKAGE_VERSION: ${{ needs.test-package-runtime.outputs.package_version }}
@@ -265,15 +273,21 @@ jobs:
           $root = (Resolve-Path $packageDir).Path
           $version = Get-Content (Join-Path $root 'VERSION.json') -Raw | ConvertFrom-Json
           if ($version.version -ne $env:PACKAGE_VERSION) { throw 'VERSION.json does not match workflow package version' }
+          if ($version.platform -ne 'windows') { throw 'Candidate package is not marked Windows-only' }
           $bats = @(Get-ChildItem -Path $root -Filter '*.bat' -File)
           if ($bats.Count -ne 1 -or $bats[0].Name -ne 'start-rpgmap.bat') { throw 'Package must expose exactly one Windows BAT: start-rpgmap.bat' }
+          if (@(Get-ChildItem -Path $root -Filter '*.sh' -File).Count -ne 0) { throw 'Windows package must not contain shell launchers' }
+
           $reference = Join-Path $root 'reference'
           if (Test-Path $reference) { Remove-Item $reference -Recurse -Force }
           if (Test-Path $reference) { throw 'reference directory still exists before Windows runtime smoke' }
 
-          $bootstrap = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d','/c','call start-rpgmap.bat local') -WorkingDirectory $root -PassThru
+          $launcherOut = Join-Path $env:RUNNER_TEMP 'rpgmap-launcher.out.log'
+          $launcherErr = Join-Path $env:RUNNER_TEMP 'rpgmap-launcher.err.log'
+          $env:RPGMAP_NO_BROWSER = '1'
+          $bootstrap = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d','/c','call start-rpgmap.bat local') -WorkingDirectory $root -RedirectStandardOutput $launcherOut -RedirectStandardError $launcherErr -PassThru
           $ready = $false
-          for ($i = 0; $i -lt 60; $i++) {
+          for ($i = 0; $i -lt 80; $i++) {
             try {
               $health = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:30000/api/health' -TimeoutSec 1
               $healthJson = $health.Content | ConvertFrom-Json
@@ -288,8 +302,50 @@ jobs:
           }
 
           if (-not $ready) {
+            if (Test-Path $launcherOut) { Get-Content $launcherOut }
+            if (Test-Path $launcherErr) { Get-Content $launcherErr }
             if ($bootstrap.HasExited) { Write-Host "BAT exit code: $($bootstrap.ExitCode)" }
-            throw 'Single packaged start-rpgmap.bat did not serve the split bundled client in Local/LAN mode with a room code.'
+            throw 'Single packaged start-rpgmap.bat did not serve the client in Local/LAN mode.'
+          }
+
+          $pf86 = ${env:ProgramFiles(x86)}
+          $edgeCandidates = @(
+            $(if ($pf86) { Join-Path $pf86 'Microsoft\Edge\Application\msedge.exe' }),
+            $(if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe' })
+          ) | Where-Object { $_ -and (Test-Path $_) }
+          $edge = $edgeCandidates | Select-Object -First 1
+          if (-not $edge) { throw 'Microsoft Edge was not found on the Windows runner' }
+
+          $edgeProfile = Join-Path $env:RUNNER_TEMP 'rpgmap-edge-profile'
+          $domFile = Join-Path $env:RUNNER_TEMP 'rpgmap-dom.html'
+          $edgeErr = Join-Path $env:RUNNER_TEMP 'rpgmap-edge.err.log'
+          Remove-Item $edgeProfile -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $domFile,$edgeErr -Force -ErrorAction SilentlyContinue
+          $edgeArgs = @(
+            '--headless=new',
+            '--disable-gpu',
+            '--no-first-run',
+            '--no-default-browser-check',
+            "--user-data-dir=$edgeProfile",
+            '--virtual-time-budget=4000',
+            '--dump-dom',
+            'http://127.0.0.1:30000/'
+          )
+          $edgeProcess = Start-Process -FilePath $edge -ArgumentList $edgeArgs -RedirectStandardOutput $domFile -RedirectStandardError $edgeErr -PassThru
+          if (-not $edgeProcess.WaitForExit(20000)) {
+            & taskkill.exe /PID $edgeProcess.Id /T /F *> $null
+            if (Test-Path $edgeErr) { Get-Content $edgeErr }
+            throw 'Edge did not finish rendering RPGmap within 20 seconds'
+          }
+          $dom = Get-Content $domFile -Raw
+          if ($dom -notmatch 'class="app-shell"') {
+            if (Test-Path $edgeErr) { Get-Content $edgeErr }
+            Write-Host $dom
+            throw 'Edge loaded the HTTP page but RPGmap never completed browser initialization'
+          }
+          if ($dom -match '启动失败：') {
+            Write-Host $dom
+            throw 'RPGmap browser boot screen reported a startup failure'
           }
 
           $previousPreference = $ErrorActionPreference
