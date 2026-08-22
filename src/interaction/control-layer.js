@@ -13,13 +13,79 @@ function installStyles(documentNode) {
   style.id = STYLE_ID;
   style.textContent = `
     .feature-control-layer { position:absolute; inset:0; z-index:650; pointer-events:none; overflow:hidden; }
-    .feature-map-control { position:absolute; display:grid; place-items:center; width:28px; height:28px; padding:0; border:2px solid rgba(33,45,47,.9); border-radius:7px; background:rgba(246,244,232,.95); box-shadow:0 2px 7px rgba(0,0,0,.28); color:#263436; font:800 15px/1 system-ui,sans-serif; cursor:pointer; pointer-events:auto; user-select:none; transform:translate(-50%,-50%); }
-    .feature-map-control:hover { transform:translate(-50%,-50%) scale(1.08); }
-    .feature-map-control[data-control-state="open"] { background:rgba(224,243,231,.96); border-color:#397858; }
-    .feature-map-control[data-control-state="closed"] { background:rgba(249,236,220,.97); border-color:#8b5a32; }
-    .feature-map-control[data-control-permission="denied"] { opacity:.62; cursor:not-allowed; }
+    .feature-map-control {
+      position:absolute;
+      display:grid;
+      place-items:center;
+      padding:0;
+      border:0;
+      border-radius:5px;
+      background:transparent;
+      box-shadow:none;
+      color:rgba(72,58,42,.9);
+      cursor:pointer;
+      pointer-events:auto;
+      user-select:none;
+      opacity:.78;
+      transform:translate(-50%,-50%);
+      transition:opacity .12s ease, background .12s ease, transform .12s ease;
+    }
+    .feature-map-control:hover,
+    .feature-map-control:focus-visible {
+      opacity:1;
+      background:rgba(248,246,236,.76);
+      outline:1px solid rgba(38,49,50,.28);
+      transform:translate(-50%,-50%) scale(1.08);
+    }
+    .feature-map-control[data-control-state="open"] { color:rgba(48,111,78,.94); }
+    .feature-map-control[data-control-state="closed"] { color:rgba(112,76,43,.94); }
+    .feature-map-control[data-control-permission="denied"] { opacity:.42; cursor:not-allowed; }
     .feature-map-control[hidden] { display:none !important; }
-    .feature-map-control .feature-control-glyph { pointer-events:none; }
+
+    .feature-map-control .feature-control-glyph {
+      position:relative;
+      display:block;
+      width:12px;
+      height:15px;
+      box-sizing:border-box;
+      border:1.7px solid currentColor;
+      border-bottom-width:2px;
+      border-radius:1px 1px 0 0;
+      pointer-events:none;
+      filter:drop-shadow(0 1px 1px rgba(0,0,0,.16));
+    }
+    .feature-map-control .feature-control-glyph::before {
+      content:'';
+      position:absolute;
+      left:2px;
+      top:2px;
+      width:6px;
+      height:10px;
+      box-sizing:border-box;
+      border:1.4px solid currentColor;
+      background:rgba(248,246,236,.38);
+      transform-origin:left center;
+      transition:transform .14s ease, width .14s ease;
+    }
+    .feature-map-control .feature-control-glyph::after {
+      content:'';
+      position:absolute;
+      left:7px;
+      top:7px;
+      width:1.7px;
+      height:1.7px;
+      border-radius:50%;
+      background:currentColor;
+      transition:left .14s ease, transform .14s ease;
+    }
+    .feature-map-control[data-control-state="open"] .feature-control-glyph::before {
+      width:8px;
+      transform:translateX(1px) skewY(-16deg) scaleX(.48);
+    }
+    .feature-map-control[data-control-state="open"] .feature-control-glyph::after {
+      left:5px;
+      transform:translateX(-1px);
+    }
   `;
   documentNode.head?.append(style);
 }
@@ -91,7 +157,7 @@ export function createFeatureControlLayer() {
           syncControls();
         });
         layer.append(button);
-        controls.set(String(feature.id), { feature, descriptor, button, glyph });
+        controls.set(String(feature.id), { feature, descriptor, button });
       }
 
       const positionControls = () => {
@@ -106,7 +172,7 @@ export function createFeatureControlLayer() {
 
       function syncControls() {
         const allowed = canOperateFeatureControl(api);
-        for (const { feature, button, glyph } of controls.values()) {
+        for (const { feature, button } of controls.values()) {
           const state = api.interaction.stateForFeature(feature.id);
           const action = featureControlAction(state);
           button.hidden = Boolean(state?.destroyed);
@@ -117,7 +183,6 @@ export function createFeatureControlLayer() {
           button.title = allowed
             ? featureControlTitle(feature, state)
             : `${featureControlTitle(feature, state)} · Player 暂无权限`;
-          glyph.textContent = state?.open ? '◇' : '▮';
         }
         positionControls();
       }
