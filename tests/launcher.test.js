@@ -32,10 +32,20 @@ test('launcher normalizes the two startup modes', () => {
   assert.equal(normalizeLaunchMode('other'), null);
 });
 
-test('Windows browser launch has multiple fallbacks', () => {
-  const candidates = browserLaunchCandidates('http://127.0.0.1:30000/#rpgmap-host=1', 'win32');
-  assert.deepEqual(candidates.map(item => item.command), ['explorer.exe', 'rundll32.exe', 'cmd.exe']);
-  assert.equal(candidates[0].args[0], 'http://127.0.0.1:30000/#rpgmap-host=1');
+test('Windows browser launch restores the proven cmd start path before fallbacks', () => {
+  const url = 'http://127.0.0.1:30000/#rpgmap-host=1&gmSecret=A1B2';
+  const candidates = browserLaunchCandidates(url, 'win32', {
+    'ProgramFiles(x86)': 'C:\\Program Files (x86)',
+    ProgramFiles: 'C:\\Program Files',
+    LOCALAPPDATA: 'C:\\Users\\Tester\\AppData\\Local',
+  });
+  assert.equal(candidates[0].command, 'cmd.exe');
+  assert.equal(candidates[0].waitForExit, true);
+  assert.match(candidates[0].args.at(-1), /^start "" "/);
+  assert.match(candidates[0].args.at(-1), /gmSecret=A1B2/);
+  assert.ok(candidates.some(item => /msedge\.exe$/i.test(item.command)));
+  assert.equal(candidates.at(-1).command, 'rundll32.exe');
+  assert.deepEqual(browserLaunchCandidates(url, 'linux'), []);
 });
 
 test('Quick Tunnel URL parser extracts the public URL only after it appears', () => {
