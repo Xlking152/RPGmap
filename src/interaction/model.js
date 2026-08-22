@@ -9,7 +9,6 @@ import {
 } from './feature-state.js';
 
 export { FEATURE_STATE_KEY, LEGACY_FEATURE_INTERACTION_STATE_KEY, setFeatureCustomState };
-export const FEATURE_INTERACTION_STATE_KEY = LEGACY_FEATURE_INTERACTION_STATE_KEY;
 
 export const FEATURE_ACTION_META = Object.freeze({
   inspect: Object.freeze({ id: 'inspect', label: '检查', kind: 'read' }),
