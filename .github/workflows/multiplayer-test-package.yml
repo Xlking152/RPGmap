@@ -201,7 +201,7 @@ jobs:
 
           curl -fsS "http://127.0.0.1:${PORT}/" > "$GITHUB_WORKSPACE/runtime-index.html"
           grep -Eq 'assets/.+\.js' "$GITHUB_WORKSPACE/runtime-index.html"
-          ASSET_PATH=$(grep -oE 'assets/[^"'"']+\.js' "$GITHUB_WORKSPACE/runtime-index.html" | head -n 1)
+          ASSET_PATH=$(grep -oE 'assets/[^"]+\.js' "$GITHUB_WORKSPACE/runtime-index.html" | head -n 1)
           test -n "$ASSET_PATH"
           curl -fsS "http://127.0.0.1:${PORT}/${ASSET_PATH}" > "$GITHUB_WORKSPACE/runtime-app.js"
           grep -q 'northern-song-lanzhou-1104' "$GITHUB_WORKSPACE/runtime-app.js"
