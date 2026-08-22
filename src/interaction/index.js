@@ -19,5 +19,15 @@ export {
   runtimeFeatureInteractionEffects,
 } from './effects.js';
 
+export {
+  characterFeatureId,
+  charactersInsideFeature,
+  featureCategoryLabel,
+  featureDetailRows,
+  featureEntranceText,
+  featureLocationLabel,
+  featureSubtypeLabel,
+} from './ui-model.js';
+
 export { createFeatureOperations } from './operations.js';
 export { createFeatureInteractionSystem } from './system.js';

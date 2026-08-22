@@ -49,7 +49,7 @@ const features = Object.freeze([
         passageTile: 'open',
       }),
     }),
-    interaction: Object.freeze({ initialOpen: false }),
+    interaction: Object.freeze({ initialState: Object.freeze({ open: false }) }),
   }),
   Object.freeze({
     id: 'demo-wall',
@@ -84,6 +84,24 @@ export const MINIMAL_LAYER_PLAN = Object.freeze([
   { id: 'destructible', role: 'destructible', sourceLayers: ['destructible'] },
   { id: 'labels', role: 'labels', sourceLayers: ['labels'] },
 ]);
+
+export const MINIMAL_FEATURE_TAXONOMY = Object.freeze({
+  categories: Object.freeze({
+    building: '建筑',
+    door: '门',
+    wall: '墙体',
+  }),
+  subtypes: Object.freeze({
+    residence: '木屋',
+    door: '门',
+    wall: '墙体',
+  }),
+  detailFields: Object.freeze({
+    use: '用途',
+    structure: '构造',
+    description: '说明',
+  }),
+});
 
 export function createMinimalReferenceSvg() {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}">
@@ -120,6 +138,7 @@ export function createMinimalReferencePackage() {
     defaultPreferences: Object.freeze({ snapMeters: 5, gridVisible: true }),
     layers: Object.freeze(['base', 'terrain', 'liquid', 'structure', 'special', 'destructible', 'damage', 'flood', 'labels']),
     layerPlan: MINIMAL_LAYER_PLAN,
+    featureTaxonomy: MINIMAL_FEATURE_TAXONOMY,
     features,
     featureCount: features.length,
     destructibleCategories: Object.freeze(['building', 'wall']),

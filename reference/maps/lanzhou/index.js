@@ -1,6 +1,10 @@
 import { createLanzhouGeneratedArtAssets } from './assets.js';
 import { applyLanzhouCapabilities } from './capabilities.js';
-import { LANZHOU_LAYER_PLAN, LANZHOU_REFERENCE_META } from './manifest.js';
+import {
+  LANZHOU_FEATURE_TAXONOMY,
+  LANZHOU_LAYER_PLAN,
+  LANZHOU_REFERENCE_META,
+} from './manifest.js';
 import { createLanzhouMapPackage } from './package.js';
 import { cleanMapPackagePresentation } from './presentation.js';
 
@@ -10,6 +14,7 @@ export function createLanzhouReferencePackage({ generatedArt = true } = {}) {
     ...source,
     features: applyLanzhouCapabilities(source.features, source.navigation),
     layerPlan: LANZHOU_LAYER_PLAN,
+    featureTaxonomy: LANZHOU_FEATURE_TAXONOMY,
     reference: Object.freeze({
       ...LANZHOU_REFERENCE_META,
       note: 'Map-specific data/rendering only; interaction, destruction and Scene state belong to RPGmap Core.',

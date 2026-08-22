@@ -80,6 +80,26 @@ function normalizeLayerPlan(mapPackage) {
   return Object.freeze(plan);
 }
 
+function normalizeStringMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return Object.freeze({});
+  return Object.freeze(Object.fromEntries(
+    Object.entries(value)
+      .map(([key, label]) => [String(key), String(label ?? '').trim()])
+      .filter(([, label]) => Boolean(label)),
+  ));
+}
+
+function normalizeFeatureTaxonomy(mapPackage) {
+  const source = mapPackage.featureTaxonomy && typeof mapPackage.featureTaxonomy === 'object'
+    ? mapPackage.featureTaxonomy
+    : {};
+  return Object.freeze({
+    categories: normalizeStringMap(source.categories),
+    subtypes: normalizeStringMap(source.subtypes),
+    detailFields: normalizeStringMap(source.detailFields),
+  });
+}
+
 function normalizePassagePolygon(value) {
   if (!Array.isArray(value) || value.length < 3) return null;
   return Object.freeze(value.map((point) => Object.freeze([Number(point[0]), Number(point[1])])));
@@ -172,6 +192,7 @@ export function prepareMapPackage(rawPackage, { source = 'unknown' } = {}) {
   if (new Set(featureIds).size !== featureIds.length) throw new TypeError('Invalid MapPackage: feature IDs must be unique');
 
   const layerPlan = normalizeLayerPlan(rawPackage);
+  const featureTaxonomy = normalizeFeatureTaxonomy(rawPackage);
   const svg = typeof rawPackage.svg === 'string' ? rawPackage.svg : render();
   if (!String(svg).includes('<svg')) throw new TypeError('Invalid MapPackage: renderer did not return SVG markup');
 
@@ -186,6 +207,7 @@ export function prepareMapPackage(rawPackage, { source = 'unknown' } = {}) {
     source: String(source),
     layerPlan,
     logicalLayers: Object.freeze(layerPlan.map((entry) => entry.id)),
+    featureTaxonomy,
     features,
     featureCount: features.length,
     svg,
