@@ -4,12 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#3c2c20" />
-    <meta name="application-version" content="1.2.0" />
+    <meta name="application-version" content="1.5.4" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%233c2c20'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-size='34' font-family='Arial,sans-serif' font-weight='700' fill='%23f4e5c2'%3ER%3C/text%3E%3C/svg%3E" />
     <title>RPGmap · TRPG / VTT Map Tool</title>
+    <style>
+      .rpgmap-boot { min-height:100vh; display:grid; place-items:center; margin:0; background:#f2eee6; color:#3c2c20; font:600 15px/1.6 "Microsoft YaHei UI","Segoe UI",sans-serif; }
+      .rpgmap-boot-card { width:min(520px,calc(100vw - 48px)); padding:24px 26px; border:1px solid #cfc5b7; border-radius:12px; background:#fffdf8; box-shadow:0 10px 30px rgba(60,44,32,.12); }
+      .rpgmap-boot-title { margin:0 0 8px; font-size:20px; }
+      .rpgmap-boot-status { margin:0; color:#6b6258; }
+      .rpgmap-boot-status[data-error="true"] { color:#a12f2a; white-space:pre-wrap; }
+    </style>
   </head>
-  <body>
-    <div id="app" aria-live="polite"></div>
+  <body style="margin:0">
+    <div id="app" aria-live="polite">
+      <div class="rpgmap-boot">
+        <div class="rpgmap-boot-card">
+          <h1 class="rpgmap-boot-title">RPGmap V1.5.4</h1>
+          <p class="rpgmap-boot-status" data-rpgmap-boot-status>正在启动…</p>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
