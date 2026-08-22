@@ -11,6 +11,16 @@ export const MAP_LAYER_ROLES = Object.freeze([
   'labels',
 ]);
 
+export const FEATURE_INTERACTION_ACTIONS = Object.freeze([
+  'inspect',
+  'enter',
+  'exit',
+  'damage',
+  'restore',
+  'open',
+  'close',
+]);
+
 const ROLE_SET = new Set(MAP_LAYER_ROLES);
 
 function asNonEmptyString(value, label) {
@@ -77,19 +87,42 @@ function normalizeFeature(feature, index, destructibleCategories) {
   const id = asNonEmptyString(feature.id ?? feature.featureId, `features[${index}].id`);
   const category = String(feature.category ?? 'generic');
   const declared = feature.capabilities && typeof feature.capabilities === 'object' ? feature.capabilities : {};
+  const declaredActions = declared.actions && typeof declared.actions === 'object' ? declared.actions : {};
+
   const destructible = declared.destructible
     ?? feature.destructible?.enabled
     ?? feature.destructible
     ?? destructibleCategories.has(category);
   const enterable = declared.enterable ?? feature.enterable === true;
   const inspectable = declared.inspectable ?? feature.inspectable !== false;
-  const interactive = declared.interactive ?? Boolean(inspectable || enterable || destructible);
+  const openable = declared.openable
+    ?? feature.openable
+    ?? feature.interactions?.openable
+    ?? declaredActions.open
+    ?? declaredActions.close
+    ?? false;
+
+  const actions = Object.freeze({
+    inspect: Boolean(declaredActions.inspect ?? inspectable),
+    enter: Boolean(declaredActions.enter ?? enterable),
+    exit: Boolean(declaredActions.exit ?? enterable),
+    damage: Boolean(declaredActions.damage ?? destructible),
+    restore: Boolean(declaredActions.restore ?? destructible),
+    open: Boolean(declaredActions.open ?? openable),
+    close: Boolean(declaredActions.close ?? openable),
+  });
+  const interactive = declared.interactive
+    ?? feature.interactive
+    ?? Object.values(actions).some(Boolean);
+
   const capabilities = Object.freeze({
     ...declared,
     inspectable: Boolean(inspectable),
     interactive: Boolean(interactive),
     enterable: Boolean(enterable),
     destructible: Boolean(destructible),
+    openable: Boolean(openable),
+    actions,
   });
   return Object.freeze({ ...feature, id, category, capabilities });
 }
@@ -144,5 +177,6 @@ export function mapPackageCapabilities(mapPackage) {
     interactiveCount: features.filter((feature) => feature.capabilities?.interactive).length,
     destructibleCount: features.filter((feature) => feature.capabilities?.destructible).length,
     enterableCount: features.filter((feature) => feature.capabilities?.enterable).length,
+    openableCount: features.filter((feature) => feature.capabilities?.openable).length,
   });
 }
