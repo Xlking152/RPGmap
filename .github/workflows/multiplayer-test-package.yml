@@ -1,4 +1,4 @@
-name: Build RPGmap 1.5.0 MapPackage Candidate
+name: Build RPGmap 1.5.1 Candidate
 
 on:
   workflow_dispatch:
@@ -40,6 +40,8 @@ jobs:
   test-package-runtime:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      package_version: ${{ steps.package_metadata.outputs.package_version }}
 
     steps:
       - name: Checkout source
@@ -93,6 +95,7 @@ jobs:
           test "$(wc -c < dist/index.html)" -gt 500000
 
       - name: Resolve package metadata
+        id: package_metadata
         shell: bash
         run: |
           set -euo pipefail
@@ -100,6 +103,7 @@ jobs:
           SOURCE_COMMIT="${{ github.event.pull_request.head.sha || github.sha }}"
           echo "PACKAGE_VERSION=${PACKAGE_VERSION}" >> "$GITHUB_ENV"
           echo "SOURCE_COMMIT=${SOURCE_COMMIT}" >> "$GITHUB_ENV"
+          echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Assemble RPGmap package
         shell: bash
@@ -152,6 +156,7 @@ jobs:
           test ! -d "$ROOT/data"
           test ! -d "$ROOT/maps"
           test "$(node -p "require('$ROOT/VERSION.json').commit")" = "$SOURCE_COMMIT"
+          test "$(node -p "require('$ROOT/VERSION.json').version")" = "$PACKAGE_VERSION"
 
       - name: Runtime smoke without reference sources
         shell: bash
@@ -228,15 +233,21 @@ jobs:
       - name: Download packaged artifact
         uses: actions/download-artifact@v4
         with:
-          name: RPGmap-v1.5.0
+          name: RPGmap-v${{ needs.test-package-runtime.outputs.package_version }}
           path: smoke
 
       - name: Run packaged BAT without reference sources
         shell: powershell
+        env:
+          PACKAGE_VERSION: ${{ needs.test-package-runtime.outputs.package_version }}
         run: |
           $ErrorActionPreference = 'Stop'
-          Expand-Archive -Path 'smoke/RPGmap-v1.5.0.zip' -DestinationPath 'smoke/package' -Force
-          $root = (Resolve-Path 'smoke/package/RPGmap-v1.5.0').Path
+          $archive = "smoke/RPGmap-v$env:PACKAGE_VERSION.zip"
+          $packageDir = "smoke/package/RPGmap-v$env:PACKAGE_VERSION"
+          Expand-Archive -Path $archive -DestinationPath 'smoke/package' -Force
+          $root = (Resolve-Path $packageDir).Path
+          $version = Get-Content (Join-Path $root 'VERSION.json') -Raw | ConvertFrom-Json
+          if ($version.version -ne $env:PACKAGE_VERSION) { throw 'VERSION.json does not match workflow package version' }
           $reference = Join-Path $root 'reference'
           if (Test-Path $reference) { Remove-Item $reference -Recurse -Force }
           if (Test-Path $reference) { throw 'reference directory still exists before Windows runtime smoke' }
