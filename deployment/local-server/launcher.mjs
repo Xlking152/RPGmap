@@ -164,23 +164,64 @@ async function validateRuntime() {
   await mkdir(path.join(ROOT, 'map', 'backups'), { recursive: true });
 }
 
-function openBrowser(url) {
-  try {
+export function browserLaunchCandidates(url, platform = process.platform) {
+  const target = String(url || '').trim();
+  if (!target) return [];
+  if (platform === 'win32') {
+    const cmdTarget = target.replace(/"/g, '%22');
+    return [
+      { command: 'explorer.exe', args: [target] },
+      { command: 'rundll32.exe', args: ['url.dll,FileProtocolHandler', target] },
+      { command: 'cmd.exe', args: ['/D', '/S', '/C', `start "" "${cmdTarget}"`] },
+    ];
+  }
+  if (platform === 'darwin') return [{ command: 'open', args: [target] }];
+  return [{ command: 'xdg-open', args: [target] }];
+}
+
+export function openBrowser(url, {
+  platform = process.platform,
+  spawnImpl = spawn,
+} = {}) {
+  const candidates = browserLaunchCandidates(url, platform);
+  let index = 0;
+
+  const tryNext = lastError => {
+    const candidate = candidates[index++];
+    if (!candidate) {
+      const detail = lastError?.message ? ` (${lastError.message})` : '';
+      console.warn(`[WARN] Browser could not be opened automatically${detail}. Open this URL manually: ${url}`);
+      return;
+    }
+
     let child;
-    if (process.platform === 'win32') {
-      child = spawn('cmd.exe', ['/D', '/S', '/C', `start "" "${url}"`], {
+    try {
+      child = spawnImpl(candidate.command, candidate.args, {
         cwd: ROOT,
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
       });
-    } else if (process.platform === 'darwin') {
-      child = spawn('open', [url], { detached: true, stdio: 'ignore' });
-    } else {
-      child = spawn('xdg-open', [url], { detached: true, stdio: 'ignore' });
+    } catch (error) {
+      tryNext(error);
+      return;
     }
-    child.unref();
-  } catch {}
+
+    let settled = false;
+    child.once('spawn', () => {
+      if (settled) return;
+      settled = true;
+      child.unref?.();
+      console.log(`[OK] Opening host browser via ${candidate.command}.`);
+    });
+    child.once('error', error => {
+      if (settled) return;
+      settled = true;
+      tryNext(error);
+    });
+  };
+
+  tryNext();
 }
 
 function stopChild(child) {
