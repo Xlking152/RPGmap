@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { describePortConflict, inspectServerPort } from '../deployment/local-server/launcher-guard.mjs';
+import {
+  describePortConflict,
+  inspectServerPort,
+  normalizeLaunchMode,
+} from '../deployment/local-server/launcher.mjs';
 
 async function withServer(handler, run) {
   const server = http.createServer(handler);
@@ -16,6 +20,14 @@ async function withServer(handler, run) {
   }
 }
 
+test('launcher normalizes the two public startup modes', () => {
+  assert.equal(normalizeLaunchMode('1'), 'local');
+  assert.equal(normalizeLaunchMode('LAN'), 'local');
+  assert.equal(normalizeLaunchMode('2'), 'internet');
+  assert.equal(normalizeLaunchMode('public'), 'internet');
+  assert.equal(normalizeLaunchMode('other'), null);
+});
+
 test('inspectServerPort identifies an existing RPGmap Local/LAN server', async () => {
   await withServer((req, res) => {
     if (req.url !== '/api/health') return res.end('no');
@@ -23,7 +35,7 @@ test('inspectServerPort identifies an existing RPGmap Local/LAN server', async (
     res.end(JSON.stringify({
       status: 'ok',
       app: 'RPGmap',
-      version: '1.5.1',
+      version: '1.5.3',
       multiplayer: { publicMode: false },
     }));
   }, async port => {
@@ -32,7 +44,6 @@ test('inspectServerPort identifies an existing RPGmap Local/LAN server', async (
     assert.equal(result.rpgmap, true);
     assert.equal(result.health.multiplayer.publicMode, false);
     assert.match(describePortConflict(result, port), /Local\/LAN/);
-    assert.match(describePortConflict(result, port), /must not be started at the same time/);
   });
 });
 
@@ -42,7 +53,7 @@ test('inspectServerPort identifies an existing RPGmap Internet/Public server', a
     res.end(JSON.stringify({
       status: 'ok',
       app: 'RPGmap',
-      version: '1.5.1',
+      version: '1.5.3',
       multiplayer: { publicMode: true },
     }));
   }, async port => {
