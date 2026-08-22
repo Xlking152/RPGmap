@@ -1,41 +1,36 @@
-# RPGmap 1.5.3 Candidate · 启动与运行说明
+# RPGmap 1.5.4 Candidate · 启动与运行说明
 
-V1.5.3 将 V1.5 的启动层重新收口：**Windows 用户只需要一个 `start-rpgmap.bat`。**
+Windows 用户只需要一个入口：
 
-MapPackage / Elevation / Feature Interaction / Navigation 架构不变；本次只整理 Runtime 启动入口与联网模式生命周期。
+```text
+start-rpgmap.bat
+        ↓
+launcher.mjs
+   ├─ Local / LAN
+   └─ Internet / Public
+        ↓
+server.mjs
+```
 
 ## 发布包目录
 
 ```text
-RPGmap-v1.5.3/
+RPGmap-v1.5.4/
 ├─ app/                    构建后的浏览器 Client + 默认地图
 ├─ map/                    当前 World / User 可写数据
-│  ├─ world.json           运行后生成
-│  ├─ users.json           有正式 Player User 后生成
+│  ├─ world.json
+│  ├─ users.json
 │  ├─ uploads/
 │  └─ backups/
 ├─ reference/              MapPackage / DIY 源码参考，不是 Runtime 依赖
 ├─ docs/
-├─ server.mjs              通用 HTTP + WebSocket Server
-├─ launcher.mjs            Local / LAN / Internet 唯一启动逻辑
+├─ server.mjs
+├─ launcher.mjs
 ├─ access-control.mjs
 ├─ portable-storage.mjs
 ├─ start-rpgmap.bat        Windows 唯一入口
-└─ start-rpgmap.sh         Linux/macOS 本地入口
+└─ start-rpgmap.sh
 ```
-
-不再包含：
-
-```text
-start-rpgmap-internet.bat
-setup-cloudflared.bat
-run-rpgmap-public-server.bat
-local-launcher.mjs
-internet-launcher.mjs
-launcher-guard.mjs
-```
-
-这些职责已经全部合并到 `launcher.mjs`。
 
 ## Windows 启动
 
@@ -45,76 +40,86 @@ launcher-guard.mjs
 start-rpgmap.bat
 ```
 
-然后选择：
+选择：
 
 ```text
 1. Local / LAN
 2. Internet / Public
 ```
 
-### 1 · Local / LAN
-
-适合本机或同一局域网跑团。
-
-Launcher 会按顺序执行：
+两种模式都会在 Server READY 后集中显示连接信息：
 
 ```text
-检查 30000 端口
-→ 启动 server.mjs
-→ 等待 /api/health READY
-→ 确认 publicMode=false
-→ 显示 Local / Network 地址
-→ 打开浏览器
+PLAYER INVITE
+  URL / Internet URL
+  Join Code          ← 房间号
+
+LOCAL / LAN
+  Local
+  LAN URL
+
+GM ONLY
+  GM Secret          ← GM 密码
+
+HOST
+  Browser            ← 自动打开本机地图并以 GM 身份进入
 ```
 
-本机默认地址：
-
-```text
-http://127.0.0.1:30000
-```
-
-同一局域网其他设备使用启动窗口中的 `Network` 地址。
-
-### 2 · Internet / Public
-
-Internet 模式本身同时提供：
-
-- 本机 Local 地址；
-- 局域网 Network 地址；
-- Cloudflare Public URL。
-
-因此启动 Internet 模式后**不要再启动第二个 Local Server**。
+### Local / LAN
 
 Launcher 会：
 
-1. 检查 30000 端口是否已有 RPGmap / 其他程序；
-2. 查找包目录或系统 PATH 中的 `cloudflared`；
-3. Windows 首次缺少时自动尝试下载官方 portable `cloudflared.exe`；
-4. 下载失败时尝试 Winget；
-5. 创建 Quick Tunnel；
-6. 生成 Join Code / GM Secret；
-7. 启动同一个 `server.mjs`；
-8. 等待 `/api/health` 并确认 `publicMode=true`；
-9. 在同一个窗口打印 Public URL / Join Code / GM Secret；
-10. 打开公网页面。
+```text
+检查端口
+→ 生成 Join Code + GM Secret
+→ 启动 server.mjs
+→ 等待 /api/health READY
+→ 显示 Local / LAN 地址与凭据
+→ 自动打开 127.0.0.1 地图
+→ 自动以 GM 身份连接
+```
 
-不再弹出额外的 Multiplayer Info 命令行窗口。
+同一局域网的玩家使用启动窗口中的 `LAN URL`，并填写 `Join Code`。
+
+### Internet / Public
+
+Launcher 会：
+
+```text
+检查端口
+→ 准备 cloudflared
+→ 创建 Quick Tunnel
+→ 生成 Join Code + GM Secret
+→ 启动 server.mjs
+→ 等待 /api/health READY
+→ 同屏显示 Public / LAN / Local / Join Code / GM Secret
+→ 主机自动打开 127.0.0.1 地图并以 GM 身份连接
+```
+
+主机不会再通过 Cloudflare 公网地址访问自己的地图；公网 URL 只用于远程玩家。这样能减少 Tunnel 往返延迟，也避免主机因为公网链路波动出现长时间加载。
+
+## 主机自动进入地图
+
+Launcher 打开的本机 URL 会带一个只存在于 URL hash 中的 GM 启动信息。hash 不会被发送给 HTTP Server；Client 读取后会立即从地址栏清除，并且只有 `localhost / 127.0.0.1` 页面允许消费这个自动 GM 信息。
+
+因此：
+
+- GM Secret 不会被附加到玩家使用的 Public URL；
+- 不会通过普通 HTTP 请求传给 Server；
+- 玩家仍然需要 `Join Code`；
+- GM 仍可从联机面板手动使用 `GM Secret` 登录其他设备。
 
 ## 启动互斥
 
-Local / LAN 与 Internet / Public 是**同一个 Server 的两种启动模式**，不是两套 Server。
-
-两者默认都使用：
+Local/LAN 与 Internet/Public 是同一个 Server 的两种模式，默认都使用：
 
 ```text
 PORT=30000
 ```
 
-如果端口已经被 RPGmap 占用，Launcher 会明确说明当前是 Local/LAN 还是 Internet/Public；如果被其他程序占用，也会直接报错，不会继续打开一个一直加载的浏览器页面。
+如果 30000 已被 RPGmap 或其他程序占用，Launcher 会在打开浏览器前停止并给出明确错误，不会再出现浏览器一直加载但 Server 实际没有成功启动的情况。
 
 ## 命令行直接指定模式
-
-Windows CI、快捷方式或高级用户可以跳过菜单：
 
 ```text
 start-rpgmap.bat local
@@ -128,25 +133,11 @@ Linux/macOS：
 ./start-rpgmap.sh internet
 ```
 
-## Runtime 与 MapPackage
+## Runtime 与数据
 
-```text
-reference/maps/lanzhou/
-        ↓ build
-src/map-package/ + Core
-        ↓
-app/index.html
-        ↓
-server.mjs
-        ↓
-Browser
-```
+`reference/` 只是开发 / DIY 参考。默认地图在 build 时已经进入 `app/index.html`；CI 会删除整个 `reference/` 后重新启动 Runtime 验证。
 
-`reference/` 是开发 / DIY 参考。构建后的 Runtime 不读取它；CI 会删除整个 `reference/` 后重新启动 Server 验证。
-
-## 数据与备份
-
-World / User / 上传资源仍集中在：
+运行数据集中在：
 
 ```text
 map/world.json
@@ -155,14 +146,4 @@ map/uploads/
 map/backups/
 ```
 
-升级程序时优先保留和备份整个 `map/`。
-
-## DIY 地图
-
-地图开发规范见：
-
-```text
-reference/README.md
-```
-
-更换地图应替换 MapPackage，不复制 Damage / Movement / Multiplayer / Scene 等通用逻辑。
+升级时优先保留整个 `map/`。
