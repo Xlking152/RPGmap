@@ -28,13 +28,22 @@ export function createMultiplayerHostBootstrapSystem() {
       const cleanUrl = `${windowNode.location.pathname || '/'}${windowNode.location.search || ''}`;
       windowNode.history?.replaceState?.(null, '', cleanUrl);
 
-      queueMicrotask(() => {
+      const connect = () => {
         api.multiplayer.connect({
           name: launch.name,
           requestedRole: launch.requestedRole,
           gmSecret: launch.gmSecret,
         });
-      });
+      };
+
+      // In a real browser, give the already-rendered map one frame to paint before
+      // the WebSocket welcome can trigger a full World import. Tests/non-DOM callers
+      // keep the old microtask behavior.
+      if (typeof windowNode?.requestAnimationFrame === 'function') {
+        windowNode.requestAnimationFrame(() => setTimeout(connect, 0));
+      } else {
+        queueMicrotask(connect);
+      }
     },
   });
 }
