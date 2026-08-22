@@ -109,9 +109,17 @@ function normalizeFeatureTaxonomy(mapPackage) {
   });
 }
 
-function normalizePassagePolygon(value) {
+function normalizeNavigationPolygon(value, label) {
   if (!Array.isArray(value) || value.length < 3) return null;
-  return Object.freeze(value.map((point) => Object.freeze([Number(point[0]), Number(point[1])])));
+  const points = value.map((point, index) => {
+    const x = Number(point?.[0]);
+    const y = Number(point?.[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new TypeError(`Invalid MapPackage: ${label}[${index}] must contain finite coordinates`);
+    }
+    return Object.freeze([x, y]);
+  });
+  return Object.freeze(points);
 }
 
 function normalizeNavigationCapability(feature, declared) {
@@ -126,8 +134,9 @@ function normalizeNavigationCapability(feature, declared) {
     passableWhenDestroyed: source.passableWhenDestroyed === true,
     damageCreatesPassage: source.damageCreatesPassage === true,
     blockingHeightFt: asOptionalNonNegativeNumber(source.blockingHeightFt, 'feature navigation blockingHeightFt'),
+    blockingPolygon: normalizeNavigationPolygon(source.blockingPolygon, 'feature navigation blockingPolygon'),
     passageTile,
-    passagePolygon: normalizePassagePolygon(source.passagePolygon),
+    passagePolygon: normalizeNavigationPolygon(source.passagePolygon, 'feature navigation passagePolygon'),
   });
 }
 

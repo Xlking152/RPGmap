@@ -80,6 +80,7 @@ function navigationCapability(feature) {
     passableWhenDestroyed: declared.passableWhenDestroyed === true,
     damageCreatesPassage: declared.damageCreatesPassage === true,
     blockingHeightFt: Number.isFinite(height) && height >= 0 ? height : null,
+    blockingPolygon: Array.isArray(declared.blockingPolygon) ? declared.blockingPolygon : null,
     passageTile,
     passagePolygon: Array.isArray(declared.passagePolygon) ? declared.passagePolygon : null,
   });
@@ -127,7 +128,8 @@ function buildMoverAwareGrid(mapPackage, scene, base, appState, moverContext) {
     if (navigation.passableWhenDestroyed && isDestroyed) continue;
     if (navigation.passableWhenOpen && featureState?.open) continue;
     if (!featureBlocksMover(feature, featureState, moverContext)) continue;
-    rasterizePolygon(grid, featurePolygon(feature), cellSize, TILE_BLOCKED);
+    const blockingPolygon = navigation.blockingPolygon || featurePolygon(feature);
+    rasterizePolygon(grid, blockingPolygon, cellSize, TILE_BLOCKED);
   }
 
   for (const feature of mapPackage.features || []) {
