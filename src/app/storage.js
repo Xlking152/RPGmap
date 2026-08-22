@@ -13,6 +13,15 @@ export function createBrowserStorage() {
   };
 }
 
+export function createMemoryStorage() {
+  const values = new Map();
+  return {
+    get(key) { return values.get(String(key)) ?? null; },
+    set(key, value) { values.set(String(key), String(value)); },
+    remove(key) { values.delete(String(key)); },
+  };
+}
+
 export function createStatePersistence({
   mapPackage,
   storageAdapter = createBrowserStorage(),
