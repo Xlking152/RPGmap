@@ -55,6 +55,19 @@ elevationFt <= blockingHeightFt → 该 Feature 正常阻挡
 
 Open / Destroyed 的既有规则优先保留：已经打开的可通行门、已经摧毁且声明 `passableWhenDestroyed` 的 Feature 不需要再通过高度判断。
 
+## 阻挡与通道几何
+
+Navigation 允许 MapPackage 分离视觉几何与通行几何：
+
+```text
+blockingPolygon  → Feature 关闭/阻挡状态下真正栅格化的障碍区域
+passagePolygon   → Feature 打开/摧毁后恢复的通行区域
+```
+
+未声明 `blockingPolygon` 时继续使用 Feature 自身 geometry，保证普通建筑、墙体和旧地图兼容。
+
+这一分离用于解决兰州城门的实际门洞问题：部分城墙预留门洞宽于城门楼视觉矩形，直接用视觉矩形阻挡会让 10 m A* 网格从两侧漏过。兰州 Reference Map 在自己的 Capability 转换中声明跨门洞的 `blockingPolygon`；Core 只读取通用 Navigation 字段，不包含城门或兰州专属判断。
+
 ## Runtime Adapter
 
 V1.5 仍保留历史 `engine/app.js` 的 Navigation 调用方式。`src/elevation/runtime-context.js` 作为兼容适配层，向 Navigation 提供当前 mover context 与 App State；新代码/测试也可以直接向 `createNavigationGrid(..., options)` 传入：
@@ -69,7 +82,11 @@ V1.5 仍保留历史 `engine/app.js` 的 Navigation 调用方式。`src/elevatio
 }
 ```
 
-未来 App/Scene 拆分后应把 mover context 作为显式参数一路传递，而不是继续扩大兼容适配层。
+旧 Movement/App 可以缓存 Navigation facade，但 facade 的 `grid` 会在 mover 高度或 Feature State 改变后重新解析，避免从一个 Token 切换到另一个 Token 时复用错误的障碍网格。
+
+V1.5 还保留一个很小的 Character Placement compatibility guard：旧 App 的“放置角色”按钮使用私有 `setTool()`，因此进入放置模式时主动把 mover context 重置到 `0 ft`，防止新地面 Token 继承上一个飞行 Token 的越障能力。
+
+未来 App/Scene 拆分后应把 mover context 作为显式参数一路传递，并删除这些兼容型 Runtime Adapter。
 
 ## Token UI
 
@@ -98,6 +115,35 @@ Token 高度保存在 `preferences.entitySystem.tokens`，因此沿用现有 Ent
 ```
 
 Minimal Reference Map 也提供不同高度的示例 Feature，用于证明 Core 不依赖兰州类别。
+
+## 路径规划验证
+
+V1.5 不只检查 `blocked` 栅格值，还对真正使用的 EasyStar 路径规划链路做回归验证：
+
+1. 通用全宽障碍关闭时，`findNavigationPath()` 必须返回 `null`。
+2. 同一障碍传入 `calculateWaypointRoute()` 时必须返回 `valid: false`，证明 Movement waypoint planner 会传播阻挡结果。
+3. 打开同一 Feature 后路径必须恢复。
+4. 角色高度严格超过障碍高度后路径必须恢复。
+5. 兰州北/东/南/西四座真实城门分别验证：关闭时局部 EasyStar 不能从门洞两侧绕缝，打开后通路恢复。
+6. 四座城门全部关闭时，从北侧城外到城中心的真实全图 EasyStar 路径必须不存在；打开北门后该完整路线必须恢复。
+
+因此“Feature State → Navigation Grid → EasyStar → Movement waypoint planner”的阻挡链路有直接回归覆盖，而不是只验证 UI 图标或单个网格单元。
+
+## 独立性边界
+
+Runtime 不读取 `reference/`；CI 会在打包后删除整个 `reference/` 再启动 Linux Runtime，并对 Windows 包执行同样的 no-reference BAT smoke。
+
+源码仓库中允许且只允许三个显式兰州适配入口：
+
+```text
+src/map-package/default-map.js          build-time 默认地图打包入口
+src/maps/lanzhou.js                     历史 import compatibility shim
+src/maps/presentation-cleanup.js        历史 presentation compatibility shim
+```
+
+自动测试扫描 `src/`，防止新增其他兰州 Reference import；同时扫描 `engine / movement / interaction / elevation`，禁止兰州地图 ID 和城门 ID 进入通用 Core。
+
+这表示 V1.5 达成的是 **Runtime 独立 + Core 规则独立**，而不是为了形式上的“零源码引用”删除仍需兼容旧调用的薄适配器。后续完成 AppCore/Scene 重构时再逐步删除 compatibility shim。
 
 ## V1.5 边界
 
