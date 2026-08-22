@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import {
+  browserLaunchCandidates,
   buildConnectionInfo,
   createInternetCredentials,
   describePortConflict,
@@ -31,6 +32,12 @@ test('launcher normalizes the two startup modes', () => {
   assert.equal(normalizeLaunchMode('other'), null);
 });
 
+test('Windows browser launch has multiple fallbacks', () => {
+  const candidates = browserLaunchCandidates('http://127.0.0.1:30000/#rpgmap-host=1', 'win32');
+  assert.deepEqual(candidates.map(item => item.command), ['explorer.exe', 'rundll32.exe', 'cmd.exe']);
+  assert.equal(candidates[0].args[0], 'http://127.0.0.1:30000/#rpgmap-host=1');
+});
+
 test('Quick Tunnel URL parser extracts the public URL only after it appears', () => {
   const before = 'INF Requesting new quick Tunnel on trycloudflare.com...';
   assert.equal(parseQuickTunnelUrl(before), null);
@@ -56,11 +63,11 @@ test('Internet READY display keeps player invite and GM secret concise and separ
     publicUrl,
     joinCode,
     gmSecret,
-    version: '1.5.3',
+    version: '1.5.4',
     port: 30000,
   }).join('\n');
 
-  assert.match(text, /RPGmap 1\.5\.3 · Internet \/ Public · READY/);
+  assert.match(text, /RPGmap 1\.5\.4 · Internet \/ Public · READY/);
   assert.match(text, /PLAYER INVITE/);
   assert.match(text, /GM ONLY/);
   assert.match(text, /GM Secret\s+: FEDCBA9876543210/);
@@ -77,7 +84,7 @@ test('port guard identifies an existing RPGmap Local/LAN server', async () => {
     res.end(JSON.stringify({
       status: 'ok',
       app: 'RPGmap',
-      version: '1.5.3',
+      version: '1.5.4',
       multiplayer: { publicMode: false },
     }));
   }, async port => {
@@ -95,7 +102,7 @@ test('port guard identifies an existing RPGmap Internet/Public server', async ()
     res.end(JSON.stringify({
       status: 'ok',
       app: 'RPGmap',
-      version: '1.5.3',
+      version: '1.5.4',
       multiplayer: { publicMode: true },
     }));
   }, async port => {
