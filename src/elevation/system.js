@@ -1,7 +1,5 @@
 import { latLngToWorld } from '../engine/geometry.js';
-import { resolveActor } from '../entities/resolver.js';
 import {
-  actorForCharacter,
   featureBlockingHeightFt,
   formatFt,
   normalizeBlockingHeightFt,
@@ -25,11 +23,8 @@ function installStyles(documentNode) {
   style.id = STYLE_ID;
   style.textContent = `
     .rpg-character { overflow:visible !important; }
-    .token-elevation-label { position:absolute; left:50%; bottom:calc(100% + 4px); transform:translateX(-50%); min-width:30px; padding:1px 5px; border:1px solid rgba(18,24,28,.78); border-radius:5px; background:rgba(24,30,34,.88); color:#f4f0df; box-shadow:0 1px 4px rgba(0,0,0,.28); font:700 10px/1.35 system-ui,sans-serif; text-align:center; white-space:nowrap; pointer-events:none; }
-    .token-hp-meter { position:absolute; left:50%; top:calc(100% + 4px); transform:translateX(-50%); width:38px; height:5px; overflow:hidden; border:1px solid rgba(18,24,28,.82); border-radius:4px; background:rgba(18,24,28,.7); box-shadow:0 1px 3px rgba(0,0,0,.28); pointer-events:none; }
-    .token-hp-fill { display:block; height:100%; width:0; background:#51a866; transition:width .16s ease; }
-    .token-hp-meter[data-hp-state="warn"] .token-hp-fill { background:#c58a38; }
-    .token-hp-meter[data-hp-state="low"] .token-hp-fill { background:#b8483f; }
+    .token-elevation-label { position:absolute; left:calc(100% + 5px); top:50%; transform:translateY(-50%); min-width:30px; padding:1px 5px; border:1px solid rgba(18,24,28,.78); border-radius:5px; background:rgba(24,30,34,.88); color:#f4f0df; box-shadow:0 1px 4px rgba(0,0,0,.28); font:700 10px/1.35 system-ui,sans-serif; text-align:center; white-space:nowrap; pointer-events:none; }
+    .character-tooltip { margin-top:0 !important; }
     .token-elevation-hud { position:fixed; z-index:5000; width:190px; padding:10px; border:1px solid rgba(225,218,194,.25); border-radius:9px; background:rgba(28,32,35,.97); box-shadow:0 10px 28px rgba(0,0,0,.38); color:#f5f1e6; font:12px/1.4 system-ui,sans-serif; }
     .token-elevation-hud strong { display:block; margin-bottom:7px; font-size:12px; }
     .token-elevation-hud-row { display:grid; grid-template-columns:34px 1fr 34px; gap:6px; align-items:center; }
@@ -94,8 +89,19 @@ function clampHudPosition(hud, event, documentNode) {
   const viewportHeight = documentNode.defaultView?.innerHeight || 720;
   const width = 190;
   const height = 116;
-  hud.style.left = `${Math.max(margin, Math.min(viewportWidth - width - margin, event.clientX + 8))}px`;
-  hud.style.top = `${Math.max(margin, Math.min(viewportHeight - height - margin, event.clientY + 8))}px`;
+  const clientX = Number(event?.clientX) || 0;
+  const clientY = Number(event?.clientY) || 0;
+  hud.style.left = `${Math.max(margin, Math.min(viewportWidth - width - margin, clientX + 8))}px`;
+  hud.style.top = `${Math.max(margin, Math.min(viewportHeight - height - margin, clientY + 8))}px`;
+}
+
+function orientCharacterTooltip(layer) {
+  const tooltip = layer?.getTooltip?.();
+  const className = String(tooltip?.options?.className || '');
+  if (!tooltip || !className.includes('character-tooltip')) return;
+  tooltip.options.direction = 'top';
+  tooltip.options.offset = [0, -14];
+  tooltip.update?.();
 }
 
 export function createElevationSystem() {
@@ -210,6 +216,7 @@ export function createElevationSystem() {
         api.map.eachLayer?.((layer) => {
           const icon = layer?._icon;
           if (!icon?.classList?.contains('rpg-character')) return;
+          orientCharacterTooltip(layer);
           const existingId = String(icon.dataset.characterId || '');
           if (existingId && characterIds.has(existingId) && !used.has(existingId)) {
             used.add(existingId);
@@ -250,7 +257,10 @@ export function createElevationSystem() {
         for (const icon of mapElement.querySelectorAll('.rpg-character[data-character-id]')) {
           const characterId = icon.dataset.characterId;
           const token = tokenForCharacter(state, characterId);
-          const actor = actorForCharacter(state, characterId);
+
+          // HealthSystem is the single owner of Token HP bars. Remove any stale
+          // Elevation-owned bar left in the DOM by an older V1.5 candidate.
+          icon.querySelector(':scope > .token-hp-meter')?.remove();
 
           let elevation = icon.querySelector(':scope > .token-elevation-label');
           if (!elevation) {
@@ -260,29 +270,6 @@ export function createElevationSystem() {
           }
           setText(elevation, `${formatFt(tokenElevationFt(token))} ft`);
           elevation.title = 'Token 当前离地高度';
-
-          let hpMeter = icon.querySelector(':scope > .token-hp-meter');
-          if (!hpMeter) {
-            hpMeter = documentNode.createElement('div');
-            hpMeter.className = 'token-hp-meter';
-            const fill = documentNode.createElement('span');
-            fill.className = 'token-hp-fill';
-            hpMeter.append(fill);
-            icon.append(hpMeter);
-          }
-          const resolved = actor ? resolveActor(actor) : null;
-          const hp = resolved?.resources?.find?.((resource) => resource.id === 'hp') || null;
-          const maximum = Math.max(0, Number(hp?.max) || 0);
-          const current = Math.max(0, Number(hp?.current) || 0);
-          if (!maximum) {
-            hpMeter.hidden = true;
-          } else {
-            hpMeter.hidden = false;
-            const ratio = Math.max(0, Math.min(1, current / maximum));
-            hpMeter.querySelector('.token-hp-fill').style.width = `${Math.round(ratio * 1000) / 10}%`;
-            hpMeter.dataset.hpState = ratio <= 0.25 ? 'low' : ratio <= 0.5 ? 'warn' : 'ok';
-            hpMeter.title = `HP ${Math.round(current * 10) / 10} / ${Math.round(maximum * 10) / 10}`;
-          }
         }
       }
 
@@ -351,16 +338,26 @@ export function createElevationSystem() {
       }
 
       function tokenContextMenu(event) {
-        const icon = event.target.closest?.('.rpg-character[data-character-id]');
-        if (!icon || !mapElement.contains(icon)) return;
-        event.preventDefault();
-        event.stopPropagation();
+        const icon = event?.target?.closest?.('.rpg-character');
+        if (!icon || !mapElement.contains(icon)) return false;
+        // Leaflet may rebuild a divIcon between render passes. Refresh the
+        // Character ↔ DOM association before requiring data-character-id.
+        identifyCharacterIcons();
         const characterId = icon.dataset.characterId;
-        if (!characterId) return;
+        if (!characterId) return false;
+        event.preventDefault?.();
+        event.stopPropagation?.();
         selectedCharacterId = characterId;
         api.selectCharacter?.(characterId);
         syncActiveMover(characterId);
         openTokenElevationHud(event, characterId);
+        return true;
+      }
+
+      function mapTokenContextMenu(event) {
+        const nativeEvent = event?.originalEvent;
+        if (!nativeEvent || nativeEvent.defaultPrevented) return;
+        tokenContextMenu(nativeEvent);
       }
 
       function renderFeatureEditor() {
@@ -465,6 +462,7 @@ export function createElevationSystem() {
         if (event.key === 'Escape' && tokenHud) closeTokenHud();
       };
       mapElement.addEventListener('contextmenu', tokenContextMenu, true);
+      api.map.on?.('contextmenu', mapTokenContextMenu);
       documentNode.addEventListener('pointerdown', closeOnPointerDown, true);
       documentNode.addEventListener('keydown', closeOnEscape, true);
 
@@ -522,6 +520,7 @@ export function createElevationSystem() {
         tokenObserver.disconnect();
         featureObserver?.disconnect();
         mapElement.removeEventListener('contextmenu', tokenContextMenu, true);
+        api.map.off?.('contextmenu', mapTokenContextMenu);
         documentNode.removeEventListener('pointerdown', closeOnPointerDown, true);
         documentNode.removeEventListener('keydown', closeOnEscape, true);
         unsubscribers.forEach((unsubscribe) => unsubscribe?.());
