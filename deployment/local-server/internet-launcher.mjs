@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { delay, describePortConflict, inspectServerPort } from './launcher-guard.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -58,10 +59,6 @@ async function readVersion() {
   } catch {
     return { app: 'RPGmap', version: '1.4.1', commit: 'unknown' };
   }
-}
-
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function openBrowser(url) {
@@ -204,6 +201,9 @@ async function main() {
 
   const port = Math.max(1, Number(process.env.PORT || 30000) || 30000);
   const originUrl = `http://127.0.0.1:${port}`;
+  const existing = await inspectServerPort(port);
+  if (existing.occupied) throw new Error(describePortConflict(existing, port));
+
   const credentials = createInternetCredentials();
   const version = await readVersion();
 
@@ -214,6 +214,7 @@ async function main() {
   console.log(' Transport  : HTTP/2 over TCP');
   console.log(` Origin     : ${originUrl}`);
   console.log(` Map Root   : ${path.resolve(process.env.RPGMAP_MAP_DIR || path.join(ROOT, 'map'))}`);
+  console.log(' Mode       : INTERNET / PUBLIC (mutually exclusive with Local/LAN launcher)');
   console.log(' Status     : creating Quick Tunnel...');
   console.log('============================================================');
   console.log('');
