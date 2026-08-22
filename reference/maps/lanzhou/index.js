@@ -10,8 +10,12 @@ import { cleanMapPackagePresentation } from './presentation.js';
 
 export function createLanzhouReferencePackage({ generatedArt = true } = {}) {
   const source = createLanzhouMapPackage(generatedArt ? createLanzhouGeneratedArtAssets() : {});
+  const cachedSvg = source.svg;
   return cleanMapPackagePresentation({
     ...source,
+    // createLanzhouMapPackage already materializes the static SVG once. Reuse it
+    // during Core startup instead of regenerating the same ~200 KB map markup.
+    createSvg: () => cachedSvg,
     features: applyLanzhouCapabilities(source.features, source.navigation),
     layerPlan: LANZHOU_LAYER_PLAN,
     featureTaxonomy: LANZHOU_FEATURE_TAXONOMY,
