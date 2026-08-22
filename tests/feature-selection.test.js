@@ -15,6 +15,7 @@ function feature(id, category, importance, points, extra = {}) {
     category,
     importance,
     geometry: { type: 'polygon', points },
+    capabilities: { inspectable: true },
     ...extra
   };
 }
@@ -32,6 +33,22 @@ test('feature inspection prefers visual importance and then the smaller footprin
     inspectableFeaturesAtPoint(point, features).map(item => item.id),
     ['gate-tight', 'gate-wide', 'wall']
   );
+});
+
+test('inspection no longer falls back to map categories', () => {
+  const point = { x: 5, y: 5 };
+  const legacyBuilding = {
+    id: 'legacy-building',
+    category: 'building',
+    geometry: { type: 'polygon', points: [[0, 0], [10, 0], [10, 10], [0, 10]] },
+  };
+  const genericInspectable = {
+    id: 'console',
+    category: 'mechanism',
+    capabilities: { inspectable: true },
+    geometry: { type: 'polygon', points: [[0, 0], [10, 0], [10, 10], [0, 10]] },
+  };
+  assert.deepEqual(inspectableFeaturesAtPoint(point, [legacyBuilding, genericInspectable]).map(item => item.id), ['console']);
 });
 
 test('scene event feature IDs are unique for damage and restore records', () => {

@@ -1,7 +1,6 @@
 import { featureToPolygon, pointInPolygon, polygonArea } from './geometry.js';
 import { deriveSceneState } from './state.js';
 
-const LEGACY_INSPECTABLE_CATEGORIES = new Set(['building', 'wall', 'vegetation', 'bridge']);
 const IMPORTANCE_RANK = Object.freeze({ primary: 3, secondary: 2, detail: 1 });
 
 function importanceRank(feature) {
@@ -13,7 +12,7 @@ function isInspectableFeature(feature) {
   if (typeof action === 'boolean') return action;
   if (typeof feature?.capabilities?.inspectable === 'boolean') return feature.capabilities.inspectable;
   if (typeof feature?.inspectable === 'boolean') return feature.inspectable;
-  return LEGACY_INSPECTABLE_CATEGORIES.has(feature?.category);
+  return false;
 }
 
 export function featureIdsForEvent(event) {

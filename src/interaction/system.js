@@ -1,10 +1,4 @@
-import {
-  damageFeatureState,
-  featureInteractionSnapshot,
-  getFeatureInteractionState,
-  listFeatureInteractions,
-  setFeatureOpenState,
-} from './model.js';
+import { createFeatureOperations } from './operations.js';
 
 const CORE_BUTTON_CLASS = 'core-interaction-action';
 const STYLE_ID = 'rpgmap-core-interaction-style';
@@ -15,6 +9,12 @@ function featureById(mapPackage, featureId) {
 
 function characterById(state, characterId) {
   return (state?.characters || []).find((character) => String(character.id) === String(characterId)) || null;
+}
+
+function characterFeatureId(character) {
+  const type = character?.location?.type;
+  if (type !== 'feature' && type !== 'building') return null;
+  return character.location.featureId == null ? null : String(character.location.featureId);
 }
 
 function installStyles(documentNode) {
@@ -36,10 +36,6 @@ function setFeedback(shell, message) {
   if (node && message) node.textContent = message;
 }
 
-function actionResult(action, featureId, ok, reason = '') {
-  return Object.freeze({ action, featureId: featureId == null ? null : String(featureId), ok: Boolean(ok), reason: String(reason || '') });
-}
-
 export function createFeatureInteractionSystem() {
   return {
     register(api) {
@@ -52,113 +48,68 @@ export function createFeatureInteractionSystem() {
       let selectedFeatureId = null;
       let destroyed = false;
 
+      const operations = createFeatureOperations({
+        mapPackage: api.mapPackage,
+        getState: () => api.getState(),
+        replaceState: (next) => api.importState(next),
+        selectFeature: (featureId, options = {}) => api.selectFeature?.(featureId, {
+          switchTab: true,
+          focus: options.focus === true,
+        }) !== false,
+        planFeatureEntry: ({ feature, characterId, entrance }) => {
+          api.setTool?.('character-move');
+          api.planCharacterMove?.(
+            characterId,
+            { x: Number(entrance[0]), y: Number(entrance[1]) },
+            // V1.4 runtime compatibility port. Feature Operations itself has no
+            // knowledge of the legacy "building" location representation.
+            { type: 'building', featureId: feature.id },
+          );
+          return true;
+        },
+        exitFeature: ({ characterId }) => {
+          if (typeof api.exitFeature === 'function') return api.exitFeature(characterId);
+          return api.exitBuilding?.(characterId) !== false;
+        },
+        restoreFeatures: (featureIds) => api.restoreFeatures?.(featureIds) === true,
+        emit: (name, detail) => api.emit?.(name, detail),
+      });
+
       const syncFeatureVisualState = () => {
         if (!shell?.querySelectorAll) return;
-        const state = api.getState();
         for (const feature of api.mapPackage?.features || []) {
-          const interactionState = getFeatureInteractionState(state, feature);
+          const featureState = operations.stateForFeature(feature.id);
+          if (!featureState) continue;
           for (const node of shell.querySelectorAll('[data-feature-id]')) {
             if (String(node.dataset?.featureId) !== String(feature.id)) continue;
             const openable = Boolean(feature.capabilities?.openable || feature.capabilities?.actions?.open || feature.capabilities?.actions?.close);
-            node.classList.toggle('interaction-open', openable && interactionState.open);
-            node.classList.toggle('interaction-closed', openable && !interactionState.open);
-            if (openable) node.setAttribute('data-interaction-open', interactionState.open ? 'true' : 'false');
+            node.classList.toggle('interaction-open', openable && featureState.open);
+            node.classList.toggle('interaction-closed', openable && !featureState.open);
+            node.setAttribute('data-feature-state', featureState.status);
+            node.setAttribute('data-feature-damaged', featureState.damaged ? 'true' : 'false');
+            if (openable) node.setAttribute('data-interaction-open', featureState.open ? 'true' : 'false');
             else node.removeAttribute('data-interaction-open');
           }
         }
       };
 
-      const actionsForFeature = (featureId, context = {}) => listFeatureInteractions({
-        mapPackage: api.mapPackage,
-        state: api.getState(),
-        featureId,
+      const actionsForFeature = (featureId, context = {}) => operations.actionsForFeature(featureId, {
         characterId: context.characterId ?? selectedCharacterId,
       });
 
-      const snapshot = (featureId, context = {}) => featureInteractionSnapshot({
-        mapPackage: api.mapPackage,
-        state: api.getState(),
-        featureId,
+      const snapshot = (featureId, context = {}) => operations.snapshot(featureId, {
         characterId: context.characterId ?? selectedCharacterId,
       });
-
-      const emitExecuted = (result, detail = {}) => {
-        api.emit?.('interaction:executed', { ...result, ...detail });
-        return result;
-      };
 
       const execute = (action, options = {}) => {
         const featureId = options.featureId ?? selectedFeatureId;
-        const state = api.getState();
-        const feature = featureById(api.mapPackage, featureId);
-        if (!feature) return emitExecuted(actionResult(action, featureId, false, 'Feature 不存在'));
-
         const characterId = options.characterId ?? selectedCharacterId;
-        const available = listFeatureInteractions({ mapPackage: api.mapPackage, state, featureId: feature.id, characterId });
-        const descriptor = available.find((entry) => entry.id === action);
-        if (!descriptor) return emitExecuted(actionResult(action, feature.id, false, 'Feature 未声明该 Interaction Capability'));
-        if (!descriptor.enabled) {
-          setFeedback(shell, descriptor.reason || `${descriptor.label}当前不可用`);
-          return emitExecuted(actionResult(action, feature.id, false, descriptor.reason));
-        }
-
-        try {
-          if (action === 'inspect') {
-            const ok = api.selectFeature?.(feature.id, { switchTab: true, focus: options.focus === true }) !== false;
-            if (ok) setFeedback(shell, `检查：${feature.name || feature.id}`);
-            return emitExecuted(actionResult(action, feature.id, ok), { characterId });
-          }
-
-          if (action === 'enter') {
-            const entrance = feature.entrance;
-            api.setTool?.('character-move');
-            api.planCharacterMove?.(
-              characterId,
-              { x: Number(entrance[0]), y: Number(entrance[1]) },
-              { type: 'building', featureId: feature.id },
-            );
-            setFeedback(shell, `前往进入：${feature.name || feature.id}`);
-            return emitExecuted(actionResult(action, feature.id, true), { characterId });
-          }
-
-          if (action === 'exit') {
-            const ok = api.exitBuilding?.(characterId) !== false;
-            if (ok) setFeedback(shell, `离开：${feature.name || feature.id}`);
-            return emitExecuted(actionResult(action, feature.id, ok), { characterId });
-          }
-
-          if (action === 'damage') {
-            const next = damageFeatureState(state, api.mapPackage, feature.id);
-            if (next === state) return emitExecuted(actionResult(action, feature.id, false, '对象当前无法继续破坏'));
-            api.importState(next);
-            const event = next.sceneEvents?.at?.(-1) || null;
-            api.emit?.('scene:damage', event ? structuredClone(event) : null);
-            setFeedback(shell, `已破坏：${feature.name || feature.id}`);
-            return emitExecuted(actionResult(action, feature.id, true), { characterId, event });
-          }
-
-          if (action === 'restore') {
-            const ok = api.restoreFeatures?.([feature.id]) === true;
-            if (ok) setFeedback(shell, `已恢复：${feature.name || feature.id}`);
-            return emitExecuted(actionResult(action, feature.id, ok, ok ? '' : '对象当前完整'), { characterId });
-          }
-
-          if (action === 'open' || action === 'close') {
-            const open = action === 'open';
-            const next = setFeatureOpenState(state, feature.id, open);
-            api.importState(next);
-            syncFeatureVisualState();
-            setFeedback(shell, `${open ? '已打开' : '已关闭'}：${feature.name || feature.id}`);
-            api.emit?.('interaction:state-change', { featureId: feature.id, open, characterId });
-            return emitExecuted(actionResult(action, feature.id, true), { characterId, open });
-          }
-
-          return emitExecuted(actionResult(action, feature.id, false, '未知 Interaction Action'));
-        } catch (error) {
-          const reason = error?.message || String(error);
-          setFeedback(shell, `Interaction 失败：${reason}`);
-          return emitExecuted(actionResult(action, feature.id, false, reason), { characterId });
-        }
+        const execution = operations.execute(action, { ...options, featureId, characterId });
+        if (execution.ok && execution.message) setFeedback(shell, execution.message);
+        else if (!execution.ok && execution.reason) setFeedback(shell, execution.reason);
+        syncFeatureVisualState();
+        api.emit?.('interaction:executed', execution);
+        return execution;
       };
 
       const interaction = Object.freeze({
@@ -172,6 +123,12 @@ export function createFeatureInteractionSystem() {
         open(featureId) { return execute('open', { featureId }); },
         close(featureId) { return execute('close', { featureId }); },
         snapshot,
+        stateForFeature(featureId) { return operations.stateForFeature(featureId); },
+        patchState(featureId, patch) {
+          const featureState = operations.patchState(featureId, patch);
+          syncFeatureVisualState();
+          return featureState;
+        },
         syncVisualState: syncFeatureVisualState,
         get selectedFeatureId() { return selectedFeatureId; },
         get selectedCharacterId() { return selectedCharacterId; },
@@ -220,6 +177,9 @@ export function createFeatureInteractionSystem() {
         decorateInspectionPanel();
       });
 
+      // V1.4.1 still renders several historical button/action names. Capture
+      // them at the Runtime adapter boundary and route them through the generic
+      // Feature Operations service instead of letting legacy UI own the rules.
       const captureLegacyActions = (event) => {
         const button = event.target?.closest?.('[data-action]');
         if (!button) return;
@@ -238,7 +198,7 @@ export function createFeatureInteractionSystem() {
         if (mapped === 'exit') {
           characterId = button.dataset.id || selectedCharacterId;
           const character = characterById(api.getState(), characterId);
-          featureId = character?.location?.type === 'building' ? character.location.featureId : selectedFeatureId;
+          featureId = characterFeatureId(character) || selectedFeatureId;
         }
         if (!featureId) return;
         event.preventDefault();
