@@ -2,6 +2,27 @@
 
 RPGmap 使用语义化版本号。更细的开发过程见 `文档/工作日志.md`。
 
+## 1.5.3 — Candidate · 2026-08-22
+
+V1.5.3 在 V1.5.2 端口互斥修复基础上进一步收口启动架构，不改变 MapPackage、Feature Interaction、Elevation 或 Navigation 数据模型。
+
+### Single-entry launcher
+
+- Windows 发布包只保留一个 `start-rpgmap.bat`。
+- 双击后选择 `Local / LAN` 或 `Internet / Public`；也支持 `start-rpgmap.bat local|internet`。
+- 新增统一 `launcher.mjs`，集中负责端口检查、Server 启动、`/api/health` READY 等待、浏览器打开、Internet Tunnel 和凭据生成。
+- 删除 `local-launcher.mjs`、`internet-launcher.mjs`、`launcher-guard.mjs`，避免多套启动逻辑分叉。
+- 删除 `start-rpgmap-internet.bat`、`setup-cloudflared.bat`、`run-rpgmap-public-server.bat`。
+- Internet 模式自动查找 `cloudflared`；Windows 缺少时自动尝试官方下载，失败后尝试 Winget。
+- Internet 模式不再额外打开 Multiplayer Info 命令行窗口，Local / Network / Public / Join Code / GM Secret 统一打印在当前 Launcher 窗口。
+
+### Packaging / CI
+
+- Candidate ZIP 根目录强制只能存在一个 Windows BAT：`start-rpgmap.bat`。
+- CI 明确禁止旧 Split Launcher / Setup / Public Server BAT 重新进入源码和安装包。
+- Windows smoke 改为执行 `start-rpgmap.bat local`，验证单入口 Launcher 能启动 `publicMode=false` Runtime。
+- Linux no-reference Runtime、source separation、Node tests、syntax 与 Vite build 验证继续保留。
+
 ## 1.5.2 — Candidate · 2026-08-22
 
 V1.5.2 修复 V1.5.1 人工验收中发现的 Local/LAN 与 Internet 启动生命周期冲突风险，不改变 MapPackage、Feature Interaction 或 Elevation 数据模型。
