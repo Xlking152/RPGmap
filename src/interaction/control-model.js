@@ -16,9 +16,11 @@ function isOpenableFeature(feature) {
 /**
  * Return the map-facing control presentation for a Feature.
  *
- * Openable Features receive a default toggle at their center (or entrance).
- * A map may override that presentation with `presentation.control`, or set it
- * to `false` when the Feature should only be operated from the inspector/API.
+ * Openable Features receive a small fixed-screen toggle at their center (or entrance).
+ * The configured size is the clickable hit target; the visual glyph stays deliberately
+ * smaller so map artwork remains dominant. A map may override presentation with
+ * `presentation.control`, or set it to `false` when the Feature should only be operated
+ * from the inspector/API.
  */
 export function featureControlDescriptor(feature) {
   if (!isOpenableFeature(feature)) return null;
@@ -33,8 +35,8 @@ export function featureControlDescriptor(feature) {
   const anchor = finiteAnchor(source.anchor ?? source.position ?? feature.center ?? feature.entrance);
   if (!anchor) return null;
 
-  const requestedSize = Number(source.size ?? 28);
-  const size = Number.isFinite(requestedSize) ? Math.max(20, Math.min(40, requestedSize)) : 28;
+  const requestedSize = Number(source.size ?? 24);
+  const size = Number.isFinite(requestedSize) ? Math.max(20, Math.min(36, requestedSize)) : 24;
   return Object.freeze({
     type,
     anchor,
