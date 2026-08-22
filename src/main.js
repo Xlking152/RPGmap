@@ -1,6 +1,7 @@
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
 import { createRpgMapApp } from './engine/app.js';
+import { createAppLifecycleSystem } from './engine/lifecycle.js';
 import { createMovementSystem } from './movement/index.js';
 import { createMeasurementSystem } from './measurement/index.js';
 import { createEntitySystem } from './entities/index.js';
@@ -23,6 +24,7 @@ createRpgMapApp({
   container: document.getElementById('app'),
   mapPackage,
   tools: [
+    createAppLifecycleSystem(),
     createMovementSystem({ defaultStep: 5, autoStep: true }),
     createEntitySystem({ dropLegacyMarkers: true }),
     createAppShellUi(),
