@@ -167,7 +167,7 @@ export function createMultiplayerController() {
         const savedAuth = saved('authToken', '');
         const hasSavedIdentity = Boolean(savedUserId && savedAuth);
         overlay.innerHTML = `<form class="multiplayer-dialog login" data-mp-login-form>
-          <h2>RPGmap V1.4.1 多人联机</h2>
+          <h2>RPGmap V1.5 多人联机</h2>
           <p>Player 第一次加入会向 GM 发起身份申请；GM 批准并分配角色后，该 User 会持久保存在当前 World。GM 也可以提前创建 User，并把 Player Key 发给指定玩家。</p>
           ${message ? `<div class="multiplayer-status-card ${message.includes('等待') ? 'warn' : ''}">${escapeHtml(message)}</div>` : ''}
           ${hasSavedIdentity ? `<div class="multiplayer-status-card">检测到本网址已保存的 Player 身份。正常情况下直接加入即可。<button type="button" class="multiplayer-mini-button" data-mp-clear-identity>清除本机身份</button></div>` : ''}
@@ -302,7 +302,6 @@ export function createMultiplayerController() {
           save('authToken', message.authToken || '');
           if (submittedPlayerKey) save('playerKey', submittedPlayerKey);
           else if (wasPending && message.authToken) {
-            // Server deliberately uses the first short token as the portable Player Key.
             save('playerKey', message.authToken);
             latestPlayerKey = message.authToken;
           }
