@@ -261,4 +261,11 @@ jobs:
             throw 'Packaged start-rpgmap.bat did not serve the bundled Lanzhou client after reference/ was removed.'
           }
 
-          & taskkill.exe /PID $bootstrap.Id /T /F 2>$null | Out-Null
+          # Runtime success was already established above. Process-tree cleanup is
+          # best-effort because Windows may report a child as unkillable after it
+          # has already exited between task enumeration and termination.
+          $previousPreference = $ErrorActionPreference
+          $ErrorActionPreference = 'SilentlyContinue'
+          & taskkill.exe /PID $bootstrap.Id /T /F *> $null
+          $ErrorActionPreference = $previousPreference
+          $global:LASTEXITCODE = 0
