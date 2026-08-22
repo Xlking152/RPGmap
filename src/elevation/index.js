@@ -24,9 +24,9 @@ export {
 
 export {
   GROUND_PLACEMENT_MOVER_CONTEXT,
-  createPlacementContextGuard,
   isCharacterPlacementControl,
 } from './placement-context.js';
+export { createPlacementContextGuard };
 
 export function createElevationSystem() {
   return {
