@@ -21,35 +21,71 @@ export function parseQuickTunnelUrl(text) {
   return match ? match[0] : null;
 }
 
-export function createInternetCredentials() {
+export function createSessionCredentials() {
   return {
     joinCode: String(randomInt(100000, 1000000)),
     gmSecret: randomBytes(8).toString('hex').toUpperCase(),
   };
 }
 
+// Compatibility export retained for existing tests/callers.
+export const createInternetCredentials = createSessionCredentials;
+
+export function buildHostLaunchUrl({ port = DEFAULT_PORT, gmSecret } = {}) {
+  const secret = String(gmSecret || '').trim();
+  const hash = new URLSearchParams({
+    'rpgmap-host': '1',
+    gmSecret: secret,
+  });
+  return `http://127.0.0.1:${Math.max(1, Number(port) || DEFAULT_PORT)}/#${hash.toString()}`;
+}
+
+function networkUrls(port) {
+  const urls = [];
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const item of entries || []) {
+      if (item.family === 'IPv4' && !item.internal) urls.push(`http://${item.address}:${port}`);
+    }
+  }
+  return [...new Set(urls)];
+}
+
 export function buildConnectionInfo({
-  publicUrl,
+  mode = 'internet',
+  publicUrl = null,
+  lanUrls = [],
   joinCode,
   gmSecret,
   version = 'unknown',
   port = DEFAULT_PORT,
 }) {
-  return [
+  const internet = mode === 'internet' && publicUrl ? publicUrl : '(not enabled - choose Internet mode)';
+  const lines = [
     SEPARATOR,
-    ` RPGmap ${version} · Internet / Public · READY`,
+    ` RPGmap ${version} · ${mode === 'internet' ? 'Internet / Public' : 'Local / LAN'} · READY`,
     SEPARATOR,
     ' PLAYER INVITE',
-    `   URL       : ${publicUrl}`,
-    `   Join Code : ${joinCode}`,
+    `   URL          : ${internet}`,
+    `   Join Code    : ${joinCode}`,
+    '',
+    ' LOCAL / LAN',
+    `   Local        : http://127.0.0.1:${port}`,
+  ];
+  if (lanUrls.length) {
+    lanUrls.forEach((url, index) => lines.push(`   LAN URL ${index + 1}    : ${url}`));
+  } else {
+    lines.push('   LAN URL      : (no active LAN IPv4 address found)');
+  }
+  lines.push(
     '',
     ' GM ONLY',
-    `   GM Secret : ${gmSecret}`,
+    `   GM Secret    : ${gmSecret}`,
     '',
-    ' LOCAL',
-    `   Local     : http://127.0.0.1:${port}`,
+    ' HOST',
+    '   Browser      : opens the local map automatically as GM',
     SEPARATOR,
-  ];
+  );
+  return lines;
 }
 
 async function isTcpPortOpen(port, host = '127.0.0.1', timeoutMs = 700) {
@@ -116,16 +152,6 @@ export function normalizeLaunchMode(value) {
   return null;
 }
 
-function networkUrls(port) {
-  const urls = [];
-  for (const entries of Object.values(os.networkInterfaces())) {
-    for (const item of entries || []) {
-      if (item.family === 'IPv4' && !item.internal) urls.push(`http://${item.address}:${port}`);
-    }
-  }
-  return [...new Set(urls)];
-}
-
 async function validateRuntime() {
   for (const relative of ['server.mjs', path.join('app', 'index.html')]) {
     try {
@@ -166,7 +192,6 @@ function spawnServer(env) {
   return spawn(process.execPath, [path.join(ROOT, 'server.mjs')], {
     cwd: ROOT,
     env,
-    // Launcher owns normal startup display; Server stderr remains visible for diagnostics.
     stdio: ['ignore', 'ignore', 'inherit'],
     windowsHide: false,
   });
@@ -199,13 +224,8 @@ async function waitForChild(child) {
 
 async function executableWorks(command) {
   try {
-    const child = spawn(command, ['--version'], {
-      cwd: ROOT,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    const result = await waitForChild(child);
-    return result.code === 0;
+    const child = spawn(command, ['--version'], { cwd: ROOT, stdio: 'ignore', windowsHide: true });
+    return (await waitForChild(child)).code === 0;
   } catch {
     return false;
   }
@@ -302,11 +322,8 @@ async function waitForTunnelUrl(tunnel, timeoutMs = 30000) {
   let scanBuffer = '';
   return new Promise((resolve, reject) => {
     let settled = false;
-
     const cleanup = () => {
       clearTimeout(timer);
-      // Keep the data listeners attached after READY so the child pipes continue
-      // to drain silently; otherwise a chatty long-running tunnel could block.
       tunnel.off('exit', onExit);
       tunnel.off('error', onError);
     };
@@ -345,23 +362,10 @@ async function ensurePortFree(port) {
   if (existing.occupied) throw new Error(describePortConflict(existing, port));
 }
 
-function localServerEnv(port) {
+function serverEnv({ port, publicMode, publicUrl = '', credentials }) {
   return {
     ...process.env,
-    RPGMAP_PUBLIC: '0',
-    RPGMAP_PUBLIC_URL: '',
-    RPGMAP_JOIN_CODE: '',
-    RPGMAP_GM_SECRET: '',
-    RPGMAP_PUBLIC_DIR: path.join(ROOT, 'app'),
-    RPGMAP_MAP_DIR: path.join(ROOT, 'map'),
-    PORT: String(port),
-  };
-}
-
-function publicServerEnv(port, publicUrl, credentials) {
-  return {
-    ...process.env,
-    RPGMAP_PUBLIC: '1',
+    RPGMAP_PUBLIC: publicMode ? '1' : '0',
     RPGMAP_PUBLIC_URL: publicUrl,
     RPGMAP_JOIN_CODE: credentials.joinCode,
     RPGMAP_GM_SECRET: credentials.gmSecret,
@@ -371,22 +375,28 @@ function publicServerEnv(port, publicUrl, credentials) {
   };
 }
 
-function printLocalReady(health, port) {
+function printReady({ health, mode, port, publicUrl = null, credentials }) {
   console.log('');
-  console.log(SEPARATOR);
-  console.log(` RPGmap ${health?.version || 'unknown'} · Local / LAN · READY`);
-  console.log(SEPARATOR);
-  console.log(` Local   : http://127.0.0.1:${port}`);
-  for (const url of networkUrls(port)) console.log(` Network : ${url}`);
-  console.log(SEPARATOR);
-  console.log(' Press Ctrl+C to stop RPGmap.');
+  for (const line of buildConnectionInfo({
+    mode,
+    publicUrl,
+    lanUrls: networkUrls(port),
+    joinCode: credentials.joinCode,
+    gmSecret: credentials.gmSecret,
+    version: health?.version || 'unknown',
+    port,
+  })) console.log(line);
+  console.log(mode === 'internet'
+    ? ' Press Ctrl+C to stop RPGmap and the tunnel.'
+    : ' Press Ctrl+C to stop RPGmap.');
   console.log('');
 }
 
 async function runLocal(port) {
   await ensurePortFree(port);
+  const credentials = createSessionCredentials();
   console.log('[INFO] Starting RPGmap Local / LAN...');
-  const server = spawnServer(localServerEnv(port));
+  const server = spawnServer(serverEnv({ port, publicMode: false, credentials }));
   let shuttingDown = false;
   const cleanup = () => {
     if (shuttingDown) return;
@@ -399,8 +409,8 @@ async function runLocal(port) {
 
   try {
     const health = await waitForServer(port, server, { publicMode: false });
-    printLocalReady(health, port);
-    openBrowser(`http://127.0.0.1:${port}`);
+    printReady({ health, mode: 'local', port, credentials });
+    openBrowser(buildHostLaunchUrl({ port, gmSecret: credentials.gmSecret }));
     const code = await new Promise(resolve => server.once('exit', resolve));
     if (!shuttingDown && code) process.exitCode = Number(code) || 1;
   } finally {
@@ -415,7 +425,7 @@ async function runInternet(port) {
   await ensurePortFree(port);
 
   const localUrl = `http://127.0.0.1:${port}`;
-  const credentials = createInternetCredentials();
+  const credentials = createSessionCredentials();
   const tunnel = spawn(cloudflared, [
     'tunnel', '--no-autoupdate', '--url', localUrl, '--protocol', 'http2',
   ], {
@@ -440,22 +450,18 @@ async function runInternet(port) {
   try {
     const publicUrl = await waitForTunnelUrl(tunnel);
     await ensurePortFree(port);
-    server = spawnServer(publicServerEnv(port, publicUrl, credentials));
+    server = spawnServer(serverEnv({
+      port,
+      publicMode: true,
+      publicUrl,
+      credentials,
+    }));
     const health = await waitForServer(port, server, { publicMode: true });
 
-    console.log('');
-    for (const line of buildConnectionInfo({
-      publicUrl,
-      joinCode: credentials.joinCode,
-      gmSecret: credentials.gmSecret,
-      version: health?.version || 'unknown',
-      port,
-    })) console.log(line);
-    for (const url of networkUrls(port)) console.log(` Network   : ${url}`);
-    console.log(' Press Ctrl+C to stop RPGmap and the tunnel.');
-    console.log('');
+    printReady({ health, mode: 'internet', port, publicUrl, credentials });
 
-    openBrowser(publicUrl);
+    // The host stays on loopback for speed/reliability. The public URL is for players.
+    openBrowser(buildHostLaunchUrl({ port, gmSecret: credentials.gmSecret }));
 
     const result = await Promise.race([
       new Promise(resolve => server.once('exit', code => resolve({ source: 'server', code }))),
@@ -481,7 +487,7 @@ async function chooseMode() {
   console.log('  1. Local / LAN');
   console.log('  2. Internet / Public');
   console.log('');
-  console.log(' Internet mode already includes Local and LAN access.');
+  console.log(' Internet mode also provides Local and LAN access.');
   console.log(SEPARATOR);
 
   const readline = createInterface({ input: process.stdin, output: process.stdout });
