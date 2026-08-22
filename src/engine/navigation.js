@@ -105,46 +105,19 @@ function restorePassage(grid, baseGrid, polygon, cellSize, passageTile) {
   );
 }
 
-export function createNavigationBase(mapPackage) {
-  const cellSize = Number(mapPackage.navigation?.cellSizeMeters ?? 10);
-  const columns = Math.ceil(mapPackage.width / cellSize);
-  const rows = Math.ceil(mapPackage.height / cellSize);
-  const grid = Array.from({ length: rows }, () => Array(columns).fill(TILE_OPEN));
-
-  for (const buffer of mapPackage.roadBuffers || []) {
-    rasterizePolygon(grid, featurePolygon(buffer), cellSize, TILE_ROAD);
-  }
-  for (const body of mapPackage.liquidBodies || []) {
-    rasterizePolygon(grid, body.polygon, cellSize, TILE_BLOCKED);
-  }
-
+function resolvedMoverContext(explicit) {
+  const source = explicit ?? getActiveMoverContext();
+  const elevationFt = Number(source?.elevationFt);
   return Object.freeze({
-    cellSize,
-    width: mapPackage.width,
-    height: mapPackage.height,
-    columns,
-    rows,
-    grid,
+    characterId: source?.characterId == null ? null : String(source.characterId),
+    elevationFt: Number.isFinite(elevationFt) && elevationFt >= 0 ? elevationFt : 0,
   });
 }
 
-/**
- * Build a mover-aware navigation grid.
- *
- * Existing callers may keep using the first three arguments. The Elevation
- * Runtime Adapter supplies app state + mover context for the current Token.
- * Tests/new callers may pass them explicitly in options.
- */
-export function createNavigationGrid(mapPackage, scene = {}, staticBase = null, options = {}) {
-  const base = staticBase || createNavigationBase(mapPackage);
-  const { cellSize, columns, rows } = base;
-  if (base.width !== mapPackage.width || base.height !== mapPackage.height) {
-    throw new Error('navigation base does not match map dimensions');
-  }
+function buildMoverAwareGrid(mapPackage, scene, base, appState, moverContext) {
+  const { cellSize } = base;
   const grid = base.grid.map((row) => row.slice());
   const destroyed = new Set((scene.destroyedObjectIds || []).map(String));
-  const appState = options.appState ?? elevationNavigationAppState();
-  const moverContext = options.moverContext ?? getActiveMoverContext();
 
   for (const feature of mapPackage.features || []) {
     const navigation = navigationCapability(feature);
@@ -208,18 +181,88 @@ export function createNavigationGrid(mapPackage, scene = {}, staticBase = null, 
     rasterizePolygon(grid, region.polygon, cellSize, TILE_BLOCKED);
   }
 
+  return grid;
+}
+
+function runtimeGridRevision(appState, moverContext) {
+  const featureStates = appState?.preferences?.featureStates || {};
+  return `${moverContext.characterId ?? ''}|${moverContext.elevationFt}|${JSON.stringify(featureStates)}`;
+}
+
+export function createNavigationBase(mapPackage) {
+  const cellSize = Number(mapPackage.navigation?.cellSizeMeters ?? 10);
+  const columns = Math.ceil(mapPackage.width / cellSize);
+  const rows = Math.ceil(mapPackage.height / cellSize);
+  const grid = Array.from({ length: rows }, () => Array(columns).fill(TILE_OPEN));
+
+  for (const buffer of mapPackage.roadBuffers || []) {
+    rasterizePolygon(grid, featurePolygon(buffer), cellSize, TILE_ROAD);
+  }
+  for (const body of mapPackage.liquidBodies || []) {
+    rasterizePolygon(grid, body.polygon, cellSize, TILE_BLOCKED);
+  }
+
   return Object.freeze({
+    cellSize,
+    width: mapPackage.width,
+    height: mapPackage.height,
+    columns,
+    rows,
+    grid,
+  });
+}
+
+/**
+ * Build a mover-aware navigation facade.
+ *
+ * Existing callers may keep using the first three arguments. When mover/app
+ * state are supplied by the Elevation Runtime Adapter, the returned facade can
+ * stay cached by legacy Movement/App code: its `grid` getter refreshes only
+ * when the active mover elevation or Feature State revision changes.
+ * Tests/new callers may pass appState + moverContext explicitly in options for
+ * a static, deterministic snapshot.
+ */
+export function createNavigationGrid(mapPackage, scene = {}, staticBase = null, options = {}) {
+  const base = staticBase || createNavigationBase(mapPackage);
+  const { cellSize, columns, rows } = base;
+  if (base.width !== mapPackage.width || base.height !== mapPackage.height) {
+    throw new Error('navigation base does not match map dimensions');
+  }
+
+  const dynamicAppState = options.appState === undefined;
+  const dynamicMover = options.moverContext === undefined;
+  let cachedGrid = null;
+  let cachedRevision = null;
+  let cachedMover = resolvedMoverContext(options.moverContext);
+
+  const resolveSnapshot = () => {
+    const appState = dynamicAppState ? elevationNavigationAppState() : options.appState;
+    const moverContext = dynamicMover ? resolvedMoverContext() : resolvedMoverContext(options.moverContext);
+    const revision = runtimeGridRevision(appState, moverContext);
+    if (!cachedGrid || cachedRevision !== revision) {
+      cachedGrid = buildMoverAwareGrid(mapPackage, scene, base, appState, moverContext);
+      cachedRevision = revision;
+      cachedMover = moverContext;
+    }
+    return cachedGrid;
+  };
+
+  if (!dynamicAppState && !dynamicMover) resolveSnapshot();
+
+  const navigation = {
     cellSize,
     width: base.width,
     height: base.height,
     columns,
     rows,
-    grid,
-    moverContext: Object.freeze({
-      characterId: moverContext?.characterId == null ? null : String(moverContext.characterId),
-      elevationFt: Number(moverContext?.elevationFt) || 0,
-    }),
-  });
+    get grid() { return resolveSnapshot(); },
+    get moverContext() {
+      if (dynamicMover) resolvedMoverContext();
+      resolveSnapshot();
+      return cachedMover;
+    },
+  };
+  return Object.freeze(navigation);
 }
 
 function worldToCell(point, navigation) {
@@ -239,6 +282,7 @@ function cellToWorld(cell, navigation) {
 export function nearestWalkablePoint(navigation, point, maximumDistance = 30) {
   const origin = worldToCell(point, navigation);
   const maximumCells = Math.ceil(maximumDistance / navigation.cellSize);
+  const grid = navigation.grid;
   let best = null;
   for (let radius = 0; radius <= maximumCells; radius += 1) {
     for (let dy = -radius; dy <= radius; dy += 1) {
@@ -247,7 +291,7 @@ export function nearestWalkablePoint(navigation, point, maximumDistance = 30) {
         const x = origin.x + dx;
         const y = origin.y + dy;
         if (x < 0 || y < 0 || x >= navigation.columns || y >= navigation.rows) continue;
-        if (navigation.grid[y][x] === TILE_BLOCKED) continue;
+        if (grid[y][x] === TILE_BLOCKED) continue;
         const world = cellToWorld({ x, y }, navigation);
         const distance = Math.hypot(world.x - Number(point.x), world.y - Number(point.y));
         if (distance <= maximumDistance + navigation.cellSize / 2 && (!best || distance < best.distance)) {

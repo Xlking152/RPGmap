@@ -8,6 +8,11 @@ import {
   normalizeElevationFt,
   tokenElevationFt,
 } from '../src/elevation/model.js';
+import {
+  configureElevationNavigationRuntime,
+  resetElevationNavigationRuntime,
+  setActiveMoverContext,
+} from '../src/elevation/runtime-context.js';
 import { createNavigationGrid, NAVIGATION_TILES } from '../src/engine/navigation.js';
 import { prepareMapPackage } from '../src/map-package/contract.js';
 import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
@@ -128,6 +133,25 @@ test('Feature State blockingHeightFt override participates in mover-aware Naviga
   });
   assert.equal(belowOverride.grid[2][2], NAVIGATION_TILES.blocked);
   assert.equal(aboveOverride.grid[2][2], NAVIGATION_TILES.open);
+});
+
+test('legacy callers may cache the Navigation facade while active mover and Feature height change', () => {
+  const map = simpleMap();
+  const appState = { sceneEvents: [], preferences: { featureStates: {} } };
+  configureElevationNavigationRuntime({ getState: () => appState });
+  try {
+    setActiveMoverContext({ characterId: 'ground', elevationFt: 0 });
+    const cachedNavigation = createNavigationGrid(map, {});
+    assert.equal(cachedNavigation.grid[2][2], NAVIGATION_TILES.blocked);
+
+    setActiveMoverContext({ characterId: 'flyer', elevationFt: 30 });
+    assert.equal(cachedNavigation.grid[2][2], NAVIGATION_TILES.open, 'cached facade must refresh for another mover');
+
+    appState.preferences.featureStates['obstacle-a'] = { custom: { blockingHeightFt: 40 } };
+    assert.equal(cachedNavigation.grid[2][2], NAVIGATION_TILES.blocked, 'cached facade must refresh for Feature State override');
+  } finally {
+    resetElevationNavigationRuntime();
+  }
 });
 
 test('Minimal Reference and Lanzhou Reference provide explicit height-aware obstacles', () => {
