@@ -1,5 +1,4 @@
 const runtimeFeatureEffects = new WeakMap();
-let effectsRevision = 0;
 
 function initialOpen(feature) {
   return Boolean(
@@ -21,22 +20,9 @@ function normalizeEffects(feature, featureState = {}) {
 
 export function recordFeatureInteractionEffects(feature, featureState = {}) {
   if (!feature || (typeof feature !== 'object' && typeof feature !== 'function')) return;
-  const next = normalizeEffects(feature, featureState);
-  const previous = runtimeFeatureEffects.get(feature);
-  if (!previous
-    || previous.open !== next.open
-    || previous.status !== next.status
-    || previous.damaged !== next.damaged
-    || previous.destroyed !== next.destroyed) {
-    runtimeFeatureEffects.set(feature, next);
-    effectsRevision += 1;
-  }
+  runtimeFeatureEffects.set(feature, normalizeEffects(feature, featureState));
 }
 
 export function runtimeFeatureInteractionEffects(feature) {
   return runtimeFeatureEffects.get(feature) || normalizeEffects(feature);
-}
-
-export function featureInteractionEffectsRevision() {
-  return effectsRevision;
 }
