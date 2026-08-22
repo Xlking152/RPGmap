@@ -17,21 +17,10 @@ on:
       - 'package-lock.json'
       - 'vite.config.js'
       - '.github/workflows/multiplayer-test-package.yml'
-  push:
-    branches:
-      - feat/v1.5.0-map-package-framework
-    paths:
-      - 'src/**'
-      - 'reference/**'
-      - 'tests/**'
-      - 'deployment/local-server/**'
-      - '文档/**'
-      - 'README.md'
-      - 'CHANGELOG.md'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'vite.config.js'
-      - '.github/workflows/multiplayer-test-package.yml'
+
+concurrency:
+  group: rpgmap-candidate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
