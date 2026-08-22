@@ -6,8 +6,11 @@ import {
   featureControlDescriptor,
   featureControlTitle,
 } from '../src/interaction/control-model.js';
-import { LANZHOU_OPENABLE_FEATURE_IDS } from '../reference/maps/lanzhou/capabilities.js';
-import { createLanzhouReferencePackage } from '../reference/maps/lanzhou/index.js';
+import {
+  LANZHOU_OPENABLE_FEATURE_IDS,
+  applyLanzhouCapabilities,
+} from '../reference/maps/lanzhou/capabilities.js';
+import { createLanzhouMapPackage } from '../reference/maps/lanzhou/package.js';
 import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
 
 test('openable Features receive a default map toggle without category rules', () => {
@@ -65,9 +68,10 @@ test('Minimal Reference door and Lanzhou openable Features all expose generic co
   const demoDoor = minimal.features.find((feature) => feature.id === 'demo-door');
   assert.ok(featureControlDescriptor(demoDoor));
 
-  const lanzhou = createLanzhouReferencePackage({ generatedArt: false });
+  const source = createLanzhouMapPackage();
+  const features = applyLanzhouCapabilities(source.features, source.navigation);
   for (const featureId of LANZHOU_OPENABLE_FEATURE_IDS) {
-    const feature = lanzhou.features.find((item) => item.id === featureId);
+    const feature = features.find((item) => item.id === featureId);
     assert.ok(feature, `missing Lanzhou openable Feature ${featureId}`);
     assert.ok(featureControlDescriptor(feature), `missing generic map control for ${featureId}`);
   }
