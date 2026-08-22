@@ -1,4 +1,4 @@
-name: Build RPGmap 1.5.3 Candidate
+name: Build RPGmap Candidate
 
 on:
   workflow_dispatch:
@@ -140,7 +140,7 @@ jobs:
             "mapPackageApiVersion": 1,
             "defaultMapSource": "reference/maps/lanzhou",
             "runtimeMapMode": "bundled-at-build-time",
-            "launcherMode": "single-entry-v1",
+            "launcherMode": "single-entry-host-bootstrap-v2",
             "defaultPort": 30000
           }
           EOF
@@ -270,7 +270,7 @@ jobs:
               $health = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:30000/api/health' -TimeoutSec 1
               $healthJson = $health.Content | ConvertFrom-Json
               $index = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:30000/' -TimeoutSec 1
-              if ($health.StatusCode -eq 200 -and -not $healthJson.multiplayer.publicMode -and $index.StatusCode -eq 200 -and $index.Content -match 'northern-song-lanzhou-1104') {
+              if ($health.StatusCode -eq 200 -and -not $healthJson.multiplayer.publicMode -and $healthJson.multiplayer.joinCodeRequired -and $index.StatusCode -eq 200 -and $index.Content -match 'northern-song-lanzhou-1104') {
                 $ready = $true
                 break
               }
@@ -281,7 +281,7 @@ jobs:
 
           if (-not $ready) {
             if ($bootstrap.HasExited) { Write-Host "BAT exit code: $($bootstrap.ExitCode)" }
-            throw 'Single packaged start-rpgmap.bat did not serve the bundled client in Local/LAN mode.'
+            throw 'Single packaged start-rpgmap.bat did not serve the bundled client in Local/LAN mode with a room code.'
           }
 
           $previousPreference = $ErrorActionPreference
