@@ -1,11 +1,19 @@
 import { featureToPolygon, pointInPolygon, polygonArea } from './geometry.js';
 import { deriveSceneState } from './state.js';
 
-const INSPECTABLE_CATEGORIES = new Set(['building', 'wall', 'vegetation', 'bridge']);
+const LEGACY_INSPECTABLE_CATEGORIES = new Set(['building', 'wall', 'vegetation', 'bridge']);
 const IMPORTANCE_RANK = Object.freeze({ primary: 3, secondary: 2, detail: 1 });
 
 function importanceRank(feature) {
   return IMPORTANCE_RANK[feature?.importance] || 0;
+}
+
+function isInspectableFeature(feature) {
+  const action = feature?.capabilities?.actions?.inspect;
+  if (typeof action === 'boolean') return action;
+  if (typeof feature?.capabilities?.inspectable === 'boolean') return feature.capabilities.inspectable;
+  if (typeof feature?.inspectable === 'boolean') return feature.inspectable;
+  return LEGACY_INSPECTABLE_CATEGORIES.has(feature?.category);
 }
 
 export function featureIdsForEvent(event) {
@@ -21,7 +29,7 @@ export function featureIdsForEvent(event) {
 
 export function inspectableFeaturesAtPoint(point, features = []) {
   return features
-    .filter(feature => INSPECTABLE_CATEGORIES.has(feature.category) && !feature.severeOnly)
+    .filter(feature => isInspectableFeature(feature) && !feature.severeOnly)
     .map(feature => {
       try {
         const polygon = featureToPolygon(feature);
