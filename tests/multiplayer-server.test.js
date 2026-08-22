@@ -24,6 +24,21 @@ function waitForMessage(ws, predicate, timeout = 5000) {
   });
 }
 
+async function waitForJsonFile(filePath, predicate, timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const value = JSON.parse(await readFile(filePath, 'utf8'));
+      if (predicate(value)) return value;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error(`JSON file did not reach expected state: ${filePath}${lastError ? ` (${lastError.message})` : ''}`);
+}
+
 async function openSocket(url) {
   const ws = new WebSocket(url);
   await new Promise((resolve, reject) => {
@@ -186,16 +201,20 @@ test('GM approves Player identity; OWNER writes succeed while unowned and combat
     player.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 4, state: allowedTurnState, reason: 'own-turn' }));
     await allowedTurnSnapshot;
 
-    await new Promise(resolve => setTimeout(resolve, 150));
-    const accessData = JSON.parse(await readFile(path.join(runtime.mapDir, 'users.json'), 'utf8'));
-    assert.equal(accessData.users.length, 1);
+    const accessData = await waitForJsonFile(
+      path.join(runtime.mapDir, 'users.json'),
+      value => value?.users?.length === 1 && Boolean(value.users[0]?.playerKeyHash),
+    );
     assert.equal(accessData.users[0].defaultActorId, 'actor-a');
     assert.equal(accessData.users[0].ownership['actor-a'], 'owner');
     assert.match(accessData.users[0].tokenHash, /^[0-9a-f]{64}$/);
     assert.match(accessData.users[0].playerKeyHash, /^[0-9a-f]{64}$/);
     assert.equal(JSON.stringify(accessData).includes(bound.authToken), false);
 
-    const worldData = JSON.parse(await readFile(path.join(runtime.mapDir, 'world.json'), 'utf8'));
+    const worldData = await waitForJsonFile(
+      path.join(runtime.mapDir, 'world.json'),
+      value => value?.revision === 5,
+    );
     assert.equal(worldData.revision, 5);
 
     player.ws.close();
