@@ -15,6 +15,7 @@ import { createDamageSystem } from './damage/index.js';
 import { createHealingSystem } from './healing/index.js';
 import { createCombatSystem } from './combat/index.js';
 import { createMultiplayerSystem } from './multiplayer/index.js';
+import { createMultiplayerHostBootstrapSystem } from './multiplayer/host-bootstrap.js';
 import { createDefaultMapPackage } from './map-package/default-map.js';
 
 const mapPackage = createDefaultMapPackage();
@@ -37,6 +38,7 @@ createRpgMapApp({
     createDamageSystem({ selection: selectionSystem }),
     createHealingSystem({ selection: selectionSystem }),
     createCombatSystem({ selection: selectionSystem }),
-    createMultiplayerSystem()
+    createMultiplayerSystem(),
+    createMultiplayerHostBootstrapSystem()
   ]
 });
