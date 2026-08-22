@@ -18,6 +18,15 @@ Navigation / SVG / Save / Multiplayer
 
 任何声明 `openable` 或 `actions.open / actions.close` 的 Feature 默认会得到一个固定屏幕尺寸的地图开关。控件位置默认使用 `feature.center`，没有 center 时尝试 `feature.entrance`。
 
+V1.5 默认展示采用接近 FVTT 的紧凑门控件：
+
+- 地图 Feature 本体保持原有视觉，不承担按钮外观；
+- 控件只显示小型门框 / 门扇图标；
+- 默认点击热区约 24 px，但可见门图标约 12–15 px，兼顾可点击性和地图美观；
+- 默认低透明度，hover / keyboard focus 时才显示轻量背景与高亮；
+- closed / open 只通过门扇形态和轻微颜色区别反馈；
+- 图标尺寸不随地图缩放变化。
+
 地图可以覆盖展示信息：
 
 ```js
@@ -27,10 +36,12 @@ presentation: {
     anchor: [500, 400],
     style: 'door',
     label: '北门',
-    size: 28
+    size: 24
   }
 }
 ```
+
+`size` 描述点击热区，而不是要求整个区域都显示成按钮。默认值为 24 px，可在安全范围内调整。
 
 如果某个可开关 Feature 只希望从 Inspector/API 操作：
 
