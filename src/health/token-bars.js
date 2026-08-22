@@ -78,7 +78,8 @@ export function createHealthTokenBars() {
               className: 'rpgmap-healthbar-marker',
               html,
               iconSize: [46, 7],
-              iconAnchor: [23, 30],
+              // Keep the single canonical HealthSystem bar below even a selected 42px token.
+              iconAnchor: [23, -27],
             }),
           }).addTo(layer);
         }
