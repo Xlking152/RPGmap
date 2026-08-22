@@ -1,4 +1,4 @@
-name: Build RPGmap 1.4.1 Package
+name: Build RPGmap 1.5.0 MapPackage Candidate
 
 on:
   workflow_dispatch:
@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - 'src/**'
+      - 'reference/**'
       - 'tests/**'
       - 'deployment/local-server/**'
       - '文档/**'
@@ -18,9 +19,10 @@ on:
       - '.github/workflows/multiplayer-test-package.yml'
   push:
     branches:
-      - feat/v1.4.1-player-identity
+      - feat/v1.5.0-map-package-framework
     paths:
       - 'src/**'
+      - 'reference/**'
       - 'tests/**'
       - 'deployment/local-server/**'
       - '文档/**'
@@ -35,9 +37,9 @@ permissions:
   contents: read
 
 jobs:
-  test-and-package:
+  test-package-runtime:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout source
@@ -61,10 +63,34 @@ jobs:
           set -euo pipefail
           while IFS= read -r -d '' file; do
             node --check "$file"
-          done < <(find src deployment/local-server -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
+          done < <(find src reference deployment/local-server -type f \( -name '*.js' -o -name '*.mjs' \) -print0)
+
+      - name: Verify source separation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f reference/README.md
+          test -f reference/maps/lanzhou/manifest.js
+          test -f reference/maps/lanzhou/package.js
+          test -f reference/maps/lanzhou/assets.js
+          test -d reference/maps/lanzhou/assets
+          test -f reference/maps/minimal/package.js
+          test -f src/map-package/contract.js
+          test -f src/map-package/default-map.js
+          test ! -d src/assets/generated
+          ! grep -Eq 'lanzhou|Lanzhou|assets/generated' src/main.js
+          grep -q 'createDefaultMapPackage' src/main.js
 
       - name: Build web client
         run: npm run build
+
+      - name: Verify bundled default map
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          grep -q 'northern-song-lanzhou-1104' dist/index.html
+          test "$(wc -c < dist/index.html)" -gt 500000
 
       - name: Resolve package version
         shell: bash
@@ -82,6 +108,7 @@ jobs:
           mkdir -p "$ROOT/app" "$ROOT/map/uploads" "$ROOT/map/backups" "$ROOT/docs"
 
           cp -R dist/. "$ROOT/app/"
+          cp -R reference "$ROOT/reference"
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
           cp deployment/local-server/access-control.mjs "$ROOT/access-control.mjs"
           cp deployment/local-server/portable-storage.mjs "$ROOT/portable-storage.mjs"
@@ -104,29 +131,75 @@ jobs:
             "version": "${PACKAGE_VERSION}",
             "commit": "${GITHUB_SHA}",
             "serverMode": "multiplayer",
-            "storageMode": "portable-map-root",
+            "storageMode": "portable-map-root-v1.4.1-compatible",
+            "mapPackageApiVersion": 1,
+            "defaultMapSource": "reference/maps/lanzhou",
+            "runtimeMapMode": "bundled-at-build-time",
             "defaultPort": 30000
           }
           EOF
 
           test -f "$ROOT/app/index.html"
+          test -f "$ROOT/reference/README.md"
+          test -f "$ROOT/reference/maps/lanzhou/package.js"
+          test -f "$ROOT/reference/maps/minimal/package.js"
           test -f "$ROOT/server.mjs"
-          test -f "$ROOT/access-control.mjs"
-          test -f "$ROOT/portable-storage.mjs"
-          test -f "$ROOT/internet-launcher.mjs"
-          test -f "$ROOT/start-rpgmap-internet.bat"
-          test -f "$ROOT/setup-cloudflared.bat"
           test -f "$ROOT/map/README.txt"
           test -d "$ROOT/map/uploads"
           test -d "$ROOT/map/backups"
-          test -f "$ROOT/docs/MULTIPLAYER-GUIDE.md"
           test ! -d "$ROOT/data"
-          test ! -d "$ROOT/public"
+          test ! -d "$ROOT/maps"
 
+      - name: Runtime smoke without reference sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE/artifact/RPGmap-v${PACKAGE_VERSION}"
+          SMOKE="$GITHUB_WORKSPACE/runtime-smoke"
+          rm -rf "$SMOKE"
+          cp -R "$ROOT" "$SMOKE"
+          rm -rf "$SMOKE/reference"
+          test ! -d "$SMOKE/reference"
+
+          export PORT=31000
+          export RPGMAP_PUBLIC_DIR="$SMOKE/app"
+          export RPGMAP_MAP_DIR="$SMOKE/map"
+          node "$SMOKE/server.mjs" > "$GITHUB_WORKSPACE/runtime-smoke.log" 2>&1 &
+          SERVER_PID=$!
+          cleanup() { kill "$SERVER_PID" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+
+          READY=0
+          for i in $(seq 1 40); do
+            if curl -fsS "http://127.0.0.1:${PORT}/api/health" > "$GITHUB_WORKSPACE/health.json"; then
+              READY=1
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$READY" -ne 1 ]; then
+            cat "$GITHUB_WORKSPACE/runtime-smoke.log"
+            exit 1
+          fi
+
+          curl -fsS "http://127.0.0.1:${PORT}/" > "$GITHUB_WORKSPACE/runtime-index.html"
+          grep -q 'northern-song-lanzhou-1104' "$GITHUB_WORKSPACE/runtime-index.html"
+          node -e "const h=require('fs').readFileSync(process.env.GITHUB_WORKSPACE+'/health.json','utf8'); const j=JSON.parse(h); if(j.status!=='ok') process.exit(1)"
+          cleanup
+          trap - EXIT
+          rm -rf "$SMOKE"
+
+      - name: Archive and verify package
+        shell: bash
+        run: |
+          set -euo pipefail
           cd "$GITHUB_WORKSPACE/artifact"
           ARCHIVE="RPGmap-v${PACKAGE_VERSION}.zip"
           zip -r -9 -q "$ARCHIVE" "RPGmap-v${PACKAGE_VERSION}"
           sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+          unzip -l "$ARCHIVE" | grep 'reference/maps/lanzhou/package.js'
+          unzip -l "$ARCHIVE" | grep 'reference/maps/minimal/package.js'
+          unzip -l "$ARCHIVE" | grep 'app/index.html'
 
       - name: Upload RPGmap package
         uses: actions/upload-artifact@v4
