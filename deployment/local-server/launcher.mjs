@@ -1,6 +1,6 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,8 +10,9 @@ import { createInterface } from 'node:readline/promises';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PORT = 30000;
 const CLOUDFLARED_WINDOWS_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe';
+const SEPARATOR = '============================================================';
 
-export function delay(ms) {
+function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
@@ -27,26 +28,31 @@ export function createInternetCredentials() {
   };
 }
 
-export function buildConnectionInfo({ publicUrl, joinCode, gmSecret, version = 'unknown', port = DEFAULT_PORT }) {
+export function buildConnectionInfo({
+  publicUrl,
+  joinCode,
+  gmSecret,
+  version = 'unknown',
+  port = DEFAULT_PORT,
+}) {
   return [
-    '============================================================',
-    ` RPGmap Internet Multiplayer  |  ${version}`,
-    '============================================================',
-    ` Public URL : ${publicUrl}`,
-    ` Join Code  : ${joinCode}`,
-    ` GM Secret  : ${gmSecret}`,
-    ` Local URL  : http://127.0.0.1:${port}`,
-    '============================================================',
-    '',
-    ' PLAYER SHARE ONLY:',
+    SEPARATOR,
+    ` RPGmap ${version} · Internet / Public · READY`,
+    SEPARATOR,
+    ' PLAYER INVITE',
     `   URL       : ${publicUrl}`,
     `   Join Code : ${joinCode}`,
     '',
-    ' GM Secret is for the GM only. Do not send it to Players.',
+    ' GM ONLY',
+    `   GM Secret : ${gmSecret}`,
+    '',
+    ' LOCAL',
+    `   Local     : http://127.0.0.1:${port}`,
+    SEPARATOR,
   ];
 }
 
-export async function isTcpPortOpen(port, host = '127.0.0.1', timeoutMs = 700) {
+async function isTcpPortOpen(port, host = '127.0.0.1', timeoutMs = 700) {
   const targetPort = Math.max(1, Number(port) || DEFAULT_PORT);
   return new Promise(resolve => {
     const socket = net.createConnection({ host, port: targetPort });
@@ -120,17 +126,8 @@ function networkUrls(port) {
   return [...new Set(urls)];
 }
 
-async function readVersion() {
-  try {
-    return JSON.parse(await readFile(path.join(ROOT, 'VERSION.json'), 'utf8'));
-  } catch {
-    return { app: 'RPGmap', version: 'dev', commit: 'unknown' };
-  }
-}
-
 async function validateRuntime() {
-  const required = ['server.mjs', path.join('app', 'index.html')];
-  for (const relative of required) {
+  for (const relative of ['server.mjs', path.join('app', 'index.html')]) {
     try {
       await access(path.join(ROOT, relative));
     } catch {
@@ -165,6 +162,16 @@ function stopChild(child) {
   try { child.kill(); } catch {}
 }
 
+function spawnServer(env) {
+  return spawn(process.execPath, [path.join(ROOT, 'server.mjs')], {
+    cwd: ROOT,
+    env,
+    // Launcher owns normal startup display; Server stderr remains visible for diagnostics.
+    stdio: ['ignore', 'ignore', 'inherit'],
+    windowsHide: false,
+  });
+}
+
 async function waitForServer(port, server, { publicMode, timeoutMs = 20000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -183,26 +190,22 @@ async function waitForServer(port, server, { publicMode, timeoutMs = 20000 } = {
   throw new Error(`RPGmap Server did not become ready at http://127.0.0.1:${port}/api/health.`);
 }
 
-function spawnServer(env) {
-  return spawn(process.execPath, [path.join(ROOT, 'server.mjs')], {
-    cwd: ROOT,
-    env,
-    stdio: 'inherit',
-    windowsHide: false,
-  });
-}
-
 async function waitForChild(child) {
   return new Promise((resolve, reject) => {
     child.once('error', reject);
-    child.once('exit', code => resolve(Number(code) || 0));
+    child.once('exit', (code, signal) => resolve({ code, signal }));
   });
 }
 
 async function executableWorks(command) {
   try {
-    const child = spawn(command, ['--version'], { cwd: ROOT, stdio: 'ignore', windowsHide: true });
-    return (await waitForChild(child)) === 0;
+    const child = spawn(command, ['--version'], {
+      cwd: ROOT,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    const result = await waitForChild(child);
+    return result.code === 0;
   } catch {
     return false;
   }
@@ -212,11 +215,15 @@ async function findCommand(command) {
   if (path.isAbsolute(command)) return (await executableWorks(command)) ? command : null;
   const lookup = process.platform === 'win32' ? 'where.exe' : 'which';
   try {
-    const child = spawn(lookup, [command], { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+    const child = spawn(lookup, [command], {
+      cwd: ROOT,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
     let output = '';
     child.stdout?.on('data', chunk => { output += String(chunk); });
-    const code = await waitForChild(child);
-    if (code !== 0) return null;
+    const result = await waitForChild(child);
+    if (result.code !== 0) return null;
     const candidate = output.split(/\r?\n/).map(line => line.trim()).find(Boolean);
     return candidate && await executableWorks(candidate) ? candidate : null;
   } catch {
@@ -227,7 +234,8 @@ async function findCommand(command) {
 async function installCloudflaredWindows() {
   const target = path.join(ROOT, 'cloudflared.exe');
   const temp = target + '.download';
-  console.log('[INFO] cloudflared not found. Installing portable cloudflared.exe...');
+  console.log('[INFO] cloudflared not found. Installing it for Internet mode...');
+
   try {
     await rm(temp, { force: true });
     const response = await fetch(CLOUDFLARED_WINDOWS_URL, { redirect: 'follow' });
@@ -235,9 +243,10 @@ async function installCloudflaredWindows() {
     const payload = Buffer.from(await response.arrayBuffer());
     if (payload.length < 1024 * 1024) throw new Error('downloaded file is unexpectedly small');
     await writeFile(temp, payload);
+    await rm(target, { force: true });
     await rename(temp, target);
     if (!await executableWorks(target)) throw new Error('downloaded cloudflared.exe could not run');
-    console.log('[OK] Portable cloudflared.exe installed beside RPGmap.');
+    console.log('[OK] cloudflared is ready.');
     return target;
   } catch (error) {
     await rm(temp, { force: true }).catch(() => {});
@@ -246,13 +255,13 @@ async function installCloudflaredWindows() {
 
   const winget = await findCommand('winget.exe');
   if (winget) {
-    console.log('[INFO] Trying Winget: Cloudflare.cloudflared...');
+    console.log('[INFO] Trying Winget package Cloudflare.cloudflared...');
     const child = spawn(winget, [
       'install', '--id', 'Cloudflare.cloudflared', '--exact',
       '--accept-package-agreements', '--accept-source-agreements',
     ], { cwd: ROOT, stdio: 'inherit', windowsHide: false });
-    const code = await waitForChild(child);
-    if (code === 0) {
+    const result = await waitForChild(child);
+    if (result.code === 0) {
       const installed = await findCommand('cloudflared.exe');
       if (installed) return installed;
     }
@@ -280,41 +289,54 @@ async function resolveCloudflared() {
   throw new Error('cloudflared is required for Internet mode. Install it in PATH or place it beside launcher.mjs.');
 }
 
+function tunnelDiagnostic(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .slice(-3)
+    .join(' | ');
+}
+
 async function waitForTunnelUrl(tunnel, timeoutMs = 30000) {
   let scanBuffer = '';
-  let settled = false;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    let settled = false;
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      tunnel.stdout?.off('data', inspect);
+      tunnel.stderr?.off('data', inspect);
+      tunnel.off('exit', onExit);
+      tunnel.off('error', onError);
+    };
+    const fail = message => {
       if (settled) return;
       settled = true;
-      reject(new Error('Cloudflare Quick Tunnel URL was not created within 30 seconds.'));
-    }, timeoutMs);
-
+      cleanup();
+      const diagnostic = tunnelDiagnostic(scanBuffer);
+      reject(new Error(diagnostic ? `${message} Cloudflare: ${diagnostic}` : message));
+    };
     const inspect = chunk => {
-      const text = String(chunk || '');
-      process.stdout.write(text);
-      scanBuffer = (scanBuffer + text).slice(-16384);
+      if (settled) return;
+      scanBuffer = (scanBuffer + String(chunk || '')).slice(-16384);
       const url = parseQuickTunnelUrl(scanBuffer);
-      if (!url || settled) return;
+      if (!url) return;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       resolve(url);
     };
+    const onExit = code => fail(`cloudflared exited before creating a Quick Tunnel URL (code ${code ?? 'unknown'}).`);
+    const onError = error => fail(error?.message || String(error));
+    const timer = setTimeout(
+      () => fail('Cloudflare Quick Tunnel URL was not created within 30 seconds.'),
+      timeoutMs,
+    );
 
     tunnel.stdout?.on('data', inspect);
     tunnel.stderr?.on('data', inspect);
-    tunnel.once('exit', code => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(`cloudflared exited before creating a Quick Tunnel URL (code ${code ?? 'unknown'}).`));
-    });
-    tunnel.once('error', error => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(error);
-    });
+    tunnel.once('exit', onExit);
+    tunnel.once('error', onError);
   });
 }
 
@@ -323,10 +345,8 @@ async function ensurePortFree(port) {
   if (existing.occupied) throw new Error(describePortConflict(existing, port));
 }
 
-async function runLocal(port) {
-  await ensurePortFree(port);
-  const localUrl = `http://127.0.0.1:${port}`;
-  const env = {
+function localServerEnv(port) {
+  return {
     ...process.env,
     RPGMAP_PUBLIC: '0',
     RPGMAP_PUBLIC_URL: '',
@@ -336,17 +356,37 @@ async function runLocal(port) {
     RPGMAP_MAP_DIR: path.join(ROOT, 'map'),
     PORT: String(port),
   };
+}
 
+function publicServerEnv(port, publicUrl, credentials) {
+  return {
+    ...process.env,
+    RPGMAP_PUBLIC: '1',
+    RPGMAP_PUBLIC_URL: publicUrl,
+    RPGMAP_JOIN_CODE: credentials.joinCode,
+    RPGMAP_GM_SECRET: credentials.gmSecret,
+    RPGMAP_PUBLIC_DIR: path.join(ROOT, 'app'),
+    RPGMAP_MAP_DIR: path.join(ROOT, 'map'),
+    PORT: String(port),
+  };
+}
+
+function printLocalReady(health, port) {
   console.log('');
-  console.log('============================================================');
-  console.log(' RPGmap · Local / LAN');
-  console.log('============================================================');
-  console.log(` Local   : ${localUrl}`);
+  console.log(SEPARATOR);
+  console.log(` RPGmap ${health?.version || 'unknown'} · Local / LAN · READY`);
+  console.log(SEPARATOR);
+  console.log(` Local   : http://127.0.0.1:${port}`);
   for (const url of networkUrls(port)) console.log(` Network : ${url}`);
-  console.log(' Status  : starting...');
-  console.log('============================================================');
+  console.log(SEPARATOR);
+  console.log(' Press Ctrl+C to stop RPGmap.');
+  console.log('');
+}
 
-  const server = spawnServer(env);
+async function runLocal(port) {
+  await ensurePortFree(port);
+  console.log('[INFO] Starting RPGmap Local / LAN...');
+  const server = spawnServer(localServerEnv(port));
   let shuttingDown = false;
   const cleanup = () => {
     if (shuttingDown) return;
@@ -359,9 +399,8 @@ async function runLocal(port) {
 
   try {
     const health = await waitForServer(port, server, { publicMode: false });
-    console.log(`[OK] READY · RPGmap ${health?.version || ''}`.trim());
-    console.log('[INFO] Browser opens only after the server is ready.');
-    openBrowser(localUrl);
+    printLocalReady(health, port);
+    openBrowser(`http://127.0.0.1:${port}`);
     const code = await new Promise(resolve => server.once('exit', resolve));
     if (!shuttingDown && code) process.exitCode = Number(code) || 1;
   } finally {
@@ -371,21 +410,12 @@ async function runLocal(port) {
 
 async function runInternet(port) {
   await ensurePortFree(port);
+  console.log('[INFO] Preparing RPGmap Internet / Public...');
   const cloudflared = await resolveCloudflared();
   await ensurePortFree(port);
 
   const localUrl = `http://127.0.0.1:${port}`;
   const credentials = createInternetCredentials();
-  const version = await readVersion();
-  console.log('');
-  console.log('============================================================');
-  console.log(' RPGmap · Internet / Public');
-  console.log('============================================================');
-  console.log(` Local origin : ${localUrl}`);
-  console.log(` Cloudflared  : ${cloudflared}`);
-  console.log(' Status       : creating Quick Tunnel...');
-  console.log('============================================================');
-
   const tunnel = spawn(cloudflared, [
     'tunnel', '--no-autoupdate', '--url', localUrl, '--protocol', 'http2',
   ], {
@@ -410,35 +440,21 @@ async function runInternet(port) {
   try {
     const publicUrl = await waitForTunnelUrl(tunnel);
     await ensurePortFree(port);
-    const env = {
-      ...process.env,
-      RPGMAP_PUBLIC: '1',
-      RPGMAP_PUBLIC_URL: publicUrl,
-      RPGMAP_JOIN_CODE: credentials.joinCode,
-      RPGMAP_GM_SECRET: credentials.gmSecret,
-      RPGMAP_PLAYER_WRITE: process.env.RPGMAP_PLAYER_WRITE || '1',
-      RPGMAP_PUBLIC_DIR: path.join(ROOT, 'app'),
-      RPGMAP_MAP_DIR: path.join(ROOT, 'map'),
-      PORT: String(port),
-    };
-
-    server = spawnServer(env);
+    server = spawnServer(publicServerEnv(port, publicUrl, credentials));
     const health = await waitForServer(port, server, { publicMode: true });
-    const lines = buildConnectionInfo({
+
+    console.log('');
+    for (const line of buildConnectionInfo({
       publicUrl,
       joinCode: credentials.joinCode,
       gmSecret: credentials.gmSecret,
-      version: version?.version || health?.version || 'unknown',
+      version: health?.version || 'unknown',
       port,
-    });
-    console.log('');
-    for (const line of lines) console.log(line);
-    for (const url of networkUrls(port)) console.log(` Network URL: ${url}`);
-    console.log('');
-    console.log(' Internet mode already serves Local + LAN + Public clients.');
-    console.log(' Do not start a second Local/LAN server at the same time.');
+    })) console.log(line);
+    for (const url of networkUrls(port)) console.log(` Network   : ${url}`);
     console.log(' Press Ctrl+C to stop RPGmap and the tunnel.');
     console.log('');
+
     openBrowser(publicUrl);
 
     const result = await Promise.race([
@@ -459,19 +475,19 @@ async function chooseMode() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return 'local';
 
   console.log('');
-  console.log('============================================================');
+  console.log(SEPARATOR);
   console.log(' RPGmap Launcher');
-  console.log('============================================================');
+  console.log(SEPARATOR);
   console.log('  1. Local / LAN');
   console.log('  2. Internet / Public');
   console.log('');
   console.log(' Internet mode already includes Local and LAN access.');
-  console.log('============================================================');
+  console.log(SEPARATOR);
+
   const readline = createInterface({ input: process.stdin, output: process.stdout });
   try {
     while (true) {
-      const answer = await readline.question('Select mode [1/2]: ');
-      const mode = normalizeLaunchMode(answer);
+      const mode = normalizeLaunchMode(await readline.question('Select mode [1/2]: '));
       if (mode) return mode;
       console.log('Please enter 1 or 2.');
     }
@@ -483,9 +499,9 @@ async function chooseMode() {
 export async function main() {
   await validateRuntime();
   const port = Math.max(1, Number(process.env.PORT || DEFAULT_PORT) || DEFAULT_PORT);
-  const mode = await chooseMode();
-  if (mode === 'internet') return runInternet(port);
-  return runLocal(port);
+  return (await chooseMode()) === 'internet'
+    ? runInternet(port)
+    : runLocal(port);
 }
 
 const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
