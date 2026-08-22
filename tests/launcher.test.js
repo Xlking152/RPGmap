@@ -51,10 +51,11 @@ test('Internet credentials create a six-digit Join Code and unique GM Secret', (
 test('Internet READY display keeps player invite and GM secret concise and separated', () => {
   const publicUrl = 'https://example-room.trycloudflare.com';
   const joinCode = '123456';
+  const gmSecret = 'FEDCBA9876543210';
   const text = buildConnectionInfo({
     publicUrl,
     joinCode,
-    gmSecret: 'ABCDEF0123456789',
+    gmSecret,
     version: '1.5.3',
     port: 30000,
   }).join('\n');
@@ -62,10 +63,11 @@ test('Internet READY display keeps player invite and GM secret concise and separ
   assert.match(text, /RPGmap 1\.5\.3 · Internet \/ Public · READY/);
   assert.match(text, /PLAYER INVITE/);
   assert.match(text, /GM ONLY/);
-  assert.match(text, /GM Secret\s+: ABCDEF0123456789/);
+  assert.match(text, /GM Secret\s+: FEDCBA9876543210/);
   assert.match(text, /Local\s+: http:\/\/127\.0\.0\.1:30000/);
   assert.equal(text.split(publicUrl).length - 1, 1);
   assert.equal(text.split(joinCode).length - 1, 1);
+  assert.equal(text.split(gmSecret).length - 1, 1);
 });
 
 test('port guard identifies an existing RPGmap Local/LAN server', async () => {
