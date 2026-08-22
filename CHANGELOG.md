@@ -2,6 +2,31 @@
 
 RPGmap 使用语义化版本号。更细的开发过程见 `文档/工作日志.md`。
 
+## 1.5.2 — Candidate · 2026-08-22
+
+V1.5.2 修复 V1.5.1 人工验收中发现的 Local/LAN 与 Internet 启动生命周期冲突风险，不改变 MapPackage、Feature Interaction 或 Elevation 数据模型。
+
+### Local / LAN startup
+
+- 新增 `local-launcher.mjs`，本地入口不再先打开浏览器再启动 Server。
+- 本地启动顺序改为：端口检查 → 启动 Server → `/api/health` READY → 打开 `127.0.0.1`。
+- 本地启动显式清除 Public URL / Join Code / GM Secret，并强制 `RPGMAP_PUBLIC=0`，避免继承公网模式环境。
+- `start-rpgmap.bat` 与 `start-rpgmap.sh` 统一通过 guarded local launcher 启动。
+
+### Local / Internet mutual exclusion
+
+- 新增 `launcher-guard.mjs` 检查 30000 端口占用。
+- 若已有 RPGmap Local/LAN 或 Internet/Public Server，占用信息会被识别并直接报错，不再继续创建第二个 Server。
+- 若端口被其他程序占用，也会给出明确错误。
+- Internet launcher 在创建 Quick Tunnel 前先检查本地 origin 端口，避免等到 Tunnel 创建后才发现 Server 无法绑定。
+- Local/LAN 与 Internet 是两种互斥启动方式；Internet 模式本身仍同时提供 Local、Network 与 Public URL，不需要再额外启动本地 Server。
+
+### Validation
+
+- 新增 launcher port-guard 自动测试。
+- Windows package smoke 额外确认 `start-rpgmap.bat` 启动的是 `publicMode=false` 的 Local/LAN Server。
+- Package 继续执行 Node、syntax、source separation、Vite build、Linux no-reference Runtime 与 Windows BAT no-reference Runtime 验证。
+
 ## 1.5.1 — Candidate · 2026-08-22
 
 V1.5.1 是 V1.5.0 MapPackage / Feature Interaction / Elevation Candidate 的人工验收修订版，保持 V1.5 架构边界不变。
