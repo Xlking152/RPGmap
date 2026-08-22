@@ -92,12 +92,14 @@ jobs:
           grep -q 'northern-song-lanzhou-1104' dist/index.html
           test "$(wc -c < dist/index.html)" -gt 500000
 
-      - name: Resolve package version
+      - name: Resolve package metadata
         shell: bash
         run: |
           set -euo pipefail
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          SOURCE_COMMIT="${{ github.event.pull_request.head.sha || github.sha }}"
           echo "PACKAGE_VERSION=${PACKAGE_VERSION}" >> "$GITHUB_ENV"
+          echo "SOURCE_COMMIT=${SOURCE_COMMIT}" >> "$GITHUB_ENV"
 
       - name: Assemble RPGmap package
         shell: bash
@@ -129,7 +131,7 @@ jobs:
           {
             "app": "RPGmap",
             "version": "${PACKAGE_VERSION}",
-            "commit": "${GITHUB_SHA}",
+            "commit": "${SOURCE_COMMIT}",
             "serverMode": "multiplayer",
             "storageMode": "portable-map-root-v1.4.1-compatible",
             "mapPackageApiVersion": 1,
@@ -149,6 +151,7 @@ jobs:
           test -d "$ROOT/map/backups"
           test ! -d "$ROOT/data"
           test ! -d "$ROOT/maps"
+          test "$(node -p "require('$ROOT/VERSION.json').commit")" = "$SOURCE_COMMIT"
 
       - name: Runtime smoke without reference sources
         shell: bash
@@ -210,3 +213,52 @@ jobs:
             artifact/RPGmap-v${{ env.PACKAGE_VERSION }}.zip.sha256
           if-no-files-found: error
           retention-days: 14
+
+  windows-bat-smoke:
+    needs: test-package-runtime
+    runs-on: windows-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+
+      - name: Download packaged artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: RPGmap-v1.5.0
+          path: smoke
+
+      - name: Run packaged BAT without reference sources
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Expand-Archive -Path 'smoke/RPGmap-v1.5.0.zip' -DestinationPath 'smoke/package' -Force
+          $root = (Resolve-Path 'smoke/package/RPGmap-v1.5.0').Path
+          $reference = Join-Path $root 'reference'
+          if (Test-Path $reference) { Remove-Item $reference -Recurse -Force }
+          if (Test-Path $reference) { throw 'reference directory still exists before Windows runtime smoke' }
+
+          $bootstrap = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d','/c','call start-rpgmap.bat') -WorkingDirectory $root -PassThru
+          $ready = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            try {
+              $health = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:30000/api/health' -TimeoutSec 1
+              $index = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:30000/' -TimeoutSec 1
+              if ($health.StatusCode -eq 200 -and $index.StatusCode -eq 200 -and $index.Content -match 'northern-song-lanzhou-1104') {
+                $ready = $true
+                break
+              }
+            } catch {}
+            if ($bootstrap.HasExited) { break }
+            Start-Sleep -Milliseconds 250
+          }
+
+          if (-not $ready) {
+            if ($bootstrap.HasExited) { Write-Host "BAT exit code: $($bootstrap.ExitCode)" }
+            throw 'Packaged start-rpgmap.bat did not serve the bundled Lanzhou client after reference/ was removed.'
+          }
+
+          & taskkill.exe /PID $bootstrap.Id /T /F 2>$null | Out-Null
