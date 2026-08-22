@@ -43,7 +43,6 @@ function installStyles(documentNode) {
     .feature-elevation-controls { display:grid; grid-template-columns:32px minmax(70px,1fr) 32px auto; gap:6px; align-items:center; }
     .feature-elevation-controls input { min-width:0; height:30px; }
     .feature-elevation-controls button { height:30px; }
-    .feature-elevation-unit { font-size:12px; opacity:.75; margin-left:-2px; }
   `;
   documentNode.head?.append(style);
 }
@@ -81,7 +80,12 @@ function canEditFeatureHeight(api) {
 
 function setFeedback(shell, message) {
   const node = shell?.querySelector?.('[data-role="map-status"]');
-  if (node && message) node.textContent = message;
+  if (node && message && node.textContent !== message) node.textContent = message;
+}
+
+function setText(node, value) {
+  const text = String(value ?? '');
+  if (node && node.textContent !== text) node.textContent = text;
 }
 
 function clampHudPosition(hud, event, documentNode) {
@@ -254,7 +258,7 @@ export function createElevationSystem() {
             elevation.className = 'token-elevation-label';
             icon.append(elevation);
           }
-          elevation.textContent = `${formatFt(tokenElevationFt(token))} ft`;
+          setText(elevation, `${formatFt(tokenElevationFt(token))} ft`);
           elevation.title = 'Token 当前离地高度';
 
           let hpMeter = icon.querySelector(':scope > .token-hp-meter');
@@ -434,7 +438,7 @@ export function createElevationSystem() {
         const reset = editor.querySelector('[data-elevation-action="feature-reset"]');
         const defaultText = declared === null ? '未声明（保持传统无限高度阻挡）' : `${formatFt(declared)} ft`;
         const effectiveText = effective === null ? '无限高度' : `${formatFt(effective)} ft`;
-        summary.textContent = `地图默认：${defaultText} · 当前：${effectiveText}${hasOverride ? ' · World 覆盖' : ''}`;
+        setText(summary, `地图默认：${defaultText} · 当前：${effectiveText}${hasOverride ? ' · World 覆盖' : ''}`);
         input.value = effective === null ? '' : String(effective);
         input.placeholder = effective === null ? '输入 ft 启用高度上限' : '';
         editor.querySelectorAll('button, input').forEach((control) => { control.disabled = !allowed; });
