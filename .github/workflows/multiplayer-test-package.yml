@@ -118,6 +118,8 @@ jobs:
           cp deployment/local-server/server.mjs "$ROOT/server.mjs"
           cp deployment/local-server/access-control.mjs "$ROOT/access-control.mjs"
           cp deployment/local-server/portable-storage.mjs "$ROOT/portable-storage.mjs"
+          cp deployment/local-server/launcher-guard.mjs "$ROOT/launcher-guard.mjs"
+          cp deployment/local-server/local-launcher.mjs "$ROOT/local-launcher.mjs"
           cp deployment/local-server/internet-launcher.mjs "$ROOT/internet-launcher.mjs"
           cp deployment/local-server/start-rpgmap.bat "$ROOT/start-rpgmap.bat"
           cp deployment/local-server/start-rpgmap.sh "$ROOT/start-rpgmap.sh"
@@ -150,6 +152,8 @@ jobs:
           test -f "$ROOT/reference/maps/lanzhou/package.js"
           test -f "$ROOT/reference/maps/minimal/package.js"
           test -f "$ROOT/server.mjs"
+          test -f "$ROOT/launcher-guard.mjs"
+          test -f "$ROOT/local-launcher.mjs"
           test -f "$ROOT/map/README.txt"
           test -d "$ROOT/map/uploads"
           test -d "$ROOT/map/backups"
@@ -208,6 +212,8 @@ jobs:
           unzip -l "$ARCHIVE" | grep 'reference/maps/lanzhou/package.js'
           unzip -l "$ARCHIVE" | grep 'reference/maps/minimal/package.js'
           unzip -l "$ARCHIVE" | grep 'app/index.html'
+          unzip -l "$ARCHIVE" | grep 'launcher-guard.mjs'
+          unzip -l "$ARCHIVE" | grep 'local-launcher.mjs'
 
       - name: Upload RPGmap package
         uses: actions/upload-artifact@v4
@@ -257,8 +263,9 @@ jobs:
           for ($i = 0; $i -lt 60; $i++) {
             try {
               $health = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:30000/api/health' -TimeoutSec 1
+              $healthJson = $health.Content | ConvertFrom-Json
               $index = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:30000/' -TimeoutSec 1
-              if ($health.StatusCode -eq 200 -and $index.StatusCode -eq 200 -and $index.Content -match 'northern-song-lanzhou-1104') {
+              if ($health.StatusCode -eq 200 -and -not $healthJson.multiplayer.publicMode -and $index.StatusCode -eq 200 -and $index.Content -match 'northern-song-lanzhou-1104') {
                 $ready = $true
                 break
               }
@@ -269,7 +276,7 @@ jobs:
 
           if (-not $ready) {
             if ($bootstrap.HasExited) { Write-Host "BAT exit code: $($bootstrap.ExitCode)" }
-            throw 'Packaged start-rpgmap.bat did not serve the bundled Lanzhou client after reference/ was removed.'
+            throw 'Packaged start-rpgmap.bat did not serve the bundled Lanzhou client in Local/LAN mode after reference/ was removed.'
           }
 
           # Runtime success was already established above. Process-tree cleanup is
