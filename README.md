@@ -1,6 +1,6 @@
 # RPGmap
 
-RPGmap 是一个面向 TRPG / VTT 的浏览器端自托管地图与跑团平台。当前开发 Candidate 为 **V1.5.3**。
+RPGmap 是一个面向 TRPG / VTT 的浏览器端自托管地图与跑团平台。当前开发 Candidate 为 **V1.5.4**。
 
 V1.5 系列的核心目标有两条：
 
@@ -133,7 +133,7 @@ elevationFt <= blockingHeightFt  => 正常阻挡
 
 ## 5. Token UI
 
-V1.5.3 延续 V1.5.1 的 Token UI：
+V1.5.4 延续 V1.5.1 的 Token UI：
 
 ```text
         Character Name
@@ -155,7 +155,7 @@ V1.5.3 延续 V1.5.1 的 Token UI：
 
 ## 6. Windows 启动：只有一个 BAT
 
-V1.5.3 最终只保留：
+V1.5.4 只保留：
 
 ```text
 start-rpgmap.bat
@@ -191,16 +191,40 @@ internet-launcher.mjs
 launcher-guard.mjs
 ```
 
+### READY 后统一显示
+
+启动窗口会集中给出：
+
+```text
+PLAYER INVITE
+  URL / Public URL
+  Join Code       ← 房间号
+
+LOCAL / LAN
+  Local
+  LAN URL
+
+GM ONLY
+  GM Secret       ← GM 密码
+
+HOST
+  Browser         ← 自动打开本机地图并以 GM 身份进入
+```
+
 ### Local / LAN
 
 ```text
 端口检查
+→ 生成 Join Code / GM Secret
 → 启动 Server
 → 等待 /api/health READY
 → 确认 publicMode=false
-→ 打印 Local / Network 地址
-→ 打开浏览器
+→ 打印 Local / LAN / Join Code / GM Secret
+→ 打开 127.0.0.1
+→ 自动以 GM 身份进入地图
 ```
+
+LAN 玩家使用启动窗口中的 `LAN URL + Join Code`。
 
 ### Internet / Public
 
@@ -211,11 +235,14 @@ launcher-guard.mjs
 → 生成 Join Code / GM Secret
 → 启动同一个 Server
 → 等待 READY + publicMode=true
-→ 打印 Local / Network / Public 地址
-→ 打开 Public URL
+→ 打印 Local / LAN / Public / Join Code / GM Secret
+→ 主机打开 127.0.0.1
+→ 自动以 GM 身份进入地图
 ```
 
-Internet 模式本身已经同时提供 Local + LAN + Public 访问，不需要再启动第二个 Local Server。
+Internet 模式本身已经同时提供 Local + LAN + Public 访问，不需要再启动第二个 Local Server。主机不再绕 Cloudflare Public URL 访问自己，公网 URL 仅供远程玩家使用。
+
+主机自动 GM bootstrap 只存在于 localhost URL hash 中；Client 消费后立即清除，并且非 localhost 页面不会执行这个自动登录信息。
 
 高级用法：
 
@@ -231,7 +258,7 @@ start-rpgmap.bat internet
 测试包结构：
 
 ```text
-RPGmap-v1.5.3/
+RPGmap-v1.5.4/
 ├─ app/
 ├─ map/
 ├─ reference/
@@ -303,7 +330,7 @@ reference/README.md
 
 ## 10. CI 关键验收
 
-V1.5.3 CI 要求：
+Candidate CI 要求：
 
 1. Core / Reference 边界检查通过；
 2. Node tests 全部通过；
@@ -312,7 +339,7 @@ V1.5.3 CI 要求：
 5. 默认兰州 MapPackage 已打进 `app/index.html`；
 6. 删除 `reference/` 后 Runtime 仍可启动；
 7. Windows 实际运行打包后的 `start-rpgmap.bat local`；
-8. `/api/health` 必须明确 `publicMode=false`；
+8. `/api/health` 必须明确 `publicMode=false` 且 Local/LAN 已启用 Join Code；
 9. 最终 ZIP 根目录 **只能有一个 BAT：`start-rpgmap.bat`**；
 10. 旧 Split Launcher / Setup / Public Server BAT 不允许重新进入安装包。
 
