@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createActorFromImport, addFormToActor, migrateLegacyCharacters, normalizeEntityState } from '../src/entities/model.js';
+import { createActorFromImport, createTokenForActor, addFormToActor, migrateLegacyCharacters, normalizeEntityState } from '../src/entities/model.js';
 import { addCustomResource, addEffect, cycleActorForm, resolveActor, setAttributeAdjustment, setBadStatusCurrent, setResourceCurrent } from '../src/entities/resolver.js';
 
 function imported(name, formName, hp, strength, statusLight = 4) {
@@ -71,4 +71,28 @@ test('legacy characters migrate to actor plus token once', () => {
   assert.equal(first.state.tokens[0].characterId, 'c1');
   const second = migrateLegacyCharacters(first.state, [character]);
   assert.equal(second.migrated, 0);
+});
+
+test('empty or malformed character cards normalize before actor creation and produce safe token references', () => {
+  const emptyActor = createActorFromImport();
+  assert.equal(emptyActor.name, '未命名角色');
+  assert.equal(emptyActor.forms[0].name, '默认形态');
+  assert.equal(emptyActor.forms[0].resourceBases.hp.baseMax, 0);
+  const token = createTokenForActor(emptyActor.id, 'empty-character');
+  assert.equal(token.actorId, emptyActor.id);
+  assert.equal(token.characterId, 'empty-character');
+
+  const malformedActor = createActorFromImport({
+    identity: null,
+    resources: null,
+    attributes: null,
+    checks: null,
+    badStatuses: null,
+    combat: null,
+    tokenAppearance: null,
+    source: null,
+  });
+  assert.equal(malformedActor.name, '未命名角色');
+  assert.equal(malformedActor.forms[0].tokenAppearance.color, '#3d9b63');
+  assert.equal(malformedActor.forms[0].resourceBases.willpower.baseMax, 0);
 });

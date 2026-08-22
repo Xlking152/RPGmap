@@ -1,5 +1,3 @@
-import { createEmptyEntityState } from './model.js';
-
 function text(value, fallback = '') {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
@@ -49,5 +47,5 @@ export function isValidEntityState(state) {
 }
 
 export function safeEntityState(state) {
-  return isValidEntityState(state) ? state : createEmptyEntityState();
+  return isValidEntityState(state) ? state : { schemaVersion: 1, actors: [], tokens: [] };
 }

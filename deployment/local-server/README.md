@@ -1,4 +1,4 @@
-# RPGmap 1.5.4 Candidate · 启动与运行说明
+# RPGmap 1.5.5 Candidate · 启动与运行说明
 
 Windows 用户只需要一个入口：
 
@@ -15,7 +15,7 @@ server.mjs
 ## 发布包目录
 
 ```text
-RPGmap-v1.5.4/
+RPGmap-v1.5.5/
 ├─ app/                    构建后的浏览器 Client + 默认地图
 ├─ map/                    当前 World / User 可写数据
 │  ├─ world.json

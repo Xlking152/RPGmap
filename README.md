@@ -1,6 +1,6 @@
 # RPGmap
 
-RPGmap 是一个面向 TRPG / VTT 的浏览器端自托管地图与跑团平台。当前开发 Candidate 为 **V1.5.4**。
+RPGmap 是一个面向 TRPG / VTT 的浏览器端自托管地图与跑团平台。当前开发 Candidate 为 **V1.5.5**。
 
 V1.5 系列的核心目标有两条：
 
@@ -133,7 +133,7 @@ elevationFt <= blockingHeightFt  => 正常阻挡
 
 ## 5. Token UI
 
-V1.5.4 延续 V1.5.1 的 Token UI：
+V1.5.5 延续 V1.5.1 的 Token UI：
 
 ```text
         Character Name
@@ -155,7 +155,7 @@ V1.5.4 延续 V1.5.1 的 Token UI：
 
 ## 6. Windows 启动：只有一个 BAT
 
-V1.5.4 只保留：
+V1.5.5 只保留：
 
 ```text
 start-rpgmap.bat
@@ -258,7 +258,7 @@ start-rpgmap.bat internet
 测试包结构：
 
 ```text
-RPGmap-v1.5.4/
+RPGmap-v1.5.5/
 ├─ app/
 ├─ map/
 ├─ reference/

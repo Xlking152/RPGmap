@@ -2,6 +2,17 @@
 
 RPGmap 使用语义化版本号。更细的开发过程见 `文档/工作日志.md`。
 
+## 1.5.5 — Candidate · 2026-08-23
+
+V1.5.5 将服务器 World 设为本地启动时的唯一状态来源，并完成了角色卡规范化模块的接入。
+
+### Token / Startup Stability
+
+- 在本地 RPGmap Server 模式下，浏览器启动时不再读取历史 `localStorage` World；客户端会在检测到 `/api/health` 后使用内存存储，随后以 `map/world.json` 的服务器快照为准。
+- 自动 GM 连接前会让地图完成首帧绘制，避免连接与完整 World 导入抢占启动渲染。
+- 空白、缺字段或结构异常的角色卡会在创建 Actor 前补齐安全默认值，防止 `undefined` 进入 Token 绑定与渲染链路。
+- 新增空角色卡回归测试，覆盖 Actor / Form / Token 所需的默认数据。
+
 ## 1.5.4 — Candidate · 2026-08-22
 
 V1.5.4 继续收口单入口 Launcher 的主机体验，不改变 MapPackage / Feature / Elevation / Navigation 数据模型。

@@ -1,5 +1,6 @@
 import { createHealthRuntime, defaultHealthMode, normalizeHealthRuntime } from '../health/model.js';
 import { normalizeElevationFt } from '../elevation/model.js';
+import { normalizeCharacterCard } from './schema.js';
 const CORE_RESOURCE_DEFS = Object.freeze([
   { id: 'hp', name: '生命', kind: 'hp' },
   { id: 'stamina', name: '精力', kind: 'stamina' },
@@ -87,40 +88,42 @@ export function createEmptyEntityState() {
   return { schemaVersion: 1, actors: [], tokens: [] };
 }
 
-export function createFormFromImport(imported, { id = uid('form'), name = imported.formName || '默认形态' } = {}) {
+export function createFormFromImport(imported, { id = uid('form'), name } = {}) {
+  const normalized = normalizeCharacterCard(imported);
   const resourceBases = {};
   for (const def of CORE_RESOURCE_DEFS) {
     resourceBases[def.id] = {
       id: def.id,
       name: def.name,
       kind: def.kind,
-      baseMax: Math.max(0, finite(imported.resources?.[def.id]?.max ?? imported.resources?.[def.id], 0)),
+      baseMax: Math.max(0, finite(normalized.resources?.[def.id]?.max ?? normalized.resources?.[def.id], 0)),
     };
   }
   return {
     id,
-    name: text(name, '默认形态'),
-    avatarDataUrl: imported.avatarDataUrl || null,
-    identity: clone(imported.identity || {}),
-    description: clone(imported.description || {}),
+    name: text(name ?? normalized.formName, '默认形态'),
+    avatarDataUrl: normalized.avatarDataUrl || null,
+    identity: clone(normalized.identity),
+    description: clone(normalized.description),
     resourceBases,
-    attributes: clone(imported.attributes || []),
+    attributes: clone(normalized.attributes),
     checks: {
-      skills: clone(imported.checks?.skills || []),
-      saves: clone(imported.checks?.saves || []),
+      skills: clone(normalized.checks.skills || []),
+      saves: clone(normalized.checks.saves || []),
     },
-    badStatuses: Array.isArray(imported.badStatuses) && imported.badStatuses.length ? clone(imported.badStatuses) : emptyBadStatuses(),
-    combat: clone(imported.combat || { attacks: [], defenses: [] }),
+    badStatuses: normalized.badStatuses.length ? clone(normalized.badStatuses) : emptyBadStatuses(),
+    combat: clone(normalized.combat),
     tokenAppearance: {
-      color: imported.tokenAppearance?.color || '#3d9b63',
-      scale: finite(imported.tokenAppearance?.scale, 1) || 1,
+      color: normalized.tokenAppearance.color || '#3d9b63',
+      scale: finite(normalized.tokenAppearance.scale, 1) || 1,
     },
-    source: clone(imported.source || null),
+    source: clone(normalized.source),
   };
 }
 
 export function createActorFromImport(imported, { id = uid('actor'), formId, formName } = {}) {
-  const form = createFormFromImport(imported, { id: formId || uid('form'), name: formName || imported.formName });
+  const normalized = normalizeCharacterCard(imported);
+  const form = createFormFromImport(normalized, { id: formId || uid('form'), name: formName || normalized.formName });
   const resources = {};
   for (const def of CORE_RESOURCE_DEFS) {
     const maximum = form.resourceBases[def.id]?.baseMax || 0;
@@ -129,7 +132,7 @@ export function createActorFromImport(imported, { id = uid('actor'), formId, for
   const badStatuses = Object.fromEntries((form.badStatuses || []).map(status => [status.id, 0]));
   return {
     id,
-    name: text(imported.identity?.name, '未命名角色'),
+    name: text(normalized.identity.name, '未命名角色'),
     currentFormId: form.id,
     forms: [form],
     runtime: {
@@ -138,7 +141,7 @@ export function createActorFromImport(imported, { id = uid('actor'), formId, for
       attributeAdjustments: {},
       badStatuses,
       health: createHealthRuntime({
-        mode: defaultHealthMode(imported.source?.type),
+        mode: defaultHealthMode(normalized.source.type),
         max: form.resourceBases.hp?.baseMax || 0,
         simpleCurrent: resources.hp?.current ?? form.resourceBases.hp?.baseMax ?? 0,
       }),

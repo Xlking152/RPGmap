@@ -12,6 +12,7 @@ import {
 import { importCharacterXlsx } from './xlsx-importer.js';
 import { imageToAvatarDataUrl } from './avatar.js';
 import { EntityStore } from './store.js';
+import { normalizeCharacterCard } from './schema.js';
 
 const STYLE_ID = 'rpgmap-entity-system-style';
 
@@ -235,7 +236,7 @@ export function createEntityUiTool(options = {}) {
         if (!file || importBusy) return;
         importBusy = true; setStatus('正在读取角色卡…');
         try {
-          const imported = await importCharacterXlsx(file);
+          const imported = normalizeCharacterCard(await importCharacterXlsx(file));
           if (imported.avatarImage) {
             try { imported.avatarDataUrl = await imageToAvatarDataUrl(imported.avatarImage); }
             catch (error) { console.warn('Excel 头像导入失败，保留空头像', error); }
