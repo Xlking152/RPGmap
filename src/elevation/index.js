@@ -1,3 +1,6 @@
+import { createElevationSystem as createCoreElevationSystem } from './system.js';
+import { createPlacementContextGuard } from './placement-context.js';
+
 export {
   actorForCharacter,
   entityStateFromAppState,
@@ -19,4 +22,17 @@ export {
   withActiveMoverContext,
 } from './runtime-context.js';
 
-export { createElevationSystem } from './system.js';
+export {
+  GROUND_PLACEMENT_MOVER_CONTEXT,
+  createPlacementContextGuard,
+  isCharacterPlacementControl,
+} from './placement-context.js';
+
+export function createElevationSystem() {
+  return {
+    register(api) {
+      createCoreElevationSystem().register(api);
+      createPlacementContextGuard().register(api);
+    },
+  };
+}
