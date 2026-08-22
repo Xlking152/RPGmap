@@ -18,6 +18,9 @@ const features = Object.freeze([
     minCoverage: 0.95,
     ruinStyle: 'timber-earth',
     destructible: Object.freeze({ enabled: true, maxHp: 100, material: 'timber-earth' }),
+    capabilities: Object.freeze({
+      navigation: Object.freeze({ blocks: true }),
+    }),
     details: Object.freeze({
       use: '用于验证通用建筑交互。',
       structure: '木构与夯土示例。',
@@ -40,6 +43,11 @@ const features = Object.freeze([
       interactive: true,
       openable: true,
       actions: Object.freeze({ inspect: true, open: true, close: true }),
+      navigation: Object.freeze({
+        blocks: true,
+        passableWhenOpen: true,
+        passageTile: 'open',
+      }),
     }),
     interaction: Object.freeze({ initialOpen: false }),
   }),
@@ -57,6 +65,13 @@ const features = Object.freeze([
     minCoverage: 0.35,
     ruinStyle: 'stone-earth',
     destructible: Object.freeze({ enabled: true, maxHp: 180, material: 'stone-earth' }),
+    capabilities: Object.freeze({
+      navigation: Object.freeze({
+        blocks: true,
+        passableWhenDestroyed: true,
+        damageCreatesPassage: true,
+      }),
+    }),
   }),
 ]);
 
@@ -95,7 +110,7 @@ export function createMinimalReferencePackage() {
     id: 'rpgmap-minimal-reference',
     title: 'RPGmap Minimal Reference Map',
     name: '最小参考地图',
-    version: '1.1.0',
+    version: '1.2.0',
     compatibleMapVersions: Object.freeze(['1.0.0']),
     width: WIDTH,
     height: HEIGHT,

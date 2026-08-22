@@ -1,5 +1,6 @@
 import { createDamagePreview, commitDamageEvent } from '../engine/state.js';
 import { featureSceneStatus } from '../engine/feature-selection.js';
+import { recordFeatureInteractionEffects } from './effects.js';
 
 export const FEATURE_INTERACTION_STATE_KEY = 'featureInteractions';
 
@@ -34,9 +35,11 @@ function actionEnabled(feature, action) {
 export function getFeatureInteractionState(state, feature) {
   const saved = state?.preferences?.[FEATURE_INTERACTION_STATE_KEY]?.[feature?.id];
   const initialOpen = Boolean(feature?.interaction?.initialOpen ?? feature?.initialOpen ?? false);
-  return Object.freeze({
+  const interactionState = Object.freeze({
     open: typeof saved?.open === 'boolean' ? saved.open : initialOpen,
   });
+  recordFeatureInteractionEffects(feature, interactionState);
+  return interactionState;
 }
 
 export function setFeatureOpenState(state, featureId, open) {

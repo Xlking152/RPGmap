@@ -80,6 +80,27 @@ function normalizeLayerPlan(mapPackage) {
   return Object.freeze(plan);
 }
 
+function normalizePassagePolygon(value) {
+  if (!Array.isArray(value) || value.length < 3) return null;
+  return Object.freeze(value.map((point) => Object.freeze([Number(point[0]), Number(point[1])])));
+}
+
+function normalizeNavigationCapability(feature, declared) {
+  const source = declared.navigation ?? feature.navigation;
+  if (!source || typeof source !== 'object') return null;
+  const passageTile = source.passageTile === 'road' || source.passageTile === 'open'
+    ? source.passageTile
+    : null;
+  return Object.freeze({
+    blocks: source.blocks === true,
+    passableWhenOpen: source.passableWhenOpen === true,
+    passableWhenDestroyed: source.passableWhenDestroyed === true,
+    damageCreatesPassage: source.damageCreatesPassage === true,
+    passageTile,
+    passagePolygon: normalizePassagePolygon(source.passagePolygon),
+  });
+}
+
 function normalizeFeature(feature, index, destructibleCategories) {
   if (!feature || typeof feature !== 'object') {
     throw new TypeError(`Invalid MapPackage: features[${index}] must be an object`);
@@ -114,6 +135,7 @@ function normalizeFeature(feature, index, destructibleCategories) {
   const interactive = declared.interactive
     ?? feature.interactive
     ?? Object.values(actions).some(Boolean);
+  const navigation = normalizeNavigationCapability(feature, declared);
 
   const capabilities = Object.freeze({
     ...declared,
@@ -123,6 +145,7 @@ function normalizeFeature(feature, index, destructibleCategories) {
     destructible: Boolean(destructible),
     openable: Boolean(openable),
     actions,
+    navigation,
   });
   return Object.freeze({ ...feature, id, category, capabilities });
 }
@@ -178,5 +201,6 @@ export function mapPackageCapabilities(mapPackage) {
     destructibleCount: features.filter((feature) => feature.capabilities?.destructible).length,
     enterableCount: features.filter((feature) => feature.capabilities?.enterable).length,
     openableCount: features.filter((feature) => feature.capabilities?.openable).length,
+    navigationObstacleCount: features.filter((feature) => feature.capabilities?.navigation?.blocks).length,
   });
 }

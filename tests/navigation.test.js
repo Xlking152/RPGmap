@@ -8,8 +8,12 @@ import {
   findNavigationPath,
   nearestWalkablePoint,
 } from '../src/engine/navigation.js';
-import { deriveSceneState } from '../src/engine/state.js';
-import { lanzhouMapPackage } from '../src/maps/lanzhou.js';
+import { createInitialState, deriveSceneState } from '../src/engine/state.js';
+import { createDefaultMapPackage } from '../src/map-package/default-map.js';
+import { prepareMapPackage } from '../src/map-package/contract.js';
+import { getFeatureInteractionState, setFeatureOpenState } from '../src/interaction/model.js';
+import { recordFeatureInteractionEffects } from '../src/interaction/effects.js';
+import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
 
 test('A* prefers road tiles, avoids blocked cells and snaps within 30 metres', async () => {
   const navigation = {
@@ -32,8 +36,74 @@ test('A* prefers road tiles, avoids blocked cells and snaps within 30 metres', a
   assert.equal(await findNavigationPath(sealed, { x: 5, y: 45 }, { x: 65, y: 45 }), null);
 });
 
-test('Lanzhou navigation exposes gates and blocks damaged pontoon cells', () => {
+test('generic openable Feature changes collision and route without gate/building category rules', async () => {
+  const barrier = {
+    id: 'generic-barrier',
+    category: 'mechanism',
+    geometry: { points: [[40, 0], [60, 0], [60, 50], [40, 50]] },
+    capabilities: { navigation: { blocks: true } },
+  };
+  const door = {
+    id: 'generic-door',
+    category: 'door',
+    geometry: { points: [[40, 20], [60, 20], [60, 30], [40, 30]] },
+    interaction: { initialOpen: false },
+    capabilities: {
+      openable: true,
+      navigation: { blocks: true, passableWhenOpen: true, passageTile: 'open' },
+    },
+  };
+  const mapPackage = {
+    width: 100,
+    height: 50,
+    navigation: { cellSizeMeters: 10, bridgeFeatureIds: [] },
+    roadBuffers: [],
+    liquidBodies: [],
+    floodRules: {},
+    features: [barrier, door],
+  };
+  const base = createNavigationBase(mapPackage);
+
+  recordFeatureInteractionEffects(door, { open: false });
+  const closed = createNavigationGrid(mapPackage, deriveSceneState([]), base);
+  assert.equal(closed.grid[2][4], NAVIGATION_TILES.blocked);
+  assert.equal(await findNavigationPath(closed, { x: 5, y: 25 }, { x: 95, y: 25 }), null);
+
+  recordFeatureInteractionEffects(door, { open: true });
+  const opened = createNavigationGrid(mapPackage, deriveSceneState([]), base);
+  assert.equal(opened.grid[2][4], NAVIGATION_TILES.open);
+  assert.ok(await findNavigationPath(opened, { x: 5, y: 25 }, { x: 95, y: 25 }));
+});
+
+test('Minimal Reference door open/close state is projected into navigation', () => {
+  const mapPackage = prepareMapPackage(createMinimalReferencePackage(), { source: 'test:minimal' });
+  const door = mapPackage.features.find((feature) => feature.id === 'demo-door');
+  let state = createInitialState(mapPackage);
+  const base = createNavigationBase(mapPackage);
+  const doorCell = { x: Math.floor(500 / 10), y: Math.floor(465 / 10) };
+
+  getFeatureInteractionState(state, door);
+  const closed = createNavigationGrid(mapPackage, deriveSceneState(state.sceneEvents), base);
+  assert.equal(closed.grid[doorCell.y][doorCell.x], NAVIGATION_TILES.blocked);
+
+  state = setFeatureOpenState(state, door.id, true);
+  getFeatureInteractionState(state, door);
+  const opened = createNavigationGrid(mapPackage, deriveSceneState(state.sceneEvents), base);
+  assert.equal(opened.grid[doorCell.y][doorCell.x], NAVIGATION_TILES.open);
+
+  state = setFeatureOpenState(state, door.id, false);
+  getFeatureInteractionState(state, door);
+  const reclosed = createNavigationGrid(mapPackage, deriveSceneState(state.sceneEvents), base);
+  assert.equal(reclosed.grid[doorCell.y][doorCell.x], NAVIGATION_TILES.blocked);
+});
+
+test('Lanzhou navigation closes gates by default, opens them by Interaction state and preserves wall breaches', () => {
+  const lanzhouMapPackage = createDefaultMapPackage();
   const staticBase = createNavigationBase(lanzhouMapPackage);
+  const initialState = createInitialState(lanzhouMapPackage);
+  const northGate = lanzhouMapPackage.features.find((feature) => feature.id === 'gate-north');
+  getFeatureInteractionState(initialState, northGate);
+
   const intact = createNavigationGrid(lanzhouMapPackage, deriveSceneState([]), staticBase);
   const bridgeCell = { x: Math.floor(3508 / 10), y: Math.floor(1086 / 10) };
   assert.equal(staticBase.grid[bridgeCell.y][bridgeCell.x], NAVIGATION_TILES.blocked);
@@ -56,10 +126,15 @@ test('Lanzhou navigation exposes gates and blocks damaged pontoon cells', () => 
   assert.equal(staticBase.grid[bridgeCell.y][bridgeCell.x], NAVIGATION_TILES.blocked);
 
   const northGateCell = { x: Math.floor(3364 / 10), y: Math.floor(1546 / 10) };
-  assert.equal(intact.grid[northGateCell.y][northGateCell.x], NAVIGATION_TILES.road);
+  assert.equal(intact.grid[northGateCell.y][northGateCell.x], NAVIGATION_TILES.blocked);
+
+  const openedState = setFeatureOpenState(initialState, northGate.id, true);
+  getFeatureInteractionState(openedState, northGate);
+  const gateOpened = createNavigationGrid(lanzhouMapPackage, deriveSceneState([]), staticBase);
+  assert.equal(gateOpened.grid[northGateCell.y][northGateCell.x], NAVIGATION_TILES.road);
 
   const wallCell = { x: Math.floor(2500 / 10), y: Math.floor(1570 / 10) };
-  assert.equal(intact.grid[wallCell.y][wallCell.x], NAVIGATION_TILES.blocked);
+  assert.equal(gateOpened.grid[wallCell.y][wallCell.x], NAVIGATION_TILES.blocked);
   const breachedScene = deriveSceneState([{
     id: 'scene-wall', type: 'damage',
     areaSnapshot: {

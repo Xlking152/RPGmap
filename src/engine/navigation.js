@@ -1,5 +1,6 @@
 import EasyStar from 'easystarjs';
 import { deriveFloodRegions } from './state.js';
+import { runtimeFeatureInteractionEffects } from '../interaction/effects.js';
 
 const TILE_BLOCKED = 0;
 const TILE_ROAD = 1;
@@ -56,8 +57,37 @@ function rasterizePolygon(grid, polygon, cellSize, tile, predicate = null) {
 
 function clipDamageForFeature(scene, featureId) {
   return (scene?.clipHits || [])
-    .filter((hit) => hit.featureId === featureId)
+    .filter((hit) => String(hit.featureId) === String(featureId))
     .map((hit) => hit.polygon);
+}
+
+function navigationCapability(feature) {
+  const declared = feature?.capabilities?.navigation || feature?.navigation;
+  if (!declared || typeof declared !== 'object') return null;
+  let passageTile = null;
+  if (declared.passageTile === 'road') passageTile = TILE_ROAD;
+  if (declared.passageTile === 'open') passageTile = TILE_OPEN;
+  return Object.freeze({
+    blocks: declared.blocks === true,
+    passableWhenOpen: declared.passableWhenOpen === true,
+    passableWhenDestroyed: declared.passableWhenDestroyed === true,
+    damageCreatesPassage: declared.damageCreatesPassage === true,
+    passageTile,
+    passagePolygon: Array.isArray(declared.passagePolygon) ? declared.passagePolygon : null,
+  });
+}
+
+function interactionOpen(feature) {
+  return Boolean(runtimeFeatureInteractionEffects(feature).open);
+}
+
+function restorePassage(grid, baseGrid, polygon, cellSize, passageTile) {
+  rasterizePolygon(
+    grid,
+    polygon,
+    cellSize,
+    (_point, column, row) => passageTile ?? baseGrid[row][column],
+  );
 }
 
 export function createNavigationBase(mapPackage) {
@@ -71,12 +101,6 @@ export function createNavigationBase(mapPackage) {
   }
   for (const body of mapPackage.liquidBodies || []) {
     rasterizePolygon(grid, body.polygon, cellSize, TILE_BLOCKED);
-  }
-
-  for (const feature of mapPackage.features || []) {
-    if (feature.category === 'building') {
-      rasterizePolygon(grid, featurePolygon(feature), cellSize, TILE_BLOCKED);
-    }
   }
 
   return Object.freeze({
@@ -96,34 +120,43 @@ export function createNavigationGrid(mapPackage, scene = {}, staticBase = null) 
     throw new Error('navigation base does not match map dimensions');
   }
   const grid = base.grid.map((row) => row.slice());
-  const destroyed = new Set(scene.destroyedObjectIds || []);
+  const destroyed = new Set((scene.destroyedObjectIds || []).map(String));
 
   for (const feature of mapPackage.features || []) {
-    if (feature.category === 'wall' && !destroyed.has(feature.id)) {
-      rasterizePolygon(grid, featurePolygon(feature), cellSize, TILE_BLOCKED);
+    const navigation = navigationCapability(feature);
+    if (!navigation?.blocks) continue;
+    if (navigation.passableWhenDestroyed && destroyed.has(String(feature.id))) continue;
+    if (navigation.passableWhenOpen && interactionOpen(feature)) continue;
+    rasterizePolygon(grid, featurePolygon(feature), cellSize, TILE_BLOCKED);
+  }
+
+  for (const feature of mapPackage.features || []) {
+    const navigation = navigationCapability(feature);
+    if (!navigation) continue;
+    const passagePolygon = navigation.passagePolygon || featurePolygon(feature);
+    const openPassage = navigation.passableWhenOpen && interactionOpen(feature);
+    const destroyedPassage = navigation.passableWhenDestroyed && destroyed.has(String(feature.id));
+    if (openPassage || destroyedPassage) {
+      restorePassage(grid, base.grid, passagePolygon, cellSize, navigation.passageTile);
     }
-  }
 
-  for (const gateway of mapPackage.navigation?.gateways || []) {
-    rasterizePolygon(grid, gateway.polygon, cellSize, TILE_ROAD);
-  }
-
-  for (const hit of scene.clipHits || []) {
-    const feature = (mapPackage.features || []).find((item) => item.id === hit.featureId);
-    if (feature?.category !== 'wall') continue;
-    const wallPolygon = featurePolygon(feature);
-    rasterizePolygon(
-      grid,
-      hit.polygon,
-      cellSize,
-      (_point, column, row) => base.grid[row][column],
-      (point) => pointInPolygon(point, wallPolygon),
-    );
+    if (navigation.damageCreatesPassage) {
+      const obstaclePolygon = featurePolygon(feature);
+      for (const damagedPolygon of clipDamageForFeature(scene, feature.id)) {
+        rasterizePolygon(
+          grid,
+          damagedPolygon,
+          cellSize,
+          (_point, column, row) => base.grid[row][column],
+          (point) => pointInPolygon(point, obstaclePolygon),
+        );
+      }
+    }
   }
 
   for (const bridgeId of mapPackage.navigation?.bridgeFeatureIds || []) {
     const bridge = (mapPackage.features || []).find((feature) => feature.id === bridgeId);
-    if (!bridge || destroyed.has(bridgeId)) continue;
+    if (!bridge || destroyed.has(String(bridgeId))) continue;
     const bridgePolygon = featurePolygon(bridge);
     const damagedPolygons = clipDamageForFeature(scene, bridgeId);
     rasterizePolygon(grid, bridgePolygon, cellSize, TILE_ROAD, (point) => (

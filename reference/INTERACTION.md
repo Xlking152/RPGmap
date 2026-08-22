@@ -1,20 +1,20 @@
 # RPGmap Feature Interaction API
 
-本文件补充 `reference/README.md` 的 MapPackage 规范，专门说明 Feature Capability 与通用 Interaction API。
+本文件补充 `reference/README.md` 的 MapPackage 规范，专门说明 Feature Capability、Interaction Effects 与通用 Interaction API。
 
 ## 设计边界
 
 ```text
 MapPackage Feature
-  ↓ capabilities/actions
-RPGmap InteractionSystem
+  ↓ capabilities/actions + capabilities.navigation
+RPGmap InteractionSystem / Interaction Effects
   ↓
 inspect / enter / exit / damage / restore / open / close
   ↓
-Movement / Damage / Scene State / Renderer / Multiplayer
+Movement / Navigation / Damage / Scene State / Renderer / Multiplayer
 ```
 
-地图只声明“能做什么”，Core 决定“怎么做”。地图包不得复制 InteractionSystem、DamageSystem 或 MovementSystem。
+地图只声明“能做什么、在什么状态下应具有什么物理语义”，Core 决定“怎么执行这些规则”。地图包不得复制 InteractionSystem、DamageSystem、NavigationSystem 或 MovementSystem。
 
 ## Capability
 
@@ -53,13 +53,48 @@ capabilities: {
     inspectable: true,
     interactive: true,
     openable: true,
-    actions: { inspect: true, open: true, close: true }
+    actions: { inspect: true, open: true, close: true },
+    navigation: {
+      blocks: true,
+      passableWhenOpen: true,
+      passageTile: 'open'
+    }
   },
   interaction: { initialOpen: false }
 }
 ```
 
 不要求 `category === 'gate'`。`door`、机关、箱盖、舱门等都使用同一个 API。
+
+## Interaction Effects + Navigation Capability
+
+Open/Close 不再只是视觉状态。`src/interaction/effects.js` 将 Interaction state 投影成 Core 可消费的运行效果，Navigation 只解释标准 Feature Navigation Capability，不判断 `building` / `wall` / `gate` 类别。
+
+Feature 可以声明：
+
+```js
+capabilities: {
+  navigation: {
+    blocks: true,
+    passableWhenOpen: true,
+    passableWhenDestroyed: true,
+    damageCreatesPassage: true,
+    passageTile: 'road',
+    passagePolygon: [[...], [...], [...]]
+  }
+}
+```
+
+语义如下：
+
+- `blocks`：完整、未满足放行条件时参与碰撞/寻路阻挡；
+- `passableWhenOpen`：Interaction `open=true` 时恢复可通行；
+- `passableWhenDestroyed`：Scene 中对象整毁后恢复可通行；
+- `damageCreatesPassage`：局部 `clipHits` 可在阻挡几何中形成破口；
+- `passageTile`：可选 `road` / `open`，未指定时恢复该位置的基础 Navigation tile；
+- `passagePolygon`：可选放行区域，例如城门只在门洞区域刻出通道，而不是把整个 Feature 外包框变成道路。
+
+这些字段描述地图对象的内容/物理语义；“什么时候读取 open、怎样合并 Scene damage、怎样重建栅格”仍全部属于 Core 规则。
 
 ## Runtime API
 
@@ -159,9 +194,9 @@ exit-building
 `reference/maps/minimal/` 包含：
 
 ```text
-demo-house  enterable + destructible
-demo-door   inspectable + openable
-demo-wall   destructible
+demo-house  enterable + destructible + navigation obstacle
+demo-door   inspectable + openable + open/close collision effect
+demo-wall   destructible + damage passage
 ```
 
-`tests/interaction.test.js` 用它验证 Capability、Inspect、Enter、Damage、Restore 可用性以及 Open/Close 状态。
+`tests/interaction.test.js` 验证通用动作状态；`tests/navigation.test.js` 额外使用非 `gate` 类别的 openable Feature 验证关闭阻挡、打开放行、A* 路径变化，以及兰州城门/城墙在同一套 Capability 下的行为。

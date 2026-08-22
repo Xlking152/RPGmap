@@ -8,4 +8,10 @@ export {
   setFeatureOpenState,
 } from './model.js';
 
+export {
+  featureInteractionEffectsRevision,
+  recordFeatureInteractionEffects,
+  runtimeFeatureInteractionEffects,
+} from './effects.js';
+
 export { createFeatureInteractionSystem } from './system.js';
