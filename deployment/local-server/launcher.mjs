@@ -305,8 +305,8 @@ async function waitForTunnelUrl(tunnel, timeoutMs = 30000) {
 
     const cleanup = () => {
       clearTimeout(timer);
-      tunnel.stdout?.off('data', inspect);
-      tunnel.stderr?.off('data', inspect);
+      // Keep the data listeners attached after READY so the child pipes continue
+      // to drain silently; otherwise a chatty long-running tunnel could block.
       tunnel.off('exit', onExit);
       tunnel.off('error', onError);
     };
