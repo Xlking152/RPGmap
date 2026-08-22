@@ -1,8 +1,15 @@
 # RPGmap
 
-RPGmap 是一个面向 TRPG / VTT 的浏览器端自托管地图与跑团平台。当前开发 Candidate 为 **V1.5.0 MapPackage Framework**；它从已验证的 V1.4.1 Multiplayer / User / Ownership 基线上重新整理“地图内容”和“通用游戏逻辑”的边界。
+RPGmap 是一个面向 TRPG / VTT 的浏览器端自托管地图与跑团平台。当前开发 Candidate 为 **V1.5.3**。
 
-## V1.5.0 的核心原则
+V1.5 系列的核心目标有两条：
+
+1. **地图内容与通用游戏逻辑分离**：换地图只换 MapPackage，不复制 Damage / Movement / Multiplayer / Scene 等 Core。
+2. **运行入口保持简单**：Windows 只保留一个 `start-rpgmap.bat`，Local/LAN 与 Internet/Public 共用一个 Launcher 和一个 Server。
+
+---
+
+## 1. 架构边界
 
 ```text
 MapPackage
@@ -18,7 +25,7 @@ World
 “这一场 Campaign 发生了什么”
 ```
 
-当前仍保持 V1.4.1 的稳定运行模型：地图源码在 **build 时** 与 Core 一起打进 `app/index.html`，Server 只负责提供完整 Client 和保存 World/User 数据。不会再让 Launcher、BAT 或 PowerShell 去扫描外部 `maps/`。
+当前默认兰州地图在 build 时进入浏览器 Client：
 
 ```text
 reference/maps/lanzhou/
@@ -32,32 +39,37 @@ server.mjs :30000
 Browser
 ```
 
-`reference/` 是源码 / DIY 参考，不是运行时依赖。构建完成后即使删除 `reference/`，`app/index.html` 仍应可以独立运行；CI 会专门验证这一点。
+`reference/` 是源码 / DIY 参考，不是运行时依赖。CI 会在打包后删除整个 `reference/` 再启动 Runtime 验证。
 
 ---
 
-## 1. 兰州城 Reference MapPackage
+## 2. Reference MapPackage
 
-原来散在 `src/maps/` 和 `src/assets/generated/` 的兰州城地图内容已经整理到：
+兰州实现位于：
 
 ```text
 reference/maps/lanzhou/
-├─ manifest.js       # Map ID、版本方向、逻辑 Layer Plan
-├─ package.js        # 兰州专属几何、Feature、Navigation、SVG 生成
-├─ assets.js         # 兰州素材绑定
-├─ presentation.js   # 兰州专属展示文本处理
-├─ assets/           # Generated Art
-├─ index.js          # 组装 MapPackage
+├─ manifest.js
+├─ package.js
+├─ capabilities.js
+├─ assets.js
+├─ presentation.js
+├─ assets/
+├─ index.js
 └─ README.md
 ```
 
-兰州城现在是 **Reference Map**：它负责描述地图，不拥有自己的 DamageSystem / MovementSystem / Multiplayer / Scene State。
+极简参考地图位于：
 
-旧 `src/maps/lanzhou.js` 只保留一个兼容 re-export，真实地图实现不再位于 Core 目录。
+```text
+reference/maps/minimal/
+```
+
+Minimal MapPackage 会交给与兰州相同的 Core Damage / Scene / Navigation API，用于防止 Core 偷偷依赖兰州 Feature ID 或地图类别。
 
 ---
 
-## 2. 通用 MapPackage Contract
+## 3. MapPackage Contract
 
 通用接口位于：
 
@@ -68,126 +80,184 @@ src/map-package/
 └─ index.js
 ```
 
-`prepareMapPackage()` 会在地图进入 Engine 前统一验证和归一：
+`prepareMapPackage()` 统一验证和归一：
 
 - ID / Version / Width / Height；
 - SVG renderer；
 - Feature ID 唯一性；
-- Logical Layer Plan；
-- Feature Capability。
+- Layer Plan；
+- Feature Capability；
+- Navigation blocker / passage geometry；
+- 可选 2.5D blocking height。
 
 标准逻辑 Layer Role：
 
 ```text
-base          基础背景
-terrain       地面 / 山体 / 道路地表
-liquid        河流 / 湖泊 / 水域
-structure     建筑 / 城墙 / 桥梁等结构（可选）
-special       Damage / Flood / 火焰 / 毒区等特殊表现
-destructible  可破坏 Feature
-labels        地名与文字
+base
+terrain
+liquid
+structure
+special
+destructible
+labels
 ```
-
-物理 SVG Group 和逻辑 Layer 不必一次性完全一致。老地图可以用 `layerPlan` 映射，逐步重构而不改变 Core API。
 
 ---
 
-## 3. Feature + Capability
+## 4. Feature / Interaction / Navigation
 
-所有地图对象统一视为 Feature。地图包描述对象能力，但不实现游戏规则。
+Core 只消费通用 Feature Capability，不识别“兰州北门”“衙门门”等地图专属 ID。
 
-例如：
+当前通用行为包括：
 
-```js
-{
-  id: 'house-001',
-  name: '木屋',
-  category: 'building',
-  geometry: {
-    type: 'polygon',
-    points: [[100,100], [300,100], [300,260], [100,260]],
-  },
-  center: [200,180],
-  enterable: true,
-  destructible: {
-    enabled: true,
-    maxHp: 100,
-    material: 'timber-earth',
-  }
-}
-```
+- inspect / enter / exit；
+- damage / restore；
+- open / close；
+- Feature State；
+- Feature Control Layer；
+- `blockingPolygon` / `passagePolygon`；
+- mover-aware Navigation；
+- EasyStar A*；
+- 2.5D `elevationFt` / `blockingHeightFt`。
 
-Contract 会归一为：
+高度规则：
 
 ```text
-feature.capabilities.inspectable
-feature.capabilities.interactive
-feature.capabilities.enterable
-feature.capabilities.destructible
+elevationFt > blockingHeightFt   => 忽略该 Feature obstacle
+elevationFt <= blockingHeightFt  => 正常阻挡
 ```
 
-Damage / Restore / Undo / Scene State / Selection / Movement 等执行逻辑继续属于 Core。
+没有声明 `blockingHeightFt` 的旧 Feature 保持传统无限高度 2D obstacle 行为。
 
 ---
 
-## 4. Minimal Reference Map
+## 5. Token UI
 
-为了防止 Engine 继续偷偷依赖兰州城，仓库新增：
-
-```text
-reference/maps/minimal/
-```
-
-它只有：
-
-- 基底；
-- 地面；
-- 水体；
-- Special Layer；
-- 一栋可进入、可破坏木屋；
-- 一堵可破坏墙；
-- Labels。
-
-自动测试会把它直接交给兰州城同一套：
+V1.5.3 延续 V1.5.1 的 Token UI：
 
 ```text
-createDamagePreview
-→ commitDamageEvent
-→ deriveSceneState
+        Character Name
+             ↑
+        ┌─────────┐  ↗ elevation ft
+        │  Token  │
+        └─────────┘
+             ↓
+          HP Bar
 ```
 
-并要求 `demo-house` 正常进入 destroyed 状态。这个测试用于证明“换地图只换 MapPackage，不复制可破坏逻辑”。
+- HealthSystem 是唯一 HP 条 owner；
+- 名称位于 Token 上方；
+- Elevation 位于右上角；
+- 右键 Token 打开高度 HUD；
+- 高度修改直接进入 mover-aware Navigation。
 
 ---
 
-## 5. DIY 新地图
+## 6. Windows 启动：只有一个 BAT
 
-完整规范见：
+V1.5.3 最终只保留：
 
 ```text
-reference/README.md
+start-rpgmap.bat
 ```
 
-推荐流程：
+双击后选择：
 
-1. 复制 `reference/maps/minimal/`；
-2. 修改地图 ID / 名称 / 尺寸 / 版本；
-3. 设计 Layer Plan；
-4. 添加 Feature 几何与 Capability；
-5. 添加素材及 `assets.js`；
-6. 保证 SVG 中 `data-feature-id` 与 Feature 对应；
-7. 通过 `prepareMapPackage()` 校验；
-8. `npm test`；
-9. `npm run build`；
-10. 将 `src/map-package/default-map.js` 切换到新 MapPackage 做运行测试。
+```text
+1. Local / LAN
+2. Internet / Public
+```
 
-主入口 `src/main.js` 不应该因为换地图而修改。
+结构统一为：
+
+```text
+start-rpgmap.bat
+        ↓
+launcher.mjs
+   ├─ local
+   └─ internet
+        ↓
+server.mjs
+```
+
+不再存在独立的：
+
+```text
+start-rpgmap-internet.bat
+setup-cloudflared.bat
+run-rpgmap-public-server.bat
+local-launcher.mjs
+internet-launcher.mjs
+launcher-guard.mjs
+```
+
+### Local / LAN
+
+```text
+端口检查
+→ 启动 Server
+→ 等待 /api/health READY
+→ 确认 publicMode=false
+→ 打印 Local / Network 地址
+→ 打开浏览器
+```
+
+### Internet / Public
+
+```text
+端口检查
+→ 查找/安装 cloudflared
+→ 创建 Quick Tunnel
+→ 生成 Join Code / GM Secret
+→ 启动同一个 Server
+→ 等待 READY + publicMode=true
+→ 打印 Local / Network / Public 地址
+→ 打开 Public URL
+```
+
+Internet 模式本身已经同时提供 Local + LAN + Public 访问，不需要再启动第二个 Local Server。
+
+高级用法：
+
+```text
+start-rpgmap.bat local
+start-rpgmap.bat internet
+```
 
 ---
 
-## 6. 当前 Core 能力
+## 7. Portable Runtime
 
-V1.5.0 继承 V1.4.1 的：
+测试包结构：
+
+```text
+RPGmap-v1.5.3/
+├─ app/
+├─ map/
+├─ reference/
+├─ docs/
+├─ server.mjs
+├─ launcher.mjs
+├─ access-control.mjs
+├─ portable-storage.mjs
+├─ start-rpgmap.bat
+└─ start-rpgmap.sh
+```
+
+World / User 默认写入：
+
+```text
+map/world.json
+map/users.json
+map/uploads/
+map/backups/
+```
+
+升级程序时重点备份整个 `map/`。
+
+---
+
+## 8. 当前 Core 能力
 
 - Movement / Waypoint / A*；
 - Entity / Actor / Token / Form；
@@ -200,71 +270,50 @@ V1.5.0 继承 V1.4.1 的：
 - NONE / OBSERVER / OWNER；
 - Server-authoritative 权限；
 - Cloudflare Quick Tunnel；
-- Portable `app/ + map/` runtime storage。
-
-当前 `map/` 名字虽然不够理想，但在这次地图框架重构中**故意不同时迁移 runtime storage**，避免再次把“地图架构”和“存储迁移”绑在一起。
+- Portable `app/ + map/` runtime storage；
+- Generic Feature Operations / Controls；
+- 2.5D Elevation / Height Blocking。
 
 ---
 
-## 7. 发布包 / Runtime
+## 9. DIY 新地图
 
-测试包仍采用 V1.4.1 已验证的启动方式：
+完整规范见：
 
 ```text
-RPGmap-v1.5.0/
-├─ app/                    # 完整 build 后 Client
-├─ map/                    # World/User 可写 runtime 数据
-├─ reference/              # DIY / MapPackage 源码参考；运行不依赖
-├─ docs/
-├─ server.mjs
-├─ access-control.mjs
-├─ portable-storage.mjs
-├─ internet-launcher.mjs
-├─ start-rpgmap.bat
-└─ start-rpgmap-internet.bat
+reference/README.md
 ```
 
-本机 / LAN：双击 `start-rpgmap.bat`。默认地址 `http://127.0.0.1:30000`。
+推荐流程：
 
-远程联机：双击 `start-rpgmap-internet.bat`，使用 Cloudflare Quick Tunnel。
+1. 复制 `reference/maps/minimal/`；
+2. 修改地图 ID / 名称 / 尺寸；
+3. 设计 Layer Plan；
+4. 添加 Feature Geometry / Capability；
+5. 添加素材；
+6. 通过 `prepareMapPackage()` 校验；
+7. `npm test`；
+8. `npm run build`；
+9. 在 `src/map-package/default-map.js` 切换默认 MapPackage；
+10. 运行完整 Runtime 验收。
+
+主入口 `src/main.js` 不应该因为换地图而修改。
 
 ---
 
-## 8. CI 的关键验收
+## 10. CI 关键验收
 
-V1.5.0 CI 不仅执行测试与 build，还要求：
+V1.5.3 CI 要求：
 
-1. 兰州实现和素材真实位于 `reference/maps/lanzhou/`；
-2. `src/main.js` 不出现 Lanzhou / generated assets 直接引用；
-3. production `app/index.html` 确实包含默认兰州 MapPackage；
-4. 最小地图通过同一套 Core Damage / Scene State；
-5. 打包后复制一份 Runtime；
-6. **删除 Runtime 测试副本中的整个 `reference/`**；
-7. 再启动 `server.mjs`；
-8. `/api/health` 与 `/` 仍必须成功。
+1. Core / Reference 边界检查通过；
+2. Node tests 全部通过；
+3. JavaScript syntax 通过；
+4. Vite production build 成功；
+5. 默认兰州 MapPackage 已打进 `app/index.html`；
+6. 删除 `reference/` 后 Runtime 仍可启动；
+7. Windows 实际运行打包后的 `start-rpgmap.bat local`；
+8. `/api/health` 必须明确 `publicMode=false`；
+9. 最终 ZIP 根目录 **只能有一个 BAT：`start-rpgmap.bat`**；
+10. 旧 Split Launcher / Setup / Public Server BAT 不允许重新进入安装包。
 
-这条测试用于防止未来再次把“Reference Map 源码”和“运行时磁盘加载”混在一起。
-
----
-
-## 9. 后续路线
-
-在 MapPackage Contract 稳定后再推进：
-
-```text
-MapPackage Contract
-        ↓
-Feature Capability 收口
-        ↓
-通用 Interaction API
-        ↓
-World Manager
-        ↓
-Scene Manager
-        ↓
-Scene Instance
-        ↓
-Server-owned Data Path / 外部 Map Import
-```
-
-只有当 Scene Manager 从导入、实例化、Server 提供资源到保存状态整条链路都设计完成后，才考虑真正的外部地图导入。不会再提前创建一个运行时根 `maps/` 让 Client / Launcher 自己找文件。
+这组约束用于同时防止地图架构和启动架构再次回退到多 Source of Truth。
