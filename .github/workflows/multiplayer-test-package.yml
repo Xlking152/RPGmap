@@ -88,13 +88,15 @@ jobs:
       - name: Build web client
         run: npm run build
 
-      - name: Verify bundled default map
+      - name: Verify split bundled client
         shell: bash
         run: |
           set -euo pipefail
           test -f dist/index.html
-          grep -q 'northern-song-lanzhou-1104' dist/index.html
-          test "$(wc -c < dist/index.html)" -gt 500000
+          test -d dist/assets
+          test "$(wc -c < dist/index.html)" -lt 100000
+          grep -R -q 'northern-song-lanzhou-1104' dist/assets
+          find dist/assets -type f | grep -Eq '\.(js|css|webp)$'
 
       - name: Resolve package metadata
         id: package_metadata
@@ -139,13 +141,14 @@ jobs:
             "storageMode": "portable-map-root-v1.4.1-compatible",
             "mapPackageApiVersion": 1,
             "defaultMapSource": "reference/maps/lanzhou",
-            "runtimeMapMode": "bundled-at-build-time",
-            "launcherMode": "single-entry-host-bootstrap-v2",
+            "runtimeMapMode": "bundled-at-build-time-split-assets",
+            "launcherMode": "single-entry-host-bootstrap-v3",
             "defaultPort": 30000
           }
           EOF
 
           test -f "$ROOT/app/index.html"
+          test -d "$ROOT/app/assets"
           test -f "$ROOT/reference/README.md"
           test -f "$ROOT/reference/maps/lanzhou/package.js"
           test -f "$ROOT/reference/maps/minimal/package.js"
@@ -197,7 +200,11 @@ jobs:
           fi
 
           curl -fsS "http://127.0.0.1:${PORT}/" > "$GITHUB_WORKSPACE/runtime-index.html"
-          grep -q 'northern-song-lanzhou-1104' "$GITHUB_WORKSPACE/runtime-index.html"
+          grep -Eq 'assets/.+\.js' "$GITHUB_WORKSPACE/runtime-index.html"
+          ASSET_PATH=$(grep -oE 'assets/[^"'"']+\.js' "$GITHUB_WORKSPACE/runtime-index.html" | head -n 1)
+          test -n "$ASSET_PATH"
+          curl -fsS "http://127.0.0.1:${PORT}/${ASSET_PATH}" > "$GITHUB_WORKSPACE/runtime-app.js"
+          grep -q 'northern-song-lanzhou-1104' "$GITHUB_WORKSPACE/runtime-app.js"
           node -e "const h=require('fs').readFileSync(process.env.GITHUB_WORKSPACE+'/health.json','utf8'); const j=JSON.parse(h); if(j.status!=='ok') process.exit(1)"
           cleanup
           trap - EXIT
@@ -214,6 +221,7 @@ jobs:
           unzip -l "$ARCHIVE" | grep 'reference/maps/lanzhou/package.js'
           unzip -l "$ARCHIVE" | grep 'reference/maps/minimal/package.js'
           unzip -l "$ARCHIVE" | grep 'app/index.html'
+          unzip -l "$ARCHIVE" | grep 'app/assets/'
           unzip -l "$ARCHIVE" | grep 'launcher.mjs'
           unzip -l "$ARCHIVE" | grep 'start-rpgmap.bat'
           ! unzip -l "$ARCHIVE" | grep -E 'start-rpgmap-internet\.bat|setup-cloudflared\.bat|run-rpgmap-public-server\.bat|local-launcher\.mjs|internet-launcher\.mjs|launcher-guard\.mjs'
@@ -270,7 +278,7 @@ jobs:
               $health = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:30000/api/health' -TimeoutSec 1
               $healthJson = $health.Content | ConvertFrom-Json
               $index = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:30000/' -TimeoutSec 1
-              if ($health.StatusCode -eq 200 -and -not $healthJson.multiplayer.publicMode -and $healthJson.multiplayer.joinCodeRequired -and $index.StatusCode -eq 200 -and $index.Content -match 'northern-song-lanzhou-1104') {
+              if ($health.StatusCode -eq 200 -and -not $healthJson.multiplayer.publicMode -and $healthJson.multiplayer.joinCodeRequired -and $index.StatusCode -eq 200 -and $index.Content -match 'assets/.+\.js') {
                 $ready = $true
                 break
               }
@@ -281,7 +289,7 @@ jobs:
 
           if (-not $ready) {
             if ($bootstrap.HasExited) { Write-Host "BAT exit code: $($bootstrap.ExitCode)" }
-            throw 'Single packaged start-rpgmap.bat did not serve the bundled client in Local/LAN mode with a room code.'
+            throw 'Single packaged start-rpgmap.bat did not serve the split bundled client in Local/LAN mode with a room code.'
           }
 
           $previousPreference = $ErrorActionPreference
