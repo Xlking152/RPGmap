@@ -1,6 +1,6 @@
 # RPGmap
 
-RPGmap 是面向 TRPG / VTT 的自托管地图与跑团工具。当前版本为 **v1.6.3**，Windows 仅支持本机与局域网（Local / LAN）联机。
+RPGmap 是面向 TRPG / VTT 的自托管地图与跑团工具。当前版本为 **v1.7.0**，Windows 仅支持本机与局域网（Local / LAN）联机。
 
 ## 快速开始
 
@@ -17,6 +17,7 @@ RPGmap 是面向 TRPG / VTT 的自托管地图与跑团工具。当前版本为 
 - Actor / Form / Token、角色卡导入与 GM 放置 Token；
 - 1m 格子中心的直线移动、Ctrl/Cmd 手动拐点、受阻红线、Token 高度与尺寸；
 - 普通 HP 与 B/L/A 伤势生命槽、伤害、恢复、角色卡直接编辑伤势；
+- Actor / Token 状态与 Buff、地图徽章、派生昏迷/死亡，以及灵体、定身、失能等机械效果；
 - 先攻表、回合锁定、聊天与共享战斗记录；
 - LAN WebSocket 同步、GM / OWNER / OBSERVER 权限，以及服务器权威 World；
 - 原子保存、滚动备份、损坏存档隔离与 Windows 打包启动器。

@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.7.0
+
+- Entity System 升级为 schema v3：World 保存自定义状态定义，Actor 状态跨形态和 Token 生效，Token 状态只影响单个地图实例；旧 effects 会确定性迁移。
+- 角色卡增加独立“状态”页、标题状态带和 Token 地图徽章；GM 可创建定义、施加、移除、调层、启停和批量操作，OWNER / OBSERVER 保持只读。
+- 首批机械状态包含“灵体”“定身”“失能”；昏迷、死亡和 B/L/A 伤势徽章由生命系统只读派生，恢复后立即解除对应限制。
+- “灵体”只绕过 `structure` 碰撞组，仍受水域、弹坑、地图边界、Token 尺寸和高度规则约束；定身、失能、昏迷和死亡会在规划与提交两个阶段阻止移动或交互。
+- Feature Capability 支持结构化状态前置条件和成功副作用；Feature 状态、角色位置与状态变化在同一次 World 提交中原子完成，失败或取消不会留下部分结果。
+- 局域网新增服务器权威 `status.apply/remove/setStacks/batch/definition.*` 操作；使用 `operationId` 去重，批量操作全成全败，并在 schema 校验、备份和原子写盘成功后才确认及广播。
+- Player 无法通过伪造状态消息或 `world.push` 改写状态定义及 Actor / Token effects；断线、权限下降或写盘失败会清理待提交状态和移动预览，并以服务器 World 恢复界面。
+
 ## v1.6.3
 
 - 修复“放置 Token”时角色卡遮罩拦截地图的问题，提供可取消的放置 HUD。
