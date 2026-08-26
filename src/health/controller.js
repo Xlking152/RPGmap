@@ -1,5 +1,5 @@
 import { EntityStore } from '../entities/store.js';
-import { applyDamageToActor, applyHealingToActor, resolveActorHealth, setActorHealthMode } from './actor.js';
+import { applyDamageToActor, applyHealingToActor, resolveActorHealth, setActorHealthMode, setActorWounds } from './actor.js';
 
 function uniqueActorsForTokens(store, tokenIds = []) {
   const seen = new Set();
@@ -18,6 +18,23 @@ function uniqueActorsForTokens(store, tokenIds = []) {
 export function createHealthController() {
   return {
     register(api) {
+      function persistHealth(store, actorIds = []) {
+        // In LAN mode this emits state:commit immediately, so the multiplayer
+        // client pushes the updated World instead of waiting for the browser
+        // storage debounce. Persist locally as well before reporting success.
+        store.persist({ source: 'health', immediate: true });
+        api.emit?.('health:change', { actorIds: actorIds.map(String) });
+      }
+
+      function canEditActor(actorId) {
+        const capabilities = api.multiplayer?.getCapabilities?.();
+        return !capabilities || capabilities.canEditActor?.(actorId) !== false;
+      }
+
+      function controllableActors(targets) {
+        return targets.filter(({ actor }) => canEditActor(actor.id));
+      }
+
       const healthApi = {
         resolveActor(actorId) {
           const store = new EntityStore(api);
@@ -35,35 +52,45 @@ export function createHealthController() {
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });
           const actor = store.actor(actorId);
-          if (!actor) return null;
+          if (!actor || !canEditActor(actor.id)) return null;
           const state = setActorHealthMode(actor, mode);
-          store.persist();
+          persistHealth(store, [actor.id]);
           return state;
+        },
+        setWounds(actorId, wounds) {
+          const store = new EntityStore(api);
+          store.load({ migrateLegacy: false, dropMarkers: false });
+          const actor = store.actor(actorId);
+          if (!actor || !canEditActor(actor.id)) return null;
+          const result = setActorWounds(actor, wounds);
+          if (!result.changed) return result;
+          persistHealth(store, [actor.id]);
+          return result;
         },
         applyDamageToTokenIds(tokenIds, damage) {
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });
-          const targets = uniqueActorsForTokens(store, tokenIds);
+          const targets = controllableActors(uniqueActorsForTokens(store, tokenIds));
           const results = targets.map(({ tokenId, actor }) => ({
             tokenId,
             actorId: actor.id,
             actorName: actor.name,
             ...applyDamageToActor(actor, damage),
           }));
-          if (results.length) store.persist();
+          if (results.length) persistHealth(store, results.map(result => result.actorId));
           return results;
         },
         applyHealingToTokenIds(tokenIds, healing) {
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });
-          const targets = uniqueActorsForTokens(store, tokenIds);
+          const targets = controllableActors(uniqueActorsForTokens(store, tokenIds));
           const results = targets.map(({ tokenId, actor }) => ({
             tokenId,
             actorId: actor.id,
             actorName: actor.name,
             ...applyHealingToActor(actor, healing),
           }));
-          if (results.length) store.persist();
+          if (results.length) persistHealth(store, results.map(result => result.actorId));
           return results;
         },
       };

@@ -73,6 +73,11 @@ function canEditFeatureHeight(api) {
   return status.session?.role === 'gm';
 }
 
+function requestedTokenElevationFt(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, number) : normalizeElevationFt(fallback, 0);
+}
+
 function setFeedback(shell, message) {
   const node = shell?.querySelector?.('[data-role="map-status"]');
   if (node && message && node.textContent !== message) node.textContent = message;
@@ -99,6 +104,11 @@ function orientCharacterTooltip(layer) {
   const tooltip = layer?.getTooltip?.();
   const className = String(tooltip?.options?.className || '');
   if (!tooltip || !className.includes('character-tooltip')) return;
+  const currentOffset = tooltip.options.offset || [];
+  const needsUpdate = tooltip.options.direction !== 'top'
+    || Number(currentOffset[0]) !== 0
+    || Number(currentOffset[1]) !== -14;
+  if (!needsUpdate) return;
   tooltip.options.direction = 'top';
   tooltip.options.offset = [0, -14];
   tooltip.update?.();
@@ -160,8 +170,16 @@ export function createElevationSystem() {
           setFeedback(shell, '当前角色还没有可保存高度的 Token 记录。');
           return false;
         }
-        token.elevationFt = normalizeElevationFt(value, token.elevationFt);
-        api.importState(next);
+        token.elevationFt = requestedTokenElevationFt(value, token.elevationFt);
+        // A height adjustment is a normal World mutation, not an imported
+        // save.  Keeping it on the commit path lets the floating editor stay
+        // open for repeated changes instead of closing after every +5 click.
+        if (typeof api.commitState === 'function') api.commitState(next, { source: 'elevation:token' });
+        else api.importState(next);
+        // A height change can make a previously previewed route valid or
+        // invalid.  Never allow an old preview to be confirmed after the
+        // collision context changed.
+        api.cancelCharacterMove?.();
         selectedCharacterId = String(characterId);
         api.selectCharacter?.(characterId);
         syncActiveMover(characterId);
@@ -174,7 +192,7 @@ export function createElevationSystem() {
         return true;
       }
 
-      function setFeatureHeight(featureId, value) {
+      async function setFeatureHeight(featureId, value) {
         if (!api.interaction || !canEditFeatureHeight(api)) {
           setFeedback(shell, 'Feature 阻挡高度属于 World 状态，当前仅本地模式或 GM 可修改。');
           return false;
@@ -182,24 +200,33 @@ export function createElevationSystem() {
         const featureState = api.interaction.stateForFeature(featureId);
         const normalized = normalizeBlockingHeightFt(value);
         if (normalized === null) return false;
-        api.interaction.patchState(featureId, {
-          custom: {
-            ...(featureState?.custom || {}),
-            blockingHeightFt: normalized,
-          },
-        });
+        try {
+          await api.interaction.patchState(featureId, {
+            custom: {
+              ...(featureState?.custom || {}),
+              blockingHeightFt: normalized,
+            },
+          });
+        } catch (error) {
+          setFeedback(shell, `Feature 高度未获服务器确认：${error.message}`);
+          return false;
+        }
         api.emit?.('elevation:feature-change', { featureId: String(featureId), blockingHeightFt: normalized });
         scheduleFeatureSync();
         setFeedback(shell, `${featureById(api.mapPackage, featureId)?.name || 'Feature'} 阻挡高度已设为 ${formatFt(normalized)} ft`);
         return true;
       }
 
-      function resetFeatureHeight(featureId) {
+      async function resetFeatureHeight(featureId) {
         if (!api.interaction || !canEditFeatureHeight(api)) return false;
         const featureState = api.interaction.stateForFeature(featureId);
         const custom = { ...(featureState?.custom || {}) };
         delete custom.blockingHeightFt;
-        api.interaction.patchState(featureId, { custom });
+        try { await api.interaction.patchState(featureId, { custom }); }
+        catch (error) {
+          setFeedback(shell, `Feature 高度重置未获服务器确认：${error.message}`);
+          return false;
+        }
         api.emit?.('elevation:feature-change', { featureId: String(featureId), blockingHeightFt: null, reset: true });
         scheduleFeatureSync();
         return true;
@@ -209,10 +236,18 @@ export function createElevationSystem() {
         if (!characterId) return false;
         event?.preventDefault?.();
         event?.stopPropagation?.();
+        return openTokenElevationEditor(characterId, event);
+      }
+
+      function openTokenElevationEditor(characterId, anchorEvent = null) {
+        if (!tokenForCharacter(api.getState(), characterId)) {
+          setFeedback(shell, '当前角色还没有可保存高度的 Token 记录。');
+          return false;
+        }
         selectedCharacterId = String(characterId);
         api.selectCharacter?.(characterId);
         syncActiveMover(characterId);
-        openTokenElevationHud(event, characterId);
+        openTokenElevationHud(anchorEvent, characterId);
         return true;
       }
 
@@ -332,7 +367,7 @@ export function createElevationSystem() {
         [down, input, up].forEach((control) => { control.disabled = !allowed; });
         row.append(down, input, up);
         const hint = documentNode.createElement('small');
-        hint.textContent = allowed ? '右键 Token 打开 · 单位 ft' : '当前没有该 Actor 的控制权限';
+        hint.textContent = allowed ? '右键 Token 或角色卡的 Token 页打开 · 单位 ft' : '当前没有该 Actor 的控制权限';
         hud.append(heading, row, hint);
         documentNode.body.append(hud);
         clampHudPosition(hud, event, documentNode);
@@ -345,11 +380,11 @@ export function createElevationSystem() {
         };
         down.addEventListener('click', (clickEvent) => {
           clickEvent.stopPropagation();
-          commit(Math.max(0, normalizeElevationFt(input.value, value) - 5));
+          commit(Math.max(0, tokenElevationFt(api.getState(), characterId) - 5));
         });
         up.addEventListener('click', (clickEvent) => {
           clickEvent.stopPropagation();
-          commit(normalizeElevationFt(input.value, value) + 5);
+          commit(tokenElevationFt(api.getState(), characterId) + 5);
         });
         input.addEventListener('change', () => commit(input.value));
         input.addEventListener('keydown', (keyEvent) => {
@@ -523,6 +558,8 @@ export function createElevationSystem() {
           return feature ? featureBlockingHeightFt(feature, api.interaction?.stateForFeature?.(featureId)) : null;
         },
         setTokenElevationFt: setTokenElevation,
+        canSetTokenElevation: characterId => canControlCharacter(api, characterId),
+        openTokenElevationEditor,
         setFeatureBlockingHeightFt: setFeatureHeight,
         resetFeatureBlockingHeightFt: resetFeatureHeight,
         sync() { scheduleTokenSync(); scheduleFeatureSync(); },

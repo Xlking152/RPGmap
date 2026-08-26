@@ -34,6 +34,7 @@ function installStyles(documentNode) {
     .entity-wound-values { display:grid; grid-template-columns:repeat(4,minmax(90px,1fr)); gap:7px; }
     .entity-wound-value { border:1px solid #dce3df; border-radius:8px; padding:8px; background:#f8faf8; }
     .entity-wound-value b { display:block; font-size:18px; margin-top:2px; }
+    .entity-wound-value input { display:block; width:100%; box-sizing:border-box; margin-top:5px; padding:5px 6px; border:1px solid #cdd6d2; border-radius:6px; font:inherit; font-weight:800; }
     .entity-wound-bar { display:flex; height:9px; border-radius:8px; overflow:hidden; background:#e7ebe8; }
     .entity-wound-bar span { min-width:0; }
     .entity-wound-bar .healthy { background:#4b9f69; }
@@ -50,17 +51,24 @@ function installStyles(documentNode) {
   documentNode.head.append(style);
 }
 
-function healthPanelHtml(actor) {
+function canEditHealth(api, actorId) {
+  const capabilities = api.multiplayer?.getCapabilities?.();
+  return !capabilities || capabilities.canEditActor?.(actorId) !== false;
+}
+
+function healthPanelHtml(api, actor) {
   const health = resolveActorHealth(actor);
+  const editable = canEditHealth(api, actor.id);
+  const disabled = editable ? '' : ' disabled title="需要 OWNER 权限且必须轮到该角色行动"';
   const options = `<option value="${HEALTH_MODE_WOUND_TRACK}" ${health.mode === HEALTH_MODE_WOUND_TRACK ? 'selected' : ''}>伤势生命槽 B/L/A</option><option value="${HEALTH_MODE_SIMPLE}" ${health.mode === HEALTH_MODE_SIMPLE ? 'selected' : ''}>普通 HP</option>`;
   if (health.mode === HEALTH_MODE_SIMPLE) {
-    return `<section class="entity-section entity-health-panel" data-health-panel><div class="entity-health-head"><h3>生命系统</h3><label>模式 <select data-health-mode="${escapeHtml(actor.id)}">${options}</select></label></div><div class="entity-help">普通 HP 模式沿用原有“当前 / 最大”生命值。适合其他规则游戏。</div></section>`;
+    return `<section class="entity-section entity-health-panel" data-health-panel><div class="entity-health-head"><h3>生命系统</h3><label>模式 <select data-health-mode="${escapeHtml(actor.id)}"${disabled}>${options}</select></label></div><div class="entity-help">普通 HP 模式沿用原有“当前 / 最大”生命值。适合其他规则游戏。</div></section>`;
   }
   const width = value => health.max > 0 ? Math.max(0, value / health.max * 100) : 0;
   return `<section class="entity-section entity-health-panel" data-health-panel>
-    <div class="entity-health-head"><h3>生命值 · 上限 ${health.max}</h3><label>模式 <select data-health-mode="${escapeHtml(actor.id)}">${options}</select></label></div>
+    <div class="entity-health-head"><h3>生命值 · 上限 ${health.max}</h3><label>模式 <select data-health-mode="${escapeHtml(actor.id)}"${disabled}>${options}</select></label></div>
     <div class="entity-wound-bar" title="${escapeHtml(formatHealthSummary(health))}"><span class="healthy" style="width:${width(health.healthy)}%"></span><span class="bashing" style="width:${width(health.bashing)}%"></span><span class="lethal" style="width:${width(health.lethal)}%"></span><span class="aggravated" style="width:${width(health.aggravated)}%"></span></div>
-    <div class="entity-wound-values"><div class="entity-wound-value">完好<b>${health.healthy}</b></div><div class="entity-wound-value">冲击 B<b>${health.bashing}</b></div><div class="entity-wound-value">严重 L<b>${health.lethal}</b></div><div class="entity-wound-value">恶性 A<b>${health.aggravated}</b></div></div>
+    <div class="entity-wound-values"><div class="entity-wound-value">完好<b>${health.healthy}</b></div><label class="entity-wound-value">冲击 B<b>${health.bashing}</b><input type="number" min="0" max="${health.max}" step="1" value="${health.bashing}" data-health-wound="bashing" data-health-actor-id="${escapeHtml(actor.id)}" aria-label="冲击 B 伤势"${disabled}></label><label class="entity-wound-value">严重 L<b>${health.lethal}</b><input type="number" min="0" max="${health.max}" step="1" value="${health.lethal}" data-health-wound="lethal" data-health-actor-id="${escapeHtml(actor.id)}" aria-label="严重 L 伤势"${disabled}></label><label class="entity-wound-value">恶性 A<b>${health.aggravated}</b><input type="number" min="0" max="${health.max}" step="1" value="${health.aggravated}" data-health-wound="aggravated" data-health-actor-id="${escapeHtml(actor.id)}" aria-label="恶性 A 伤势"${disabled}></label></div>
     <div class="entity-health-status ${health.dead || health.unconscious ? 'is-danger' : ''}">${escapeHtml(healthStatusLabel(health))}${health.deteriorating ? ' · 每轮伤势恶化规则请由操作者确认后处理' : ''}</div>
     <div class="entity-help">伤害由右侧“聊天 → 伤害”应用。这里显示的是生命槽结果；不会自动处理盔甲、硬度、DR、临时生命等伤害前置步骤。</div>
   </section>`;
@@ -93,7 +101,7 @@ export function createHealthSheetExtension() {
         enhancing = true;
         try {
           existing?.remove();
-          body.insertAdjacentHTML('afterbegin', healthPanelHtml(actor));
+          body.insertAdjacentHTML('afterbegin', healthPanelHtml(api, actor));
           const panel = body.querySelector('[data-health-panel]');
           if (panel) panel.dataset.healthSignature = signature;
         } finally {
@@ -123,8 +131,15 @@ export function createHealthSheetExtension() {
 
       documentNode.addEventListener('change', event => {
         const select = event.target.closest?.('[data-health-mode]');
-        if (!select) return;
-        api.health?.setMode?.(select.dataset.healthMode, select.value);
+        if (select) {
+          api.health?.setMode?.(select.dataset.healthMode, select.value);
+          queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
+          return;
+        }
+        const input = event.target.closest?.('[data-health-wound]');
+        if (!input) return;
+        const value = Math.max(0, Math.floor(Number(input.value) || 0));
+        api.health?.setWounds?.(input.dataset.healthActorId, { [input.dataset.healthWound]: value });
         queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
       });
 
@@ -132,6 +147,11 @@ export function createHealthSheetExtension() {
       observer.observe(documentNode.body, { childList: true, subtree: true });
       api.selection?.subscribe?.(() => queueMicrotask(enhanceInspector));
       api.on('state:import', () => queueMicrotask(() => { enhanceSheet(); enhanceInspector(); }));
+      api.on('state:commit', event => {
+        const source = String(event.detail?.source || '');
+        if (source === 'health' || source.startsWith('entities:resource')) queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
+      });
+      api.on('health:change', () => queueMicrotask(() => { enhanceSheet(); enhanceInspector(); }));
       queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
     },
   };

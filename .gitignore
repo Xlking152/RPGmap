@@ -49,6 +49,7 @@ desktop.ini
 /.rpgmap*/
 
 # Locally generated release folders
+/artifact/
 /release/
 /releases/
 /release-check/

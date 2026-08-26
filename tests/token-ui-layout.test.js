@@ -12,8 +12,9 @@ test('Elevation owns only the top-right ft label and not a second HP bar', () =>
   assert.match(elevationSource, /HealthSystem is the single owner of Token HP bars/);
 });
 
-test('HealthSystem keeps the single canonical token health bar below the token', () => {
-  assert.match(healthBarSource, /iconAnchor: \[23, -27\]/);
+test('HealthSystem keeps the single canonical token health bar below the scaled Token', () => {
+  assert.match(healthBarSource, /tokenDiameterMeters\(token\)/);
+  assert.match(healthBarSource, /iconAnchor: \[barWidth \/ 2, -\(tokenPixels \/ 2 \+ 6\)\]/);
   assert.match(healthBarSource, /rpgmap-token-healthbar/);
 });
 

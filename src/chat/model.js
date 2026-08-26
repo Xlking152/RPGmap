@@ -26,17 +26,21 @@ export function normalizeChatState(raw) {
     type: ['chat', 'system', 'combat', 'damage', 'healing', 'roll'].includes(item.type) ? item.type : 'system',
     text: text(item.text),
     createdAt: Number.isFinite(Date.parse(item.createdAt)) ? item.createdAt : new Date().toISOString(),
+    sender: item.sender && typeof item.sender === 'object' ? {
+      id: String(item.sender.id || ''), name: text(item.sender.name), role: text(item.sender.role),
+    } : null,
     data: safeData(item.data),
   })) : [];
   return { schemaVersion: 1, messages };
 }
 
-export function appendMessage(state, { type = 'system', text: message = '', data = null } = {}) {
+export function appendMessage(state, { type = 'system', text: message = '', sender = null, data = null } = {}) {
   const item = {
     id: uid('message'),
     type: ['chat', 'system', 'combat', 'damage', 'healing', 'roll'].includes(type) ? type : 'system',
     text: text(message),
     createdAt: new Date().toISOString(),
+    sender: sender && typeof sender === 'object' ? { id: String(sender.id || ''), name: text(sender.name), role: text(sender.role) } : null,
     data: safeData(data),
   };
   state.messages ||= [];

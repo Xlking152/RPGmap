@@ -65,10 +65,55 @@ test('client canControlActor follows active Combat turn', () => {
   assert.equal(canControlActor({ actorId: 'actor-a', state: state({ combat }), permissions: playerPermissions }), true);
 });
 
+test('client resolves a legacy current combatant through its Token binding', () => {
+  const combat = {
+    id: 'combat', state: 'active', round: 1, turnIndex: 0,
+    combatants: [{ id: 'cb-a', actorId: null, tokenId: 'token-a', order: 0 }],
+  };
+  const before = state({ combat });
+  assert.equal(canControlActor({ actorId: 'actor-a', state: before, permissions: playerPermissions }), true);
+  const next = structuredClone(before);
+  next.preferences.entitySystem.actors[0].runtime.health = { mode: 'wound-track', wounds: { bashing: 1, lethal: 0, aggravated: 0 } };
+  assert.equal(validateLocalPlayerChange({ before, next, permissions: playerPermissions }).ok, true);
+});
+
 test('GM wildcard bypasses local ownership preflight', () => {
   const before = state();
   const next = structuredClone(before);
   next.preferences.entitySystem.actors[1].runtime.hp = 1;
   next.preferences.combatSystem.combat = { id: 'c', state: 'setup', round: 0, turnIndex: 0, combatants: [] };
   assert.equal(validateLocalPlayerChange({ before, next, permissions: { actorOwnerIds: ['*'] } }).ok, true);
+});
+
+test('Player cannot change an owned Token diameter', () => {
+  const before = state();
+  const next = structuredClone(before);
+  next.preferences.entitySystem.tokens[0].diameterMeters = 10;
+  assert.equal(
+    validateLocalPlayerChange({ before, next, permissions: playerPermissions }).code,
+    'token_size_gm_only',
+  );
+});
+
+test('Player cannot forge Actor, Token, or definition status changes through World push', () => {
+  const before = state();
+  before.preferences.entitySystem.statusDefinitions = [];
+  before.preferences.entitySystem.actors.forEach(actor => { actor.effects = []; });
+  before.preferences.entitySystem.tokens.forEach(token => { token.effects = []; });
+
+  const actorChange = structuredClone(before);
+  actorChange.preferences.entitySystem.actors[0].effects.push({
+    id: 'effect-rooted', definitionId: 'status-rooted', stacks: 1, enabled: true,
+  });
+  assert.equal(validateLocalPlayerChange({ before, next: actorChange, permissions: playerPermissions }).code, 'status_server_only');
+
+  const tokenChange = structuredClone(before);
+  tokenChange.preferences.entitySystem.tokens[0].effects.push({
+    id: 'effect-spirit', definitionId: 'status-spirit', stacks: 1, enabled: true,
+  });
+  assert.equal(validateLocalPlayerChange({ before, next: tokenChange, permissions: playerPermissions }).code, 'status_server_only');
+
+  const definitionChange = structuredClone(before);
+  definitionChange.preferences.entitySystem.statusDefinitions.push({ id: 'custom', name: 'Custom' });
+  assert.equal(validateLocalPlayerChange({ before, next: definitionChange, permissions: playerPermissions }).code, 'status_server_only');
 });

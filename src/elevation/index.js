@@ -9,6 +9,9 @@ export {
   formatFt,
   normalizeBlockingHeightFt,
   normalizeElevationFt,
+  normalizeTokenDiameterMeters,
+  TOKEN_DIAMETERS_METERS,
+  tokenDiameterMeters,
   tokenElevationFt,
   tokenForCharacter,
 } from './model.js';

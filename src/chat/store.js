@@ -19,7 +19,12 @@ export class ChatStore {
     appState.preferences ||= {};
     appState.preferences[PREFERENCE_KEY] = structuredClone(this.state);
     this.saving = true;
-    try { this.api.importState(appState); }
+    try {
+      // Chat is a small World mutation, not a save-file import. Keeping it on
+      // the commit path also prevents it from reverting a fresh combat setup.
+      if (typeof this.api.commitState === 'function') this.api.commitState(appState, { source: 'chat', render: false });
+      else this.api.importState(appState);
+    }
     finally { queueMicrotask(() => { this.saving = false; }); }
     return true;
   }

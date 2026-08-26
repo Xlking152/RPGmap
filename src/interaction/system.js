@@ -80,13 +80,19 @@ export function createFeatureInteractionSystem() {
       let decorateQueued = false;
       let observer = null;
 
-      const replaceRuntimeState = (next) => {
+      const replaceRuntimeState = async (next, context = {}) => {
         const featureId = selectedFeatureId;
         const characterId = selectedCharacterId;
-        const imported = api.importState(next);
+        const committed = typeof api.commitAuthoritativeState === 'function'
+          ? await api.commitAuthoritativeState(next, {
+            source: context.source || 'feature:operation',
+            reason: context.source || 'feature:operation',
+            render: true,
+          })
+          : await api.importState(next);
         if (characterId) api.selectCharacter?.(characterId);
         if (featureId) api.selectFeature?.(featureId, { switchTab: true });
-        return imported;
+        return committed;
       };
 
       const operations = createFeatureOperations({
@@ -97,24 +103,52 @@ export function createFeatureInteractionSystem() {
           switchTab: true,
           focus: options.focus === true,
         }) !== false,
-        planFeatureEntry: ({ feature, characterId, entrance }) => {
+        resolveStatus: context => api.status?.resolve?.(context) || { statuses: [], capabilities: { canInteract: true } },
+        getStatusDefinitions: () => api.status?.getDefinitions?.() || [],
+        applyStatusMutations: (draft, mutations, context) => api.status?.applyOperationsToState?.(draft, mutations, context),
+        planFeatureEntry: async ({ feature, characterId, entrance, statusMutations }) => {
           api.setTool?.('character-move');
-          api.planCharacterMove?.(
+          const route = await api.planCharacterMove?.(
             characterId,
             { x: Number(entrance[0]), y: Number(entrance[1]) },
             // V1.4 runtime compatibility port. The generic Feature model does
             // not expose this historical location type to maps or Operations.
-            { type: 'building', featureId: feature.id },
+            {
+              type: 'building', featureId: feature.id, statusMutations, featureAction: 'enter',
+              statusRule: feature.capabilities?.statusRules?.enter || null,
+            },
           );
-          return true;
+          return Boolean(route);
         },
-        exitFeature: ({ characterId }) => {
-          if (typeof api.exitFeature === 'function') return api.exitFeature(characterId);
-          return api.exitBuilding?.(characterId) !== false;
+        exitFeature: ({ characterId, feature, statusMutations }) => {
+          const options = {
+            statusMutations,
+            authoritative: true,
+            source: { type: 'feature', featureId: feature.id, action: 'exit' },
+          };
+          if (typeof api.exitFeature === 'function') return api.exitFeature(characterId, options);
+          return api.exitBuilding?.(characterId, options) !== false;
         },
-        restoreFeatures: (featureIds) => api.restoreFeatures?.(featureIds) === true,
+        restoreFeatures: (featureIds, options) => api.restoreFeatures?.(featureIds, options) === true,
         emit: (name, detail) => api.emit?.(name, detail),
       });
+
+      const actionPermission = (action, characterId) => {
+        const capabilities = api.multiplayer?.getCapabilities?.();
+        if (!capabilities || capabilities.connected === false) return { ok: true, reason: '' };
+        if (['damage', 'restore', 'open', 'close'].includes(action)) {
+          return capabilities.canManageStructure === true
+            ? { ok: true, reason: '' }
+            : { ok: false, reason: '只有 GM 可以修改 Feature 与场景结构' };
+        }
+        if (['enter', 'exit'].includes(action)) {
+          if (!characterId) return { ok: false, reason: '请先选择角色' };
+          return api.multiplayer?.canControlCharacter?.(characterId) !== false
+            ? { ok: true, reason: '' }
+            : { ok: false, reason: '你没有该 Actor 的 OWNER 权限，或当前不在其战斗回合' };
+        }
+        return { ok: true, reason: '' };
+      };
 
       const syncFeatureVisualState = () => {
         if (!shell?.querySelectorAll) return;
@@ -145,18 +179,32 @@ export function createFeatureInteractionSystem() {
         }
       };
 
-      const actionsForFeature = (featureId, context = {}) => operations.actionsForFeature(featureId, {
-        characterId: context.characterId ?? selectedCharacterId,
-      });
+      const actionsForFeature = (featureId, context = {}) => {
+        const characterId = context.characterId ?? selectedCharacterId;
+        return operations.actionsForFeature(featureId, { characterId }).map(descriptor => {
+          const permission = actionPermission(descriptor.id, characterId);
+          if (descriptor.enabled && !permission.ok) {
+            return Object.freeze({ ...descriptor, enabled: false, reason: permission.reason });
+          }
+          return descriptor;
+        });
+      };
 
       const snapshot = (featureId, context = {}) => operations.snapshot(featureId, {
         characterId: context.characterId ?? selectedCharacterId,
       });
 
-      const execute = (action, options = {}) => {
+      const execute = async (action, options = {}) => {
         const featureId = options.featureId ?? selectedFeatureId;
         const characterId = options.characterId ?? selectedCharacterId;
-        const execution = operations.execute(action, { ...options, featureId, characterId });
+        const permission = actionPermission(action, characterId);
+        if (!permission.ok) {
+          const denied = Object.freeze({ action, featureId, characterId, ok: false, reason: permission.reason });
+          setFeedback(shell, permission.reason);
+          api.emit?.('interaction:executed', denied);
+          return denied;
+        }
+        const execution = await operations.execute(action, { ...options, featureId, characterId });
         if (execution.ok && execution.message) setFeedback(shell, execution.message);
         else if (!execution.ok && execution.reason) setFeedback(shell, execution.reason);
         syncFeatureVisualState();
@@ -176,8 +224,8 @@ export function createFeatureInteractionSystem() {
         close(featureId) { return execute('close', { featureId }); },
         snapshot,
         stateForFeature(featureId) { return operations.stateForFeature(featureId); },
-        patchState(featureId, patch) {
-          const featureState = operations.patchState(featureId, patch);
+        async patchState(featureId, patch) {
+          const featureState = await operations.patchState(featureId, patch);
           syncFeatureVisualState();
           return featureState;
         },
@@ -198,7 +246,8 @@ export function createFeatureInteractionSystem() {
         button.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
-          execute(descriptor.id, { featureId, characterId });
+          button.disabled = true;
+          void execute(descriptor.id, { featureId, characterId }).finally(() => { button.disabled = !descriptor.enabled; });
         });
         return button;
       };
@@ -416,7 +465,7 @@ export function createFeatureInteractionSystem() {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation?.();
-        execute(mapped, { featureId, characterId });
+        void execute(mapped, { featureId, characterId });
       };
 
       const genericPanInspect = (event) => {
@@ -457,6 +506,8 @@ export function createFeatureInteractionSystem() {
         api.on?.('scene:restore', queueDecorate),
         api.on?.('character:move', queueDecorate),
         api.on?.('character:eject', queueDecorate),
+        api.on?.('status:change', queueDecorate),
+        api.on?.('multiplayer:capabilities', queueDecorate),
       ].filter(Boolean);
 
       if (globalThis.MutationObserver && shell?.querySelector) {

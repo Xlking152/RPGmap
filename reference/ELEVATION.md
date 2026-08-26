@@ -66,7 +66,7 @@ passagePolygon   → Feature 打开/摧毁后恢复的通行区域
 
 未声明 `blockingPolygon` 时继续使用 Feature 自身 geometry，保证普通建筑、墙体和旧地图兼容。
 
-这一分离用于解决兰州城门的实际门洞问题：部分城墙预留门洞宽于城门楼视觉矩形，直接用视觉矩形阻挡会让 10 m A* 网格从两侧漏过。兰州 Reference Map 在自己的 Capability 转换中声明跨门洞的 `blockingPolygon`；Core 只读取通用 Navigation 字段，不包含城门或兰州专属判断。
+这一分离用于解决兰州城门的实际门洞问题：部分城墙预留门洞宽于城门楼视觉矩形，直接用视觉矩形阻挡会让旧的粗网格路线从两侧漏过。兰州 Reference Map 在自己的 Capability 转换中声明跨门洞的 `blockingPolygon`；Core 只读取通用 Navigation 字段，不包含城门或兰州专属判断。
 
 ## Runtime Adapter
 
@@ -118,16 +118,16 @@ Minimal Reference Map 也提供不同高度的示例 Feature，用于证明 Core
 
 ## 路径规划验证
 
-V1.5 不只检查 `blocked` 栅格值，还对真正使用的 EasyStar 路径规划链路做回归验证：
+V1.6.3 使用 1m 稀疏分块导航场和有界整数 supercover 直线检测，不会建立自动绕行路径：
 
-1. 通用全宽障碍关闭时，`findNavigationPath()` 必须返回 `null`。
-2. 同一障碍传入 `calculateWaypointRoute()` 时必须返回 `valid: false`，证明 Movement waypoint planner 会传播阻挡结果。
-3. 打开同一 Feature 后路径必须恢复。
-4. 角色高度严格超过障碍高度后路径必须恢复。
-5. 兰州北/东/南/西四座真实城门分别验证：关闭时局部 EasyStar 不能从门洞两侧绕缝，打开后通路恢复。
-6. 四座城门全部关闭时，从北侧城外到城中心的真实全图 EasyStar 路径必须不存在；打开北门后该完整路线必须恢复。
+1. 通用全宽障碍关闭时，`findDirectNavigationPath()` 必须返回 `null`。
+2. 同一障碍传入 `calculateWaypointRoute()` 时必须返回 `valid: false`，并标出首个阻挡格。
+3. 打开同一 Feature 后直线必须恢复。
+4. 角色高度严格超过障碍高度后直线必须恢复。
+5. 兰州北/东/南/西四座真实城门分别验证：关闭时直线受阻，打开后恢复通行。
+6. 历史浮点 DDA 卡死坐标、长对角线和角点穿越均在 Worker 的硬时限内返回。
 
-因此“Feature State → Navigation Grid → EasyStar → Movement waypoint planner”的阻挡链路有直接回归覆盖，而不是只验证 UI 图标或单个网格单元。
+因此“Feature State → 1m Navigation Field → bounded direct check → Movement waypoint planner”的阻挡链路有直接回归覆盖；受阻时由玩家用 Ctrl/Cmd 添加可通行的直线拐点。
 
 ## 独立性边界
 

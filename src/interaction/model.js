@@ -7,6 +7,7 @@ import {
   patchFeatureState,
   setFeatureCustomState,
 } from './feature-state.js';
+import { evaluateFeatureStatusRule } from './status-rules.js';
 
 export { FEATURE_STATE_KEY, LEGACY_FEATURE_INTERACTION_STATE_KEY, setFeatureCustomState };
 
@@ -71,16 +72,21 @@ function descriptor(action, enabled, reason = '') {
   });
 }
 
-export function listFeatureInteractions({ mapPackage, state, featureId, characterId = null } = {}) {
+export function listFeatureInteractions({ mapPackage, state, featureId, characterId = null, resolveStatus = null } = {}) {
   const feature = featureById(mapPackage, featureId);
   if (!feature) return Object.freeze([]);
 
   const featureState = getFeatureRuntimeState(state, feature);
   const character = characterId ? characterById(state, characterId) : null;
   const actions = [];
+  const statusReason = action => {
+    const result = evaluateFeatureStatusRule({ feature, action, characterId, resolveStatus });
+    return result.ok ? '' : result.reason;
+  };
 
   if (actionEnabled(feature, 'inspect')) {
-    actions.push(descriptor('inspect', true));
+    const reason = statusReason('inspect');
+    actions.push(descriptor('inspect', !reason, reason));
   }
 
   if (actionEnabled(feature, 'enter')) {
@@ -90,36 +96,38 @@ export function listFeatureInteractions({ mapPackage, state, featureId, characte
     else if (actionEnabled(feature, 'open') && !featureState.open) reason = '对象当前处于关闭状态';
     else if (!character) reason = '请先选择角色';
     else if (character.location?.type !== 'map') reason = '角色当前不在地图上';
+    else reason = statusReason('enter');
     actions.push(descriptor('enter', !reason, reason));
   }
 
   if (actionEnabled(feature, 'exit')) {
     const inside = characterFeatureId(character) === String(feature.id);
-    actions.push(descriptor('exit', inside, inside ? '' : '所选角色当前不在该 Feature 内'));
+    const reason = inside ? statusReason('exit') : '所选角色当前不在该 Feature 内';
+    actions.push(descriptor('exit', !reason, reason));
   }
 
   if (actionEnabled(feature, 'damage')) {
-    actions.push(descriptor('damage', !featureState.destroyed, '对象已经被摧毁'));
+    const reason = featureState.destroyed ? '对象已经被摧毁' : statusReason('damage');
+    actions.push(descriptor('damage', !reason, reason));
   }
 
   if (actionEnabled(feature, 'restore')) {
-    actions.push(descriptor('restore', featureState.damaged, '对象当前完整'));
+    const reason = !featureState.damaged ? '对象当前完整' : statusReason('restore');
+    actions.push(descriptor('restore', !reason, reason));
   }
 
   if (actionEnabled(feature, 'open')) {
-    actions.push(descriptor(
-      'open',
-      !featureState.destroyed && !featureState.open,
-      featureState.destroyed ? '对象已经被摧毁' : '对象已经打开',
-    ));
+    const reason = featureState.destroyed
+      ? '对象已经被摧毁'
+      : featureState.open ? '对象已经打开' : statusReason('open');
+    actions.push(descriptor('open', !reason, reason));
   }
 
   if (actionEnabled(feature, 'close')) {
-    actions.push(descriptor(
-      'close',
-      !featureState.destroyed && featureState.open,
-      featureState.destroyed ? '对象已经被摧毁' : '对象已经关闭',
-    ));
+    const reason = featureState.destroyed
+      ? '对象已经被摧毁'
+      : !featureState.open ? '对象已经关闭' : statusReason('close');
+    actions.push(descriptor('close', !reason, reason));
   }
 
   return Object.freeze(actions);
@@ -167,7 +175,7 @@ export function damageFeatureState(state, mapPackage, featureId) {
   return commitDamageEvent(state, area, preview);
 }
 
-export function featureInteractionSnapshot({ mapPackage, state, featureId, characterId = null } = {}) {
+export function featureInteractionSnapshot({ mapPackage, state, featureId, characterId = null, resolveStatus = null } = {}) {
   const feature = featureById(mapPackage, featureId);
   if (!feature) return null;
   const featureState = getFeatureRuntimeState(state, feature);
@@ -176,6 +184,6 @@ export function featureInteractionSnapshot({ mapPackage, state, featureId, chara
     featureState,
     sceneStatus: featureState.status,
     interactionState: Object.freeze({ open: featureState.open }),
-    actions: listFeatureInteractions({ mapPackage, state, featureId, characterId }),
+    actions: listFeatureInteractions({ mapPackage, state, featureId, characterId, resolveStatus }),
   });
 }

@@ -1,5 +1,6 @@
 import L from 'leaflet';
-import { latLngToWorld } from '../engine/geometry.js';
+import { latLngToWorld, worldToLatLng } from '../engine/geometry.js';
+import { tokenDiameterMeters } from '../elevation/model.js';
 import { createTokenGhostDescriptor, isMovementEndpointLayer } from './ghost.js';
 
 const GHOST_STYLE_ID = 'fvtt-token-ghost-style';
@@ -15,11 +16,11 @@ function installGhostStyles(documentNode) {
   style.id = GHOST_STYLE_ID;
   style.textContent = `
     .fvtt-token-ghost-marker { background:transparent; border:0; pointer-events:none !important; }
-    .fvtt-token-ghost-core { position:relative; width:42px; height:42px; display:grid; place-items:center; overflow:visible; border-radius:50%; color:#fff; opacity:.62; transform:scale(1.04); filter:saturate(.82) brightness(1.08); transition:opacity .12s,filter .12s,transform .12s; }
+    .fvtt-token-ghost-core { position:relative; width:var(--token-size,42px); height:var(--token-size,42px); display:grid; place-items:center; overflow:visible; border-radius:50%; color:#fff; opacity:.62; transform:scale(1.04); filter:saturate(.82) brightness(1.08); transition:opacity .12s,filter .12s,transform .12s; }
     .fvtt-token-ghost-core::before { content:''; position:absolute; inset:-6px; border-radius:50%; pointer-events:none; border:2px dashed rgba(23,109,118,.92); background:rgba(23,109,118,.08); box-shadow:0 0 0 2px rgba(255,255,255,.72),0 0 18px 6px rgba(23,109,118,.34); animation:fvtt-ghost-pulse 1.15s ease-in-out infinite alternate; }
     .fvtt-token-ghost-core.blocked { opacity:.5; filter:grayscale(.28) saturate(.72); }
     .fvtt-token-ghost-core.blocked::before { border-color:rgba(181,47,42,.96); background:rgba(181,47,42,.1); box-shadow:0 0 0 2px rgba(255,255,255,.72),0 0 18px 6px rgba(181,47,42,.38); }
-    .fvtt-token-ghost-face { position:relative; z-index:1; width:42px; height:42px; display:grid; place-items:center; overflow:hidden; border-radius:50%; border:3px solid rgba(255,255,255,.9); background:var(--character-color,#3d9b63); box-shadow:0 2px 8px rgba(0,0,0,.34),0 0 0 2px var(--character-color,#3d9b63); font-size:12px; font-weight:750; }
+    .fvtt-token-ghost-face { position:relative; z-index:1; width:100%; height:100%; display:grid; place-items:center; overflow:hidden; border-radius:50%; border:3px solid rgba(255,255,255,.9); background:var(--character-color,#3d9b63); box-shadow:0 2px 8px rgba(0,0,0,.34),0 0 0 2px var(--character-color,#3d9b63); font-size:12px; font-weight:750; }
     .fvtt-token-ghost-face img { width:100%; height:100%; display:block; object-fit:cover; }
     .fvtt-token-ghost-badge { position:absolute; z-index:2; left:50%; top:-22px; transform:translateX(-50%); padding:2px 6px; border-radius:5px; white-space:nowrap; color:#fff; background:rgba(27,38,41,.84); box-shadow:0 2px 7px rgba(0,0,0,.2); font:700 10px/1.35 "Microsoft YaHei","PingFang SC",system-ui,sans-serif; }
     .fvtt-token-ghost-core.blocked .fvtt-token-ghost-badge { background:rgba(130,35,31,.9); }
@@ -32,10 +33,11 @@ function ghostIcon(descriptor) {
   const portrait = descriptor.avatarDataUrl ? '<img src="' + escapeHtml(descriptor.avatarDataUrl) + '" alt="">' : '<span>' + escapeHtml(descriptor.initial) + '</span>';
   const blockedClass = descriptor.blocked ? ' blocked' : '';
   const badge = descriptor.blocked ? '受阻' : '预览';
+  const size = Number(descriptor.sizePixels) || 42;
   return L.divIcon({
     className:'fvtt-token-ghost-marker',
-    html:'<div class="fvtt-token-ghost-core' + blockedClass + '" style="--character-color:' + descriptor.color + '"><span class="fvtt-token-ghost-badge">' + badge + '</span><span class="fvtt-token-ghost-face">' + portrait + '</span></div>',
-    iconSize:[42,42], iconAnchor:[21,21],
+    html:'<div class="fvtt-token-ghost-core' + blockedClass + '" style="--character-color:' + descriptor.color + ';--token-size:' + size + 'px"><span class="fvtt-token-ghost-badge">' + badge + '</span><span class="fvtt-token-ghost-face">' + portrait + '</span></div>',
+    iconSize:[size,size], iconAnchor:[size / 2,size / 2],
   });
 }
 function sameColor(left, right) { return String(left || '').toLowerCase() === String(right || '').toLowerCase(); }
@@ -59,6 +61,12 @@ export function createMovementGhostRenderer() {
         ghostMarker = null;
       };
       const scheduleHide = () => { cancelHide(); hideTimer = setTimeout(hideGhost, HIDE_DELAY_MS); };
+      const tokenSizePixels = character => {
+        const origin = api.map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, api.mapPackage.height));
+        const unit = api.map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 0 }, api.mapPackage.height));
+        const pixelsPerMeter = Math.hypot(unit.x - origin.x, unit.y - origin.y) || 1;
+        return Math.max(18, Math.min(144, tokenDiameterMeters(api.getState(), character.id) * pixelsPerMeter));
+      };
       const showGhost = layer => {
         const character = selectedCharacter();
         if (!character || typeof layer.getLatLng !== 'function') return;
@@ -66,6 +74,7 @@ export function createMovementGhostRenderer() {
         endpointLayer = layer;
         const descriptor = createTokenGhostDescriptor(character, latLngToWorld(layer.getLatLng(), api.mapPackage.height), {
           blocked: sameColor(layer.options?.color, BLOCKED_ROUTE_COLOR),
+          sizePixels: tokenSizePixels(character),
         });
         if (!descriptor) return;
         if (!ghostMarker) {

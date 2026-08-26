@@ -4,9 +4,11 @@ function copyPoint(point) {
 
 function appendRoutePoints(target, points) {
   if (!points?.length) return;
-  points.forEach((point, index) => {
-    if (index === 0 && target.length) return;
-    target.push(copyPoint(point));
+  points.forEach(point => {
+    const next = copyPoint(point);
+    const previous = target.at(-1);
+    if (previous && previous.x === next.x && previous.y === next.y) return;
+    target.push(next);
   });
 }
 
@@ -15,7 +17,6 @@ export async function calculateWaypointRoute({ session, destination, findPath })
   const points = [];
   const segments = [];
   let distance = 0;
-  let snappedDestination = false;
 
   for (let index = 0; index < controls.length - 1; index += 1) {
     const route = await findPath(controls[index], controls[index + 1]);
@@ -29,10 +30,9 @@ export async function calculateWaypointRoute({ session, destination, findPath })
       to: copyPoint(controls[index + 1]),
       distance: route.distance,
       points: route.points.map(copyPoint),
-      snappedDestination: Boolean(route.snappedDestination),
+      routeType: 'direct',
     });
     distance += route.distance;
-    snappedDestination = Boolean(route.snappedDestination);
   }
 
   return {
@@ -42,6 +42,6 @@ export async function calculateWaypointRoute({ session, destination, findPath })
     segments,
     distance,
     destination: points.at(-1) || copyPoint(destination),
-    snappedDestination,
+    routeType: 'direct',
   };
 }

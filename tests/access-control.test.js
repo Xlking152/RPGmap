@@ -10,6 +10,7 @@ import {
   verifyPlayerKey,
   verifyUserCredential,
 } from '../deployment/local-server/access-control.mjs';
+import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
 
 function world({ activeActorId = null } = {}) {
   const combatants = [
@@ -101,4 +102,93 @@ test('active Combat only permits the current owned Actor to change', () => {
   const denied = structuredClone(otherTurn);
   denied.preferences.entitySystem.actors[0].runtime.hp = 8;
   assert.equal(validatePlayerWorldPush({ before: otherTurn, next: denied, user }).code, 'combat_turn_locked');
+});
+
+test('server resolves legacy combat turns without actorId through the Token binding', () => {
+  const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
+  const before = world({ activeActorId: 'actor-a' });
+  before.preferences.combatSystem.combat.combatants[0].actorId = null;
+  const next = structuredClone(before);
+  next.preferences.entitySystem.actors[0].runtime.health = { mode: 'wound-track', wounds: { bashing: 1, lethal: 0, aggravated: 0 } };
+  assert.equal(validatePlayerWorldPush({ before, next, user }).ok, true);
+});
+
+test('World schema rejects duplicate raw IDs before permission Maps can collapse them', () => {
+  const duplicateActor = world();
+  duplicateActor.preferences.entitySystem.actors.push({ id: 'actor-a', name: 'shadow duplicate' });
+  assert.throws(() => assertWorldState(duplicateActor), { code: 'duplicate_id' });
+
+  const duplicateToken = world();
+  duplicateToken.preferences.entitySystem.tokens.push({ id: 'token-a', characterId: 'token-b', actorId: 'actor-b' });
+  assert.throws(() => assertWorldState(duplicateToken), { code: 'duplicate_id' });
+});
+
+test('only GM may modify Token diameter and the schema bounds allowed values', () => {
+  const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
+  const before = world();
+  const changed = structuredClone(before);
+  changed.preferences.entitySystem.tokens[0].diameterMeters = 10;
+  assert.equal(validatePlayerWorldPush({ before, next: changed, user }).code, 'token_size_gm_only');
+
+  const invalidDiameter = world();
+  invalidDiameter.preferences.entitySystem.tokens[0].diameterMeters = 7;
+  assert.throws(() => assertWorldState(invalidDiameter), /diameterMeters/);
+});
+
+test('Player World pushes cannot rewrite status definitions or Actor/Token effects', () => {
+  const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
+  const before = world();
+  before.preferences.entitySystem.schemaVersion = 3;
+
+  const actorEffect = structuredClone(before);
+  actorEffect.preferences.entitySystem.actors[0].effects = [{
+    id: 'effect-rooted', definitionId: 'status-rooted', stacks: 1, enabled: true,
+  }];
+  assert.equal(validatePlayerWorldPush({ before, next: actorEffect, user }).code, 'status_gm_only');
+
+  const tokenEffect = structuredClone(before);
+  tokenEffect.preferences.entitySystem.tokens[0].effects = [{
+    id: 'effect-spirit', definitionId: 'status-spirit', stacks: 1, enabled: true,
+  }];
+  assert.equal(validatePlayerWorldPush({ before, next: tokenEffect, user }).code, 'status_gm_only');
+
+  const definition = structuredClone(before);
+  definition.preferences.entitySystem.statusDefinitions = [{
+    id: 'custom-slow', name: 'Slow', scopes: ['actor'], maxStacks: 1,
+    category: 'debuff', color: '#445566', changes: [], capabilities: { canMove: false },
+  }];
+  assert.equal(validatePlayerWorldPush({ before, next: definition, user }).code, 'status_gm_only');
+});
+
+test('authoritative status and derived health capabilities block Player movement', () => {
+  const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
+
+  const rooted = world();
+  rooted.preferences.entitySystem.schemaVersion = 3;
+  rooted.preferences.entitySystem.actors[0].effects = [{
+    id: 'effect-rooted', definitionId: 'status-rooted', stacks: 1, enabled: true,
+  }];
+  const rootedMove = structuredClone(rooted);
+  rootedMove.characters[0].location.x = 9;
+  assert.equal(validatePlayerWorldPush({ before: rooted, next: rootedMove, user }).code, 'status_movement_forbidden');
+
+  for (const [label, wounds] of [
+    ['unconscious', { bashing: 2, lethal: 0, aggravated: 0 }],
+    ['dead', { bashing: 0, lethal: 0, aggravated: 2 }],
+  ]) {
+    const incapacitated = world();
+    incapacitated.preferences.entitySystem.actors[0] = {
+      id: 'actor-a', name: 'A', currentFormId: 'form-a',
+      forms: [{ id: 'form-a', resourceBases: { hp: { baseMax: 2 } }, source: { type: 'xlsx' } }],
+      runtime: {
+        resources: { hp: { current: 0, maxOverride: null } },
+        health: { mode: 'wound-track', wounds },
+      },
+      effects: [],
+    };
+    const moved = structuredClone(incapacitated);
+    moved.characters[0].location.y = 11;
+    const denied = validatePlayerWorldPush({ before: incapacitated, next: moved, user });
+    assert.equal(denied.code, 'status_movement_forbidden', label);
+  }
 });

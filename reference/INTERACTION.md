@@ -214,6 +214,29 @@ V1.4.1 存档/Runtime 内部仍存在历史 `location.type = 'building'` 表示�
 
 当一个可进入 Feature 被整毁后，Interaction adapter 会按通用 `enterable + destroyed` 状态疏散内部角色，而不是按 `category === 'building'` 决定。
 
+## Status Rules
+
+Feature 可以声明结构化状态条件与成功后的状态副作用。规则只引用已存在的状态定义，不允许脚本或表达式：
+
+```js
+capabilities: {
+  statusRules: {
+    enter: {
+      requiresAll: ['status-spirit'],
+      forbidsAny: ['status-incapacitated'],
+      onSuccess: {
+        apply: [{ statusId: 'status-blessed', scope: 'actor', stacks: 1 }],
+        remove: [{ statusId: 'status-key', scope: 'token' }],
+      },
+    },
+  },
+}
+```
+
+按钮生成时检查一次，执行或抵达时再次检查。成功动作的 Feature State、最终位置和状态副作用先组成同一个 World 草稿；局域网模式必须等服务器原子写盘并返回对应 `operationId` 后才显示成功。路径失败、取消、权限拒绝、revision 冲突或写盘失败都不会留下部分状态。
+
+状态副作用不能引用生命系统派生的昏迷/死亡。机械状态由 GM 管理；OWNER/OBSERVER 只能读取服务器快照。Player 不能用 `world.push` 直接改写定义或 Actor/Token effects。
+
 ## Damage / Restore
 
 直接破坏 Feature 仍复用原来的：
@@ -272,5 +295,5 @@ demo-wall   destructible + damage passage
 - Feature taxonomy 驱动 UI 标签；
 - Feature State 统一 open/custom/damage status；
 - generic Feature location helper 兼容旧 location schema；
-- open/close 改变 collision + A*；
+- open/close 改变直线碰撞判定；
 - direct damage 不经过 category routing。

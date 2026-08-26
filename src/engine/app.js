@@ -43,11 +43,13 @@ import {
 import {
   createNavigationBase,
   createNavigationGrid,
-  findNavigationPath,
+  findDirectNavigationPath,
+  inspectDirectNavigationPath,
   nearestWalkablePoint
 } from './navigation.js';
 import { createBrowserStorage, createStatePersistence } from '../app/storage.js';
 import { MovementSession, calculateWaypointRoute } from './movement-path.js';
+import { moverContextForCharacter, tokenDiameterMeters } from '../elevation/model.js';
 import { createMapPresentation } from '../render/map-presentation.js';
 import { createSceneRenderer } from '../render/scene-renderer.js';
 import {
@@ -314,7 +316,10 @@ export function createRpgMapApp({
   const stateLoadNotice = loadedState.notice;
   const runtime = {
     tool: 'pan',
-    activeTab: 'markers',
+    // The old marker editor is retired from the V1.5 shell.  Starting on the
+    // character panel also prevents its historical "add label" screen from
+    // flashing before the modern shell has registered.
+    activeTab: 'characters',
     currentMarkerColor: MARKER_COLORS[1].value,
     currentCharacterColor: MARKER_COLORS[2].value,
     selectedMarkerId: null,
@@ -403,6 +408,13 @@ export function createRpgMapApp({
     mapPackage,
     getState: () => structuredClone(state),
     setTool,
+    setActivePanel,
+    placeCharacter,
+    repositionCharacter,
+    inspectTokenPlacement,
+    commitState,
+    commitAuthoritativeState,
+    persistNow,
     exportState: () => exportSave(state, mapPackage),
     importState: importSaveObject,
     on(type, listener) { bus.addEventListener(type, listener); return () => bus.removeEventListener(type, listener); },
@@ -415,6 +427,8 @@ export function createRpgMapApp({
     selectCharacter,
     planCharacterMove,
     commitCharacterMove,
+    cancelCharacterMove,
+    deleteCharacter,
     enterBuilding,
     exitBuilding,
     undoScene,
@@ -434,6 +448,26 @@ export function createRpgMapApp({
       document.removeEventListener('keydown', handleKeydown);
     }
   };
+  bus.addEventListener('token:size-change', () => {
+    // A diameter change invalidates every preview made for the old footprint.
+    cancelCharacterMove();
+    invalidateNavigation();
+    renderCharacters();
+    renderCharacterLayers();
+  });
+  bus.addEventListener('status:change', () => {
+    // Status abilities are part of the navigation cache key. Any pending
+    // preview was calculated under an older authority decision and must not be
+    // commit-able after a status transition.
+    cancelCharacterMove();
+    invalidateNavigation();
+    renderCharacters();
+    renderCharacterLayers();
+    renderInspection();
+  });
+  bus.addEventListener('multiplayer:capabilities', () => {
+    if (runtime.characterMovePreview || runtime.characterMoveSession) cancelCharacterMove();
+  });
   container.rpgMapApp = api;
   tools.forEach(tool => tool?.register?.(api));
   return api;
@@ -462,6 +496,39 @@ export function createRpgMapApp({
 
   function persistNow() {
     persistence.persistNow();
+  }
+
+  /**
+   * Commit an internal World mutation without pretending that a save file was
+   * imported.  Runtime tools used to call importState() for every preference
+   * change, which woke every state:import listener and could turn one Token
+   * placement into a full import/render cascade.
+   */
+  function commitState(nextState, { source = 'local', render = true } = {}) {
+    const normalized = validateAndNormalizeSave(nextState, mapPackage);
+    state = normalized;
+    if (render) {
+      invalidateNavigation();
+      renderAll();
+    }
+    scheduleSave();
+    emit('state:commit', { source, state: structuredClone(state) });
+    return true;
+  }
+
+  async function commitAuthoritativeState(nextState, { source = 'authoritative-world', reason = source, render = true } = {}) {
+    const normalized = validateAndNormalizeSave(nextState, mapPackage);
+    const multiplayer = api.multiplayer?.getStatus?.();
+    if (multiplayer?.connected) {
+      if (typeof api.multiplayer?.performWorldOperation !== 'function') {
+        throw new Error('当前局域网控制器不支持服务器确认提交');
+      }
+      // The canonical snapshot is imported by Multiplayer before this Promise
+      // resolves. Do not mutate or render the draft optimistically.
+      return api.multiplayer.performWorldOperation(normalized, { reason });
+    }
+    commitState(normalized, { source, render });
+    return { offline: true };
   }
 
   function fitInitialView(animate = true) {
@@ -1615,6 +1682,17 @@ export function createRpgMapApp({
     container.querySelectorAll('[data-panel]').forEach(node => node.classList.toggle('active', node.dataset.panel === tab));
   }
 
+  /**
+   * Keep replacement UI shells in sync with the core panel state without
+   * changing the selected map tool.  This is deliberately narrower than
+   * setTab(): the retired marker editor cannot be revived by a sidebar click.
+   */
+  function setActivePanel(panel) {
+    if (!['characters', 'inspect', 'measure', 'areas', 'layers'].includes(panel)) return false;
+    setTab(panel);
+    return true;
+  }
+
   function syncToolUi() {
     container.querySelectorAll('[data-tool]').forEach(node => node.classList.toggle('active', node.dataset.tool === runtime.tool));
     elements.map.style.cursor = runtime.tool === 'pan'
@@ -1626,6 +1704,17 @@ export function createRpgMapApp({
   }
 
   function setTool(tool) {
+    if (tool === 'marker' || tool === 'marker-select') {
+      // Legacy labels/markers are preserved as importable data so a GM can
+      // migrate them, but their obsolete editor is no longer a playable UI.
+      if (runtime.tool === 'marker-select') clearMarkerSelection(false);
+      runtime.tool = 'pan';
+      map.dragging.enable();
+      map.boxZoom.enable();
+      setStatus('旧版标签工具已停用；如需处理旧标记，请在角色库中使用“迁移旧标记”。');
+      syncToolUi();
+      return false;
+    }
     if (runtime.tool === 'marker-select' && tool !== 'marker-select') clearMarkerSelection(false);
     runtime.tool = tool;
     if (tool === 'marker' || tool === 'marker-select') setTab('markers');
@@ -1775,6 +1864,8 @@ export function createRpgMapApp({
     map.on('zoomend moveend resize', () => {
       updateGrid();
       updateScale();
+      renderCharacterLayers();
+      renderCharacterRoute();
       mapPresentation.schedule();
     });
     map.on('move', () => {
@@ -1939,27 +2030,35 @@ export function createRpgMapApp({
     runtime.characterMoveRequest += 1;
   }
 
-  function ensureNavigationGrid() {
-    const revision = state.sceneEvents.map(event => event.id).join('|');
+  function ensureNavigationGrid(characterId = runtime.selectedCharacterId) {
+    const moverContext = moverContextForCharacter(state, characterId);
+    const revision = JSON.stringify({
+      sceneEvents: state.sceneEvents,
+      featureStates: state.preferences?.featureStates || {},
+      moverContext,
+    });
     runtime.navigationBase ||= createNavigationBase(mapPackage);
     if (!runtime.navigationGrid || runtime.navigationRevision !== revision) {
       runtime.navigationGrid = createNavigationGrid(
         mapPackage,
         deriveSceneState(state.sceneEvents),
-        runtime.navigationBase
+        runtime.navigationBase,
+        { appState: state, moverContext }
       );
       runtime.navigationRevision = revision;
     }
     return runtime.navigationGrid;
   }
 
-  function placeCharacter(point) {
-    const navigation = ensureNavigationGrid();
-    const safePoint = nearestWalkablePoint(navigation, point, 30);
-    if (!safePoint) {
-      showToast('附近没有可放置角色的安全位置', 'error');
-      return false;
-    }
+  function placeCharacter(point, { suppressEditor = false } = {}) {
+    // New Tokens always start on a 1 m cell centre.  Navigation remains lazy:
+    // placement never constructs an entire world-sized collision grid.
+    const rawPoint = clampWorld(point);
+    const safePoint = {
+      x: clamp(Math.floor(rawPoint.x) + 0.5, 0.5, Math.max(0.5, mapPackage.width - 0.5)),
+      y: clamp(Math.floor(rawPoint.y) + 0.5, 0.5, Math.max(0.5, mapPackage.height - 0.5)),
+    };
+    if (!inspectDirectNavigationPath(ensureNavigationGrid(null), safePoint, safePoint).valid) return false;
     const character = {
       id: uid('character'),
       name: '角色 ' + (state.characters.length + 1),
@@ -1974,9 +2073,36 @@ export function createRpgMapApp({
     setTool('character-move');
     renderCharacters();
     renderCharacterLayers();
-    openCharacterEditor(character.id);
+    if (!suppressEditor) openCharacterEditor(character.id);
     emit('character:create', structuredClone(character));
     return true;
+  }
+
+  function repositionCharacter(characterId, point) {
+    const character = state.characters.find(item => String(item.id) === String(characterId));
+    if (!character) return false;
+    const rawPoint = clampWorld(point);
+    const safePoint = {
+      x: clamp(Math.floor(rawPoint.x) + 0.5, 0.5, Math.max(0.5, mapPackage.width - 0.5)),
+      y: clamp(Math.floor(rawPoint.y) + 0.5, 0.5, Math.max(0.5, mapPackage.height - 0.5)),
+    };
+    if (!inspectDirectNavigationPath(ensureNavigationGrid(character.id), safePoint, safePoint).valid) return false;
+    character.location = { type: 'map', ...safePoint };
+    followBoundCharacterAreas(character);
+    invalidateNavigation();
+    scheduleSave();
+    renderCharacters(); renderCharacterLayers(); renderAreaLayers();
+    emit('character:move', structuredClone(character));
+    return true;
+  }
+
+  function inspectTokenPlacement(characterId, point) {
+    const rawPoint = clampWorld(point);
+    const safePoint = {
+      x: clamp(Math.floor(rawPoint.x) + 0.5, 0.5, Math.max(0.5, mapPackage.width - 0.5)),
+      y: clamp(Math.floor(rawPoint.y) + 0.5, 0.5, Math.max(0.5, mapPackage.height - 0.5)),
+    };
+    return inspectDirectNavigationPath(ensureNavigationGrid(characterId), safePoint, safePoint);
   }
 
   function selectCharacter(id) {
@@ -2149,17 +2275,30 @@ export function createRpgMapApp({
     return true;
   }
 
+  function tokenPixelsPerMeter() {
+    const origin = map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, mapPackage.height));
+    const unit = map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 0 }, mapPackage.height));
+    const pixels = Math.hypot(unit.x - origin.x, unit.y - origin.y);
+    return Number.isFinite(pixels) && pixels > 0 ? pixels : 1;
+  }
+
+  function tokenRenderSize(character) {
+    const diameter = tokenDiameterMeters(state, character.id);
+    return clamp(diameter * tokenPixelsPerMeter(), 18, 144);
+  }
+
   function characterIcon(character) {
     const selected = runtime.selectedCharacterId === character.id;
     const color = safeColor(character.color, '#3d9b63');
+    const size = tokenRenderSize(character) * (selected ? 1.16 : 1);
     const portrait = character.avatarDataUrl
       ? '<img src="' + character.avatarDataUrl + '" alt="">'
       : '<span>' + escapeHtml((character.name.trim()[0] || '?').toUpperCase()) + '</span>';
     return L.divIcon({
       className: 'rpg-character',
-      html: '<div class="rpg-character-core' + (selected ? ' selected' : '') + '" style="--character-color:' + color + '">' + portrait + '</div>',
-      iconSize: [selected ? 42 : 34, selected ? 42 : 34],
-      iconAnchor: [selected ? 21 : 17, selected ? 21 : 17]
+      html: '<div class="rpg-character-core' + (selected ? ' selected' : '') + '" style="--character-color:' + color + ';--token-size:' + size + 'px">' + portrait + '</div>',
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2]
     });
   }
 
@@ -2231,6 +2370,12 @@ export function createRpgMapApp({
 
   async function recalculateCharacterMove(characterId, destination, arrival = null) {
     const character = state.characters.find(item => item.id === characterId);
+    const statusCapability = api.status?.resolveCapabilities?.({ characterId }) || { canMove: true, reasons: [] };
+    if (statusCapability.canMove === false) {
+      cancelCharacterMove();
+      showToast(statusCapability.reasons?.[0] || '当前状态禁止该角色移动', 'error');
+      return null;
+    }
     const session = ensureCharacterMoveSession(characterId, arrival);
     if (!character || !session) {
       showToast('请先选择一个位于地图上的角色', 'error');
@@ -2241,14 +2386,18 @@ export function createRpgMapApp({
     runtime.characterMovePreview = { characterId, calculating: true, arrival: arrival || session.arrival, waypointCount: session.waypoints.length };
     renderCharacters();
     renderCharacterRoute();
-    setStatus('正在计算分段道路优先路线…');
+    setStatus('正在检查直线路径…');
+    const navigation = ensureNavigationGrid(characterId);
     const route = await calculateWaypointRoute({
       session,
       destination,
-      findPath: (from, to) => findNavigationPath(ensureNavigationGrid(), from, to),
+      findPath: (from, to) => findDirectNavigationPath(navigation, from, to),
     });
     if (request !== runtime.characterMoveRequest) return null;
     if (!route.valid) {
+      const from = route.controls?.[route.failedSegmentIndex];
+      const to = route.controls?.[route.failedSegmentIndex + 1];
+      if (from && to) route.inspection = inspectDirectNavigationPath(navigation, from, to);
       runtime.characterMovePreview = {
         characterId,
         ...route,
@@ -2259,7 +2408,7 @@ export function createRpgMapApp({
       };
       renderCharacters();
       renderCharacterRoute();
-      setStatus('第 ' + (route.failedSegmentIndex + 1) + ' 段无法通行 · 右键撤销拐点或重新选择终点');
+      setStatus('直线路径受阻 · Ctrl/Cmd+点击添加可通行拐点，右键撤销，Esc 取消');
       showToast('路径中的一段被建筑、城墙、水域或弹坑阻挡', 'error');
       return null;
     }
@@ -2272,7 +2421,9 @@ export function createRpgMapApp({
     };
     renderCharacters();
     renderCharacterRoute();
-    setStatus('路线 ' + formatDistance(route.distance) + (session.waypoints.length ? ' · ' + session.waypoints.length + ' 个拐点' : '') + ' · 确认后开始移动');
+    setStatus('直线路线 ' + formatDistance(route.distance)
+      + (session.waypoints.length ? ' · ' + session.waypoints.length + ' 个拐点' : '')
+      + ' · 确认后开始移动');
     emit('character:move-preview', structuredClone(runtime.characterMovePreview));
     return route;
   }
@@ -2283,12 +2434,34 @@ export function createRpgMapApp({
       showToast('请先选择一个位于地图上的角色', 'error');
       return false;
     }
-    const route = await recalculateCharacterMove(characterId, point);
+    const legStart = session.waypoints.at(-1) || session.start;
+    const directLeg = findDirectNavigationPath(
+      ensureNavigationGrid(characterId),
+      legStart,
+      point,
+    );
+    if (!directLeg) {
+      const inspection = inspectDirectNavigationPath(ensureNavigationGrid(characterId), legStart, point);
+      runtime.characterMovePreview = {
+        characterId,
+        controls: [session.start, ...session.waypoints, point],
+        points: [session.start, ...session.waypoints],
+        distance: Math.hypot(point.x - legStart.x, point.y - legStart.y),
+        failedSegmentIndex: session.waypoints.length,
+        calculating: false,
+        invalid: true,
+        inspection,
+        waypointCount: session.waypoints.length,
+      };
+      renderCharacters();
+      renderCharacterRoute();
+      setStatus('直线路径受阻 · Ctrl/Cmd+点击添加可通行拐点，右键撤销，Esc 取消');
+      showToast('Ctrl/Cmd 拐点必须能从当前位置直线到达', 'error');
+      return false;
+    }
+    session.addWaypoint(directLeg.destination);
+    const route = await recalculateCharacterMove(characterId, directLeg.destination);
     if (!route) return false;
-    session.addWaypoint(route.destination);
-    runtime.characterMovePreview.waypointCount = session.waypoints.length;
-    renderCharacters();
-    renderCharacterRoute();
     setStatus('已添加拐点 ' + session.waypoints.length + ' · Ctrl/Cmd+点击继续添加，普通点击设置终点，右键撤销');
     return true;
   }
@@ -2313,19 +2486,50 @@ export function createRpgMapApp({
   function renderCharacterRoute() {
     layers.characterRoute.clearLayers();
     const preview = runtime.characterMovePreview;
-    if (!preview || preview.calculating || !preview.points?.length) return;
-    L.polyline(preview.points.map(point => worldToLatLng(point, mapPackage.height)), {
-      pane: 'measurePane',
-      color: preview.invalid ? '#b52f2a' : '#176d76',
-      weight: 4,
-      dashArray: '10 7',
-      interactive: false,
-      className: 'character-route-preview'
-    }).addTo(layers.characterRoute);
-    L.tooltip({ permanent: true, direction: 'top', className: 'marker-tooltip', pane: 'measurePane' })
-      .setLatLng(worldToLatLng(preview.points.at(-1), mapPackage.height))
-      .setContent(preview.invalid ? '路径受阻' : formatDistance(preview.distance))
-      .addTo(layers.characterRoute);
+    if (!preview || preview.calculating) return;
+    const routeWeight = characterId => Math.max(2, tokenDiameterMeters(state, characterId) * tokenPixelsPerMeter());
+    if (preview.points?.length > 1) {
+      L.polyline(preview.points.map(point => worldToLatLng(point, mapPackage.height)), {
+        pane: 'measurePane',
+        color: '#176d76',
+        weight: routeWeight(preview.characterId),
+        dashArray: '10 7',
+        interactive: false,
+        className: 'character-route-preview'
+      }).addTo(layers.characterRoute);
+    }
+    const failedFrom = preview.invalid ? preview.controls?.[preview.failedSegmentIndex] : null;
+    const failedTo = preview.invalid ? preview.controls?.[preview.failedSegmentIndex + 1] : null;
+    if (failedFrom && failedTo) {
+      L.polyline([
+        worldToLatLng(failedFrom, mapPackage.height),
+        worldToLatLng(failedTo, mapPackage.height),
+      ], {
+        pane: 'measurePane',
+        color: '#b52f2a',
+        weight: routeWeight(preview.characterId),
+        dashArray: '5 8',
+        interactive: false,
+        className: 'character-route-preview character-route-blocked'
+      }).addTo(layers.characterRoute);
+    }
+    const blocker = preview.invalid ? preview.inspection?.blockingCell : null;
+    if (blocker) {
+      L.rectangle([
+        worldToLatLng({ x: blocker.x, y: blocker.y + 1 }, mapPackage.height),
+        worldToLatLng({ x: blocker.x + 1, y: blocker.y }, mapPackage.height),
+      ], {
+        pane: 'measurePane', color: '#b52f2a', weight: 2, fillColor: '#b52f2a', fillOpacity: 0.4, interactive: false,
+        className: 'character-route-blocked-cell',
+      }).addTo(layers.characterRoute);
+    }
+    const endpoint = failedTo || preview.points?.at(-1);
+    if (endpoint) {
+      L.tooltip({ permanent: true, direction: 'top', className: 'marker-tooltip', pane: 'measurePane' })
+        .setLatLng(worldToLatLng(endpoint, mapPackage.height))
+        .setContent(preview.invalid ? '路径受阻' : formatDistance(preview.distance))
+        .addTo(layers.characterRoute);
+    }
     const session = runtime.characterMoveSession;
     session?.waypoints.forEach((point, index) => {
       L.circleMarker(worldToLatLng(point, mapPackage.height), {
@@ -2368,6 +2572,12 @@ export function createRpgMapApp({
     if (!preview || preview.calculating || preview.invalid) return false;
     const character = state.characters.find(item => item.id === preview.characterId);
     if (!character || character.location.type !== 'map') return false;
+    const statusCapability = api.status?.resolveCapabilities?.({ characterId: character.id }) || { canMove: true, reasons: [] };
+    if (statusCapability.canMove === false) {
+      cancelCharacterMove();
+      showToast(statusCapability.reasons?.[0] || '当前状态禁止该角色移动', 'error');
+      return false;
+    }
     const arrival = preview.arrival;
     preview.committing = true;
     if (!arrival) {
@@ -2376,12 +2586,53 @@ export function createRpgMapApp({
       scheduleSave();
     }
     renderCharacters();
-    animateCharacterRoute(character, preview, () => {
+    animateCharacterRoute(character, preview, async () => {
       if (arrival?.type === 'building') {
-        character.location = { type: 'building', featureId: arrival.featureId };
-        followBoundCharacterAreas(character);
-        scheduleSave();
-        showToast(character.name + ' 已进入' + (featureById.get(arrival.featureId)?.name || '建筑'), 'success');
+        if (runtime.characterMovePreview !== preview) {
+          showToast('移动期间角色状态或地图已经变化，请重新规划', 'error');
+          return;
+        }
+        const arrivalCapability = api.status?.resolveCapabilities?.({ characterId: character.id }) || { canMove: true };
+        const arrivalAction = api.interaction?.actionsForFeature?.(arrival.featureId, { characterId: character.id })
+          ?.find?.(entry => entry.id === 'enter');
+        if (arrivalCapability.canMove === false || arrivalAction?.enabled === false) {
+          cancelCharacterMove();
+          showToast(arrivalAction?.reason || arrivalCapability.reasons?.[0] || '抵达前状态条件已经变化，移动已取消', 'error');
+          return;
+        }
+        let draft = structuredClone(state);
+        const draftCharacter = draft.characters.find(item => item.id === character.id);
+        if (!draftCharacter) {
+          cancelCharacterMove();
+          showToast('抵达时角色已经不存在，移动已取消', 'error');
+          return;
+        }
+        draftCharacter.location = { type: 'building', featureId: arrival.featureId };
+        if (Array.isArray(arrival.statusMutations) && arrival.statusMutations.length) {
+          draft = api.status?.applyOperationsToState?.(draft, arrival.statusMutations, {
+            source: { type: 'feature', featureId: arrival.featureId, action: arrival.featureAction || 'enter' },
+          });
+          if (!draft) {
+            cancelCharacterMove();
+            showToast('抵达状态副作用无效，移动已取消', 'error');
+            return;
+          }
+        }
+        try {
+          await commitAuthoritativeState(draft, {
+            source: 'feature:enter',
+            reason: `feature.enter:${arrival.featureId}`,
+            render: true,
+          });
+        } catch (error) {
+          cancelCharacterMove();
+          showToast('进入 Feature 未获服务器确认：' + error.message, 'error');
+          emit('character:move-cancelled', { id: character.id, reason: error.message });
+          return;
+        }
+        const arrivedCharacter = state.characters.find(item => item.id === character.id);
+        followBoundCharacterAreas(arrivedCharacter);
+        showToast(arrivedCharacter.name + ' 已进入' + (featureById.get(arrival.featureId)?.name || '建筑'), 'success');
       }
       runtime.characterMovePreview = null;
       runtime.characterMoveSession = null;
@@ -2393,7 +2644,8 @@ export function createRpgMapApp({
       setStatus(arrival?.type === 'building'
         ? '角色已进入建筑'
         : '角色移动完成 · ' + formatDistance(preview.distance));
-      emit('character:move', structuredClone(character));
+      const committedCharacter = state.characters.find(item => item.id === character.id) || character;
+      emit('character:move', structuredClone(committedCharacter));
     });
     return true;
   }
@@ -2411,6 +2663,11 @@ export function createRpgMapApp({
   function enterBuilding(characterId, featureId) {
     const character = state.characters.find(item => item.id === characterId);
     const feature = featureById.get(featureId);
+    const capability = api.status?.resolveCapabilities?.({ characterId }) || { canInteract: true, canMove: true, reasons: [] };
+    if (capability.canInteract === false || capability.canMove === false) {
+      showToast(capability.reasons?.[0] || '当前状态禁止进入 Feature', 'error');
+      return false;
+    }
     if (!character || character.location.type !== 'map') {
       showToast('请先选择一个位于地图上的角色', 'error');
       return false;
@@ -2427,8 +2684,13 @@ export function createRpgMapApp({
     return true;
   }
 
-  function exitBuilding(characterId) {
+  function exitBuilding(characterId, options = {}) {
     const character = state.characters.find(item => item.id === characterId);
+    const capability = api.status?.resolveCapabilities?.({ characterId }) || { canInteract: true, canMove: true, reasons: [] };
+    if (capability.canInteract === false || capability.canMove === false) {
+      showToast(capability.reasons?.[0] || '当前状态禁止离开 Feature', 'error');
+      return false;
+    }
     if (!character || character.location.type !== 'building') return false;
     const feature = featureById.get(character.location.featureId);
     const target = feature?.entrance
@@ -2439,16 +2701,41 @@ export function createRpgMapApp({
       showToast('建筑附近没有可用安全位置', 'error');
       return false;
     }
-    character.location = { type: 'map', x: safe.x, y: safe.y };
-    followBoundCharacterAreas(character);
+    let draft = structuredClone(state);
+    const draftCharacter = draft.characters.find(item => item.id === characterId);
+    draftCharacter.location = { type: 'map', x: safe.x, y: safe.y };
+    if (Array.isArray(options.statusMutations) && options.statusMutations.length) {
+      draft = api.status?.applyOperationsToState?.(draft, options.statusMutations, options);
+      if (!draft) {
+        showToast('离开状态副作用无效，操作已取消', 'error');
+        return false;
+      }
+    }
+    const finalize = () => {
+      const exitedCharacter = state.characters.find(item => item.id === characterId);
+      if (!exitedCharacter) return false;
+      followBoundCharacterAreas(exitedCharacter);
+      renderCharacters();
+      renderCharacterLayers();
+      renderAreaLayers();
+      renderInspection();
+      showToast(exitedCharacter.name + ' 已离开建筑', 'success');
+      emit('character:exit-building', structuredClone(exitedCharacter));
+      return true;
+    };
+    if (options.authoritative === true) {
+      return commitAuthoritativeState(draft, {
+        source: 'feature:exit',
+        reason: `feature.exit:${feature?.id || ''}`,
+        render: true,
+      }).then(finalize, error => {
+        showToast('离开 Feature 未获服务器确认：' + error.message, 'error');
+        return false;
+      });
+    }
+    state = draft;
     scheduleSave();
-    renderCharacters();
-    renderCharacterLayers();
-    renderAreaLayers();
-    renderInspection();
-    showToast(character.name + ' 已离开建筑', 'success');
-    emit('character:exit-building', structuredClone(character));
-    return true;
+    return finalize();
   }
 
   function selectDistanceMarker(markerId) {
@@ -3108,6 +3395,11 @@ export function createRpgMapApp({
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
+    const capabilities = api.multiplayer?.getCapabilities?.();
+    if (capabilities?.connected && !capabilities.canManageWorld) {
+      showToast('只有 GM 可以导入会覆盖共享 World 的存档', 'error');
+      return;
+    }
     try {
       if (file.size > MAX_SAVE_FILE_BYTES) {
         throw new Error('存档文件超过 5 MB 上限');
@@ -3129,7 +3421,7 @@ export function createRpgMapApp({
         : '';
       const confirmed = await confirmDialog(
         '导入存档',
-        migrationMessage + '导入将替换当前标记、攻击范围、破坏历史和用户设置。',
+        migrationMessage + '导入会覆盖当前角色与 Token、旧标记、范围与锚点、聊天记录、战斗状态、场景状态、用户偏好以及服务器 World。导入前请确认已保留可恢复备份。',
         '导入'
       );
       if (!confirmed) return false;
@@ -3336,11 +3628,16 @@ export function createRpgMapApp({
     return true;
   }
 
-  function restoreFeatures(featureIds) {
+  function restoreFeatures(featureIds, options = {}) {
     try {
       const before = state;
-      state = commitRestoreEvent(state, [...new Set(featureIds || [])]);
-      if (state === before) return false;
+      let draft = commitRestoreEvent(state, [...new Set(featureIds || [])]);
+      if (draft === before) return false;
+      if (Array.isArray(options.statusMutations) && options.statusMutations.length) {
+        draft = api.status?.applyOperationsToState?.(draft, options.statusMutations, options);
+        if (!draft) throw new Error('状态副作用无效');
+      }
+      state = draft;
       runtime.damagePreview = null;
       invalidateNavigation();
       scheduleSave();

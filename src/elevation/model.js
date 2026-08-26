@@ -1,8 +1,19 @@
+import { resolveStatuses } from '../status/model.js';
+
 function finiteNonNegative(value, fallback = 0) {
   const number = Number(value);
   if (Number.isFinite(number) && number >= 0) return number;
   const fallbackNumber = Number(fallback);
   return Number.isFinite(fallbackNumber) && fallbackNumber >= 0 ? fallbackNumber : 0;
+}
+
+export const TOKEN_DIAMETERS_METERS = Object.freeze([1, 5, 10, 20]);
+
+export function normalizeTokenDiameterMeters(value, fallback = 1) {
+  const candidate = Number(value);
+  if (TOKEN_DIAMETERS_METERS.includes(candidate)) return candidate;
+  const fallbackCandidate = Number(fallback);
+  return TOKEN_DIAMETERS_METERS.includes(fallbackCandidate) ? fallbackCandidate : 1;
 }
 
 function optionalFiniteNonNegative(value) {
@@ -49,6 +60,29 @@ export function tokenElevationFt(tokenOrState, characterId = null) {
     ? tokenOrState
     : tokenForCharacter(tokenOrState, characterId);
   return normalizeElevationFt(token?.elevationFt, 0);
+}
+
+export function tokenDiameterMeters(tokenOrState, characterId = null) {
+  const token = characterId === null
+    ? tokenOrState
+    : tokenForCharacter(tokenOrState, characterId);
+  // `size` was an unused V1.5 field. Only exact supported legacy values are
+  // accepted, so an old visual scale never turns a Token into a giant.
+  return normalizeTokenDiameterMeters(token?.diameterMeters ?? token?.size, 1);
+}
+
+export function moverContextForCharacter(state, characterId) {
+  const id = characterId == null ? null : String(characterId);
+  const resolved = id
+    ? resolveStatuses(entityStateFromAppState(state), { characterId: id })
+    : { capabilities: { collisionBypassGroups: [] }, statusVersion: 'none' };
+  return Object.freeze({
+    characterId: id,
+    elevationFt: id ? tokenElevationFt(state, id) : 0,
+    diameterMeters: id ? tokenDiameterMeters(state, id) : 1,
+    statusVersion: resolved.statusVersion,
+    collisionBypassGroups: Object.freeze([...(resolved.capabilities?.collisionBypassGroups || [])]),
+  });
 }
 
 export function featureBlockingHeightFt(feature, featureState = null) {

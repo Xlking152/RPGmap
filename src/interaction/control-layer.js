@@ -143,7 +143,7 @@ export function createFeatureControlLayer() {
           event.preventDefault();
           event.stopPropagation();
           if (!canOperateFeatureControl(api)) {
-            setFeedback(layer.closest('.app-shell') || documentNode, '当前 Player 暂无地图 Feature 开关权限；该权限模型已列入后续计划。');
+            setFeedback(layer.closest('.app-shell') || documentNode, '只有 GM 可以修改地图 Feature 的开关与结构状态');
             syncControls();
             return;
           }
@@ -153,7 +153,7 @@ export function createFeatureControlLayer() {
             syncControls();
             return;
           }
-          api.interaction.execute(action, { featureId: feature.id, source: 'map-control' });
+          void api.interaction.execute(action, { featureId: feature.id, source: 'map-control' });
           syncControls();
         });
         layer.append(button);

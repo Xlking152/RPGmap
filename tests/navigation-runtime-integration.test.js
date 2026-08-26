@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createNavigationGrid, findNavigationPath } from '../src/engine/navigation.js';
+import { createNavigationGrid, findDirectNavigationPath } from '../src/engine/navigation.js';
 import { calculateWaypointRoute } from '../src/movement/path.js';
 import { MovementSession } from '../src/movement/session.js';
 import { applyLanzhouCapabilities } from '../reference/maps/lanzhou/capabilities.js';
@@ -81,33 +81,6 @@ function gatewayCrossing(gateway, distance = 140) {
   };
 }
 
-function cropNavigation(navigation, center, radiusMeters = 240) {
-  const cellSize = navigation.cellSize;
-  const minColumn = Math.max(0, Math.floor((center.x - radiusMeters) / cellSize));
-  const maxColumn = Math.min(navigation.columns - 1, Math.floor((center.x + radiusMeters) / cellSize));
-  const minRow = Math.max(0, Math.floor((center.y - radiusMeters) / cellSize));
-  const maxRow = Math.min(navigation.rows - 1, Math.floor((center.y + radiusMeters) / cellSize));
-  const columns = maxColumn - minColumn + 1;
-  const rows = maxRow - minRow + 1;
-  const grid = navigation.grid
-    .slice(minRow, maxRow + 1)
-    .map((row) => row.slice(minColumn, maxColumn + 1));
-  const origin = { x: minColumn * cellSize, y: minRow * cellSize };
-  return {
-    navigation: {
-      cellSize,
-      width: columns * cellSize,
-      height: rows * cellSize,
-      columns,
-      rows,
-      grid,
-    },
-    point(point) {
-      return { x: point.x - origin.x, y: point.y - origin.y };
-    },
-  };
-}
-
 function lanzhouWithCapabilities() {
   const source = createLanzhouMapPackage();
   return {
@@ -116,7 +89,7 @@ function lanzhouWithCapabilities() {
   };
 }
 
-test('Movement path planning is actually blocked by a closed generic Feature and restored by open/elevation state', async () => {
+test('direct movement is blocked by a closed generic Feature and restored by open/elevation state', async () => {
   const map = genericBarrierMap();
   const start = { x: 50, y: 20 };
   const destination = { x: 50, y: 80 };
@@ -125,31 +98,40 @@ test('Movement path planning is actually blocked by a closed generic Feature and
     appState: appState(false),
     moverContext: { characterId: 'ground', elevationFt: 0 },
   });
-  assert.equal(await findNavigationPath(closedGround, start, destination), null, 'closed barrier must stop A*');
+  assert.equal(findDirectNavigationPath(closedGround, start, destination), null, 'closed barrier must stop direct movement');
+
+  const atBarrierHeight = createNavigationGrid(map, {}, null, {
+    appState: appState(false),
+    moverContext: { characterId: 'at-height', elevationFt: 20 },
+  });
+  assert.equal(findDirectNavigationPath(atBarrierHeight, start, destination), null,
+    'a Token at exactly the blocking height must still be stopped');
 
   const session = new MovementSession({ characterId: 'ground', start });
   const blockedWaypointRoute = await calculateWaypointRoute({
     session,
     destination,
-    findPath: (from, to) => findNavigationPath(closedGround, from, to),
+    findPath: (from, to) => findDirectNavigationPath(closedGround, from, to),
   });
-  assert.equal(blockedWaypointRoute.valid, false, 'movement planner must surface the blocked A* segment');
+  assert.equal(blockedWaypointRoute.valid, false, 'movement planner must surface the blocked direct segment');
   assert.equal(blockedWaypointRoute.failedSegmentIndex, 0);
 
   const openedGround = createNavigationGrid(map, {}, null, {
     appState: appState(true),
     moverContext: { characterId: 'ground', elevationFt: 0 },
   });
-  assert.ok(await findNavigationPath(openedGround, start, destination), 'opening the same Feature must restore A* passage');
+  assert.ok(findDirectNavigationPath(openedGround, start, destination), 'opening the same Feature must restore direct passage');
 
   const closedAbove = createNavigationGrid(map, {}, null, {
     appState: appState(false),
     moverContext: { characterId: 'flyer', elevationFt: 21 },
   });
-  assert.ok(await findNavigationPath(closedAbove, start, destination), 'strictly higher mover must clear a 20 ft blocker');
+  const aboveRoute = findDirectNavigationPath(closedAbove, start, destination);
+  assert.deepEqual(aboveRoute.points, [start, destination], 'strictly higher mover must use the restored direct route');
+  assert.equal(aboveRoute.routeType, 'direct');
 });
 
-test('real Lanzhou city-gate grids block EasyStar routes when closed and restore them when opened', async () => {
+test('real Lanzhou city gates block direct lines when closed and restore them when opened', async () => {
   const map = lanzhouWithCapabilities();
   const gateways = new Map((map.navigation.gateways || []).map((gateway) => [String(gateway.featureId), gateway]));
 
@@ -167,22 +149,19 @@ test('real Lanzhou city-gate grids block EasyStar routes when closed and restore
       appState: openState,
       moverContext: { characterId: 'ground', elevationFt: 0 },
     });
-    const closed = cropNavigation(closedFull, crossing.center);
-    const opened = cropNavigation(openedFull, crossing.center);
-
     assert.equal(
-      await findNavigationPath(closed.navigation, closed.point(crossing.start), closed.point(crossing.end)),
+      findDirectNavigationPath(closedFull, crossing.start, crossing.end),
       null,
-      `${featureId}: closed gate must block the real EasyStar path`,
+      `${featureId}: closed gate must block the direct path`,
     );
     assert.ok(
-      await findNavigationPath(opened.navigation, opened.point(crossing.start), opened.point(crossing.end)),
-      `${featureId}: opened gate must restore the real EasyStar path`,
+      findDirectNavigationPath(openedFull, crossing.start, crossing.end),
+      `${featureId}: opened gate must restore the direct path`,
     );
   }
 });
 
-test('Lanzhou city perimeter is globally sealed with all city gates closed and becomes enterable through an opened north gate', async () => {
+test('opening a gate restores only the exact two-point direct crossing through the city perimeter', async () => {
   const map = lanzhouWithCapabilities();
   const outsideNorth = { x: 3364, y: 1332 };
   const cityCenter = { x: 3268, y: 2195 };
@@ -192,7 +171,7 @@ test('Lanzhou city perimeter is globally sealed with all city gates closed and b
     moverContext: { characterId: 'ground', elevationFt: 0 },
   });
   assert.equal(
-    await findNavigationPath(sealed, outsideNorth, cityCenter),
+    findDirectNavigationPath(sealed, outsideNorth, cityCenter),
     null,
     'all four closed city gates must seal the city perimeter for a ground mover',
   );
@@ -201,8 +180,10 @@ test('Lanzhou city perimeter is globally sealed with all city gates closed and b
     appState: cityGateState('gate-north'),
     moverContext: { characterId: 'ground', elevationFt: 0 },
   });
-  assert.ok(
-    await findNavigationPath(northOpen, outsideNorth, cityCenter),
-    'opening the north gate must create an actual outside-to-city-center route',
+  const direct = findDirectNavigationPath(northOpen, outsideNorth, cityCenter);
+  assert.deepEqual(
+    direct?.points,
+    [outsideNorth, cityCenter],
+    'the opened north gate permits this exact straight crossing without adding automatic detour points',
   );
 });

@@ -1,6 +1,7 @@
 import L from 'leaflet';
 import { worldToLatLng } from '../engine/geometry.js';
 import { EntityStore } from '../entities/store.js';
+import { tokenDiameterMeters } from '../elevation/model.js';
 import { resolveActorHealth } from './actor.js';
 import { HEALTH_MODE_WOUND_TRACK, formatHealthSummary } from './model.js';
 
@@ -70,16 +71,20 @@ export function createHealthTokenBars() {
           const health = resolveActorHealth(actor);
           const html = barHtml(health);
           if (!html) continue;
+          const token = store.token(character.id);
+          const origin = api.map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, api.mapPackage.height));
+          const unit = api.map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 0 }, api.mapPackage.height));
+          const tokenPixels = Math.max(18, Math.min(144, tokenDiameterMeters(token) * (Math.hypot(unit.x - origin.x, unit.y - origin.y) || 1)));
+          const barWidth = Math.max(28, Math.min(160, tokenPixels * 1.1));
           L.marker(worldToLatLng(character.location, api.mapPackage.height), {
             pane: PANE,
             interactive: false,
             keyboard: false,
             icon: L.divIcon({
               className: 'rpgmap-healthbar-marker',
-              html,
-              iconSize: [46, 7],
-              // Keep the single canonical HealthSystem bar below even a selected 42px token.
-              iconAnchor: [23, -27],
+              html: html.replace('class="rpgmap-token-healthbar"', `class="rpgmap-token-healthbar" style="width:${barWidth}px"`),
+              iconSize: [barWidth, 7],
+              iconAnchor: [barWidth / 2, -(tokenPixels / 2 + 6)],
             }),
           }).addTo(layer);
         }
@@ -89,6 +94,12 @@ export function createHealthTokenBars() {
       api.on('character:delete', render);
       api.on('state:import', render);
       api.on('state:saved', render);
+      api.on('state:commit', event => {
+        const source = String(event.detail?.source || '');
+        if (source === 'health' || source.startsWith('entities:resource')) render();
+      });
+      api.on('health:change', render);
+      api.on('token:size-change', render);
       render();
     },
   };

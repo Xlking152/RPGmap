@@ -1,5 +1,6 @@
 import { createHealthRuntime, defaultHealthMode, normalizeHealthRuntime } from '../health/model.js';
-import { normalizeElevationFt } from '../elevation/model.js';
+import { normalizeElevationFt, normalizeTokenDiameterMeters } from '../elevation/model.js';
+import { normalizeEntityStatusState, STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { normalizeCharacterCard } from './schema.js';
 const CORE_RESOURCE_DEFS = Object.freeze([
   { id: 'hp', name: '生命', kind: 'hp' },
@@ -85,7 +86,7 @@ function normalizeForm(form) {
 }
 
 export function createEmptyEntityState() {
-  return { schemaVersion: 1, actors: [], tokens: [] };
+  return { schemaVersion: STATUS_SCHEMA_VERSION, statusDefinitions: [], actors: [], tokens: [] };
 }
 
 export function createFormFromImport(imported, { id = uid('form'), name } = {}) {
@@ -174,12 +175,13 @@ export function createTokenForActor(actorId, characterId, overrides = {}) {
     id: String(characterId),
     actorId: String(actorId),
     characterId: String(characterId),
-    size: finite(overrides.size, 1) || 1,
+    diameterMeters: normalizeTokenDiameterMeters(overrides.diameterMeters ?? overrides.size, 1),
     rotation: finite(overrides.rotation, 0),
     elevationFt: normalizeElevationFt(overrides.elevationFt, 0),
     hidden: Boolean(overrides.hidden),
     locked: Boolean(overrides.locked),
     showName: overrides.showName !== false,
+    effects: Array.isArray(overrides.effects) ? clone(overrides.effects) : [],
   };
 }
 
@@ -218,9 +220,25 @@ export function normalizeEntityState(raw) {
   const tokens = Array.isArray(raw.tokens)
     ? raw.tokens
       .filter(token => token && actorIds.has(String(token.actorId)))
-      .map(token => ({ ...clone(token), elevationFt: normalizeElevationFt(token.elevationFt, 0) }))
+      .map(token => {
+        const next = clone(token);
+        const diameterMeters = normalizeTokenDiameterMeters(next.diameterMeters ?? next.size, 1);
+        delete next.size;
+        return { ...next, diameterMeters, elevationFt: normalizeElevationFt(next.elevationFt, 0) };
+      })
     : [];
-  return { schemaVersion: 1, actors, tokens };
+  const normalizedStatuses = normalizeEntityStatusState({
+    schemaVersion: raw.schemaVersion,
+    statusDefinitions: raw.statusDefinitions,
+    actors,
+    tokens,
+  });
+  return {
+    schemaVersion: STATUS_SCHEMA_VERSION,
+    statusDefinitions: normalizedStatuses.statusDefinitions,
+    actors: normalizedStatuses.actors,
+    tokens: normalizedStatuses.tokens,
+  };
 }
 
 export function migrateLegacyCharacters(entityState, characters = []) {

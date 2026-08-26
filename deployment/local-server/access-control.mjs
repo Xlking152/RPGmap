@@ -1,4 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { assertWorldState, isSameChat } from './world-schema.mjs';
+import { resolveStatusCapabilitiesForCharacter, statusStateChanged } from './status-operations.mjs';
 
 export const OWNERSHIP = Object.freeze({ NONE: 'none', OBSERVER: 'observer', OWNER: 'owner' });
 const OWNERSHIP_VALUES = new Set(Object.values(OWNERSHIP));
@@ -16,6 +18,10 @@ function cleanActorId(value) {
 
 function same(a, b) {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+function tokenSizeFields(token) {
+  return { diameterMeters: token?.diameterMeters ?? null, size: token?.size ?? null };
 }
 
 function mapById(items = []) {
@@ -111,6 +117,17 @@ function changedActorIds(before, next) {
     }
   }
   return changed;
+}
+
+function movedCharacterIds(before, next) {
+  const moved = [];
+  const nextCharacters = mapById(next?.characters || []);
+  for (const character of before?.characters || []) {
+    if (character?.id == null) continue;
+    const other = nextCharacters.get(String(character.id));
+    if (other && !same(character.location, other.location)) moved.push(String(character.id));
+  }
+  return moved;
 }
 
 function globalProjection(state) {
@@ -318,7 +335,10 @@ export function currentCombatActorId(state) {
   const combat = combatState(state);
   if (!combat || combat.state !== 'active' || !Array.isArray(combat.combatants) || !combat.combatants.length) return null;
   const index = Math.max(0, Math.min(combat.combatants.length - 1, Number(combat.turnIndex) || 0));
-  return cleanActorId(combat.combatants[index]?.actorId);
+  const current = combat.combatants[index];
+  // Keep the server's turn check identical to the client. The live Token
+  // binding wins over cached combatant data, including legacy/null actorId.
+  return tokenActorMap(state).get(String(current?.tokenId || '')) || cleanActorId(current?.actorId) || null;
 }
 
 export function validatePlayerWorldPush({ before, next, user } = {}) {
@@ -326,8 +346,20 @@ export function validatePlayerWorldPush({ before, next, user } = {}) {
   if (!before || typeof before !== 'object') return { ok: false, code: 'gm_initialization_required', message: 'World 只能由 GM 初始化' };
   if (!next || typeof next !== 'object' || Array.isArray(next)) return { ok: false, code: 'invalid_state', message: 'World state must be an object' };
 
+  try {
+    // Do this before any Set/Map projection.  A Map silently overwrites duplicate
+    // keys, which previously allowed the validator and UI to see different data.
+    assertWorldState(before);
+    assertWorldState(next);
+  } catch (error) {
+    return { ok: false, code: error?.code || 'invalid_state', message: error?.message || 'World state 无效' };
+  }
+
   if (!actorSetsMatch(before, next) || !tokenSetsMatch(before, next) || !characterSetsMatch(before, next)) {
     return { ok: false, code: 'actor_structure_gm_only', message: '创建、删除或重新绑定 Actor / Token 只能由 GM 完成' };
+  }
+  if (statusStateChanged(before, next)) {
+    return { ok: false, code: 'status_gm_only', message: '状态定义与 Actor / Token 效果只能通过 GM 状态操作提交' };
   }
   if (!same(combatState(before), combatState(next))) {
     return { ok: false, code: 'combat_gm_only', message: '参战者、先攻顺序、轮次与当前回合只能由 GM 修改' };
@@ -335,8 +367,16 @@ export function validatePlayerWorldPush({ before, next, user } = {}) {
   if (!same(globalProjection(before), globalProjection(next))) {
     return { ok: false, code: 'world_scope_forbidden', message: 'Player 只能修改自己拥有的 Actor、Token 与聊天内容' };
   }
-  if (!chatAppendOnly(before, next)) {
-    return { ok: false, code: 'chat_history_forbidden', message: 'Player 不能删除或改写既有聊天 / Game Log' };
+  if (!isSameChat(before, next)) {
+    return { ok: false, code: 'chat_server_only', message: '聊天记录只能通过服务器提交' };
+  }
+
+  const beforeTokens = mapById(entityState(before).tokens || []);
+  const nextTokens = mapById(entityState(next).tokens || []);
+  for (const [id, token] of beforeTokens) {
+    if (!same(tokenSizeFields(token), tokenSizeFields(nextTokens.get(id)))) {
+      return { ok: false, code: 'token_size_gm_only', message: 'Token 直径只能由 GM 修改' };
+    }
   }
 
   const changed = changedActorIds(before, next);
@@ -346,6 +386,19 @@ export function validatePlayerWorldPush({ before, next, user } = {}) {
   for (const actorId of changed) {
     if (ownershipLevel(user, actorId) !== OWNERSHIP.OWNER) {
       return { ok: false, code: 'actor_not_owned', message: `你没有 Actor ${actorId} 的 OWNER 权限`, actorId };
+    }
+  }
+
+  for (const characterId of movedCharacterIds(before, next)) {
+    const capabilities = resolveStatusCapabilitiesForCharacter(before, characterId);
+    if (capabilities.canMove === false) {
+      const reason = capabilities.reasons?.length ? `（${capabilities.reasons.join('、')}）` : '';
+      return {
+        ok: false,
+        code: 'status_movement_forbidden',
+        message: `该角色当前状态禁止移动${reason}`,
+        characterId,
+      };
     }
   }
 

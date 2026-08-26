@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,15 +52,15 @@ async function openSocket(url) {
 async function openAndHello(url, hello) {
   const ws = await openSocket(url);
   const welcomePromise = waitForMessage(ws, message => message.type === 'welcome');
-  ws.send(JSON.stringify({ type: 'hello', ...hello }));
+  ws.send(JSON.stringify({ type: 'hello', ...(hello.requestedRole === 'gm' ? { gmSecret: 'TEST-GM-SECRET' } : {}), ...hello }));
   return { ws, welcome: await welcomePromise };
 }
 
-async function startServer(extraEnv = {}) {
-  const mapDir = await mkdtemp(path.join(tmpdir(), 'rpgmap-map-'));
+async function startServer(extraEnv = {}, existingMapDir = null) {
+  const mapDir = existingMapDir || await mkdtemp(path.join(tmpdir(), 'rpgmap-map-'));
   const serverPath = fileURLToPath(new URL('../deployment/local-server/server.mjs', import.meta.url));
   const child = spawn(process.execPath, [serverPath], {
-    env: { ...process.env, PORT: '0', RPGMAP_MAP_DIR: mapDir, RPGMAP_PUBLIC_DIR: mapDir, ...extraEnv },
+    env: { ...process.env, NODE_ENV: 'test', RPGMAP_TEST_ALLOW_MISSING_ORIGIN: '1', RPGMAP_GM_SECRET: 'TEST-GM-SECRET', PORT: '0', RPGMAP_MAP_DIR: mapDir, RPGMAP_PUBLIC_DIR: mapDir, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stderr = '';
@@ -83,10 +83,10 @@ async function startServer(extraEnv = {}) {
   return { child, mapDir, url: `ws://127.0.0.1:${port}/ws` };
 }
 
-async function stopServer(runtime) {
+async function stopServer(runtime, { removeMap = true } = {}) {
   runtime.child.kill('SIGTERM');
   await new Promise(resolve => setTimeout(resolve, 120));
-  await rm(runtime.mapDir, { recursive: true, force: true });
+  if (removeMap) await rm(runtime.mapDir, { recursive: true, force: true });
 }
 
 function initialWorld() {
@@ -116,6 +116,264 @@ function initialWorld() {
 }
 
 function clone(value) { return structuredClone(value); }
+
+async function sendStatusAndWait(ws, message) {
+  const operationId = message.operationId;
+  const snapshotPromise = waitForMessage(ws, value => value.type === 'world.snapshot' && value.operationId === operationId);
+  const ackPromise = waitForMessage(ws, value => value.type === 'status.ack' && value.operationId === operationId);
+  ws.send(JSON.stringify(message));
+  const [snapshot, ack] = await Promise.all([snapshotPromise, ackPromise]);
+  return { snapshot, ack };
+}
+
+test('clearing shared chat preserves active combat and actor health in LAN World', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'GM', requestedRole: 'gm' });
+    const state = initialWorld();
+    state.preferences.entitySystem.actors[0].runtime.health = { mode: 'wound-track', wounds: { bashing: 2, lethal: 1, aggravated: 0 } };
+    state.preferences.combatSystem.combat = {
+      id: 'combat-keep', state: 'active', round: 3, turnIndex: 1,
+      combatants: [
+        { id: 'cb-a', tokenId: 'token-a', actorId: 'actor-a', initiative: 12, order: 0 },
+        { id: 'cb-b', tokenId: 'token-b', actorId: 'actor-b', initiative: 7, order: 1 },
+      ],
+    };
+    state.preferences.chatSystem.messages.push({ id: 'log-1', type: 'combat', text: '旧战斗日志', createdAt: '2026-01-01T00:00:00.000Z' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' }));
+    await initialized;
+
+    const clearedSnapshot = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 2 && message.reason === 'chat.clear');
+    gm.ws.send(JSON.stringify({ type: 'chat.clear' }));
+    const cleared = await clearedSnapshot;
+    assert.deepEqual(cleared.state.preferences.chatSystem.messages, []);
+    assert.deepEqual(cleared.state.preferences.combatSystem.combat, state.preferences.combatSystem.combat);
+    assert.deepEqual(cleared.state.preferences.entitySystem.actors[0].runtime.health, state.preferences.entitySystem.actors[0].runtime.health);
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('GM status protocol is authoritative, revisioned, durable, and idempotent', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Status GM', requestedRole: 'gm' });
+    const state = initialWorld();
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' }));
+    await initialized;
+
+    const keyPromise = waitForMessage(gm.ws, message => message.type === 'access.claim');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Status Player', defaultActorId: 'actor-a', ownership: { 'actor-a': 'owner' } }));
+    const keyMessage = await keyPromise;
+    const player = await openAndHello(runtime.url, { name: 'Status Player', requestedRole: 'player', claimCode: keyMessage.claimCode });
+
+    const playerDeniedPromise = waitForMessage(player.ws, message => message.type === 'status.denied' && message.operationId === 'player-status-1');
+    player.ws.send(JSON.stringify({
+      type: 'status.apply', operationId: 'player-status-1', clientRevision: 1,
+      scope: 'actor', targetId: 'actor-a', statusId: 'status-rooted',
+    }));
+    const playerDenied = await playerDeniedPromise;
+    assert.equal(playerDenied.code, 'status_gm_only');
+    assert.equal(playerDenied.revision, 1);
+    assert.deepEqual(playerDenied.state, state);
+
+    const invalidIdPromise = waitForMessage(gm.ws, message => message.type === 'status.denied' && message.code === 'invalid_operation_id');
+    gm.ws.send(JSON.stringify({
+      type: 'status.apply', operationId: 'bad operation id', clientRevision: 1,
+      scope: 'actor', targetId: 'actor-a', statusId: 'status-rooted',
+    }));
+    assert.equal((await invalidIdPromise).revision, 1);
+
+    const definition = {
+      id: 'status-focus', name: 'Focus', description: 'Stackable test status', icon: 'star',
+      color: '#225588', category: 'buff', scopes: ['actor'], maxStacks: 5,
+      changes: [], capabilities: {},
+    };
+    const stalePromise = waitForMessage(gm.ws, message => message.type === 'status.denied' && message.operationId === 'definition-stale');
+    gm.ws.send(JSON.stringify({
+      type: 'status.definition.upsert', operationId: 'definition-stale', clientRevision: 0, definition,
+    }));
+    const stale = await stalePromise;
+    assert.equal(stale.code, 'revision_conflict');
+    assert.equal(stale.revision, 1);
+
+    const upsertMessage = {
+      type: 'status.definition.upsert', operationId: 'definition-upsert-1', clientRevision: 1, definition,
+    };
+    const upsert = await sendStatusAndWait(gm.ws, upsertMessage);
+    assert.equal(upsert.snapshot.revision, 2);
+    assert.equal(upsert.snapshot.originSessionId, gm.welcome.session.id);
+    assert.equal(upsert.snapshot.reason, 'status.definition.upsert');
+    assert.equal(upsert.snapshot.state.preferences.entitySystem.schemaVersion, 3);
+    assert.equal(upsert.snapshot.state.preferences.entitySystem.statusDefinitions[0].id, 'status-focus');
+    assert.equal(upsert.ack.duplicate, false);
+
+    const duplicate = await sendStatusAndWait(gm.ws, upsertMessage);
+    assert.equal(duplicate.ack.duplicate, true);
+    assert.equal(duplicate.ack.committedRevision, 2);
+    assert.equal(duplicate.snapshot.revision, 2);
+    assert.equal(duplicate.snapshot.reason, 'status.duplicate');
+
+    const forged = clone(upsert.snapshot.state);
+    forged.preferences.entitySystem.actors[0].effects = [{
+      id: 'forged-effect', definitionId: 'status-focus', stacks: 1, enabled: true,
+    }];
+    const forgedDeniedPromise = waitForMessage(player.ws, message => message.type === 'world.denied' && message.code === 'status_gm_only');
+    player.ws.send(JSON.stringify({
+      type: 'world.push', operationId: 'forged-world-status-1', baseRevision: 2, state: forged, reason: 'forged-status',
+    }));
+    const forgedDenied = await forgedDeniedPromise;
+    assert.equal(forgedDenied.revision, 2);
+    assert.equal(forgedDenied.operationId, 'forged-world-status-1');
+
+    const applied = await sendStatusAndWait(gm.ws, {
+      type: 'status.apply', operationId: 'status-apply-1', clientRevision: 2,
+      scope: 'actor', targetId: 'actor-a', statusId: 'status-focus', stacks: 2,
+    });
+    assert.equal(applied.snapshot.revision, 3);
+    assert.equal(applied.snapshot.state.preferences.entitySystem.actors[0].effects[0].stacks, 2);
+
+    const stacked = await sendStatusAndWait(gm.ws, {
+      type: 'status.setStacks', operationId: 'status-stacks-1', clientRevision: 3,
+      scope: 'actor', targetId: 'actor-a', statusId: 'status-focus', stacks: 4,
+      enabled: false, note: '等待解除',
+    });
+    assert.equal(stacked.snapshot.revision, 4);
+    assert.equal(stacked.snapshot.state.preferences.entitySystem.actors[0].effects[0].stacks, 4);
+    assert.equal(stacked.snapshot.state.preferences.entitySystem.actors[0].effects[0].enabled, false);
+    assert.equal(stacked.snapshot.state.preferences.entitySystem.actors[0].effects[0].note, '等待解除');
+
+    const batched = await sendStatusAndWait(gm.ws, {
+      type: 'status.batch', operationId: 'status-batch-1', clientRevision: 4,
+      operations: [
+        { type: 'status.remove', scope: 'actor', targetId: 'actor-a', statusId: 'status-focus' },
+        { type: 'status.apply', scope: 'token', targetId: 'token-a', statusId: 'status-spirit' },
+      ],
+    });
+    assert.equal(batched.snapshot.revision, 5);
+    assert.deepEqual(batched.snapshot.state.preferences.entitySystem.actors[0].effects, []);
+    assert.equal(batched.snapshot.state.preferences.entitySystem.tokens[0].effects[0].definitionId, 'status-spirit');
+
+    const removed = await sendStatusAndWait(gm.ws, {
+      type: 'status.remove', operationId: 'status-remove-1', clientRevision: 5,
+      scope: 'token', targetId: 'token-a', statusId: 'status-spirit',
+    });
+    assert.equal(removed.snapshot.revision, 6);
+    assert.deepEqual(removed.snapshot.state.preferences.entitySystem.tokens[0].effects, []);
+
+    const deleted = await sendStatusAndWait(gm.ws, {
+      type: 'status.definition.delete', operationId: 'definition-delete-1', clientRevision: 6,
+      definitionId: 'status-focus',
+    });
+    assert.equal(deleted.snapshot.revision, 7);
+    assert.deepEqual(deleted.snapshot.state.preferences.entitySystem.statusDefinitions, []);
+
+    // GM Feature success may atomically combine a mechanical status side effect
+    // with movement/Actor changes in one complete-schema World commit.
+    const featureWorld = clone(deleted.snapshot.state);
+    featureWorld.characters[0].location.x = 42;
+    featureWorld.preferences.entitySystem.actors[0].effects = [{
+      id: 'feature-rooted', definitionId: 'status-rooted', stacks: 1, enabled: true,
+    }];
+    const featureSnapshotPromise = waitForMessage(gm.ws, message => message.type === 'world.snapshot'
+      && message.revision === 8 && message.operationId === 'feature-world-1');
+    gm.ws.send(JSON.stringify({
+      type: 'world.push', operationId: 'feature-world-1', baseRevision: 7, state: featureWorld, reason: 'feature-success',
+    }));
+    const featureSnapshot = await featureSnapshotPromise;
+    assert.equal(featureSnapshot.originSessionId, gm.welcome.session.id);
+    assert.equal(featureSnapshot.state.characters[0].location.x, 42);
+    assert.equal(featureSnapshot.state.preferences.entitySystem.actors[0].effects[0].definitionId, 'status-rooted');
+
+    const worldData = await waitForJsonFile(path.join(runtime.mapDir, 'world.json'), value => value?.revision === 8);
+    assert.equal(worldData.state.preferences.entitySystem.actors[0].effects[0].definitionId, 'status-rooted');
+
+    player.ws.close();
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('failed status persistence does not advance revision, broadcast, or consume idempotency key', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Status GM', requestedRole: 'gm' });
+    const state = initialWorld();
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' }));
+    await initialized;
+
+    const worldFile = path.join(runtime.mapDir, 'world.json');
+    await rm(worldFile, { force: true });
+    await mkdir(worldFile);
+
+    const message = {
+      type: 'status.apply', operationId: 'status-persist-retry', clientRevision: 1,
+      scope: 'actor', targetId: 'actor-a', statusId: 'status-rooted',
+    };
+    const deniedPromise = waitForMessage(gm.ws, value => value.type === 'status.denied' && value.operationId === message.operationId);
+    const forbiddenSnapshot = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.operationId === message.operationId, 200);
+    gm.ws.send(JSON.stringify(message));
+    const denied = await deniedPromise;
+    assert.equal(denied.code, 'persist_failed');
+    assert.equal(denied.revision, 1);
+    assert.equal(denied.state.preferences.entitySystem.actors[0].effects, undefined);
+    await assert.rejects(forbiddenSnapshot, /message timeout/);
+
+    const canonicalPromise = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.reason === 'request');
+    gm.ws.send(JSON.stringify({ type: 'world.request' }));
+    assert.equal((await canonicalPromise).revision, 1);
+
+    await rm(worldFile, { recursive: true, force: true });
+    const retried = await sendStatusAndWait(gm.ws, message);
+    assert.equal(retried.ack.duplicate, false);
+    assert.equal(retried.snapshot.revision, 2);
+    assert.equal(retried.snapshot.state.preferences.entitySystem.actors[0].effects[0].definitionId, 'status-rooted');
+
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('status operation idempotency survives a LAN server restart', async () => {
+  let runtime = await startServer();
+  const mapDir = runtime.mapDir;
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Restart GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorld(), reason: 'init' }));
+    await initialized;
+
+    const operation = {
+      type: 'status.apply', operationId: 'restart-idempotency-1', clientRevision: 1,
+      scope: 'actor', targetId: 'actor-a', statusId: 'status-rooted',
+    };
+    const committed = await sendStatusAndWait(gm.ws, operation);
+    assert.equal(committed.snapshot.revision, 2);
+    assert.equal(committed.snapshot.state.preferences.entitySystem.actors[0].effects[0].stacks, 1);
+    gm.ws.close();
+
+    await stopServer(runtime, { removeMap: false });
+    runtime = await startServer({}, mapDir);
+    const reconnected = await openAndHello(runtime.url, { name: 'Restart GM', requestedRole: 'gm' });
+    assert.equal(reconnected.welcome.world.revision, 2);
+    assert.equal(reconnected.welcome.world.state.preferences.entitySystem.actors[0].effects[0].stacks, 1);
+
+    const duplicate = await sendStatusAndWait(reconnected.ws, { ...operation, clientRevision: 2 });
+    assert.equal(duplicate.ack.duplicate, true);
+    assert.equal(duplicate.ack.committedRevision, 2);
+    assert.equal(duplicate.snapshot.revision, 2);
+    assert.equal(duplicate.snapshot.state.preferences.entitySystem.actors[0].effects[0].stacks, 1);
+    reconnected.ws.close();
+  } finally {
+    await stopServer(runtime, { removeMap: true });
+  }
+});
 
 test('GM approves Player identity; OWNER writes succeed while unowned and combat-locked writes fail', async () => {
   const runtime = await startServer();
@@ -257,15 +515,50 @@ test('GM can pre-create a User and Player can bind it with a reusable Player Key
   }
 });
 
-test('public GM secret bypasses Join Code; new Players require Join Code and enter pending approval', async () => {
+test('GM Secret is mandatory; duplicate World IDs and client-forged system chat are rejected', async () => {
   const runtime = await startServer({
-    RPGMAP_PUBLIC: '1',
     RPGMAP_JOIN_CODE: '654321',
     RPGMAP_GM_SECRET: 'GM-TEST-SECRET',
   });
   try {
-    const gm = await openAndHello(runtime.url, { name: 'Internet GM', requestedRole: 'gm', gmSecret: 'GM-TEST-SECRET', joinCode: '' });
+    const missingSecret = await openSocket(runtime.url);
+    const missingSecretError = waitForMessage(missingSecret, message => message.type === 'error');
+    missingSecret.send(JSON.stringify({ type: 'hello', name: 'No Secret', requestedRole: 'gm' }));
+    assert.equal((await missingSecretError).code, 'gm_secret_required');
+    missingSecret.close();
+
+    const gm = await openAndHello(runtime.url, { name: 'LAN GM', requestedRole: 'gm', gmSecret: 'GM-TEST-SECRET', joinCode: '' });
     assert.equal(gm.welcome.session.role, 'gm');
+
+    const world = initialWorld();
+    world.preferences.chatSystem.messages = Array.from({ length: 500 }, (_, index) => ({
+      id: `old-${index}`, type: 'chat', text: `old ${index}`, createdAt: '2026-01-01T00:00:00.000Z',
+    }));
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: world, reason: 'init' }));
+    await initialized;
+
+    const duplicate = clone(world);
+    duplicate.characters.push({ id: 'token-a', name: 'Duplicate', location: { type: 'map', x: 0, y: 0 }, visible: true });
+    const duplicateDenied = waitForMessage(gm.ws, message => message.type === 'error');
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 1, state: duplicate, reason: 'duplicate-id' }));
+    assert.equal((await duplicateDenied).code, 'duplicate_id');
+
+    const appendSnapshot = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 2);
+    gm.ws.send(JSON.stringify({ type: 'chat.append', event: 'system', text: 'server-owned event' }));
+    const appended = await appendSnapshot;
+    assert.equal(appended.state.preferences.chatSystem.messages.length, 500);
+    assert.equal(appended.state.preferences.chatSystem.messages.some(message => message.id === 'old-0'), false);
+    assert.equal(appended.state.preferences.chatSystem.messages.at(-1).sender.name, 'LAN GM');
+
+    const claim = waitForMessage(gm.ws, message => message.type === 'access.claim');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'LAN Player', defaultActorId: 'actor-a', ownership: { 'actor-a': 'owner' } }));
+    const playerKey = await claim;
+    const player = await openAndHello(runtime.url, { name: 'LAN Player', requestedRole: 'player', joinCode: '654321', claimCode: playerKey.claimCode });
+    const forgedSystem = waitForMessage(player.ws, message => message.type === 'error');
+    player.ws.send(JSON.stringify({ type: 'chat.append', event: 'system', text: 'forged system entry', sender: { name: 'fake' } }));
+    assert.equal((await forgedSystem).code, 'chat_type_forbidden');
+    player.ws.close();
 
     const badPlayer = await openSocket(runtime.url);
     const errorPromise = waitForMessage(badPlayer, message => message.type === 'error');
@@ -273,11 +566,6 @@ test('public GM secret bypasses Join Code; new Players require Join Code and ent
     assert.equal((await errorPromise).code, 'invalid_join_code');
     badPlayer.close();
 
-    const player = await openAndHello(runtime.url, { name: 'Internet Player', requestedRole: 'player', joinCode: '654321' });
-    assert.equal(player.welcome.session.role, 'player');
-    assert.equal(player.welcome.identity.status, 'pending');
-    assert.equal(player.welcome.permissions.worldWrite, false);
-    player.ws.close();
     gm.ws.close();
   } finally {
     await stopServer(runtime);

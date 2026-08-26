@@ -130,6 +130,9 @@ function normalizeNavigationCapability(feature, declared) {
     : null;
   return Object.freeze({
     blocks: source.blocks === true,
+    collisionGroup: typeof source.collisionGroup === 'string'
+      ? source.collisionGroup.trim().slice(0, 64) || null
+      : null,
     passableWhenOpen: source.passableWhenOpen === true,
     passableWhenDestroyed: source.passableWhenDestroyed === true,
     damageCreatesPassage: source.damageCreatesPassage === true,
@@ -138,6 +141,75 @@ function normalizeNavigationCapability(feature, declared) {
     passageTile,
     passagePolygon: normalizeNavigationPolygon(source.passagePolygon, 'feature navigation passagePolygon'),
   });
+}
+
+function normalizeStatusIdList(value, label) {
+  if (value == null) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > 64) {
+    throw new TypeError(`Invalid MapPackage: ${label} must be an array with at most 64 entries`);
+  }
+  const result = value.map((entry, index) => asNonEmptyString(entry, `${label}[${index}]`));
+  if (new Set(result).size !== result.length) {
+    throw new TypeError(`Invalid MapPackage: ${label} entries must be unique`);
+  }
+  return Object.freeze(result);
+}
+
+function normalizeStatusMutation(value, label, action) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`Invalid MapPackage: ${label} must be an object`);
+  }
+  const statusId = asNonEmptyString(value.statusId ?? value.definitionId, `${label}.statusId`);
+  const scope = value.scope == null ? 'actor' : asNonEmptyString(value.scope, `${label}.scope`);
+  if (scope !== 'actor' && scope !== 'token') {
+    throw new TypeError(`Invalid MapPackage: ${label}.scope must be actor or token`);
+  }
+  const normalized = { statusId, scope };
+  if (action === 'apply') {
+    const stacks = Number(value.stacks ?? 1);
+    if (!Number.isInteger(stacks) || stacks < 1 || stacks > 99) {
+      throw new TypeError(`Invalid MapPackage: ${label}.stacks must be an integer from 1 to 99`);
+    }
+    normalized.stacks = stacks;
+    if (value.note != null) normalized.note = String(value.note).slice(0, 4000);
+  }
+  return Object.freeze(normalized);
+}
+
+function normalizeStatusRule(value, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`Invalid MapPackage: ${label} must be an object`);
+  }
+  const onSuccessSource = value.onSuccess && typeof value.onSuccess === 'object' && !Array.isArray(value.onSuccess)
+    ? value.onSuccess
+    : {};
+  const apply = Array.isArray(onSuccessSource.apply) ? onSuccessSource.apply : [];
+  const remove = Array.isArray(onSuccessSource.remove) ? onSuccessSource.remove : [];
+  if (apply.length > 64 || remove.length > 64) {
+    throw new TypeError(`Invalid MapPackage: ${label}.onSuccess has too many status mutations`);
+  }
+  return Object.freeze({
+    requiresAll: normalizeStatusIdList(value.requiresAll, `${label}.requiresAll`),
+    forbidsAny: normalizeStatusIdList(value.forbidsAny, `${label}.forbidsAny`),
+    onSuccess: Object.freeze({
+      apply: Object.freeze(apply.map((entry, index) => normalizeStatusMutation(entry, `${label}.onSuccess.apply[${index}]`, 'apply'))),
+      remove: Object.freeze(remove.map((entry, index) => normalizeStatusMutation(entry, `${label}.onSuccess.remove[${index}]`, 'remove'))),
+    }),
+  });
+}
+
+function normalizeStatusRulesCapability(declared) {
+  const source = declared.statusRules;
+  if (source == null) return Object.freeze({});
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    throw new TypeError('Invalid MapPackage: capabilities.statusRules must be an object');
+  }
+  const rules = {};
+  for (const action of FEATURE_INTERACTION_ACTIONS) {
+    if (source[action] == null) continue;
+    rules[action] = normalizeStatusRule(source[action], `capabilities.statusRules.${action}`);
+  }
+  return Object.freeze(rules);
 }
 
 function normalizeFeature(feature, index, destructibleCategories) {
@@ -175,6 +247,7 @@ function normalizeFeature(feature, index, destructibleCategories) {
     ?? feature.interactive
     ?? Object.values(actions).some(Boolean);
   const navigation = normalizeNavigationCapability(feature, declared);
+  const statusRules = normalizeStatusRulesCapability(declared);
 
   const capabilities = Object.freeze({
     ...declared,
@@ -185,6 +258,7 @@ function normalizeFeature(feature, index, destructibleCategories) {
     openable: Boolean(openable),
     actions,
     navigation,
+    statusRules,
   });
   return Object.freeze({ ...feature, id, category, capabilities });
 }

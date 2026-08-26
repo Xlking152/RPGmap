@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createActorFromImport } from '../src/entities/model.js';
-import { applyDamageToActor, applyHealingToActor, resolveActorHealth } from '../src/health/actor.js';
+import { applyDamageToActor, applyHealingToActor, resolveActorHealth, setActorWounds } from '../src/health/actor.js';
 
 test('resolved wound healing restores the selected B/L/A slots to healthy', () => {
   const actor = createActorFromImport({
@@ -34,4 +34,18 @@ test('ordinary wound healing does not replace resurrection after all slots becom
   assert.equal(result.blocked, 'dead');
   assert.equal(result.applied, 0);
   assert.equal(result.after.dead, true);
+});
+
+test('direct B/L/A editing is normalized and keeps the ordinary HP projection in sync', () => {
+  const actor = createActorFromImport({
+    formName: '默认形态', identity: { name: '直接编辑' },
+    resources: { hp: { max: 10 }, stamina: { max: 0 }, willpower: { max: 0 } },
+    attributes: [], checks: { skills: [], saves: [] }, badStatuses: [], combat: { attacks: [], defenses: [] },
+    tokenAppearance: {}, source: { type: 'xlsx' },
+  });
+  const result = setActorWounds(actor, { bashing: 9, lethal: 6, aggravated: 4 });
+  assert.equal(result.changed, true);
+  assert.deepEqual({ bashing: result.after.bashing, lethal: result.after.lethal, aggravated: result.after.aggravated }, { bashing: 0, lethal: 6, aggravated: 4 });
+  assert.equal(result.after.healthy, 0);
+  assert.equal(resolveActorHealth(actor).current, 0);
 });

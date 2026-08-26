@@ -6,6 +6,8 @@ import {
   featureBlockingHeightFt,
   featureBlocksMover,
   normalizeElevationFt,
+  normalizeTokenDiameterMeters,
+  moverContextForCharacter,
   tokenElevationFt,
 } from '../src/elevation/model.js';
 import {
@@ -59,6 +61,24 @@ test('Token elevationFt defaults to zero and normalizes as a non-negative value'
     tokens: [{ id: 'character-a', actorId: 'actor-a', characterId: 'character-a', elevationFt: 45 }],
   });
   assert.equal(normalized.tokens[0].elevationFt, 45);
+});
+
+test('Token diameter is constrained and legacy size only migrates at supported values', () => {
+  assert.equal(createTokenForActor('actor-a', 'character-a').diameterMeters, 1);
+  assert.equal(createTokenForActor('actor-a', 'character-a', { diameterMeters: 10 }).diameterMeters, 10);
+  assert.equal(normalizeTokenDiameterMeters(7), 1);
+  const normalized = normalizeEntityState({
+    actors: [{ id: 'actor-a', forms: [], runtime: {} }],
+    tokens: [
+      { id: 'valid', actorId: 'actor-a', characterId: 'valid', size: 5 },
+      { id: 'invalid', actorId: 'actor-a', characterId: 'invalid', size: 9 },
+    ],
+  });
+  assert.equal(normalized.tokens[0].diameterMeters, 5);
+  assert.equal(normalized.tokens[0].size, undefined);
+  assert.equal(normalized.tokens[1].diameterMeters, 1);
+  const context = moverContextForCharacter({ preferences: { entitySystem: normalized } }, 'valid');
+  assert.equal(context.diameterMeters, 5);
 });
 
 test('Feature height blocking uses strict greater-than clearance and supports World override', () => {
@@ -119,8 +139,8 @@ test('Navigation grid ignores a height-aware Feature only when mover elevation i
     appState,
     moverContext: { characterId: 'character-a', elevationFt: 21 },
   });
-  assert.equal(atHeight.grid[2][2], NAVIGATION_TILES.blocked);
-  assert.equal(aboveHeight.grid[2][2], NAVIGATION_TILES.open);
+  assert.equal(atHeight.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.blocked);
+  assert.equal(aboveHeight.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.open);
 });
 
 test('Navigation uses blockingPolygon instead of visible Feature geometry when declared', () => {
@@ -131,7 +151,7 @@ test('Navigation uses blockingPolygon instead of visible Feature geometry when d
     appState: { sceneEvents: [], preferences: { featureStates: {} } },
     moverContext: { elevationFt: 0 },
   });
-  assert.equal(navigation.grid[4][2], NAVIGATION_TILES.blocked, 'declared blocker must extend beyond visible geometry');
+  assert.equal(navigation.tileAt({ x: 25, y: 45 }), NAVIGATION_TILES.blocked, 'declared blocker must extend beyond visible geometry');
 });
 
 test('Feature State blockingHeightFt override participates in mover-aware Navigation', () => {
@@ -152,8 +172,8 @@ test('Feature State blockingHeightFt override participates in mover-aware Naviga
     appState,
     moverContext: { elevationFt: 41 },
   });
-  assert.equal(belowOverride.grid[2][2], NAVIGATION_TILES.blocked);
-  assert.equal(aboveOverride.grid[2][2], NAVIGATION_TILES.open);
+  assert.equal(belowOverride.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.blocked);
+  assert.equal(aboveOverride.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.open);
 });
 
 test('legacy callers may cache the Navigation facade while active mover and Feature height change', () => {
@@ -163,13 +183,13 @@ test('legacy callers may cache the Navigation facade while active mover and Feat
   try {
     setActiveMoverContext({ characterId: 'ground', elevationFt: 0 });
     const cachedNavigation = createNavigationGrid(map, {});
-    assert.equal(cachedNavigation.grid[2][2], NAVIGATION_TILES.blocked);
+    assert.equal(cachedNavigation.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.blocked);
 
     setActiveMoverContext({ characterId: 'flyer', elevationFt: 30 });
-    assert.equal(cachedNavigation.grid[2][2], NAVIGATION_TILES.open, 'cached facade must refresh for another mover');
+    assert.equal(cachedNavigation.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.open, 'cached facade must refresh for another mover');
 
     appState.preferences.featureStates['obstacle-a'] = { custom: { blockingHeightFt: 40 } };
-    assert.equal(cachedNavigation.grid[2][2], NAVIGATION_TILES.blocked, 'cached facade must refresh for Feature State override');
+    assert.equal(cachedNavigation.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.blocked, 'cached facade must refresh for Feature State override');
   } finally {
     resetElevationNavigationRuntime();
   }

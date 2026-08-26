@@ -19,7 +19,7 @@ const features = Object.freeze([
     ruinStyle: 'timber-earth',
     destructible: Object.freeze({ enabled: true, maxHp: 100, material: 'timber-earth' }),
     capabilities: Object.freeze({
-      navigation: Object.freeze({ blocks: true, blockingHeightFt: 15 }),
+      navigation: Object.freeze({ blocks: true, collisionGroup: 'structure', blockingHeightFt: 15 }),
     }),
     details: Object.freeze({
       use: '用于验证通用建筑交互。',
@@ -45,6 +45,7 @@ const features = Object.freeze([
       actions: Object.freeze({ inspect: true, open: true, close: true }),
       navigation: Object.freeze({
         blocks: true,
+        collisionGroup: 'structure',
         blockingHeightFt: 8,
         passableWhenOpen: true,
         passageTile: 'open',
@@ -69,6 +70,7 @@ const features = Object.freeze([
     capabilities: Object.freeze({
       navigation: Object.freeze({
         blocks: true,
+        collisionGroup: 'structure',
         blockingHeightFt: 12,
         passableWhenDestroyed: true,
         damageCreatesPassage: true,

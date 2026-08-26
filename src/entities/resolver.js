@@ -17,7 +17,15 @@ function applyMode(current, mode, value) {
 
 function effectsFor(actor, target) {
   return (actor?.effects || []).filter(effect => effect?.enabled !== false)
-    .flatMap(effect => effect.changes || [])
+    .flatMap(effect => (effect.changes || []).map(change => ({
+      ...change,
+      // Stackable definitions are restricted to additive changes. Project the
+      // linear stack value here so every existing resource/attribute resolver
+      // consumes the canonical status semantics without a second code path.
+      value: change?.mode === 'add'
+        ? finite(change?.value) * Math.max(1, Math.floor(finite(effect?.stacks, 1)))
+        : change?.value,
+    })))
     .filter(change => change?.target === target);
 }
 

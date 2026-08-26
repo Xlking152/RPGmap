@@ -31,3 +31,24 @@ test('calculateWaypointRoute sums routed segments and reports the blocked leg', 
   assert.equal(blocked.valid, false);
   assert.equal(blocked.failedSegmentIndex, 1);
 });
+
+test('manual waypoints and the final destination use the same strict direct planner', async () => {
+  const session = new MovementSession({ characterId: 'hero', start: { x: 0, y: 0 } });
+  session.addWaypoint({ x: 10, y: 0 });
+  const calls = [];
+  const route = await calculateWaypointRoute({
+    session,
+    destination: { x: 20, y: 0 },
+    findPath: async (from, to) => {
+      calls.push({ from, to });
+      return { points: [from, to], distance: 10, destination: to, routeType: 'direct' };
+    },
+  });
+  assert.equal(route.valid, true);
+  assert.deepEqual(calls, [
+    { from: { x: 0, y: 0 }, to: { x: 10, y: 0 } },
+    { from: { x: 10, y: 0 }, to: { x: 20, y: 0 } },
+  ]);
+  assert.equal(route.routeType, 'direct');
+  assert.equal(route.distance, 20);
+});

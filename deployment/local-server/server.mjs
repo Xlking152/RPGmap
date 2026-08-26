@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { readFile, stat, writeFile, rename } from 'node:fs/promises';
+import { readFile, stat, writeFile, rename, copyFile, readdir, rm } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -22,6 +22,14 @@ import {
   verifyUserCredential,
 } from './access-control.mjs';
 import { createPortableStorage, ensurePortableStorage, migrateLegacyStorage } from './portable-storage.mjs';
+import { assertSafeJson, assertWorldState, isSameChat } from './world-schema.mjs';
+import {
+  STATUS_OPERATION_CACHE_LIMIT,
+  applyStatusMessage,
+  assertStatusOperationId,
+  isStatusMessage,
+  isStructuralStatusMessage,
+} from './status-operations.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '0.0.0.0';
@@ -32,11 +40,11 @@ const PUBLIC_DIR = STORAGE.appDir;
 const MAP_DIR = STORAGE.mapDir;
 const WORLD_FILE = STORAGE.worldFile;
 const ACCESS_FILE = STORAGE.usersFile;
-const PUBLIC_MODE = process.env.RPGMAP_PUBLIC === '1';
 const PLAYER_JOIN_CODE = String(process.env.RPGMAP_JOIN_CODE || '').trim();
 const GM_SECRET = String(process.env.RPGMAP_GM_SECRET || randomBytes(4).toString('hex').toUpperCase());
-const PUBLIC_URL = String(process.env.RPGMAP_PUBLIC_URL || '').trim();
 const MAX_WS_PAYLOAD = 8 * 1024 * 1024;
+const BACKUP_RETENTION = 10;
+const TEST_ALLOW_MISSING_ORIGIN = process.env.NODE_ENV === 'test' && process.env.RPGMAP_TEST_ALLOW_MISSING_ORIGIN === '1';
 
 const MIME = new Map([
   ['.html', 'text/html; charset=utf-8'], ['.js', 'text/javascript; charset=utf-8'],
@@ -96,11 +104,6 @@ function networkUrls(port) {
   return [...new Set(urls)];
 }
 
-function isLoopback(address) {
-  const value = String(address || '').toLowerCase();
-  return value === '127.0.0.1' || value === '::1' || value === '::ffff:127.0.0.1';
-}
-
 function sanitizeName(value) {
   const text = String(value || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 40);
   return text || 'Player';
@@ -108,6 +111,16 @@ function sanitizeName(value) {
 
 function wsAccept(key) {
   return createHash('sha1').update(String(key) + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+}
+
+function hasSameOrigin(req) {
+  const host = String(req.headers.host || '').trim();
+  const origin = String(req.headers.origin || '').trim();
+  if (!origin && TEST_ALLOW_MISSING_ORIGIN) return true;
+  if (!host || !origin) return false;
+  // The server only serves HTTP Local/LAN URLs.  A browser cannot forge Origin,
+  // so matching it to the WebSocket target blocks hostile web pages on loopback.
+  return origin === `http://${host}`;
 }
 
 function encodeFrame(payload, opcode = 0x1) {
@@ -229,6 +242,53 @@ function attachFrameReader(socket, onText, onClose) {
 
 await ensureRuntimeDirs();
 const legacyMigrations = await migrateLegacyStorage(STORAGE);
+async function quarantineCorruptFile(filePath, label, error) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const target = path.join(STORAGE.backupsDir, `${label}.corrupt.${stamp}.json`);
+  try {
+    await rename(filePath, target);
+  } catch (moveError) {
+    throw new Error(`${label} 损坏且无法隔离（${moveError.message}）。原文件未被覆盖。`);
+  }
+  throw new Error(`${label} 损坏，已隔离到 ${target}。请检查或恢复备份后重启。（${error.message}）`);
+}
+
+async function loadRequiredJson(filePath, label) {
+  try {
+    return JSON.parse(await readFile(filePath, 'utf8'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return undefined;
+    return quarantineCorruptFile(filePath, label, error);
+  }
+}
+
+async function pruneBackups(label) {
+  const entries = await readdir(STORAGE.backupsDir, { withFileTypes: true });
+  const backups = entries.filter(entry => entry.isFile() && entry.name.startsWith(`${label}.backup.`))
+    .sort((left, right) => right.name.localeCompare(left.name));
+  await Promise.all(backups.slice(BACKUP_RETENTION).map(entry => rm(path.join(STORAGE.backupsDir, entry.name), { force: true })));
+}
+
+async function writeJsonWithBackup(filePath, label, value) {
+  const snapshot = JSON.stringify(value, null, 2);
+  try {
+    await stat(filePath);
+    const stamp = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
+    await copyFile(filePath, path.join(STORAGE.backupsDir, `${label}.backup.${stamp}.json`));
+    await pruneBackups(label);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  const temp = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temp, snapshot, 'utf8');
+    await rename(temp, filePath);
+  } catch (error) {
+    await rm(temp, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
 let version = { app: 'RPGmap', version: 'unknown', serverMode: 'multiplayer' };
 try { version = JSON.parse(await readFile(path.join(STORAGE.packageRoot, 'VERSION.json'), 'utf8')); }
 catch {
@@ -236,43 +296,101 @@ catch {
 }
 const packageVersion = version.version || version.packageVersion || 'unknown';
 
-let world = { schemaVersion: 1, worldId: WORLD_ID, revision: 0, updatedAt: null, state: null };
-try {
-  const loaded = JSON.parse(await readFile(WORLD_FILE, 'utf8'));
-  if (loaded && typeof loaded === 'object') {
-    world = {
-      schemaVersion: 1,
-      worldId: WORLD_ID,
-      revision: Math.max(0, Number(loaded.revision) || 0),
-      updatedAt: loaded.updatedAt || null,
-      state: loaded.state && typeof loaded.state === 'object' ? loaded.state : null,
-    };
+let world = {
+  schemaVersion: 1,
+  worldId: WORLD_ID,
+  revision: 0,
+  updatedAt: null,
+  state: null,
+  recentStatusOperations: [],
+};
+const loadedWorld = await loadRequiredJson(WORLD_FILE, 'world');
+if (loadedWorld !== undefined) {
+  if (!loadedWorld || typeof loadedWorld !== 'object' || Array.isArray(loadedWorld)) await quarantineCorruptFile(WORLD_FILE, 'world', new Error('root must be an object'));
+  if (loadedWorld.state !== null && loadedWorld.state !== undefined) {
+    try { assertWorldState(loadedWorld.state); }
+    catch (error) { await quarantineCorruptFile(WORLD_FILE, 'world', error); }
   }
-} catch {}
+  world = {
+    schemaVersion: 1,
+    worldId: WORLD_ID,
+    revision: Math.max(0, Number(loadedWorld.revision) || 0),
+    updatedAt: loadedWorld.updatedAt || null,
+    state: loadedWorld.state || null,
+    recentStatusOperations: Array.isArray(loadedWorld.recentStatusOperations)
+      ? loadedWorld.recentStatusOperations.slice(-STATUS_OPERATION_CACHE_LIMIT).flatMap(record => {
+        try {
+          const operationId = assertStatusOperationId(record?.operationId);
+          const revision = Math.max(0, Number(record?.revision) || 0);
+          const results = Array.isArray(record?.results) ? structuredClone(record.results) : [];
+          return [{ operationId, revision, results }];
+        } catch { return []; }
+      })
+      : [],
+  };
+}
+
+// Idempotency is intentionally bounded. A reconnect can safely retry a recent
+// GM status mutation without applying it twice, while unbounded client keys can
+// never grow server memory for the lifetime of the process.
+const completedStatusOperations = new Map();
+for (const record of world.recentStatusOperations || []) {
+  completedStatusOperations.set(record.operationId, {
+    revision: record.revision,
+    results: structuredClone(record.results),
+  });
+}
+function rememberStatusOperation(operationId, revision, results) {
+  completedStatusOperations.set(operationId, { revision, results: structuredClone(results) });
+  while (completedStatusOperations.size > STATUS_OPERATION_CACHE_LIMIT) {
+    completedStatusOperations.delete(completedStatusOperations.keys().next().value);
+  }
+}
+
+function recentStatusOperationsWith(operationId, revision, results) {
+  const records = (world.recentStatusOperations || [])
+    .filter(record => record.operationId !== operationId);
+  records.push({ operationId, revision, results: structuredClone(results) });
+  return records.slice(-STATUS_OPERATION_CACHE_LIMIT);
+}
+
+function statusOperationIdForReply(value) {
+  if (typeof value !== 'string') return null;
+  const result = value.trim().slice(0, 160);
+  return result || null;
+}
 
 let access = createAccessState();
-try { access = normalizeAccessState(JSON.parse(await readFile(ACCESS_FILE, 'utf8'))); } catch {}
+const loadedAccess = await loadRequiredJson(ACCESS_FILE, 'users');
+if (loadedAccess !== undefined) {
+  if (!loadedAccess || typeof loadedAccess !== 'object' || Array.isArray(loadedAccess) || !Array.isArray(loadedAccess.users)) {
+    await quarantineCorruptFile(ACCESS_FILE, 'users', new Error('users must be an array'));
+  }
+  access = normalizeAccessState(loadedAccess);
+}
 
 let persistChain = Promise.resolve();
-function persistWorld() {
-  const snapshot = JSON.stringify(world, null, 2);
-  persistChain = persistChain.then(async () => {
-    const temp = WORLD_FILE + '.tmp';
-    await writeFile(temp, snapshot, 'utf8');
-    await rename(temp, WORLD_FILE);
-  }).catch(error => console.error('[RPGmap] world persist failed:', error));
-  return persistChain;
+function persistWorld(snapshot) {
+  const task = persistChain.catch(() => {}).then(() => writeJsonWithBackup(WORLD_FILE, 'world', snapshot));
+  persistChain = task;
+  return task;
 }
 
 let accessPersistChain = Promise.resolve();
-function persistAccess() {
-  const snapshot = JSON.stringify(access, null, 2);
-  accessPersistChain = accessPersistChain.then(async () => {
-    const temp = ACCESS_FILE + '.tmp';
-    await writeFile(temp, snapshot, 'utf8');
-    await rename(temp, ACCESS_FILE);
-  }).catch(error => console.error('[RPGmap] access persist failed:', error));
-  return accessPersistChain;
+let lastPersistedAccess = structuredClone(access);
+function persistAccess(snapshot = access) {
+  // Access handlers mutate small in-memory records before awaiting this write.
+  // If the atomic disk write fails, restore the last durable record before the
+  // serialized message queue accepts another request.
+  const rollback = structuredClone(lastPersistedAccess);
+  const task = accessPersistChain.then(() => writeJsonWithBackup(ACCESS_FILE, 'users', snapshot));
+  accessPersistChain = task.catch(() => {});
+  return task.then(() => {
+    lastPersistedAccess = structuredClone(snapshot);
+  }, error => {
+    if (snapshot === access) access = rollback;
+    throw error;
+  });
 }
 
 const sessions = new Map();
@@ -327,6 +445,28 @@ function broadcastPresence() { broadcast(presencePayload()); }
 function broadcastWorld(message, exceptSocket = null) {
   broadcast(message, exceptSocket, session => session.role === 'gm' || session.identityStatus === 'active');
 }
+function statusSnapshot({ operationId, originSessionId, reason }) {
+  return {
+    type: 'world.snapshot',
+    operationId,
+    revision: world.revision,
+    updatedAt: world.updatedAt,
+    state: world.state,
+    originSessionId,
+    reason,
+  };
+}
+function sendStatusDenied(socket, message, code, description) {
+  return sendSocket(socket, {
+    type: 'status.denied',
+    operationId: statusOperationIdForReply(message?.operationId),
+    code: String(code || 'status_denied'),
+    message: String(description || '服务器拒绝了状态操作'),
+    revision: world.revision,
+    updatedAt: world.updatedAt,
+    state: world.state,
+  });
+}
 function sessionPermissions(session) {
   if (session.role === 'gm') {
     return { worldWrite: true, worldReset: true, manageAccess: true, combatManage: true, actorOwnerIds: ['*'], actorObserverIds: ['*'], defaultActorId: null };
@@ -377,8 +517,8 @@ function multiplayerInfo() {
     revision: world.revision,
     clients: sessions.size,
     users: access.users.length,
-    publicMode: PUBLIC_MODE,
-    publicUrl: PUBLIC_URL || null,
+    publicMode: false,
+    publicUrl: null,
     joinCodeRequired: Boolean(PLAYER_JOIN_CODE),
     playerWriteEnabled: true,
   };
@@ -430,12 +570,16 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// Serialize messages across sockets, not only per connection. This guarantees
+// every World mutation clones the latest durable revision before it writes.
+let messageChain = Promise.resolve();
 server.on('upgrade', (req, socket) => {
   let pathname = '/';
   try { pathname = new URL(req.url || '/', 'http://localhost').pathname; } catch {}
   if (pathname !== '/ws') return socket.destroy();
   const key = req.headers['sec-websocket-key'];
   if (!key || String(req.headers.upgrade || '').toLowerCase() !== 'websocket') return socket.destroy();
+  if (!hasSameOrigin(req)) return socket.destroy();
 
   socket.write([
     'HTTP/1.1 101 Switching Protocols',
@@ -458,17 +602,28 @@ server.on('upgrade', (req, socket) => {
     }
   };
 
-  attachFrameReader(socket, async text => {
+  attachFrameReader(socket, text => {
+    messageChain = messageChain.then(async () => {
     let message;
     try { message = JSON.parse(text); }
     catch { return sendSocket(socket, { type: 'error', code: 'invalid_json', message: 'Invalid JSON' }); }
+    try { assertSafeJson(message, 'message'); }
+    catch (error) {
+      if (joined && isStatusMessage(message)) {
+        return sendStatusDenied(socket, message, error.code || 'invalid_message', error.message);
+      }
+      return sendSocket(socket, { type: 'error', code: error.code || 'invalid_message', message: error.message });
+    }
 
     if (!joined) {
       if (message?.type !== 'hello') return closeSocket(socket, 1008, 'hello required');
       const requestedRole = message.requestedRole === 'gm' ? 'gm' : 'player';
       const secretMatches = Boolean(message.gmSecret) && String(message.gmSecret) === GM_SECRET;
-      const localGmAllowed = !PUBLIC_MODE && isLoopback(socket.remoteAddress);
-      const gmAuthorized = requestedRole === 'gm' && (secretMatches || localGmAllowed);
+      const gmAuthorized = requestedRole === 'gm' && secretMatches;
+      if (requestedRole === 'gm' && !gmAuthorized) {
+        sendSocket(socket, { type: 'error', code: 'gm_secret_required', message: 'GM 必须提供正确的 GM Secret' });
+        return closeSocket(socket, 1008, 'GM secret required');
+      }
       if (PLAYER_JOIN_CODE && !gmAuthorized && String(message.joinCode || '') !== PLAYER_JOIN_CODE) {
         sendSocket(socket, { type: 'error', code: 'invalid_join_code', message: '房间码错误' });
         return closeSocket(socket, 1008, 'invalid join code');
@@ -605,14 +760,114 @@ server.on('upgrade', (req, socket) => {
       }
     }
 
-    if (message?.type === 'world.push') {
+    if (isStatusMessage(message)) {
+      let operationId;
+      try { operationId = assertStatusOperationId(message.operationId); }
+      catch (error) { return sendStatusDenied(socket, message, error?.code || 'invalid_operation_id', error?.message); }
+
       if (session.role !== 'gm') {
-        if (session.identityStatus !== 'active') return sendSocket(socket, { type: 'error', code: 'identity_pending', message: '等待 GM 批准身份后才能操作 World' });
+        return sendStatusDenied(socket, message, 'status_gm_only', '只有 GM 可以修改状态定义与 Actor / Token 效果');
+      }
+
+      const completed = completedStatusOperations.get(operationId);
+      if (completed) {
+        // Send the current canonical World as well as the idempotent ACK. The
+        // original commit may predate later World revisions after a reconnect.
+        sendSocket(socket, statusSnapshot({
+          operationId,
+          originSessionId: session.id,
+          reason: 'status.duplicate',
+        }));
+        return sendSocket(socket, {
+          type: 'status.ack',
+          operationId,
+          revision: world.revision,
+          committedRevision: completed.revision,
+          results: completed.results,
+          duplicate: true,
+        });
+      }
+
+      if (isStructuralStatusMessage(message)) {
+        if (!Number.isSafeInteger(message.clientRevision) || message.clientRevision < 0) {
+          return sendStatusDenied(socket, message, 'invalid_revision', '修改状态定义时必须提供有效的 clientRevision');
+        }
+        if (message.clientRevision !== world.revision) {
+          return sendStatusDenied(socket, message, 'revision_conflict', '状态定义已被其他操作更新，请先重新载入最新 World');
+        }
+      }
+
+      let applied;
+      try {
+        applied = applyStatusMessage(world.state, message, {
+          userId: session.userId,
+          sessionId: session.id,
+        });
+        // The status operation validator is deliberately narrow. Run the full
+        // World schema as a second gate before a byte can reach disk.
+        assertWorldState(applied.state);
+        if (Buffer.byteLength(JSON.stringify(applied.state)) > MAX_WS_PAYLOAD) {
+          const error = new Error('World state is too large');
+          error.code = 'state_too_large';
+          throw error;
+        }
+      } catch (error) {
+        return sendStatusDenied(socket, message, error?.code || 'invalid_status', error?.message);
+      }
+
+      const nextWorld = {
+        schemaVersion: 1,
+        worldId: WORLD_ID,
+        revision: world.revision + 1,
+        updatedAt: new Date().toISOString(),
+        state: applied.state,
+        recentStatusOperations: recentStatusOperationsWith(
+          operationId,
+          world.revision + 1,
+          applied.results,
+        ),
+      };
+      try { await persistWorld(nextWorld); }
+      catch (error) { return sendStatusDenied(socket, message, 'persist_failed', `状态操作未保存：${error.message}`); }
+
+      world = nextWorld;
+      rememberStatusOperation(operationId, world.revision, applied.results);
+      broadcastWorld(statusSnapshot({
+        operationId,
+        originSessionId: session.id,
+        reason: String(message.type),
+      }));
+      sendSocket(socket, {
+        type: 'status.ack',
+        operationId,
+        revision: world.revision,
+        results: applied.results,
+        duplicate: false,
+      });
+      return;
+    }
+
+    if (message?.type === 'world.push') {
+      const worldOperationId = statusOperationIdForReply(message.operationId);
+      if (!message.state || typeof message.state !== 'object' || Array.isArray(message.state)) {
+        return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'invalid_state', message: 'World state must be an object' });
+      }
+      try {
+        assertWorldState(message.state);
+      } catch (error) {
+        return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: error?.code || 'invalid_state', message: error?.message || 'World state 无效' });
+      }
+      if (world.state && !isSameChat(world.state, message.state)) {
+        return sendSocket(socket, { type: 'world.denied', operationId: worldOperationId, code: 'chat_server_only', message: '聊天记录只能通过服务器提交', revision: world.revision, updatedAt: world.updatedAt, state: world.state });
+      }
+      if (session.role !== 'gm') {
+        if (session.identityStatus !== 'active') return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'identity_pending', message: '等待 GM 批准身份后才能操作 World' });
         const user = findUser(session.userId);
         const authorization = validatePlayerWorldPush({ before: world.state, next: message.state, user });
         if (!authorization.ok) {
           return sendSocket(socket, {
             type: 'world.denied',
+            operationId: worldOperationId,
             code: authorization.code,
             message: authorization.message,
             revision: world.revision,
@@ -624,18 +879,93 @@ server.on('upgrade', (req, socket) => {
       }
       const baseRevision = Math.max(0, Number(message.baseRevision) || 0);
       if (baseRevision !== world.revision) {
-        return sendSocket(socket, { type: 'world.conflict', revision: world.revision, updatedAt: world.updatedAt, state: world.state });
-      }
-      if (!message.state || typeof message.state !== 'object' || Array.isArray(message.state)) {
-        return sendSocket(socket, { type: 'error', code: 'invalid_state', message: 'World state must be an object' });
+        return sendSocket(socket, {
+          type: 'world.conflict',
+          operationId: worldOperationId,
+          revision: world.revision,
+          updatedAt: world.updatedAt,
+          state: world.state,
+        });
       }
       const encoded = JSON.stringify(message.state);
-      if (Buffer.byteLength(encoded) > MAX_WS_PAYLOAD) return sendSocket(socket, { type: 'error', code: 'state_too_large', message: 'World state is too large' });
-      world = { schemaVersion: 1, worldId: WORLD_ID, revision: world.revision + 1, updatedAt: new Date().toISOString(), state: message.state };
-      persistWorld();
-      const snapshot = { type: 'world.snapshot', revision: world.revision, updatedAt: world.updatedAt, state: world.state, originSessionId: session.id, reason: String(message.reason || 'state-change').slice(0, 80) };
+      if (Buffer.byteLength(encoded) > MAX_WS_PAYLOAD) return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'state_too_large', message: 'World state is too large' });
+      const nextWorld = {
+        schemaVersion: 1,
+        worldId: WORLD_ID,
+        revision: world.revision + 1,
+        updatedAt: new Date().toISOString(),
+        state: message.state,
+        recentStatusOperations: world.recentStatusOperations || [],
+      };
+      try { await persistWorld(nextWorld); }
+      catch (error) { return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'persist_failed', message: `World 未保存：${error.message}` }); }
+      world = nextWorld;
+      const snapshot = {
+        type: 'world.snapshot',
+        operationId: worldOperationId,
+        revision: world.revision,
+        updatedAt: world.updatedAt,
+        state: world.state,
+        originSessionId: session.id,
+        reason: String(message.reason || 'state-change').slice(0, 80),
+      };
       broadcastWorld(snapshot);
       broadcastAccessSnapshots();
+      return;
+    }
+
+    if (message?.type === 'chat.append') {
+      if (session.role !== 'gm' && session.identityStatus !== 'active') {
+        return sendSocket(socket, { type: 'error', code: 'identity_pending', message: '等待 GM 批准身份后才能聊天' });
+      }
+      if (!world.state) return sendSocket(socket, { type: 'error', code: 'world_uninitialized', message: 'World 尚未初始化' });
+      const text = String(message.text || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 4000);
+      if (!text) return sendSocket(socket, { type: 'error', code: 'invalid_chat', message: '聊天内容不能为空' });
+      const event = String(message.event || 'chat');
+      const typeByEvent = { chat: 'chat', system: 'system', combat: 'combat', damage: 'damage', healing: 'healing', roll: 'roll' };
+      if (!typeByEvent[event] || (event !== 'chat' && session.role !== 'gm')) {
+        return sendSocket(socket, { type: 'error', code: 'chat_type_forbidden', message: '只有 GM 可以发送系统事件日志' });
+      }
+      const nextState = structuredClone(world.state);
+      nextState.preferences ||= {};
+      nextState.preferences.chatSystem ||= { schemaVersion: 1, messages: [] };
+      const messages = nextState.preferences.chatSystem.messages;
+      if (!Array.isArray(messages)) return sendSocket(socket, { type: 'error', code: 'invalid_chat', message: '聊天数据损坏' });
+      messages.push({
+        id: randomUUID(), type: typeByEvent[event], text, createdAt: new Date().toISOString(),
+        sender: { id: session.userId || session.id, name: publicSession(session).name, role: session.role },
+        data: message.data && typeof message.data === 'object' && !Array.isArray(message.data) ? message.data : null,
+      });
+      if (messages.length > 500) messages.splice(0, messages.length - 500);
+      try { assertWorldState(nextState); }
+      catch (error) { return sendSocket(socket, { type: 'error', code: error.code || 'invalid_chat', message: error.message }); }
+      const nextWorld = {
+        schemaVersion: 1, worldId: WORLD_ID, revision: world.revision + 1,
+        updatedAt: new Date().toISOString(), state: nextState,
+        recentStatusOperations: world.recentStatusOperations || [],
+      };
+      try { await persistWorld(nextWorld); }
+      catch (error) { return sendSocket(socket, { type: 'error', code: 'persist_failed', message: `聊天未保存：${error.message}` }); }
+      world = nextWorld;
+      broadcastWorld({ type: 'world.snapshot', revision: world.revision, updatedAt: world.updatedAt, state: world.state, originSessionId: session.id, reason: 'chat.append' });
+      return;
+    }
+
+    if (message?.type === 'chat.clear') {
+      if (session.role !== 'gm') return sendSocket(socket, { type: 'error', code: 'gm_only', message: '只有 GM 可以清空共享聊天记录' });
+      if (!world.state) return sendSocket(socket, { type: 'error', code: 'world_uninitialized', message: 'World 尚未初始化' });
+      const nextState = structuredClone(world.state);
+      nextState.preferences ||= {};
+      nextState.preferences.chatSystem = { schemaVersion: 1, messages: [] };
+      const nextWorld = {
+        schemaVersion: 1, worldId: WORLD_ID, revision: world.revision + 1,
+        updatedAt: new Date().toISOString(), state: nextState,
+        recentStatusOperations: world.recentStatusOperations || [],
+      };
+      try { await persistWorld(nextWorld); }
+      catch (error) { return sendSocket(socket, { type: 'error', code: 'persist_failed', message: `聊天未保存：${error.message}` }); }
+      world = nextWorld;
+      broadcastWorld({ type: 'world.snapshot', revision: world.revision, updatedAt: world.updatedAt, state: world.state, originSessionId: session.id, reason: 'chat.clear' });
       return;
     }
 
@@ -646,6 +976,10 @@ server.on('upgrade', (req, socket) => {
 
     if (message?.type === 'ping') return sendSocket(socket, { type: 'pong', at: Date.now() });
     sendSocket(socket, { type: 'error', code: 'unknown_message', message: 'Unknown message type' });
+    }).catch(error => {
+      console.error('[RPGmap] websocket message rejected:', error);
+      if (!socket.destroyed) sendSocket(socket, { type: 'error', code: 'request_failed', message: '请求未完成，服务器保持运行。' });
+    });
   }, cleanup);
 });
 
@@ -658,14 +992,13 @@ server.listen(PORT, HOST, () => {
   console.log('============================================================');
   console.log(` Local     : http://127.0.0.1:${actualPort}`);
   for (const url of networkUrls(actualPort)) console.log(` Network   : ${url}`);
-  if (PUBLIC_URL) console.log(` Public URL: ${PUBLIC_URL}`);
   console.log(` World     : ${WORLD_ID} · revision ${world.revision}`);
   console.log(` Users     : ${access.users.length} persistent Player identities`);
   console.log(` Map Root  : ${MAP_DIR}`);
   console.log(` World File: ${WORLD_FILE}`);
   console.log(` Users File: ${ACCESS_FILE}`);
   console.log(' Players   : Actor Ownership + Combat Turn Lock');
-  console.log(` Public    : ${PUBLIC_MODE ? 'ON' : 'OFF'}`);
+  console.log(' Mode      : Local / LAN only');
   if (PLAYER_JOIN_CODE) console.log(` JoinCode  : ${PLAYER_JOIN_CODE}`);
   console.log(` GMSecret  : ${GM_SECRET}`);
   console.log(` Build     : ${version.commit || 'unknown'}`);

@@ -4,11 +4,10 @@ import http from 'node:http';
 import {
   browserLaunchCandidates,
   buildConnectionInfo,
-  createInternetCredentials,
+  createSessionCredentials,
   describePortConflict,
   inspectServerPort,
   normalizeLaunchMode,
-  parseQuickTunnelUrl,
 } from '../deployment/local-server/launcher.mjs';
 
 async function withServer(handler, run) {
@@ -24,65 +23,49 @@ async function withServer(handler, run) {
   }
 }
 
-test('launcher normalizes the two startup modes', () => {
+test('launcher accepts only the Local/LAN startup mode', () => {
   assert.equal(normalizeLaunchMode('1'), 'local');
   assert.equal(normalizeLaunchMode('LAN'), 'local');
-  assert.equal(normalizeLaunchMode('2'), 'internet');
-  assert.equal(normalizeLaunchMode('public'), 'internet');
+  assert.equal(normalizeLaunchMode('2'), null);
+  assert.equal(normalizeLaunchMode('public'), null);
   assert.equal(normalizeLaunchMode('other'), null);
 });
 
-test('Windows browser launch restores the proven cmd start path before fallbacks', () => {
+test('Windows browser launch delegates only to the system default browser', () => {
   const url = 'http://127.0.0.1:30000/#rpgmap-host=1&gmSecret=A1B2';
-  const candidates = browserLaunchCandidates(url, 'win32', {
-    'ProgramFiles(x86)': 'C:\\Program Files (x86)',
-    ProgramFiles: 'C:\\Program Files',
-    LOCALAPPDATA: 'C:\\Users\\Tester\\AppData\\Local',
-  });
+  const candidates = browserLaunchCandidates(url, 'win32');
   assert.equal(candidates[0].command, 'cmd.exe');
   assert.equal(candidates[0].waitForExit, true);
   assert.match(candidates[0].args.at(-1), /^start "" "/);
   assert.match(candidates[0].args.at(-1), /gmSecret=A1B2/);
-  assert.ok(candidates.some(item => /msedge\.exe$/i.test(item.command)));
+  assert.equal(candidates.some(item => /msedge\.exe$/i.test(item.command)), false);
   assert.equal(candidates.at(-1).command, 'rundll32.exe');
   assert.deepEqual(browserLaunchCandidates(url, 'linux'), []);
 });
 
-test('Quick Tunnel URL parser extracts the public URL only after it appears', () => {
-  const before = 'INF Requesting new quick Tunnel on trycloudflare.com...';
-  assert.equal(parseQuickTunnelUrl(before), null);
-  assert.equal(
-    parseQuickTunnelUrl(`${before}\nINF https://receiving-acquisition-ferry-bent.trycloudflare.com`),
-    'https://receiving-acquisition-ferry-bent.trycloudflare.com',
-  );
-});
-
-test('Internet credentials create a six-digit Join Code and unique GM Secret', () => {
-  const first = createInternetCredentials();
-  const second = createInternetCredentials();
+test('Local/LAN credentials create a six-digit Join Code and unique GM Secret', () => {
+  const first = createSessionCredentials();
+  const second = createSessionCredentials();
   assert.match(first.joinCode, /^\d{6}$/);
   assert.match(first.gmSecret, /^[0-9A-F]{16}$/);
   assert.notEqual(first.gmSecret, second.gmSecret);
 });
 
-test('Internet READY display keeps player invite and GM secret concise and separated', () => {
-  const publicUrl = 'https://example-room.trycloudflare.com';
+test('Local/LAN READY display keeps invite and GM secret concise and separated', () => {
   const joinCode = '123456';
   const gmSecret = 'FEDCBA9876543210';
   const text = buildConnectionInfo({
-    publicUrl,
     joinCode,
     gmSecret,
     version: '1.5.4',
     port: 30000,
   }).join('\n');
 
-  assert.match(text, /RPGmap 1\.5\.4 · Internet \/ Public · READY/);
+  assert.match(text, /RPGmap 1\.5\.4 · Local \/ LAN · READY/);
   assert.match(text, /PLAYER INVITE/);
   assert.match(text, /GM ONLY/);
   assert.match(text, /GM Secret\s+: FEDCBA9876543210/);
   assert.match(text, /Local\s+: http:\/\/127\.0\.0\.1:30000/);
-  assert.equal(text.split(publicUrl).length - 1, 1);
   assert.equal(text.split(joinCode).length - 1, 1);
   assert.equal(text.split(gmSecret).length - 1, 1);
 });
@@ -106,7 +89,7 @@ test('port guard identifies an existing RPGmap Local/LAN server', async () => {
   });
 });
 
-test('port guard identifies an existing RPGmap Internet/Public server', async () => {
+test('port guard reports RPGmap as Local/LAN even when stale health metadata says public', async () => {
   await withServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({
@@ -119,7 +102,7 @@ test('port guard identifies an existing RPGmap Internet/Public server', async ()
     const result = await inspectServerPort(port);
     assert.equal(result.occupied, true);
     assert.equal(result.rpgmap, true);
-    assert.match(describePortConflict(result, port), /Internet\/Public/);
+    assert.match(describePortConflict(result, port), /Local\/LAN/);
   });
 });
 

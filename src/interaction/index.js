@@ -38,6 +38,11 @@ export {
 
 export { createFeatureControlLayer };
 export { createFeatureOperations } from './operations.js';
+export {
+  evaluateFeatureStatusRule,
+  featureStatusMutations,
+  featureStatusRule,
+} from './status-rules.js';
 
 /**
  * Register the generic Feature API first, then mount the map-facing control layer

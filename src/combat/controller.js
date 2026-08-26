@@ -204,9 +204,14 @@ export function createCombatController({ selection } = {}) {
         if (!requireCombatManager()) return false;
         if (!store.state.combat) return;
         if (!window.confirm('结束当前战斗并清空先攻表？')) return;
-        combatLog('战斗结束', { event: 'end', combatId: store.state.combat.id });
+        const combatId = store.state.combat.id;
+        // In LAN mode the World commit must be sent before its matching chat
+        // event.  Sending the event first increments the server revision, so
+        // the following clear request is rejected as stale and the combat
+        // appears impossible to end.
         store.clear();
         render();
+        combatLog('战斗结束', { event: 'end', combatId });
         status('战斗已结束');
         return true;
       }

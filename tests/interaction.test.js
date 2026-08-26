@@ -89,6 +89,43 @@ test('MapPackage contract normalizes action capabilities including open/close', 
   assert.equal(mapPackageCapabilities(mapPackage).openableCount, 1);
 });
 
+test('MapPackage contract validates structured status rules without script fields', () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"><g data-layer="base"/></svg>';
+  const mapPackage = prepareMapPackage({
+    id: 'status-rule-map', version: '1', width: 100, height: 100, layers: ['base'], svg,
+    features: [{
+      id: 'altar', geometry: { points: [[10, 10], [20, 10], [20, 20], [10, 20]] },
+      capabilities: {
+        actions: { open: true },
+        statusRules: {
+          open: {
+            requiresAll: ['status-spirit'],
+            forbidsAny: ['status-incapacitated'],
+            onSuccess: {
+              apply: [{ statusId: 'blessed', scope: 'actor', stacks: 2 }],
+              remove: [{ statusId: 'muddy', scope: 'token' }],
+            },
+          },
+        },
+      },
+    }],
+  });
+  assert.deepEqual(mapPackage.features[0].capabilities.statusRules.open, {
+    requiresAll: ['status-spirit'],
+    forbidsAny: ['status-incapacitated'],
+    onSuccess: {
+      apply: [{ statusId: 'blessed', scope: 'actor', stacks: 2 }],
+      remove: [{ statusId: 'muddy', scope: 'token' }],
+    },
+  });
+  assert.throws(() => prepareMapPackage({
+    id: 'bad-status-rule-map', version: '1', width: 100, height: 100, layers: ['base'], svg,
+    features: [{ id: 'bad', geometry: { points: [[0, 0], [1, 0], [1, 1]] }, capabilities: {
+      statusRules: { enter: { onSuccess: { apply: [{ statusId: 'x', scope: 'world' }] } } },
+    } }],
+  }), /scope must be actor or token/);
+});
+
 test('inspection uses Capability instead of map-category allowlists', () => {
   const mapPackage = preparedMinimal();
   const hits = inspectableFeaturesAtPoint({ x: 500, y: 465 }, mapPackage.features);
@@ -203,7 +240,7 @@ test('direct Feature damage reuses normal Scene damage events without category r
   assert.ok(deriveSceneState(next.sceneEvents).destroyedObjectIds.includes('crate-a'));
 });
 
-test('Feature Operations execute map-independent actions through Runtime ports', () => {
+test('Feature Operations await map-independent Runtime ports before reporting success', async () => {
   const mapPackage = preparedGenericOperationsMap();
   let state = createInitialState(mapPackage);
   state.characters.push({
@@ -227,15 +264,15 @@ test('Feature Operations execute map-independent actions through Runtime ports',
     emit: (name, detail) => events.push([name, detail]),
   });
 
-  assert.equal(operations.inspect('portal-a').ok, true);
-  assert.equal(operations.open('portal-a').ok, true);
+  assert.equal((await operations.inspect('portal-a')).ok, true);
+  assert.equal((await operations.open('portal-a')).ok, true);
   assert.equal(operations.stateForFeature('portal-a').open, true);
-  assert.equal(operations.enter('portal-a', 'actor-a').ok, true);
+  assert.equal((await operations.enter('portal-a', 'actor-a')).ok, true);
 
   state.characters[0].location = { type: 'feature', featureId: 'portal-a' };
-  assert.equal(operations.exit('portal-a', 'actor-a').ok, true);
+  assert.equal((await operations.exit('portal-a', 'actor-a')).ok, true);
 
-  const damaged = operations.damage('crate-a');
+  const damaged = await operations.damage('crate-a');
   assert.equal(damaged.ok, true);
   assert.equal(operations.stateForFeature('crate-a').destroyed, true);
   assert.deepEqual(calls, [
@@ -245,4 +282,91 @@ test('Feature Operations execute map-independent actions through Runtime ports',
   ]);
   assert.ok(events.some(([name]) => name === 'interaction:state-change'));
   assert.ok(events.some(([name]) => name === 'scene:damage'));
+});
+
+test('Feature status requirements are rechecked and status side effects commit atomically', async () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"><g data-layer="base"/></svg>';
+  const mapPackage = prepareMapPackage({
+    id: 'feature-status-atomic', version: '1', width: 100, height: 100, layers: ['base'], svg,
+    features: [{
+      id: 'spirit-door', geometry: { points: [[40, 0], [60, 0], [60, 100], [40, 100]] },
+      capabilities: {
+        openable: true,
+        actions: { open: true, close: true },
+        statusRules: { open: {
+          requiresAll: ['status-spirit'], forbidsAny: ['status-incapacitated'],
+          onSuccess: { apply: [{ statusId: 'blessed', scope: 'actor', stacks: 1 }] },
+        } },
+      },
+    }],
+  });
+  let state = createInitialState(mapPackage);
+  state.characters.push({ id: 'character-a', location: { type: 'map', x: 10, y: 10 } });
+  state.preferences.entitySystem = {
+    schemaVersion: 3,
+    statusDefinitions: [{ id: 'blessed', name: 'Blessed', scopes: ['actor'], maxStacks: 1, changes: [], capabilities: {} }],
+    actors: [{ id: 'actor-a', effects: [] }],
+    tokens: [{ id: 'token-a', actorId: 'actor-a', characterId: 'character-a', effects: [] }],
+  };
+  let activeStatuses = [];
+  const resolveStatus = () => ({ statuses: activeStatuses, capabilities: { canInteract: true } });
+  let actions = actionMap(listFeatureInteractions({
+    mapPackage, state, featureId: 'spirit-door', characterId: 'character-a', resolveStatus,
+  }));
+  assert.match(actions.open.reason, /status-spirit/);
+
+  activeStatuses = [{ definitionId: 'status-spirit', enabled: true }];
+  actions = actionMap(listFeatureInteractions({
+    mapPackage, state, featureId: 'spirit-door', characterId: 'character-a', resolveStatus,
+  }));
+  assert.equal(actions.open.enabled, true);
+
+  const rejected = createFeatureOperations({
+    mapPackage, getState: () => state, replaceState: next => { state = next; }, resolveStatus,
+    getStatusDefinitions: () => [
+      { id: 'status-spirit', builtIn: true, persisted: true },
+      { id: 'blessed', persisted: true },
+    ],
+    applyStatusMutations: () => { throw new Error('simulated status rejection'); },
+  });
+  assert.equal((await rejected.open('spirit-door', { characterId: 'character-a' })).ok, false);
+  assert.equal(rejected.stateForFeature('spirit-door').open, false, 'Feature must not commit before a failing status effect');
+
+  let replacementCount = 0;
+  const accepted = createFeatureOperations({
+    mapPackage, getState: () => state, replaceState: next => { replacementCount += 1; state = next; }, resolveStatus,
+    getStatusDefinitions: () => [
+      { id: 'status-spirit', builtIn: true, persisted: true },
+      { id: 'blessed', persisted: true },
+    ],
+    applyStatusMutations: (draft, mutations) => {
+      const next = structuredClone(draft);
+      next.preferences.entitySystem.actors[0].effects.push({
+        id: 'effect-blessed', definitionId: mutations[0].statusId, stacks: mutations[0].stacks, enabled: true,
+      });
+      return next;
+    },
+  });
+  const result = await accepted.open('spirit-door', { characterId: 'character-a' });
+  assert.equal(result.ok, true);
+  assert.equal(replacementCount, 1);
+  assert.equal(accepted.stateForFeature('spirit-door').open, true);
+  assert.equal(state.preferences.entitySystem.actors[0].effects[0].definitionId, 'blessed');
+
+  const canonicalBeforeFailure = structuredClone(state);
+  const persistenceRejected = createFeatureOperations({
+    mapPackage,
+    getState: () => state,
+    replaceState: async () => { throw new Error('simulated LAN persistence rejection'); },
+    resolveStatus,
+    getStatusDefinitions: () => [
+      { id: 'status-spirit', builtIn: true, persisted: true },
+      { id: 'blessed', persisted: true },
+    ],
+    applyStatusMutations: draft => structuredClone(draft),
+  });
+  const failedClose = await persistenceRejected.close('spirit-door', { characterId: 'character-a' });
+  assert.equal(failedClose.ok, false);
+  assert.match(failedClose.reason, /persistence rejection/);
+  assert.deepEqual(state, canonicalBeforeFailure, 'a rejected LAN commit must leave the canonical Feature and status state unchanged');
 });

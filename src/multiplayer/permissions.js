@@ -41,6 +41,19 @@ function sameIds(a, b) {
   return true;
 }
 
+function tokenSizeFields(token) {
+  return { diameterMeters: token?.diameterMeters ?? null, size: token?.size ?? null };
+}
+
+function statusProjection(state) {
+  const entities = entityState(state);
+  return {
+    definitions: entities.statusDefinitions ?? [],
+    actors: (entities.actors || []).map(actor => ({ id: actor?.id, effects: actor?.effects ?? [] })),
+    tokens: (entities.tokens || []).map(token => ({ id: token?.id, effects: token?.effects ?? [] })),
+  };
+}
+
 function globalProjection(state) {
   const copy = structuredClone(state);
   delete copy.characters;
@@ -64,7 +77,12 @@ function currentActorId(state) {
   const combat = combatState(state);
   if (!combat || combat.state !== 'active' || !Array.isArray(combat.combatants) || !combat.combatants.length) return null;
   const index = Math.max(0, Math.min(combat.combatants.length - 1, Number(combat.turnIndex) || 0));
-  return combat.combatants[index]?.actorId == null ? null : String(combat.combatants[index].actorId);
+  const current = combat.combatants[index];
+  // The Token binding is authoritative. Old combat records may omit actorId,
+  // and a GM can later rebind a Token, so a cached combatant actorId must not
+  // turn a valid OWNER turn into an unowned, immovable turn.
+  return tokenActors(state).get(String(current?.tokenId || ''))
+    || (current?.actorId != null && String(current.actorId).trim() ? String(current.actorId) : null);
 }
 
 export function actorIdForCharacter(state, characterId) {
@@ -91,10 +109,16 @@ export function validateLocalPlayerChange({ before, next, permissions = {} } = {
     if (String(token.actorId ?? '') !== String(other?.actorId ?? '') || String(token.characterId ?? '') !== String(other?.characterId ?? '')) {
       return { ok: false, code: 'actor_structure_gm_only', message: '重新绑定 Actor / Token 只能由 GM 完成' };
     }
+    if (!same(tokenSizeFields(token), tokenSizeFields(other))) {
+      return { ok: false, code: 'token_size_gm_only', message: 'Token 直径只能由 GM 修改' };
+    }
   }
   if (!same(combatState(before), combatState(next))) return { ok: false, code: 'combat_gm_only', message: '先攻、参战者和回合推进只能由 GM 修改' };
+  if (!same(statusProjection(before), statusProjection(next))) {
+    return { ok: false, code: 'status_server_only', message: '状态定义与 Actor / Token 状态只能通过 GM 状态操作提交' };
+  }
   if (!same(globalProjection(before), globalProjection(next))) return { ok: false, code: 'world_scope_forbidden', message: 'Player 只能修改自己拥有的角色与聊天内容' };
-  if (!appendOnly(before, next)) return { ok: false, code: 'chat_history_forbidden', message: '不能删除或改写既有聊天 / Game Log' };
+  if (!same(chatMessages(before), chatMessages(next))) return { ok: false, code: 'chat_server_only', message: '聊天记录只能通过服务器提交' };
 
   const changed = new Set();
   for (const [id, actor] of beforeActors) if (!same(actor, nextActors.get(id))) changed.add(id);

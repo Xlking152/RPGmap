@@ -18,6 +18,7 @@ import { createCombatSystem } from './combat/index.js';
 import { createMultiplayerSystem } from './multiplayer/index.js';
 import { createMultiplayerHostBootstrapSystem } from './multiplayer/host-bootstrap.js';
 import { createDefaultMapPackage } from './map-package/default-map.js';
+import { createStatusSystem, createStatusUiSystem } from './status/index.js';
 
 function setBootStatus(message, { error = false } = {}) {
   const node = document.querySelector('[data-rpgmap-boot-status]');
@@ -79,7 +80,11 @@ export async function startRpgMap() {
     tools: [
       createAppLifecycleSystem(),
       createMovementSystem({ defaultStep: 5, autoStep: true }),
-      createEntitySystem({ dropLegacyMarkers: true }),
+      // Legacy markers are data.  They remain untouched until a GM explicitly
+      // confirms their migration from the in-app review flow.
+      createEntitySystem({ dropLegacyMarkers: false }),
+      createStatusSystem(),
+      createStatusUiSystem(),
       createAppShellUi(),
       createMeasurementSystem(),
       selectionSystem,

@@ -424,14 +424,14 @@ button { color: inherit; }
 .rpg-character-core img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .rpg-character { background: transparent; border: 0; }
 .rpg-character-core {
-  width: 34px;
-  height: 34px;
+  width: var(--token-size, 34px);
+  height: var(--token-size, 34px);
   border: 3px solid #fff;
   box-shadow: 0 2px 8px rgba(0,0,0,.4), 0 0 0 2px var(--character-color);
   font-size: 12px;
   transition: width .15s, height .15s, box-shadow .15s;
 }
-.rpg-character-core.selected { width: 42px; height: 42px; box-shadow: 0 0 0 3px #fff, 0 0 12px 5px rgba(22, 166, 182, .72); }
+.rpg-character-core.selected { box-shadow: 0 0 0 3px #fff, 0 0 12px 5px rgba(22, 166, 182, .72); }
 .character-tooltip { margin-top: 4px; }
 .character-list-item { min-height: 54px; }
 .move-preview-card { border-left: 3px solid var(--accent-2); padding-left: 11px; }

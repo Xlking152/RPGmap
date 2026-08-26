@@ -94,14 +94,29 @@ function findEocd(view) {
   throw new Error('不是有效的 XLSX/ZIP 文件');
 }
 
+const XLSX_LIMITS = Object.freeze({
+  maxArchiveBytes: 10 * 1024 * 1024,
+  maxEntries: 200,
+  maxEntryBytes: 10 * 1024 * 1024,
+  maxExpandedBytes: 50 * 1024 * 1024,
+  maxCompressionRatio: 100,
+  maxImages: 4,
+  maxImageTotalBytes: 8 * 1024 * 1024,
+  maxImageDimension: 4096,
+});
+
 function parseZipDirectory(buffer) {
+  if (buffer.byteLength > XLSX_LIMITS.maxArchiveBytes) throw new Error('XLSX 压缩文件超过 10 MiB 限制');
   const view = new DataView(buffer);
   const eocd = findEocd(view);
   const count = view.getUint16(eocd + 10, true);
+  if (count > XLSX_LIMITS.maxEntries) throw new Error('XLSX ZIP 条目过多');
   let offset = view.getUint32(eocd + 16, true);
   const decoder = new TextDecoder('utf-8');
   const entries = new Map();
+  let expandedBytes = 0;
   for (let index = 0; index < count; index += 1) {
+    if (offset + 46 > view.byteLength) throw new Error('XLSX ZIP 中央目录越界');
     if (view.getUint32(offset, true) !== 0x02014b50) throw new Error('XLSX ZIP 中央目录损坏');
     const method = view.getUint16(offset + 10, true);
     const compressedSize = view.getUint32(offset + 20, true);
@@ -111,6 +126,12 @@ function parseZipDirectory(buffer) {
     const commentLength = view.getUint16(offset + 32, true);
     const localOffset = view.getUint32(offset + 42, true);
     const name = decoder.decode(new Uint8Array(buffer, offset + 46, fileNameLength));
+    if (!name || name.length > 240 || name.includes('..') || name.startsWith('/')) throw new Error('XLSX ZIP 条目路径无效');
+    if (compressedSize > XLSX_LIMITS.maxEntryBytes || uncompressedSize > XLSX_LIMITS.maxEntryBytes) throw new Error(`XLSX ZIP 条目过大：${name}`);
+    if (uncompressedSize > Math.max(1, compressedSize) * XLSX_LIMITS.maxCompressionRatio) throw new Error(`XLSX ZIP 压缩比过高：${name}`);
+    expandedBytes += uncompressedSize;
+    if (expandedBytes > XLSX_LIMITS.maxExpandedBytes) throw new Error('XLSX 解压总量超过 50 MiB 限制');
+    if (entries.has(name)) throw new Error(`XLSX ZIP 包含重复条目：${name}`);
     entries.set(name, { name, method, compressedSize, uncompressedSize, localOffset });
     offset += 46 + fileNameLength + extraLength + commentLength;
   }
@@ -124,12 +145,26 @@ async function unzipEntry(buffer, entry) {
   const fileNameLength = view.getUint16(offset + 26, true);
   const extraLength = view.getUint16(offset + 28, true);
   const dataStart = offset + 30 + fileNameLength + extraLength;
+  if (offset < 0 || dataStart < offset || dataStart + entry.compressedSize > buffer.byteLength) throw new Error(`XLSX ZIP 条目越界：${entry.name}`);
   const compressed = new Uint8Array(buffer, dataStart, entry.compressedSize);
   if (entry.method === 0) return new Uint8Array(compressed);
   if (entry.method !== 8) throw new Error(`不支持的 XLSX ZIP 压缩方式：${entry.method}`);
   if (typeof DecompressionStream !== 'function') throw new Error('当前浏览器不支持 XLSX 解压，请升级浏览器');
   const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  const output = new Uint8Array(await new Response(stream).arrayBuffer());
+  if (output.byteLength !== entry.uncompressedSize || output.byteLength > XLSX_LIMITS.maxEntryBytes) throw new Error(`XLSX ZIP 解压大小异常：${entry.name}`);
+  return output;
+}
+
+async function validateImage(image) {
+  if (typeof createImageBitmap !== 'function') return image;
+  const bitmap = await createImageBitmap(new Blob([image.data], { type: image.mime }));
+  try {
+    if (bitmap.width > XLSX_LIMITS.maxImageDimension || bitmap.height > XLSX_LIMITS.maxImageDimension) throw new Error('XLSX 图片尺寸超过 4096×4096 限制');
+  } finally {
+    bitmap.close?.();
+  }
+  return image;
 }
 
 function mimeForPath(path) {
@@ -159,6 +194,8 @@ export async function readXlsxCachedWorkbook(arrayBuffer, requestedSheetNames = 
   const sheetDefs = parseWorkbookSheets(workbookXml);
   const names = requestedSheetNames.length ? new Set(requestedSheetNames) : null;
   const sheets = new Map();
+  let imageCount = 0;
+  let imageBytes = 0;
 
   for (const sheetDef of sheetDefs) {
     if (names && !names.has(sheetDef.name)) continue;
@@ -182,7 +219,13 @@ export async function readXlsxCachedWorkbook(arrayBuffer, requestedSheetNames = 
           if (!imageTarget) continue;
           const imagePath = resolveZipPath(drawingPath, imageTarget);
           const data = await bytes(imagePath);
-          if (data) images.push({ path: imagePath, mime: mimeForPath(imagePath), data });
+          if (data) {
+            if (imageCount >= XLSX_LIMITS.maxImages) throw new Error('XLSX 图片数量超过 4 张限制');
+            imageBytes += data.byteLength;
+            if (imageBytes > XLSX_LIMITS.maxImageTotalBytes) throw new Error('XLSX 图片总量超过 8 MiB 限制');
+            imageCount += 1;
+            images.push(await validateImage({ path: imagePath, mime: mimeForPath(imagePath), data }));
+          }
         }
       }
     }

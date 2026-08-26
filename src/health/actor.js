@@ -49,6 +49,31 @@ export function setActorHealthMode(actor, mode) {
   return resolveActorHealth(actor);
 }
 
+export function setActorWounds(actor, wounds = {}) {
+  const before = resolveActorHealth(actor);
+  if (before.mode !== HEALTH_MODE_WOUND_TRACK) {
+    return { before, after: before, changed: false, blocked: 'simple_mode' };
+  }
+  const hp = resolveResource(actor, 'hp') || { max: 0, current: 0 };
+  const current = ensureActorHealth(actor);
+  // normalizeHealthRuntime also clamps the total to the available health
+  // slots, in A → L → B order.  This keeps direct B/L/A editing subject to
+  // exactly the same invariants as damage and recovery.
+  actor.runtime.health = normalizeHealthRuntime({
+    ...current,
+    mode: HEALTH_MODE_WOUND_TRACK,
+    wounds: { ...current.wounds, ...wounds },
+  }, {
+    defaultMode: HEALTH_MODE_WOUND_TRACK,
+    max: hp.max,
+    simpleCurrent: hp.current,
+  });
+  const after = resolveActorHealth(actor);
+  setResourceCurrent(actor, 'hp', after.healthy);
+  actor.updatedAt = new Date().toISOString();
+  return { before, after: resolveActorHealth(actor), changed: true, blocked: null };
+}
+
 export function applyDamageToActor(actor, { amount = 0, type = 'L' } = {}) {
   const before = resolveActorHealth(actor);
   ensureActorHealth(actor);

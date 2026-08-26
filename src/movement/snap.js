@@ -1,4 +1,4 @@
-export const MOVEMENT_STEPS = Object.freeze([5, 10, 20, 50, 100]);
+export const MOVEMENT_STEPS = Object.freeze([1, 5, 10, 20, 50, 100]);
 
 export function normalizeMovementStep(value, fallback = 5) {
   const number = Number(value);
@@ -13,8 +13,10 @@ export function cycleMovementStep(current, direction) {
 export function snapMovementPoint(point, step = 5) {
   const normalizedStep = normalizeMovementStep(step);
   return {
-    x: Math.round(Number(point.x) / normalizedStep) * normalizedStep,
-    y: Math.round(Number(point.y) / normalizedStep) * normalizedStep,
+    // Navigation cells are centred on n + 0.5.  Keeping every control point
+    // on a centre removes boundary ambiguity before direct-path inspection.
+    x: Math.round((Number(point.x) - 0.5) / normalizedStep) * normalizedStep + 0.5,
+    y: Math.round((Number(point.y) - 0.5) / normalizedStep) * normalizedStep + 0.5,
   };
 }
 export function movementMetersPerPixel(map, mapPackage) {
@@ -28,6 +30,7 @@ export function movementMetersPerPixel(map, mapPackage) {
 export function recommendedMovementStep({ metersPerPixel, fallback = 5 } = {}) {
   const value = Number(metersPerPixel);
   if (!Number.isFinite(value) || value <= 0) return normalizeMovementStep(fallback);
+  if (value < 0.2) return 1;
   if (value < 0.8) return 5;
   if (value < 1.5) return 10;
   if (value < 3) return 20;

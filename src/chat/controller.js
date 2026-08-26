@@ -70,7 +70,7 @@ function messageHtml(message) {
       ? healthTargetsHtml(message.data, { healing: true })
       : '';
   return `<article class="chat-entry ${escapeHtml(message.type)}" data-chat-message-id="${escapeHtml(message.id)}">
-    <div class="chat-entry-head"><strong>${escapeHtml(entryLabel(message.type))}</strong><span>${escapeHtml(timeLabel(message.createdAt))}</span></div>
+    <div class="chat-entry-head"><strong>${escapeHtml(entryLabel(message.type))}</strong><span>${escapeHtml(message.sender?.name || '')}</span><span>${escapeHtml(timeLabel(message.createdAt))}</span></div>
     ${message.text ? `<div class="chat-entry-text">${escapeHtml(message.text)}</div>` : ''}${detail}
   </article>`;
 }
@@ -119,7 +119,7 @@ export function createChatController({ selection } = {}) {
         const messages = store.state.messages || [];
         const selectedCount = selectedIds().length;
         panel.innerHTML = `<div class="rpgmap-chat-panel">
-          <header class="chat-panel-head"><strong>聊天 / 战斗记录</strong><button type="button" data-chat-action="clear" title="清空本地记录">清空</button></header>
+          <header class="chat-panel-head"><strong>聊天 / 战斗记录</strong><button type="button" data-chat-action="clear" title="清空共享聊天记录（仅 GM）">清空</button></header>
           <div class="chat-log" data-chat-log>${messages.length ? messages.map(messageHtml).join('') : '<div class="chat-empty">这里会记录聊天、战斗回合、伤害、恢复以及后续的投骰结果。</div>'}</div>
           <div class="chat-composer">
             <div class="chat-composer-tabs"><button type="button" class="${composerMode === 'message' ? 'active' : ''}" data-chat-mode="message">消息</button><button type="button" class="${composerMode === 'damage' ? 'active' : ''}" data-chat-mode="damage">伤害</button><button type="button" class="${composerMode === 'healing' ? 'active' : ''}" data-chat-mode="healing">恢复</button></div>
@@ -135,6 +135,22 @@ export function createChatController({ selection } = {}) {
       }
 
       function append(type, text, data = null) {
+        const multiplayer = api.multiplayer?.getStatus?.();
+        if (multiplayer?.connected) {
+          // The server reserves system/combat/damage/healing event types for
+          // the GM.  Players may still perform an allowed own-turn health
+          // change; record that result as ordinary attributed chat instead of
+          // sending a forbidden event that looks like a failed recovery.
+          const requested = ['chat', 'system', 'combat', 'damage', 'healing', 'roll'].includes(type) ? type : 'chat';
+          const event = multiplayer.session?.role === 'gm' || requested === 'chat' ? requested : 'chat';
+          const appendAfterWorld = ['combat', 'damage', 'healing'].includes(requested)
+            ? api.multiplayer?.appendChatAfterWorld
+            : api.multiplayer?.appendChat;
+          if (!appendAfterWorld?.({ text, event, data })) {
+            status('聊天未发送：服务器连接不可用');
+          }
+          return null;
+        }
         const item = store.append({ type, text, data });
         render();
         return item;
@@ -156,8 +172,14 @@ export function createChatController({ selection } = {}) {
         const mode = event.target.closest?.('[data-chat-mode]')?.dataset.chatMode;
         if (mode) { composerMode = mode; render(); return; }
         if (event.target.closest?.('[data-chat-action="clear"]')) {
-          if (!window.confirm('清空聊天 / 战斗记录？')) return;
-          store.clear(); render(); status('聊天记录已清空');
+          if (!window.confirm('清空共享聊天 / 战斗记录？此操作仅限 GM，且会影响所有玩家。')) return;
+          const multiplayer = api.multiplayer?.getStatus?.();
+          if (multiplayer?.connected) {
+            if (!api.multiplayer?.getCapabilities?.().canClearChat) { status('只有 GM 可以清空共享聊天记录'); return; }
+            api.multiplayer.clearChat();
+          } else {
+            store.clear(); render(); status('聊天记录已清空');
+          }
         }
       });
 
@@ -200,7 +222,13 @@ export function createChatController({ selection } = {}) {
           const ids = selectedIds();
           if (!ids.length) { status('恢复生命：请先选择一个或多个 Token'); return; }
           const results = api.healing?.applyToSelected?.({ amount, type }) || api.health?.applyHealingToTokenIds?.(ids, { amount, type }) || [];
-          if (!results.length) { status('恢复生命：当前选择中没有可用 Actor'); return; }
+          if (!results.length) { status('恢复生命：没有可操作的角色；Player 只能恢复自己的当前回合角色'); return; }
+          const applied = results.reduce((total, result) => total + Number(result.applied || 0), 0);
+          if (!applied) {
+            const dead = results.some(result => result.blocked === 'dead');
+            status(dead ? '恢复生命：目标已死亡；普通恢复不能代替复活' : `恢复生命：所选角色没有可恢复的${healingTypeLabel(type)}伤势`);
+            return;
+          }
           const targets = results.map(result => ({
             actorId: result.actorId,
             actorName: result.actorName,
@@ -210,8 +238,8 @@ export function createChatController({ selection } = {}) {
             applied: result.applied,
             overflow: result.overflow,
           }));
-          append('healing', `${results.length} 个角色恢复 ${Math.floor(amount)} 点${healingTypeLabel(type)}生命槽`, { amount: Math.floor(amount), healingType: type, targets });
-          status(`已执行恢复 · ${results.length} 个角色`);
+          append('healing', `${results.length} 个角色恢复 ${applied} 点${healingTypeLabel(type)}生命槽`, { amount: Math.floor(amount), healingType: type, targets });
+          status(`已恢复 ${applied} 点${healingTypeLabel(type)}生命槽 · ${results.length} 个角色`);
         }
       });
 

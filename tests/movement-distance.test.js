@@ -10,7 +10,7 @@ import {
 } from '../src/engine/movement-distance.js';
 
 test('movement distance steps normalize and round upward without changing actual distance', () => {
-  assert.deepEqual(MOVEMENT_DISTANCE_STEPS, [5, 10, 20, 50, 100]);
+  assert.deepEqual(MOVEMENT_DISTANCE_STEPS, [1, 5, 10, 20, 50, 100]);
   assert.equal(normalizeMovementDistanceStep('20'), 20);
   assert.equal(normalizeMovementDistanceStep(7), 5);
   assert.equal(movementDisplayCost(12.4, 5), 15);

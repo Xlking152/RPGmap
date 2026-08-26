@@ -107,12 +107,14 @@ export function applyLanzhouCapabilities(features = [], navigation = {}) {
       navigationCapability = Object.freeze({
         ...declaredNavigation,
         blocks: true,
+        collisionGroup: 'structure',
         blockingHeightFt: declaredHeight ?? LANZHOU_DEFAULT_BLOCKING_HEIGHT_FT.building,
       });
     } else if (feature.category === 'wall') {
       navigationCapability = Object.freeze({
         ...declaredNavigation,
         blocks: true,
+        collisionGroup: 'structure',
         passableWhenDestroyed: true,
         damageCreatesPassage: true,
         blockingHeightFt: declaredHeight ?? LANZHOU_DEFAULT_BLOCKING_HEIGHT_FT.wall,
@@ -123,6 +125,7 @@ export function applyLanzhouCapabilities(features = [], navigation = {}) {
       navigationCapability = Object.freeze({
         ...(navigationCapability || {}),
         blocks: true,
+        collisionGroup: 'structure',
         passableWhenOpen: true,
         passableWhenDestroyed: true,
         blockingHeightFt: declaredHeight ?? LANZHOU_DEFAULT_BLOCKING_HEIGHT_FT.openable,
