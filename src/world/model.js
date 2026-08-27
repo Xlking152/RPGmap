@@ -1,4 +1,4 @@
-import { canonicalAttackAreas, legacyRuntimeAttackAreas } from './attack-anchors.js';
+import { canonicalAttackAreas } from './attack-anchors.js';
 
 export const WORLD_SCHEMA_VERSION = 2;
 export const WORLD_STATE_KEY = 'worldV2';
@@ -47,7 +47,7 @@ function sceneIdForMap(mapId) {
 
 function normalizeWorldToken(raw, actorIds) {
   const token = object(raw);
-  const tokenId = id(token.id ?? token.characterId);
+  const tokenId = id(token.id);
   const actorId = id(token.actorId);
   if (!tokenId || !actorId || !actorIds.has(actorId)) return null;
   const placement = token.placement === 'feature' || token.featureId != null ? 'feature' : 'map';
@@ -70,29 +70,6 @@ function normalizeWorldToken(raw, actorIds) {
     showName: token.showName !== false,
     effects: clone(array(token.effects)),
   };
-}
-
-/**
- * One-way SaveV2 migration adapter. Character location is accepted here only
- * when a World V2 envelope does not exist yet. Once a World exists, Scene Token
- * placement never flows through this legacy representation again.
- */
-function worldTokenFromLegacyRuntime(token, character, actorIds) {
-  const tokenId = id(token?.id ?? token?.characterId ?? character?.id);
-  const actorId = id(token?.actorId);
-  if (!tokenId || !actorId || !actorIds.has(actorId)) return null;
-  const location = object(character?.location);
-  const featurePlaced = (location.type === 'building' || location.type === 'feature') && location.featureId != null;
-  const placement = token?.placement === 'feature' || token?.featureId != null || featurePlaced ? 'feature' : 'map';
-  return normalizeWorldToken({
-    ...token,
-    id: tokenId,
-    actorId,
-    placement,
-    featureId: placement === 'feature' ? (token?.featureId ?? location.featureId) : null,
-    x: placement === 'map' ? finite(token?.x, finite(location.x, 0)) : null,
-    y: placement === 'map' ? finite(token?.y, finite(location.y, 0)) : null,
-  }, actorIds);
 }
 
 function normalizeScene(raw, { mapPackage = null, actorIds = new Set() } = {}) {
@@ -161,16 +138,17 @@ export function activeWorldScene(world) {
     || null;
 }
 
+/**
+ * Construct a new World from the modern reducer shell. Legacy Character input
+ * is converted before this boundary by src/legacy/save-v2.js.
+ */
 export function createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worldId = 'world-default', worldName = '' } = {}) {
   const entity = runtimeEntityState(state);
   const actors = clone(array(entity.actors));
   const actorIds = new Set(actors.map(actor => id(actor?.id)).filter(Boolean));
-  const legacyCharacterById = new Map(array(state?.characters).map(character => [String(character?.id), character]));
-  const tokens = array(entity.tokens).flatMap(token => {
-    const tokenId = String(token?.id ?? token?.characterId ?? '');
-    const normalized = worldTokenFromLegacyRuntime(token, legacyCharacterById.get(tokenId), actorIds);
-    return normalized ? [normalized] : [];
-  });
+  const tokens = array(entity.tokens)
+    .map(token => normalizeWorldToken(token, actorIds))
+    .filter(Boolean);
   const mapRef = mapMetadata(mapPackage || {});
   const sceneId = sceneIdForMap(mapRef.id);
   const now = new Date().toISOString();
@@ -228,7 +206,7 @@ export function synchronizeWorldV2FromRuntimeState(state, { mapPackage, ruleset,
     ? {
         ...item,
         mapPackage: mapMetadata(mapPackage || item.mapPackage),
-        // Placement is canonical World data. Flat Entity drafts may update
+        // Placement/id/Actor binding are canonical Scene data. Flat Entity drafts may update
         // effects/property fields, but can never move or rebind a Scene Token.
         tokens: item.tokens
           .filter(token => actorIds.has(String(token.actorId)))
@@ -282,14 +260,9 @@ export function projectWorldV2ToRuntimeState(state, rawWorld, { mapPackage, rule
   const tokens = scene.tokens.filter(token => actorIds.has(String(token.actorId)));
   const next = clone(state || {});
   next.markers = clone(scene.markers);
-  // Attack-area Token anchors are canonical in World V2. Only the legacy flat
-  // SaveV2/AppCore shell receives a translated Character-shaped anchor.
-  next.attackAreas = legacyRuntimeAttackAreas(scene.attackAreas);
+  next.attackAreas = canonicalAttackAreas(scene.attackAreas);
   next.sceneEvents = clone(scene.sceneEvents);
-  // SaveV2/AppCore still expects the property to exist, but it is now a sealed
-  // empty tombstone rather than a Token projection. No runtime system may store
-  // identity, placement, HP, status, or display state here.
-  next.characters = [];
+  delete next.characters;
   next.preferences ||= {};
   next.preferences.gridVisible = scene.settings?.gridVisible !== false;
   next.preferences.entitySystem = {
@@ -304,6 +277,7 @@ export function projectWorldV2ToRuntimeState(state, rawWorld, { mapPackage, rule
 
 export function attachWorldV2(state, world) {
   const next = clone(state || {});
+  delete next.characters;
   next.preferences ||= {};
   next.preferences[WORLD_STATE_KEY] = clone(world);
   return next;
