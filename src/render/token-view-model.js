@@ -1,4 +1,4 @@
-import { tokenDiameterMeters } from '../elevation/model.js';
+import { tokenDiameterMeters, tokenElevationFt } from '../elevation/model.js';
 import { normalizeTokenRotation } from '../token/properties.js';
 
 function finite(value) {
@@ -52,6 +52,7 @@ export function createTokenViewModel({ token, actor, selected = false } = {}) {
     color,
     diameterMeters: tokenDiameterMeters(token),
     rotation: normalizeTokenRotation(token.rotation, 0),
+    elevationFt: tokenElevationFt(token),
     showName: token.showName !== false,
     selected: Boolean(selected),
     actorLink: token.actorLink !== false,
