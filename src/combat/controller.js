@@ -13,7 +13,7 @@ import {
 import { CombatStore } from './store.js';
 import { installCombatStyles, renderCombatTopbar, renderCombatTracker } from './tracker.js';
 
-function entityTokenRefs(appState, ids) {
+function legacyTokenRefs(appState, ids) {
   const entity = appState.preferences?.entitySystem || {};
   const entityTokens = Array.isArray(entity.tokens) ? entity.tokens : [];
   const characters = new Set((appState.characters || []).map(character => String(character.id)));
@@ -24,6 +24,63 @@ function entityTokenRefs(appState, ids) {
       const entityToken = entityTokens.find(token => String(token.characterId || token.id) === tokenId);
       return { tokenId, actorId: entityToken?.actorId ?? null };
     });
+}
+
+function tokenRefs(api, ids) {
+  if (!api.tokens?.get) return legacyTokenRefs(api.getState(), ids);
+  return (ids || []).map(String).flatMap(tokenId => {
+    const token = api.tokens.get(tokenId);
+    return token ? [{ tokenId: String(token.id), actorId: token.actorId ?? null }] : [];
+  });
+}
+
+function currentActorForm(actor) {
+  if (!actor?.forms?.length) return null;
+  return actor.forms.find(form => String(form?.id) === String(actor.currentFormId)) || actor.forms[0] || null;
+}
+
+function runtimeTokenView(api, tokenId) {
+  if (api.tokens?.get) {
+    const token = api.tokens.get(tokenId);
+    if (token) {
+      let resolved = null;
+      try { resolved = api.tokens.resolveActor?.(token.id) || null; } catch {}
+      const actor = resolved?.actor || null;
+      const form = currentActorForm(actor);
+      const character = api.getState().characters?.find(item => String(item.id) === String(token.id)) || null;
+      return {
+        token,
+        actor,
+        synthetic: resolved?.synthetic === true,
+        character,
+        name: actor?.name || character?.name || `Token ${token.id}`,
+        avatar: form?.avatarDataUrl || actor?.img || character?.avatarDataUrl || null,
+      };
+    }
+  }
+  const character = api.getState().characters?.find(item => String(item.id) === String(tokenId)) || null;
+  return character ? {
+    token: null,
+    actor: null,
+    synthetic: false,
+    character,
+    name: character.name || `Token ${tokenId}`,
+    avatar: character.avatarDataUrl || null,
+  } : null;
+}
+
+function tokenMapPoint(api, tokenId) {
+  const view = runtimeTokenView(api, tokenId);
+  const token = view?.token;
+  if (token) {
+    if (token.hidden === true || token.placement !== 'map') return null;
+    const x = Number(token.x);
+    const y = Number(token.y);
+    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+  }
+  const character = view?.character;
+  if (!character || character.visible === false || character.location?.type !== 'map') return null;
+  return { x: Number(character.location.x), y: Number(character.location.y) };
 }
 
 function ensureCombatPane(map) {
@@ -64,7 +121,8 @@ export function createCombatController({ selection } = {}) {
       else toolbar?.append(top);
 
       const selectedIds = () => selection?.getSelectedTokenIds?.() || api.selection?.getSelectedTokenIds?.() || [];
-      const tokenName = tokenId => api.getState().characters?.find(item => String(item.id) === String(tokenId))?.name || `Token ${tokenId}`;
+      const resolveTokenView = tokenId => runtimeTokenView(api, tokenId);
+      const tokenName = tokenId => resolveTokenView(tokenId)?.name || `Token ${tokenId}`;
       const combatLog = (message, data = null) => api.chat?.combat?.(message, data);
 
       const status = message => {
@@ -107,9 +165,9 @@ export function createCombatController({ selection } = {}) {
         const combat = store.state.combat;
         const current = combat?.state === 'active' ? currentCombatant(combat) : null;
         if (!current) return;
-        const character = api.getState().characters?.find(item => String(item.id) === String(current.tokenId));
-        if (!character || character.location?.type !== 'map' || character.visible === false) return;
-        L.circleMarker(worldToLatLng(character.location, api.mapPackage.height), {
+        const point = tokenMapPoint(api, current.tokenId);
+        if (!point) return;
+        L.circleMarker(worldToLatLng(point, api.mapPackage.height), {
           pane: 'combatPane',
           radius: 22,
           color: '#c86b24',
@@ -125,8 +183,8 @@ export function createCombatController({ selection } = {}) {
       function render() {
         const appState = api.getState();
         const combat = store.state.combat;
-        renderCombatTracker(tracker, combat, appState);
-        renderCombatTopbar(top, combat, appState, selectedIds().length, addableSelectedCount());
+        renderCombatTracker(tracker, combat, appState, resolveTokenView);
+        renderCombatTopbar(top, combat, appState, selectedIds().length, addableSelectedCount(), resolveTokenView);
         renderTurn();
         applyPermissionUi();
       }
@@ -144,7 +202,7 @@ export function createCombatController({ selection } = {}) {
           status('进入战斗：请先单选或框选至少一个 Token');
           return false;
         }
-        const refs = entityTokenRefs(api.getState(), ids);
+        const refs = tokenRefs(api, ids);
         if (!refs.length) {
           status('进入战斗：当前选择中没有可用 Token');
           return false;
@@ -159,7 +217,7 @@ export function createCombatController({ selection } = {}) {
         if (!requireCombatManager()) return false;
         const combat = store.state.combat;
         if (!combat) return enterCombat();
-        const refs = entityTokenRefs(api.getState(), selectedIds());
+        const refs = tokenRefs(api, selectedIds());
         const existing = new Set(combat.combatants.map(item => String(item.tokenId)));
         const newRefs = refs.filter(ref => !existing.has(String(ref.tokenId)));
         const added = addCombatants(combat, refs);
@@ -206,9 +264,8 @@ export function createCombatController({ selection } = {}) {
         if (!window.confirm('结束当前战斗并清空先攻表？')) return;
         const combatId = store.state.combat.id;
         // In LAN mode the World commit must be sent before its matching chat
-        // event.  Sending the event first increments the server revision, so
-        // the following clear request is rejected as stale and the combat
-        // appears impossible to end.
+        // event. Sending the event first increments the server revision, so
+        // the following clear request is rejected as stale.
         store.clear();
         render();
         combatLog('战斗结束', { event: 'end', combatId });
@@ -217,11 +274,12 @@ export function createCombatController({ selection } = {}) {
       }
 
       function focusToken(tokenId, { center = true } = {}) {
-        const character = api.getState().characters?.find(item => String(item.id) === String(tokenId));
-        if (!character) return false;
-        api.selectCharacter?.(character.id);
-        if (center && character.location?.type === 'map') {
-          api.map.panTo(worldToLatLng(character.location, api.mapPackage.height), { animate: true, duration: 0.25 });
+        const view = runtimeTokenView(api, tokenId);
+        if (!view) return false;
+        api.selectCharacter?.(tokenId);
+        const point = tokenMapPoint(api, tokenId);
+        if (center && point) {
+          api.map.panTo(worldToLatLng(point, api.mapPackage.height), { animate: true, duration: 0.25 });
         }
         return true;
       }
@@ -230,6 +288,21 @@ export function createCombatController({ selection } = {}) {
         const combat = store.state.combat;
         const current = combat?.state === 'active' ? currentCombatant(combat) : null;
         if (current) focusToken(current.tokenId, { center });
+      }
+
+      function pruneMissingTokens() {
+        const combat = store.state.combat;
+        if (!combat?.combatants?.length || !api.tokens?.get) return false;
+        let changed = false;
+        for (const item of [...combat.combatants]) {
+          if (api.tokens.get(item.tokenId)) continue;
+          removeCombatant(combat, item.id);
+          changed = true;
+        }
+        if (!changed) return false;
+        if (!combat.combatants.length) store.clear();
+        else store.persist();
+        return true;
       }
 
       top.addEventListener('click', event => {
@@ -334,6 +407,13 @@ export function createCombatController({ selection } = {}) {
       api.on('state:import', () => {
         if (store.saving) return;
         store.load();
+        pruneMissingTokens();
+        render();
+      });
+      api.on('state:commit', event => {
+        const source = String(event.detail?.source || '');
+        if (!source.startsWith('token-v2:') && !source.startsWith('world-v2:') && source !== 'health') return;
+        if (pruneMissingTokens()) return render();
         render();
       });
 
