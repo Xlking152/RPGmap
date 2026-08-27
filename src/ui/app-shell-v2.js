@@ -1,3 +1,5 @@
+import { installStatusUiStyles, renderStatusStrip, resolveStatusUiSnapshot } from '../status/ui.js';
+
 const STYLE_ID = 'rpgmap-app-shell-v2-style';
 
 function escapeHtml(value) {
@@ -83,6 +85,7 @@ export function createAppShellUiV2() {
       const documentNode = mapElement.ownerDocument || document;
       const shell = mapElement.closest('.app-shell') || documentNode;
       installStyles(documentNode);
+      installStatusUiStyles(documentNode);
 
       const toolbar = shell.querySelector('.toolbar');
       const toolbarRight = shell.querySelector('.toolbar-right');
@@ -180,6 +183,12 @@ export function createAppShellUiV2() {
         head.append(avatar, title);
         card.append(head);
 
+        const statusSnapshot = resolveStatusUiSnapshot(api, {
+          actorId: token.actorId,
+          tokenId: token.id,
+        });
+        card.insertAdjacentHTML('beforeend', `<div class="ui-status-summary">${renderStatusStrip(statusSnapshot.statuses, { limit: 6, emptyText: '无机械状态' })}</div>`);
+
         const meta = documentNode.createElement('div');
         meta.className = 'ui-token-meta';
         for (const text of [
@@ -228,7 +237,7 @@ export function createAppShellUiV2() {
       const renderAll = () => { renderCurrent(); renderLayers(); };
       const selectionOff = api.selection.subscribe?.(renderCurrent);
       if (selectionOff) off.push(selectionOff);
-      for (const eventName of ['token:create', 'token:delete', 'token:move', 'token:property-change', 'elevation:token-change', 'state:commit', 'state:import']) {
+      for (const eventName of ['token:create', 'token:delete', 'token:move', 'token:property-change', 'elevation:token-change', 'status:change', 'state:commit', 'state:import']) {
         off.push(api.on?.(eventName, renderAll));
       }
       off.push(api.on?.('tool:change', event => {
