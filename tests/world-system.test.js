@@ -8,8 +8,7 @@ function actor() { return { id: 'actor-1', name: '角色', currentFormId: 'form-
 function state() {
   return {
     saveVersion: 2, mapId: 'test-map', mapVersion: '1.0.0', markers: [], attackAreas: [], sceneEvents: [],
-    characters: [{ id: 'token-1', name: '角色', color: '#3d9b63', avatarDataUrl: null, visible: true, location: { type: 'map', x: 1.5, y: 2.5 } }],
-    preferences: { gridVisible: true, entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [{ id: 'token-1', actorId: 'actor-1', diameterMeters: 1, rotation: 0, elevationFt: 0, hidden: false, locked: false, showName: true, effects: [] }] } },
+    preferences: { gridVisible: true, entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [{ id: 'token-1', actorId: 'actor-1', placement: 'map', x: 1.5, y: 2.5, diameterMeters: 1, rotation: 0, elevationFt: 0, hidden: false, locked: false, showName: true, effects: [] }] } },
   };
 }
 function apiFixture() {
@@ -24,13 +23,17 @@ function apiFixture() {
   return { api, events, current: () => structuredClone(current) };
 }
 
-test('WorldSystem migrates legacy placement once and later flat commits cannot move Scene Tokens', () => {
+function assertNoCharacters(value) {
+  assert.equal(Object.hasOwn(value, 'characters'), false);
+}
+
+test('WorldSystem hydrates modern Token placement once and later flat commits cannot move Scene Tokens', () => {
   const fixture = apiFixture();
   createWorldSystem().register(fixture.api);
   let world = fixture.current().preferences[WORLD_STATE_KEY];
   assert.equal(activeWorldScene(world).tokens[0].x, 1.5);
   const draft = fixture.api.getState();
-  assert.deepEqual(draft.characters, []);
+  assertNoCharacters(draft);
   draft.preferences.entitySystem.tokens[0].x = 30.5;
   draft.preferences.entitySystem.tokens[0].y = 40.5;
   fixture.api.commitState(draft, { source: 'reducer-test' });
@@ -39,15 +42,16 @@ test('WorldSystem migrates legacy placement once and later flat commits cannot m
   assert.equal(activeWorldScene(world).tokens[0].y, 2.5);
 });
 
-test('WorldSystem import gives canonical World V2 precedence and keeps Character tombstone empty', () => {
+test('WorldSystem canonical World V2 takes precedence and Character projection stays absent', () => {
   const fixture = apiFixture();
   createWorldSystem().register(fixture.api);
   const imported = fixture.api.getState();
   const world = imported.preferences[WORLD_STATE_KEY];
   activeWorldScene(world).tokens[0].x = 77.5;
   activeWorldScene(world).tokens[0].y = 66.5;
-  fixture.api.importState(imported);
-  assert.deepEqual(fixture.current().characters, []);
+  const projected = fixture.api.world.projectState(imported);
+  fixture.api.importState(projected);
+  assertNoCharacters(fixture.current());
   assert.equal(fixture.api.world.getActiveScene().tokens[0].x, 77.5);
   assert.equal(fixture.api.world.getActiveScene().tokens[0].y, 66.5);
 });
@@ -60,6 +64,6 @@ test('WorldSystem can create and activate another Scene using the loaded MapPack
   assert.equal(fixture.api.world.listScenes().length, 2);
   await fixture.api.world.setActiveScene('scene-second');
   assert.equal(fixture.api.world.get().activeSceneId, 'scene-second');
-  assert.equal(fixture.current().characters.length, 0);
+  assertNoCharacters(fixture.current());
   assert.equal(fixture.current().markers.length, 0);
 });
