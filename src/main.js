@@ -24,8 +24,6 @@ import { createWorldSystem } from './world/index.js';
 import {
   createTokenRuntimeSystem,
   createTokenStatusBridgeSystem,
-  createActorTokenPlacementUiSystem,
-  createTokenPropertyUiSystem,
 } from './token/index.js';
 import { createTokenRendererSystem } from './render/token-layer.js';
 
@@ -103,16 +101,12 @@ export async function startRpgMap() {
       // import boundaries before Entity, Status, Movement, Combat, or LAN tools
       // begin mutating the active-scene compatibility projection.
       createWorldSystem(),
-      // Token Runtime V2 is the canonical Scene-token mutation surface. It is
-      // registered before legacy Movement/Entity tools so new code never needs
-      // to write characters[] or preferences.entitySystem directly.
+      // Token Runtime V2 is the canonical Scene-token mutation surface.
       createTokenRuntimeSystem(),
-      // The old Entity panel still provides the Actor-placement HUD, but the
-      // map click is captured before AppCore and writes through tokens.create().
-      createActorTokenPlacementUiSystem(),
       createMovementSystem({ defaultStep: 5, autoStep: true }),
-      // Legacy markers are data. They remain untouched until a GM explicitly
-      // confirms their migration from the in-app review flow.
+      // Entity editor now calls Token Runtime directly for Token CRUD and
+      // placement/property edits. No capture/MutationObserver Token editor
+      // bridge is registered around it anymore.
       createEntitySystem({ dropLegacyMarkers: false }),
       createStatusSystem(),
       // Status writes still use the existing server-authoritative protocol,
@@ -123,14 +117,10 @@ export async function startRpgMap() {
       createMeasurementSystem(),
       selectionSystem,
       // The visible Leaflet Token layer is canonical from this point onward.
-      // The old Character layer remains hidden solely as an editor/panel bridge.
+      // The old Character layer remains hidden solely as an AppCore facade.
       createTokenRendererSystem(),
       createFeatureInteractionSystem(),
       createElevationSystem(),
-      // Keep the old Entity/Elevation surfaces, but intercept their Token
-      // property edits so hidden/diameter/rotation/elevation persist only on
-      // the canonical active Scene Token through api.tokens.update().
-      createTokenPropertyUiSystem(),
       createHealthSystem(),
       createChatSystem({ selection: selectionSystem }),
       createDamageSystem({ selection: selectionSystem }),
