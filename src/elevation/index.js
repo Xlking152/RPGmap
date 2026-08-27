@@ -1,7 +1,4 @@
-import { createTokenElevationSystem } from './token-system.js';
-
 export {
-  entityStateFromAppState,
   featureBlockingHeightFt,
   featureBlocksMover,
   formatFt,
@@ -23,7 +20,3 @@ export {
 } from './runtime-context.js';
 
 export { createTokenElevationSystem } from './token-system.js';
-
-export function createElevationSystem() {
-  return createTokenElevationSystem();
-}
