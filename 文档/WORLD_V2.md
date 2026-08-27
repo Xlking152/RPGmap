@@ -125,6 +125,34 @@ Entering a Feature changes canonical Token placement only after the interactive 
 
 `api.planCharacterMove()`, `api.commitCharacterMove()`, `api.exitBuilding()` and `character:move` remain temporary compatibility facades/events for the old shell. Movement itself no longer treats `characters[].location` as authoritative.
 
+## Renderer ownership
+
+The visible Leaflet Token stack is now canonical. `src/render/token-layer.js` renders only active Scene Tokens:
+
+```text
+api.tokens.list()
+  ↓
+Scene.tokens[]
+  ↓
+api.tokens.resolveActor(tokenId)
+  ↓
+Base Actor or Synthetic Actor
+  ↓
+Token ViewModel
+  ├── x / y / diameter / hidden / showName
+  └── Actor name / active-form avatar / token color
+  ↓
+Leaflet Token layer
+  ├── Token body + name tooltip
+  └── canonical Status badges
+```
+
+Token health bars likewise enumerate `api.tokens.list()` and resolve health by Token id. Renderer and health overlay source files no longer read `state.characters[]` or `preferences.entitySystem`.
+
+The old AppCore `characterPane` is still constructed because the current character sidebar/editor owns private legacy view state. Token Renderer V2 hides that pane and its old tooltip/status overlay; it is a compatibility implementation detail, not a visible renderer. This allows the map surface to be canonical before the editor/placement UI is migrated.
+
+Selection remains Token-based. A Token click updates canonical Token selection and emits `token:select`; `selectCharacter(tokenId)` is invoked only as a temporary sidebar-focus bridge until the character editor is replaced.
+
 ## Server behavior
 
 The Local/LAN server accepts legacy states without World V2 for backward compatibility.
@@ -144,20 +172,21 @@ This synchronization also means a Player cannot move a Token by forging only `wo
 ## Completed runtime migrations
 
 1. World V2 canonical storage and active-Scene compatibility projection.
-2. independent Scene Token identity and placement.
+2. Independent Scene Token identity and placement.
 3. Base Actor + `actorDelta` Synthetic Actor health/runtime semantics.
 4. Synthetic Actor status resolution and authoritative status writes.
-5. Selection/Combat/Token-health consumers beginning to read canonical Tokens.
+5. Selection and Combat reading canonical Tokens.
 6. Movement, collision planning, Feature enter/exit and movement authority using `Scene.tokens[]`.
+7. Visible Leaflet Token renderer, Token status badges and Token health bars reading canonical `Scene.tokens[]`.
 
 ## Next migrations
 
-The next runtime migration is **Renderer → `Scene.tokens[]`**. Renderer is intentionally next because Movement is already canonical while the visible Leaflet Token layer still consumes the Character compatibility projection.
+The next runtime migration is **Actor placement/editor UI → canonical Token APIs**. The map surface is already canonical; the remaining Character facade is now primarily a sidebar/editor compatibility concern.
 
-1. Render map Tokens from `api.tokens.list()` / active `Scene.tokens[]` rather than `state.characters[]`.
-2. Resolve display name/avatar/color from `Token + resolved Actor/Synthetic Actor`.
-3. Keep only a thin Character compatibility projection for remaining Actor placement/editor UI.
-4. Migrate Actor placement UI to canonical Token create/update/remove APIs.
+1. Replace `placeCharacter()` with Actor selection/creation plus `api.tokens.create()`.
+2. Replace `repositionCharacter()` and Character visibility/size edits with `api.tokens.move()` / `api.tokens.update()`.
+3. Resolve editor display from World Actor + selected Token rather than `state.characters[]`.
+4. Migrate Feature occupant/editor lists to canonical Tokens and resolved Actors where they still use Character records.
 5. Remove `characterId` as a Token compatibility alias and finally retire `state.characters[]`.
 6. Add MapPackage registry/reload so `setActiveScene()` can switch across different maps.
 7. Move remaining subsystem state into explicit World/Scene documents where appropriate.
