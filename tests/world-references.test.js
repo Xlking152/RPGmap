@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
 import { createWorldSystem } from '../src/world/system.js';
 import { activeWorldScene } from '../src/world/model.js';
 import { pruneProjectedWorldReferences } from '../src/world/references.js';
@@ -99,6 +100,7 @@ test('api.world.commit prunes missing Token combatants before authoritative adap
   assert.ok(authoritativePayload);
   assert.deepEqual(authoritativePayload.preferences.entitySystem.tokens.map(token => token.id), ['token-b']);
   assert.deepEqual(authoritativePayload.preferences.combatSystem.combat.combatants.map(item => item.tokenId), ['token-b']);
+  assert.doesNotThrow(() => assertWorldState(structuredClone(authoritativePayload)));
 });
 
 test('WorldSystem source prunes projected references before authoritative commit', async () => {
