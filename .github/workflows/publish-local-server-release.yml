@@ -42,6 +42,7 @@ jobs:
           sha256sum -c "RPGmap-v${{ steps.meta.outputs.version }}.zip.sha256"
           test "$(node -p "require('./RPGmap-v${{ steps.meta.outputs.version }}/VERSION.json').version")" = "${{ steps.meta.outputs.version }}"
           test "$(node -p "require('./RPGmap-v${{ steps.meta.outputs.version }}/VERSION.json').commit")" = "${{ steps.meta.outputs.commit }}"
+          test -f "RPGmap-v${{ steps.meta.outputs.version }}/world-v2.mjs"
           test -f "RPGmap-v${{ steps.meta.outputs.version }}/status-operations.mjs"
           test "$(find "RPGmap-v${{ steps.meta.outputs.version }}" -maxdepth 1 -name '*.bat' | wc -l)" -eq 1
           test ! -e "RPGmap-v${{ steps.meta.outputs.version }}/cloudflared.exe"
