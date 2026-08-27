@@ -150,13 +150,13 @@ Leaflet Token layer
 
 Token health bars likewise enumerate `api.tokens.list()` and resolve health by Token id. Renderer and health overlay source files no longer read `state.characters[]` or `preferences.entitySystem`.
 
-The old AppCore `characterPane` is still constructed because the current character sidebar/editor owns private legacy view state. Token Renderer V2 hides that pane and its old tooltip/status overlay; it is a compatibility implementation detail, not a visible renderer. This allows the map surface to be canonical before the editor/placement UI is migrated.
+The old AppCore `characterPane` is still constructed because the current character sidebar/editor owns private legacy view state. Token Renderer V2 hides that pane and its old tooltip/status overlay; it is a compatibility implementation detail, not a visible renderer. This allows the map surface to be canonical before the editor/placement UI is fully replaced.
 
 Selection remains Token-based. A Token click updates canonical Token selection and emits `token:select`; `selectCharacter(tokenId)` is invoked only as a temporary sidebar-focus bridge until the character editor is replaced.
 
 ## Actor placement and reposition ownership
 
-Modern Actor placement now creates the Scene Token directly. The Entity panel may still provide the temporary Actor-selection HUD, but it no longer creates a Character first and then binds that Character into a Token.
+Modern Actor placement creates the Scene Token directly. The Entity panel may still provide the temporary Actor-selection HUD, but it no longer creates a Character first and then binds that Character into a Token.
 
 ```text
 Entity panel selects Actor
@@ -204,7 +204,7 @@ Passing the current Token id into placement inspection lets navigation exclude t
 
 ## Token property ownership
 
-Token presentation/geometry properties are now written through the canonical Token runtime as well. `src/token/properties.js` is the DOM-free property boundary:
+Token presentation/geometry properties are written through the canonical Token runtime. `src/token/properties.js` is the DOM-free property boundary:
 
 ```text
 tokenId
@@ -244,7 +244,7 @@ elevationFt     → elevation label + movement/collision context
 
 ## Entity editor Token read ownership
 
-The Entity editor now treats the active Scene Token catalog as a read-only canonical view instead of using the Entity Token mirror as its display source.
+The Entity editor treats the active Scene Token catalog as a read-only canonical view instead of using the Entity Token mirror as its display source.
 
 ```text
 Actor card Token count / Status Token list
@@ -276,6 +276,95 @@ Health / Status / Damage reducer EntityStore
 
 This distinction is required for Synthetic Actor operations. Reducers must mutate the Token object inside their draft (for example `token.actorDelta`) and persist that exact draft atomically; replacing reducer Tokens with clones returned by `api.tokens.get()` / `list()` would discard those changes.
 
+## Token and Actor deletion ownership
+
+Modern deletion is now canonical as well.
+
+A single active-Scene Token is deleted through:
+
+```text
+Entity Token delete
+        ↓
+api.tokens.get(tokenId)
+        ↓
+api.tokens.remove(tokenId)
+        ↓
+removeSceneToken()
+        ├── detach Token-bound attackArea anchors
+        └── remove Scene.tokens[] entry
+        ↓
+api.world.commit()
+```
+
+A Token-bound attack area is converted to a free anchor in the same World mutation. If the Token was on the map, the area's origin is frozen at the Token's last canonical `x/y`; a Feature-placed Token keeps the area's existing origin because another Scene/MapPackage may not be loaded to resolve a Feature centre safely.
+
+`src/entities/token-delete-ui.js` captures both the current Entity Token delete controls and the old `delete-character` button path before AppCore can mutate `state.characters[]`. It also replaces the public `api.deleteCharacter(tokenId)` compatibility method with a canonical facade that delegates to Token Runtime. New deletion paths emit `token:delete`, not `character:delete`.
+
+Actor deletion is a World-level structural operation rather than a loop over current-Scene Characters:
+
+```text
+Actor delete
+   ↓
+scan world.scenes[]
+   ↓
+remove every Token whose actorId matches
+   ├── Scene A
+   ├── Scene B
+   └── ...
+   ↓
+detach their Scene-local attackArea anchors
+   ↓
+remove World Actor
+   ↓
+api.world.commit()
+```
+
+This preserves the Actor → many Tokens model across multiple Scenes. `src/entities/canonical-delete.js` owns the DOM-free deletion operation and never calls `deleteCharacter()`, `EntityStore.removeToken()` or `EntityStore.removeActor()`.
+
+The old AppCore Character deletion function and EntityStore compatibility methods still exist internally for the remaining bridge/fallback code. They are no longer the public or visible modern deletion path and are scheduled for removal together with the Character facade.
+
+## Feature occupant view ownership
+
+The visible Feature inspector occupant list now comes from canonical active-Scene Tokens:
+
+```text
+selected Feature id
+       ↓
+api.tokens.list()
+       ↓
+placement === 'feature' && featureId matches
+       ↓
+api.tokens.resolveActor(tokenId)
+       ↓
+Linked Actor or Synthetic Actor display
+```
+
+`src/entities/feature-token-view.js` is the DOM-free resolver and `src/entities/feature-token-ui.js` overlays the current Feature inspector while AppCore is still present. Synthetic Actor name/avatar/form overrides are therefore displayed per Token instance rather than from the Character compatibility projection.
+
+The older AppCore Feature template still exists underneath this transitional bridge and will be deleted when the AppCore Character sidebar is retired; it is not the visible occupant data source after the bridge registers.
+
+## World referential integrity before Local/LAN authority
+
+Deleting a Token or Actor can invalidate Combat references. The Local/LAN server correctly rejects a World where a Combatant refers to a missing Token or Actor, so post-commit UI cleanup would be too late.
+
+World V2 therefore prunes dangling runtime references before authoritative validation:
+
+```text
+canonical World mutation
+        ↓
+projectWorldV2ToRuntimeState()
+        ↓
+pruneProjectedWorldReferences()
+        ├── keep valid Combatants
+        └── remove missing tokenId / actorId references
+        ↓
+coreCommitAuthoritativeState()
+        ↓
+Local/LAN validation + persistence
+```
+
+This makes Token/Actor deletion one atomic server-valid operation. If the final Combatant is removed, the temporary Combat projection is cleared rather than persisting an empty dangling tracker.
+
 ## Server behavior
 
 The Local/LAN server accepts legacy states without World V2 for backward compatibility.
@@ -289,6 +378,7 @@ When `preferences.worldV2` exists, `assertWorldState()` synchronizes the active 
 - `actorLink` and `actorDelta` shape.
 - MapPackage references.
 - Synthetic Actor status instances through the normal Actor Status schema.
+- Combatant Token/Actor references against the submitted authoritative projection.
 
 This synchronization also means a Player cannot move a Token by forging only `worldV2.scenes[].tokens[]`: before authorization/persistence, the active Scene Token mirror is reconstructed from the submitted runtime projection. Legitimate Movement commits submit matching canonical and compatibility projections; canonical-only tampering is overwritten before it can persist.
 
@@ -305,16 +395,31 @@ This synchronization also means a Player cannot move a Token by forging only `wo
 9. Modern Token reposition writing through `api.tokens.move()` instead of `repositionCharacter()` / `characters[].location`.
 10. Token hidden/diameter/rotation/elevation edits writing through `api.tokens.update()`, with renderer output driven by the same canonical fields.
 11. Entity editor Token counts/lists/placement/display reading `api.tokens.list()` / `get()` / `resolveActor()` through a UI-scoped canonical read view.
+12. Single Token deletion writing through `api.tokens.remove()` with Token-bound attack-area anchors detached atomically.
+13. Actor deletion removing every matching Token across all Scenes before removing the World Actor.
+14. Feature inspector occupant display reading canonical Feature-placed Tokens and resolved Linked/Synthetic Actors.
+15. World authoritative commits pruning dangling Combat references before Local/LAN validation.
+16. Public `api.deleteCharacter()` compatibility calls routing to canonical Token deletion instead of Character storage.
+
+At this point the modern Token CRUD surface is canonical:
+
+```text
+Create   → api.tokens.create()
+Read     → api.tokens.list() / get() / resolveActor()
+Move     → api.tokens.move() / placeInFeature()
+Update   → api.tokens.update()
+Delete   → api.tokens.remove()
+```
 
 ## Next migrations
 
-Actor placement, reposition, Token property writes, and Entity editor Token reads are canonical. The remaining Character facade is now concentrated in deletion and a few sidebar/Feature views.
+Token CRUD and the visible Entity/Feature Token paths are canonical. The remaining Character code is now compatibility implementation rather than the modern data path.
 
-1. Replace Token deletion with `api.tokens.remove()` and make Actor deletion remove all canonical Scene Tokens before removing the Actor.
-2. Migrate remaining Feature occupant/editor lists from `state.characters[]` to canonical Tokens and resolved Actors.
-3. Remove the temporary Actor-placement/property/read UI bridges once the Entity editor owns canonical Actor/Token state directly.
-4. Remove `characterId` as a Token compatibility alias and finally retire `state.characters[]`.
+1. Replace the temporary Actor-placement/property/read/delete/Feature UI bridges with a direct canonical Entity editor implementation.
+2. Remove dormant `character:create` / `character:move` / `character:delete` compatibility listeners and AppCore Character mutation functions once no fallback caller remains.
+3. Remove `characterId` as a Token compatibility alias and finally retire `state.characters[]` plus the hidden `characterPane`.
+4. Move remaining Feature destruction/ejection and attack-area Character anchors to explicit Token ids/names instead of Character-era field names.
 5. Add MapPackage registry/reload so `setActiveScene()` can switch across different maps.
-6. Move remaining subsystem state into explicit World/Scene documents where appropriate.
+6. Move remaining subsystem state, including Combat, into explicit World/Scene documents where appropriate.
 
 Until those migrations land, code must treat World V2 as canonical and the flat SaveV2 fields as compatibility projections only.
