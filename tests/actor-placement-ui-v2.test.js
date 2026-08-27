@@ -9,18 +9,17 @@ function withoutComments(source) {
     .replace(/(^|\s)\/\/.*$/gm, '$1');
 }
 
-test('Actor placement bridge bypasses legacy Character create and reposition writes', async () => {
-  const path = fileURLToPath(new URL('../src/token/actor-placement-ui.js', import.meta.url));
-  const source = await readFile(path, 'utf8');
-  const runtimeSource = withoutComments(source);
-  assert.match(runtimeSource, /createActorTokenAtPoint/);
-  assert.match(runtimeSource, /relocateActorTokenAtPoint/);
-  assert.match(runtimeSource, /api\.emit\?\.\('token:create'/);
-  assert.match(runtimeSource, /api\.emit\?\.\('token:move'/);
-  assert.match(runtimeSource, /stopImmediatePropagation\(\)/);
-  assert.doesNotMatch(runtimeSource, /api\.placeCharacter/);
-  assert.doesNotMatch(runtimeSource, /api\.repositionCharacter/);
-  assert.doesNotMatch(runtimeSource, /state\.characters|\.characters\.push|bindToken\s*\(/);
+test('Entity Token controller owns Actor placement without legacy Character create/reposition writes', async () => {
+  const path = fileURLToPath(new URL('../src/entities/token-controller.js', import.meta.url));
+  const source = withoutComments(await readFile(path, 'utf8'));
+  assert.match(source, /createActorTokenAtPoint/);
+  assert.match(source, /relocateActorTokenAtPoint/);
+  assert.match(source, /api\.emit\?\.\('token:create'/);
+  assert.match(source, /api\.emit\?\.\('token:move'/);
+  assert.match(source, /stopImmediatePropagation\(\)/);
+  assert.doesNotMatch(source, /api\.placeCharacter/);
+  assert.doesNotMatch(source, /api\.repositionCharacter/);
+  assert.doesNotMatch(source, /character:create|character:move|state\.characters|\.characters\.push|bindToken\s*\(/);
 });
 
 test('placement adapter writes through canonical Token create/move and never Character storage', async () => {
@@ -32,11 +31,15 @@ test('placement adapter writes through canonical Token create/move and never Cha
   assert.doesNotMatch(source, /placeCharacter\s*\(|repositionCharacter\s*\(/);
 });
 
-test('Actor placement bridge is registered after Token Runtime and before Entity UI', async () => {
-  const path = fileURLToPath(new URL('../src/main.js', import.meta.url));
-  const source = await readFile(path, 'utf8');
-  const runtime = source.indexOf('createTokenRuntimeSystem(),');
-  const placement = source.indexOf('createActorTokenPlacementUiSystem(),');
-  const entities = source.indexOf('createEntitySystem({ dropLegacyMarkers: false }),');
-  assert.ok(runtime >= 0 && placement > runtime && entities > placement);
+test('Entity UI calls canonical placement directly and startup no longer registers a placement bridge', async () => {
+  const ui = withoutComments(await readFile(fileURLToPath(new URL('../src/entities/ui.js', import.meta.url)), 'utf8'));
+  const main = withoutComments(await readFile(fileURLToPath(new URL('../src/main.js', import.meta.url)), 'utf8'));
+  const index = withoutComments(await readFile(fileURLToPath(new URL('../src/token/index.js', import.meta.url)), 'utf8'));
+
+  assert.match(ui, /createEntityTokenController/);
+  assert.match(ui, /tokenController\.beginPlacement\(/);
+  assert.match(ui, /tokenController\.handleMapClick/);
+  assert.doesNotMatch(ui, /api\.placeCharacter|api\.repositionCharacter|store\.bindToken/);
+  assert.doesNotMatch(main, /createActorTokenPlacementUiSystem/);
+  assert.doesNotMatch(index, /createActorTokenPlacementUiSystem|actor-placement-ui/);
 });
