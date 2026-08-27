@@ -4,7 +4,6 @@ import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
 
 function state() {
   return {
-    characters: [],
     markers: [],
     attackAreas: [],
     sceneEvents: [],
@@ -50,14 +49,16 @@ test('server validation preserves authoritative World V2 placement while merging
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].x, 12.5);
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].y, 18.5);
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].elevationFt, 15);
-  assert.deepEqual(value.characters, []);
+  assert.equal(Object.hasOwn(value, 'characters'), false);
 });
 
 test('legacy server states without World V2 remain valid and are not rewritten', () => {
   const value = state();
   delete value.preferences.worldV2;
+  value.characters = [];
   assert.equal(assertWorldState(value), value);
   assert.equal(value.preferences.worldV2, undefined);
+  assert.deepEqual(value.characters, []);
 });
 
 test('World V2 rejects an active Scene reference that does not exist', () => {
