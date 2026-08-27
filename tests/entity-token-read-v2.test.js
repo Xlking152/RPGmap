@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { EntityStore } from '../src/entities/store.js';
+import { EntityStore, withCanonicalEntityTokenReadView } from '../src/entities/store.js';
 import {
   formatCanonicalTokenPlacement,
   listCanonicalActorTokens,
@@ -46,18 +46,39 @@ function apiWithTokens(tokens = [token()]) {
   };
 }
 
-test('EntityStore exposes canonical api.tokens.list() as its Token read view without losing compatibility bookkeeping', () => {
+test('only the Entity UI store exposes canonical Token reads while ordinary reducer stores keep mutable drafts', () => {
   const canonical = [token()];
   const api = apiWithTokens(canonical);
-  const store = new EntityStore(api);
-  store.installCanonicalTokenReadView({ schemaVersion: 3, statusDefinitions: [], actors: [], tokens: [{ id: 'legacy-token', actorId: 'legacy-actor' }] });
 
-  assert.deepEqual(store.state.tokens.map(item => item.id), ['token-a']);
-  assert.deepEqual(store.compatTokens.map(item => item.id), ['legacy-token']);
-  assert.deepEqual(store.snapshot().tokens.map(item => item.id), ['token-a']);
+  const reducerStore = new EntityStore(api);
+  reducerStore.state = {
+    schemaVersion: 3,
+    statusDefinitions: [],
+    actors: [],
+    tokens: [token({ id: 'draft-token', characterId: 'draft-token', actorDelta: { runtime: { hp: 10 } } })],
+  };
+  reducerStore.compatTokens = reducerStore.state.tokens;
+  assert.equal(reducerStore.canonicalTokenReadView, false);
+  const mutable = reducerStore.token('draft-token');
+  mutable.actorDelta.runtime.hp = 7;
+  assert.equal(reducerStore.snapshot().tokens[0].actorDelta.runtime.hp, 7);
+  assert.equal(reducerStore.token('token-a'), null, 'ordinary reducer stores must not replace their draft with api.tokens.get()');
+
+  let editorStore;
+  withCanonicalEntityTokenReadView(() => { editorStore = new EntityStore(api); });
+  editorStore.installCanonicalTokenReadView({
+    schemaVersion: 3,
+    statusDefinitions: [],
+    actors: [],
+    tokens: [{ id: 'legacy-token', actorId: 'legacy-actor' }],
+  });
+  assert.equal(editorStore.canonicalTokenReadView, true);
+  assert.deepEqual(editorStore.state.tokens.map(item => item.id), ['token-a']);
+  assert.deepEqual(editorStore.compatTokens.map(item => item.id), ['legacy-token']);
+  assert.deepEqual(editorStore.snapshot().tokens.map(item => item.id), ['token-a']);
 
   canonical.push(token({ id: 'token-b', characterId: 'token-b' }));
-  assert.deepEqual(store.state.tokens.map(item => item.id), ['token-a', 'token-b']);
+  assert.deepEqual(editorStore.state.tokens.map(item => item.id), ['token-a', 'token-b']);
 });
 
 test('canonical Entity Token helpers list by Actor and read placement through get/resolveActor', () => {
@@ -89,10 +110,12 @@ test('Entity Token Read V2 is read-only and has no Character/Entity projection d
   assert.doesNotMatch(source, /commitState\(|importState\(/);
 });
 
-test('EntityStore canonical Token read accessor is explicit in source', async () => {
-  const source = await readFile(new URL('../src/entities/store.js', import.meta.url), 'utf8');
-  assert.match(source, /canonicalTokens\(\)/);
-  assert.match(source, /this\.api\.tokens\?\.list\?\.\(\)/);
-  assert.match(source, /Object\.defineProperty\(state, 'tokens'/);
-  assert.match(source, /compatTokens/);
+test('canonical Token read mode is explicitly scoped to Entity UI registration', async () => {
+  const storeSource = await readFile(new URL('../src/entities/store.js', import.meta.url), 'utf8');
+  const indexSource = await readFile(new URL('../src/entities/index.js', import.meta.url), 'utf8');
+  assert.match(storeSource, /withCanonicalEntityTokenReadView/);
+  assert.match(storeSource, /canonicalTokenReadView = canonicalEntityUiStoreDepth > 0/);
+  assert.match(storeSource, /if \(!this\.canonicalTokenReadView\) return this\.state\.tokens/);
+  assert.match(storeSource, /Object\.defineProperty\(state, 'tokens'/);
+  assert.match(indexSource, /withCanonicalEntityTokenReadView\(\(\) => ui\.register\(api\)\)/);
 });
