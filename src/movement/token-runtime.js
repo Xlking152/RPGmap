@@ -67,9 +67,7 @@ function updateAnchoredAreas(world, tokenId, point) {
   const index = activeSceneIndex(next);
   next.scenes[index].attackAreas = array(next.scenes[index].attackAreas).map(area => {
     const anchor = area?.anchor || {};
-    const canonical = anchor.type === 'token' && String(anchor.tokenId) === String(tokenId);
-    const legacy = anchor.type === 'character' && String(anchor.characterId) === String(tokenId);
-    if (!canonical && !legacy) return area;
+    if (anchor.type !== 'token' || String(anchor.tokenId) !== String(tokenId)) return area;
     return {
       ...area,
       origin: { x: Number(point.x), y: Number(point.y) },
