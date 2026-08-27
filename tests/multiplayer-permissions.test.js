@@ -27,6 +27,43 @@ function state({ combat = null } = {}) {
   };
 }
 
+function addWorldV2(value) {
+  value.preferences.worldV2 = {
+    schemaVersion: 2,
+    id: 'world-test',
+    name: 'Test World',
+    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    activeSceneId: 'scene-test',
+    actors: structuredClone(value.preferences.entitySystem.actors),
+    statusDefinitions: [],
+    scenes: [{
+      id: 'scene-test',
+      name: 'Test Scene',
+      mapPackage: { id: 'test', version: '1' },
+      tokens: value.preferences.entitySystem.tokens.map((token, index) => ({
+        id: token.id,
+        actorId: token.actorId,
+        actorLink: true,
+        actorDelta: null,
+        placement: 'map',
+        x: value.characters[index].location.x,
+        y: value.characters[index].location.y,
+        diameterMeters: 1,
+        rotation: 0,
+        elevationFt: 0,
+        hidden: false,
+        locked: false,
+        showName: true,
+        effects: [],
+      })),
+      markers: [], attackAreas: [], sceneEvents: [], settings: { gridVisible: true },
+    }],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  return value;
+}
+
 const playerPermissions = {
   actorOwnerIds: ['actor-a'],
   actorObserverIds: ['actor-a'],
@@ -116,4 +153,24 @@ test('Player cannot forge Actor, Token, or definition status changes through Wor
   const definitionChange = structuredClone(before);
   definitionChange.preferences.entitySystem.statusDefinitions.push({ id: 'custom', name: 'Custom' });
   assert.equal(validateLocalPlayerChange({ before, next: definitionChange, permissions: playerPermissions }).code, 'status_server_only');
+});
+
+test('World V2 mirror allows owned movement but keeps World structure GM-only', () => {
+  const before = addWorldV2(state());
+  const moved = structuredClone(before);
+  moved.characters[0].location.x = 9;
+  moved.preferences.worldV2.scenes[0].tokens[0].x = 9;
+  moved.preferences.worldV2.updatedAt = '2026-01-01T00:00:01.000Z';
+  assert.equal(validateLocalPlayerChange({ before, next: moved, permissions: playerPermissions }).ok, true);
+
+  const rulesetTamper = structuredClone(before);
+  rulesetTamper.preferences.worldV2.ruleset.id = 'forged-ruleset';
+  assert.equal(validateLocalPlayerChange({ before, next: rulesetTamper, permissions: playerPermissions }).code, 'world_scope_forbidden');
+
+  const sceneTamper = structuredClone(before);
+  sceneTamper.preferences.worldV2.scenes.push({
+    id: 'scene-forged', name: 'Forged', mapPackage: { id: 'test', version: '1' },
+    tokens: [], markers: [], attackAreas: [], sceneEvents: [], settings: { gridVisible: true },
+  });
+  assert.equal(validateLocalPlayerChange({ before, next: sceneTamper, permissions: playerPermissions }).code, 'world_scope_forbidden');
 });
