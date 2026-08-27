@@ -82,9 +82,16 @@ export function createTokenRuntimeSystem() {
           });
         },
         async remove(tokenId) {
-          return commit(removeSceneToken(api.world.get(), tokenId), {
+          const removed = await commit(removeSceneToken(api.world.get(), tokenId), {
             source: 'token-v2:remove', reason: 'token.remove', render: true,
           });
+          api.emit?.('token:delete', {
+            id: removed.id,
+            tokenId: removed.id,
+            actorId: removed.actorId,
+            token: clone(removed),
+          });
+          return removed;
         },
       };
 
