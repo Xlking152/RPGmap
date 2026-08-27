@@ -135,6 +135,9 @@ export function createEntityTokenReadUiSystem() {
           const { token, actor, synthetic } = read;
           card.dataset.tokenId = String(token.id);
           card.dataset.tokenReadV2 = 'canonical';
+          card.dataset.tokenListSource = 'api.tokens.list';
+          card.dataset.tokenValueSource = 'api.tokens.get';
+          card.dataset.actorValueSource = 'api.tokens.resolveActor';
           for (const carrier of card.querySelectorAll?.('[data-character-id], [data-token-id]') || []) {
             carrier.dataset.tokenId = String(token.id);
           }
