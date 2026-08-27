@@ -12,7 +12,29 @@ import {
 } from '../deployment/local-server/access-control.mjs';
 import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
 
+function canonicalToken(id, actorId, x, y) {
+  return {
+    id, actorId, actorLink: true, actorDelta: null,
+    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    hidden: false, locked: false, showName: true, effects: [], x, y,
+  };
+}
+
+function sceneToken(id, actorId, x, y) {
+  return {
+    id, actorId, actorLink: true, actorDelta: null,
+    placement: 'map', x, y, featureId: null,
+    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    hidden: false, locked: false, showName: true, effects: [],
+  };
+}
+
 function world({ activeActorId = null } = {}) {
+  const actors = [
+    { id: 'actor-a', name: 'A', runtime: { hp: 10 }, effects: [] },
+    { id: 'actor-b', name: 'B', runtime: { hp: 10 }, effects: [] },
+  ];
+  const tokens = [canonicalToken('token-a', 'actor-a', 1, 1), canonicalToken('token-b', 'actor-b', 2, 2)];
   const combatants = [
     { id: 'cb-a', tokenId: 'token-a', actorId: 'actor-a', initiative: 10, order: 0 },
     { id: 'cb-b', tokenId: 'token-b', actorId: 'actor-b', initiative: 5, order: 1 },
@@ -21,80 +43,38 @@ function world({ activeActorId = null } = {}) {
   return {
     version: 2,
     mapId: 'test',
-    characters: [
-      { id: 'token-a', location: { type: 'map', x: 1, y: 1 } },
-      { id: 'token-b', location: { type: 'map', x: 2, y: 2 } },
-    ],
     preferences: {
       entitySystem: {
-        actors: [
-          { id: 'actor-a', name: 'A', runtime: { hp: 10 } },
-          { id: 'actor-b', name: 'B', runtime: { hp: 10 } },
-        ],
-        tokens: [
-          { id: 'token-a', characterId: 'token-a', actorId: 'actor-a' },
-          { id: 'token-b', characterId: 'token-b', actorId: 'actor-b' },
-        ],
+        schemaVersion: 3,
+        actors: structuredClone(actors),
+        tokens: structuredClone(tokens),
+        statusDefinitions: [],
       },
       chatSystem: { messages: [] },
       combatSystem: { combat: activeActorId ? { id: 'combat', state: 'active', round: 1, turnIndex, combatants } : null },
+      worldV2: {
+        schemaVersion: 2,
+        id: 'world-test',
+        name: 'Test World',
+        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        activeSceneId: 'scene-test',
+        actors: structuredClone(actors),
+        statusDefinitions: [],
+        scenes: [{
+          id: 'scene-test', name: 'Test Scene', mapPackage: { id: 'test', version: '1' },
+          tokens: [sceneToken('token-a', 'actor-a', 1, 1), sceneToken('token-b', 'actor-b', 2, 2)],
+          markers: [], attackAreas: [], sceneEvents: [], settings: { gridVisible: true },
+        }],
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
     },
   };
 }
 
-function addWorldV2(value) {
-  const actors = structuredClone(value.preferences.entitySystem.actors);
-  delete value.characters;
-  value.preferences.entitySystem.tokens = value.preferences.entitySystem.tokens.map((token, index) => {
-    const { characterId: _legacyCharacterId, ...canonical } = token;
-    return {
-      ...canonical,
-      actorLink: true,
-      actorDelta: null,
-      diameterMeters: 1,
-      rotation: 0,
-      elevationFt: 0,
-      hidden: false,
-      locked: false,
-      showName: true,
-      effects: [],
-      x: index + 1,
-      y: index + 1,
-    };
-  });
-  value.preferences.worldV2 = {
-    schemaVersion: 2,
-    id: 'world-test',
-    name: 'Test World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
-    activeSceneId: 'scene-test',
-    actors,
-    statusDefinitions: [],
-    scenes: [{
-      id: 'scene-test', name: 'Test Scene', mapPackage: { id: 'test', version: '1' },
-      tokens: value.preferences.entitySystem.tokens.map(token => ({
-        id: token.id,
-        actorId: token.actorId,
-        actorLink: true,
-        actorDelta: null,
-        placement: 'map',
-        x: token.x,
-        y: token.y,
-        featureId: null,
-        diameterMeters: 1,
-        rotation: 0,
-        elevationFt: 0,
-        hidden: false,
-        locked: false,
-        showName: true,
-        effects: [],
-      })),
-      markers: [], attackAreas: [], sceneEvents: [], settings: { gridVisible: true },
-    }],
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-  };
-  return value;
+function moveToken(state, tokenId, patch) {
+  const token = state.preferences.worldV2.scenes[0].tokens.find(item => item.id === tokenId);
+  Object.assign(token, patch);
 }
 
 test('persistent User stores hashes while returning portable Player Key and browser credential', () => {
@@ -130,7 +110,7 @@ test('access normalization never exposes raw credentials and keeps default Actor
   assert.equal(normalized.users[0].ownership['actor-a'], 'observer');
 });
 
-test('Player may change owned Actor but not unowned Actor or Combat state', () => {
+test('Player may change owned Actor but not unowned Actor or Combat state in World V2', () => {
   const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
   const before = world();
   const owned = structuredClone(before);
@@ -156,7 +136,7 @@ test('active Combat only permits the current owned Actor to change', () => {
   assert.equal(validatePlayerWorldPush({ before: otherTurn, next: denied, user }).code, 'combat_turn_locked');
 });
 
-test('server resolves legacy combat turns without actorId through the Token binding', () => {
+test('Combat resolves a missing combatant actorId through canonical Token binding', () => {
   const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
   const before = world({ activeActorId: 'actor-a' });
   before.preferences.combatSystem.combat.combatants[0].actorId = null;
@@ -167,10 +147,10 @@ test('server resolves legacy combat turns without actorId through the Token bind
 
 test('World schema rejects duplicate raw IDs before permission Maps can collapse them', () => {
   const duplicateActor = world();
-  duplicateActor.preferences.entitySystem.actors.push({ id: 'actor-a', name: 'shadow duplicate' });
+  duplicateActor.preferences.entitySystem.actors.push({ id: 'actor-a', name: 'shadow duplicate', effects: [] });
   assert.throws(() => assertWorldState(duplicateActor), { code: 'duplicate_id' });
   const duplicateToken = world();
-  duplicateToken.preferences.entitySystem.tokens.push({ id: 'token-a', characterId: 'token-b', actorId: 'actor-b' });
+  duplicateToken.preferences.entitySystem.tokens.push(canonicalToken('token-a', 'actor-b', 3, 3));
   assert.throws(() => assertWorldState(duplicateToken), { code: 'duplicate_id' });
 });
 
@@ -188,7 +168,6 @@ test('only GM may modify Token diameter and the schema bounds allowed values', (
 test('Player World pushes cannot rewrite status definitions or Actor/Token effects', () => {
   const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
   const before = world();
-  before.preferences.entitySystem.schemaVersion = 3;
   const actorEffect = structuredClone(before);
   actorEffect.preferences.entitySystem.actors[0].effects = [{ id: 'effect-rooted', definitionId: 'status-rooted', stacks: 1, enabled: true }];
   assert.equal(validatePlayerWorldPush({ before, next: actorEffect, user }).code, 'status_gm_only');
@@ -196,17 +175,16 @@ test('Player World pushes cannot rewrite status definitions or Actor/Token effec
   tokenEffect.preferences.entitySystem.tokens[0].effects = [{ id: 'effect-spirit', definitionId: 'status-spirit', stacks: 1, enabled: true }];
   assert.equal(validatePlayerWorldPush({ before, next: tokenEffect, user }).code, 'status_gm_only');
   const definition = structuredClone(before);
-  definition.preferences.entitySystem.statusDefinitions = [{ id: 'custom-slow', name: 'Slow', scopes: ['actor'], maxStacks: 1, category: 'debuff', color: '#445566', changes: [], capabilities: { canMove: false } }];
+  definition.preferences.entitySystem.statusDefinitions = [{ id: 'custom-slow', name: 'Slow', scopes: ['actor'], maxStacks: 1, category: 'debuff', color: '#445566', icon: 'anchor', description: '', changes: [], capabilities: { canMove: false } }];
   assert.equal(validatePlayerWorldPush({ before, next: definition, user }).code, 'status_gm_only');
 });
 
-test('authoritative status and derived health capabilities block Player movement', () => {
+test('authoritative status and derived health capabilities block canonical Token movement', () => {
   const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
   const rooted = world();
-  rooted.preferences.entitySystem.schemaVersion = 3;
   rooted.preferences.entitySystem.actors[0].effects = [{ id: 'effect-rooted', definitionId: 'status-rooted', stacks: 1, enabled: true }];
   const rootedMove = structuredClone(rooted);
-  rootedMove.characters[0].location.x = 9;
+  moveToken(rootedMove, 'token-a', { x: 9 });
   assert.equal(validatePlayerWorldPush({ before: rooted, next: rootedMove, user }).code, 'status_movement_forbidden');
   for (const [label, wounds] of [
     ['unconscious', { bashing: 2, lethal: 0, aggravated: 0 }],
@@ -220,7 +198,7 @@ test('authoritative status and derived health capabilities block Player movement
       effects: [],
     };
     const moved = structuredClone(incapacitated);
-    moved.characters[0].location.y = 11;
+    moveToken(moved, 'token-a', { y: 11 });
     const denied = validatePlayerWorldPush({ before: incapacitated, next: moved, user });
     assert.equal(denied.code, 'status_movement_forbidden', label);
   }
@@ -228,9 +206,9 @@ test('authoritative status and derived health capabilities block Player movement
 
 test('server Player permissions allow canonical World V2 movement but protect World structure', () => {
   const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
-  const before = addWorldV2(world());
+  const before = world();
   const moved = structuredClone(before);
-  moved.preferences.worldV2.scenes[0].tokens[0].x = 9;
+  moveToken(moved, 'token-a', { x: 9 });
   const movementResult = validatePlayerWorldPush({ before, next: moved, user });
   assert.equal(movementResult.ok, true, JSON.stringify(movementResult));
   assert.equal(moved.preferences.worldV2.scenes[0].tokens[0].x, 9);
