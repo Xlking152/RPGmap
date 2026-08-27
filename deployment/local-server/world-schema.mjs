@@ -82,17 +82,23 @@ export function assertSafeJson(value, label = 'world') {
 export function assertWorldState(value) {
   assertSafeJson(value, 'state');
   const state = object(value, 'state');
+  const preferences = state.preferences === undefined ? {} : object(state.preferences, 'state.preferences');
+  const hasWorldV2 = preferences.worldV2 !== undefined && preferences.worldV2 !== null;
 
-  // SaveV2 may still carry a legacy Character array during one-way migration,
-  // but World V2 runtime authority never requires or joins through it.
-  const characters = state.characters === undefined ? [] : array(state.characters, 'state.characters');
+  // Character documents are accepted only while reading a pre-World legacy
+  // save. Once World V2 exists they are forbidden, even as an empty tombstone.
+  if (hasWorldV2 && Object.hasOwn(state, 'characters')) {
+    fail('World V2 state must not contain state.characters', 'legacy_character_forbidden');
+  }
+  const characters = !hasWorldV2 && state.characters !== undefined
+    ? array(state.characters, 'state.characters')
+    : [];
   const markers = state.markers === undefined ? [] : array(state.markers, 'state.markers');
   const attackAreas = state.attackAreas === undefined ? [] : array(state.attackAreas, 'state.attackAreas');
   assertUniqueIds(characters, 'state.characters');
   assertUniqueIds(markers, 'state.markers');
   assertUniqueIds(attackAreas, 'state.attackAreas');
 
-  const preferences = state.preferences === undefined ? {} : object(state.preferences, 'state.preferences');
   const entities = preferences.entitySystem;
   let actorIds = new Set();
   let tokenIds = new Set();
@@ -103,9 +109,10 @@ export function assertWorldState(value) {
     for (const [index, token] of entityState.tokens.entries()) {
       const actorId = id(token.actorId, `entitySystem.tokens[${index}].actorId`);
       if (!actorIds.has(actorId)) fail(`Token references missing Actor: ${actorId}`, 'invalid_reference');
-      // characterId is accepted only as inert legacy input. Canonical runtime
-      // identity is token.id; there is no one-Character-per-Token invariant.
-      if (token.characterId !== undefined && token.characterId !== null && String(token.characterId).trim() !== '') {
+      if (hasWorldV2 && Object.hasOwn(token, 'characterId')) {
+        fail(`entitySystem.tokens[${index}].characterId is forbidden in World V2`, 'legacy_character_forbidden');
+      }
+      if (!hasWorldV2 && token.characterId !== undefined && token.characterId !== null && String(token.characterId).trim() !== '') {
         id(token.characterId, `entitySystem.tokens[${index}].characterId`);
       }
       if (token.diameterMeters !== undefined && ![1, 5, 10, 20].includes(Number(token.diameterMeters))) {
@@ -115,9 +122,8 @@ export function assertWorldState(value) {
     assertStatusState(entityState);
   }
 
-  // World V2 is canonical. Flat entity/scene fields remain a temporary reducer
-  // projection, so merge only mutable mechanical fields back into the active
-  // Scene without routing placement through Character documents.
+  // World V2 is canonical. Flat entity/scene fields remain a reducer projection,
+  // but placement and identity never route through Character documents.
   const worldV2 = synchronizeWorldV2Mirror(state);
   if (worldV2) assertWorldV2(worldV2);
 
@@ -126,7 +132,7 @@ export function assertWorldState(value) {
     const messages = array(object(chat, 'state.preferences.chatSystem').messages, 'chatSystem.messages', WORLD_LIMITS.maxChatMessages);
     assertUniqueIds(messages, 'chatSystem.messages');
     for (const [index, message] of messages.entries()) {
-      if (!['chat', 'system', 'combat', 'damage', 'healing', 'roll'].includes(String(message.type))) fail(`chatSystem.messages[${index}] has an invalid type`);
+      if (!['chat', 'system', 'combat', 'damage', 'healing', 'roll'].includes(String(message.type))) fail(`chatSystem.messages[${index}].type has an invalid type`);
       if (typeof message.text !== 'string' || message.text.length > 4_000) fail(`chatSystem.messages[${index}].text is invalid`, 'world_limit');
       if (typeof message.createdAt !== 'string') fail(`chatSystem.messages[${index}].createdAt is invalid`);
     }
