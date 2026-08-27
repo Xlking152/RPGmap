@@ -42,11 +42,19 @@ jobs:
           sha256sum -c "RPGmap-v${{ steps.meta.outputs.version }}.zip.sha256"
           test "$(node -p "require('./RPGmap-v${{ steps.meta.outputs.version }}/VERSION.json').version")" = "${{ steps.meta.outputs.version }}"
           test "$(node -p "require('./RPGmap-v${{ steps.meta.outputs.version }}/VERSION.json').commit")" = "${{ steps.meta.outputs.commit }}"
-          test -f "RPGmap-v${{ steps.meta.outputs.version }}/world-v2.mjs"
-          test -f "RPGmap-v${{ steps.meta.outputs.version }}/status-operations.mjs"
-          test "$(find "RPGmap-v${{ steps.meta.outputs.version }}" -maxdepth 1 -name '*.bat' | wc -l)" -eq 1
-          test ! -e "RPGmap-v${{ steps.meta.outputs.version }}/cloudflared.exe"
-          test ! -e "RPGmap-v${{ steps.meta.outputs.version }}/start-rpgmap.sh"
+          ROOT="RPGmap-v${{ steps.meta.outputs.version }}"
+          test -f "$ROOT/start-rpgmap.bat"
+          test -f "$ROOT/launcher.mjs"
+          test -f "$ROOT/server.mjs"
+          test -f "$ROOT/access-control.mjs"
+          test -f "$ROOT/portable-storage.mjs"
+          test -f "$ROOT/world-schema.mjs"
+          test -f "$ROOT/world-v2.mjs"
+          test -f "$ROOT/status-operations.mjs"
+          test -f "$ROOT/app/index.html"
+          test "$(find "$ROOT" -maxdepth 1 -name '*.bat' | wc -l)" -eq 1
+          test ! -e "$ROOT/cloudflared.exe"
+          test ! -e "$ROOT/start-rpgmap.sh"
       - uses: actions/upload-artifact@v7
         with:
           name: release-candidate-v${{ steps.meta.outputs.version }}
@@ -59,6 +67,7 @@ jobs:
     needs: candidate
     runs-on: windows-latest
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: '22.12.0'
@@ -77,21 +86,7 @@ jobs:
           if ($actual -ne $expected) { throw 'Candidate ZIP checksum mismatch.' }
           Expand-Archive -LiteralPath $zip -DestinationPath release/unpacked -Force
           $root = Join-Path $PWD "release/unpacked/RPGmap-v$version"
-          $env:RPGMAP_NO_BROWSER = '1'
-          $launcher = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/D', '/S', '/C', 'start-rpgmap.bat') -WorkingDirectory $root -PassThru -WindowStyle Hidden
-          try {
-            $health = $null
-            for ($attempt = 0; $attempt -lt 40; $attempt += 1) {
-              try {
-                $health = Invoke-RestMethod -Uri 'http://127.0.0.1:30000/api/health' -TimeoutSec 2
-                if ($health.status -eq 'ok' -and $health.multiplayer.enabled -eq $true -and $health.multiplayer.publicMode -eq $false) { break }
-              } catch {}
-              Start-Sleep -Milliseconds 500
-            }
-            if ($null -eq $health -or $health.status -ne 'ok') { throw 'Candidate package did not pass Windows startup smoke.' }
-          } finally {
-            if (-not $launcher.HasExited) { & taskkill.exe /PID $launcher.Id /T /F | Out-Null }
-          }
+          & ./scripts/windows-smoke.ps1 -Root $root -TimeoutSeconds 30
 
   publish:
     needs: [candidate, windows-smoke]
