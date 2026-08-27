@@ -3,6 +3,7 @@ import { STATUS_SCHEMA_VERSION } from '../status/model.js';
 
 const PREFERENCE_KEY = 'entitySystem';
 let canonicalEntityUiStoreDepth = 0;
+let canonicalEntityUiStore = null;
 
 /**
  * Construct an EntityStore for the editor while marking only that instance as
@@ -13,6 +14,16 @@ export function withCanonicalEntityTokenReadView(callback) {
   canonicalEntityUiStoreDepth += 1;
   try { return callback(); }
   finally { canonicalEntityUiStoreDepth -= 1; }
+}
+
+export function refreshCanonicalEntityUiStore() {
+  if (!canonicalEntityUiStore) return null;
+  canonicalEntityUiStore.load({ migrateLegacy: false, dropMarkers: false });
+  return canonicalEntityUiStore;
+}
+
+export function getCanonicalEntityUiStore() {
+  return canonicalEntityUiStore;
 }
 
 function entityContentChanged(raw, normalized) {
@@ -58,6 +69,7 @@ export class EntityStore {
     this.state = createEmptyEntityState();
     this.compatTokens = [];
     this.canonicalTokenReadView = canonicalEntityUiStoreDepth > 0;
+    if (this.canonicalTokenReadView) canonicalEntityUiStore = this;
     this.saving = false;
   }
 
@@ -80,6 +92,7 @@ export class EntityStore {
 
   installCanonicalTokenReadView(state) {
     this.canonicalTokenReadView = true;
+    canonicalEntityUiStore = this;
     this.compatTokens = Array.isArray(state?.tokens) ? state.tokens : [];
     Object.defineProperty(state, 'tokens', {
       configurable: true,
