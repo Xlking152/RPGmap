@@ -63,24 +63,26 @@ test('old resistance-threshold saves migrate into bad statuses without remaining
   assert.equal(normalized.actors[0].runtime.badStatuses['bad-status-32'], 0);
 });
 
-test('legacy characters migrate to actor plus token once', () => {
+test('legacy Character migration creates one Actor plus canonical Token id once', () => {
   const character = { id: 'c1', name: '旧角色', color: '#123456', avatarDataUrl: null, location: { type: 'map', x: 1, y: 2 } };
   const first = migrateLegacyCharacters(null, [character]);
   assert.equal(first.migrated, 1);
   assert.equal(first.state.actors.length, 1);
-  assert.equal(first.state.tokens[0].characterId, 'c1');
+  assert.equal(first.state.tokens[0].id, 'c1');
+  assert.equal(first.state.tokens[0].characterId, undefined);
   const second = migrateLegacyCharacters(first.state, [character]);
   assert.equal(second.migrated, 0);
 });
 
-test('empty or malformed character cards normalize before actor creation and produce safe token references', () => {
+test('empty or malformed character cards normalize before actor creation and produce safe canonical Token references', () => {
   const emptyActor = createActorFromImport();
   assert.equal(emptyActor.name, '未命名角色');
   assert.equal(emptyActor.forms[0].name, '默认形态');
   assert.equal(emptyActor.forms[0].resourceBases.hp.baseMax, 0);
-  const token = createTokenForActor(emptyActor.id, 'empty-character');
+  const token = createTokenForActor(emptyActor.id, 'empty-token');
   assert.equal(token.actorId, emptyActor.id);
-  assert.equal(token.characterId, 'empty-character');
+  assert.equal(token.id, 'empty-token');
+  assert.equal(token.characterId, undefined);
 
   const malformedActor = createActorFromImport({
     identity: null,
