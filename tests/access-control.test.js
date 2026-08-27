@@ -229,7 +229,8 @@ test('server Player permissions allow canonical World V2 movement but protect Wo
   const before = addWorldV2(world());
   const moved = structuredClone(before);
   moved.preferences.worldV2.scenes[0].tokens[0].x = 9;
-  assert.equal(validatePlayerWorldPush({ before, next: moved, user }).ok, true);
+  const movementResult = validatePlayerWorldPush({ before, next: moved, user });
+  assert.equal(movementResult.ok, true, JSON.stringify(movementResult));
   assert.equal(moved.preferences.worldV2.scenes[0].tokens[0].x, 9);
   assert.deepEqual(moved.characters, []);
 
