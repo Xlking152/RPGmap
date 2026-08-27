@@ -26,6 +26,7 @@ import {
   createTokenStatusBridgeSystem,
 } from './token/index.js';
 import { createTokenRendererSystem } from './render/token-layer.js';
+import { createCharacterRetirementSystem } from './legacy/character-retirement.js';
 
 function setBootStatus(message, { error = false } = {}) {
   const node = document.querySelector('[data-rpgmap-boot-status]');
@@ -117,7 +118,6 @@ export async function startRpgMap() {
       createAppShellUi(),
       createMeasurementSystem(),
       selectionSystem,
-      // The visible Leaflet Token layer is canonical from this point onward.
       createTokenRendererSystem(),
       createFeatureInteractionSystem(),
       createElevationSystem(),
@@ -127,7 +127,11 @@ export async function startRpgMap() {
       createHealingSystem({ selection: selectionSystem }),
       createCombatSystem({ selection: selectionSystem }),
       createMultiplayerSystem(),
-      createMultiplayerHostBootstrapSystem()
+      createMultiplayerHostBootstrapSystem(),
+      // Register last: all live workflows are canonical at this point. The old
+      // Character parser can remain for one-way SaveV2 migration, but no public
+      // Character mutation/selection API or Leaflet pane survives into runtime.
+      createCharacterRetirementSystem(),
     ]
   });
 }
