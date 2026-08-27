@@ -4,10 +4,7 @@ import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
 
 function state() {
   return {
-    characters: [{
-      id: 'token-1', name: '角色', color: '#3d9b63', avatarDataUrl: null, visible: true,
-      location: { type: 'map', x: 12.5, y: 18.5 },
-    }],
+    characters: [],
     markers: [],
     attackAreas: [],
     sceneEvents: [],
@@ -17,7 +14,7 @@ function state() {
         statusDefinitions: [],
         actors: [{ id: 'actor-1', name: '角色', forms: [], runtime: {}, effects: [] }],
         tokens: [{
-          id: 'token-1', characterId: 'token-1', actorId: 'actor-1', actorLink: true,
+          id: 'token-1', actorId: 'actor-1', actorLink: true,
           diameterMeters: 1, rotation: 0, elevationFt: 0, hidden: false, locked: false, showName: true, effects: [],
         }],
       },
@@ -27,24 +24,33 @@ function state() {
         name: 'World',
         ruleset: { id: 'infinite-horror', version: '1.0.0' },
         activeSceneId: 'scene-test',
-        actors: [],
+        actors: [{ id: 'actor-1', name: '角色', forms: [], runtime: {}, effects: [] }],
         statusDefinitions: [],
         scenes: [{
           id: 'scene-test', name: 'Scene', mapPackage: { id: 'test-map', version: '1' },
-          tokens: [], markers: [], attackAreas: [], sceneEvents: [], settings: { gridVisible: true },
+          tokens: [{
+            id: 'token-1', actorId: 'actor-1', actorLink: true, actorDelta: null,
+            placement: 'map', x: 12.5, y: 18.5, featureId: null,
+            diameterMeters: 1, rotation: 0, elevationFt: 0,
+            hidden: false, locked: false, showName: true, effects: [],
+          }],
+          markers: [], attackAreas: [], sceneEvents: [], settings: { gridVisible: true },
         }],
       },
     },
   };
 }
 
-test('server validation mirrors authoritative Actor/Token projection into World V2', () => {
+test('server validation preserves authoritative World V2 placement while merging reducer Actor/Token fields', () => {
   const value = state();
+  value.preferences.entitySystem.tokens[0].elevationFt = 15;
   assert.equal(assertWorldState(value), value);
   assert.equal(value.preferences.worldV2.actors[0].id, 'actor-1');
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].actorId, 'actor-1');
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].x, 12.5);
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].y, 18.5);
+  assert.equal(value.preferences.worldV2.scenes[0].tokens[0].elevationFt, 15);
+  assert.deepEqual(value.characters, []);
 });
 
 test('legacy server states without World V2 remain valid and are not rewritten', () => {
