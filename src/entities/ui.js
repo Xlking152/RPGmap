@@ -13,8 +13,7 @@ import { importCharacterXlsx } from './xlsx-importer.js';
 import { imageToAvatarDataUrl } from './avatar.js';
 import { EntityStore } from './store.js';
 import { normalizeCharacterCard } from './schema.js';
-import { latLngToWorld } from '../engine/geometry.js';
-import { TOKEN_DIAMETERS_METERS, tokenDiameterMeters, tokenElevationFt } from '../elevation/model.js';
+import { createEntityTokenController } from './token-controller.js';
 import {
   canManageStatuses,
   createStatusUiController,
@@ -52,7 +51,9 @@ function installStyles(documentNode) {
     .entity-card-copy { min-width:0; flex:1; }
     .entity-card-copy strong { display:block; font-size:14px; overflow:hidden; text-overflow:ellipsis; }
     .entity-card-copy small { color:#667477; }
-    .entity-card-actions { display:flex; gap:6px; flex-wrap:wrap; }
+    .entity-card-actions { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+    .entity-card-actions label { display:inline-flex; gap:5px; align-items:center; }
+    .entity-card-actions input[type="number"] { width:72px; }
     .entity-sheet-backdrop { position:fixed; inset:0; z-index:4200; background:rgba(18,23,24,.48); display:grid; place-items:center; padding:24px; }
     .entity-sheet { width:min(880px,94vw); max-height:90vh; overflow:auto; background:#f8faf7; border:1px solid rgba(40,70,70,.3); border-radius:14px; box-shadow:0 20px 60px rgba(0,0,0,.28); }
     .entity-sheet-header { position:sticky; top:0; z-index:3; display:flex; align-items:center; gap:14px; padding:14px 16px; background:rgba(248,250,247,.97); border-bottom:1px solid rgba(40,70,70,.18); }
@@ -118,17 +119,14 @@ export function createEntityUiTool(options = {}) {
       const shell = mapElement.closest('.app-shell') || documentNode;
       installStyles(documentNode);
       installStatusUiStyles(documentNode);
-      const store = new EntityStore(api);
+      const store = new EntityStore(api, { canonicalTokenReads: true });
       const migration = store.load({ migrateLegacy: true, dropMarkers: options.dropLegacyMarkers !== false });
       let selectedTokenId = null;
-      let pendingPlacementActorId = null;
-      let pendingRelocationCharacterId = null;
       let pendingImportActorId = null;
       let openActorId = null;
       let openTab = 'overview';
       let renderingPanel = false;
       let importBusy = false;
-      let removingActor = false;
 
       const characterTab = shell.querySelector('[data-tab="characters"]');
       if (characterTab) characterTab.textContent = '指示物';
@@ -142,21 +140,36 @@ export function createEntityUiTool(options = {}) {
       importButton.title = '导入 XLSX：仅读取角色概览与具体数值表';
       toolbar?.prepend(importButton);
       const xlsxInput = documentNode.createElement('input');
-      xlsxInput.type = 'file'; xlsxInput.accept = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'; xlsxInput.hidden = true;
+      xlsxInput.type = 'file';
+      xlsxInput.accept = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      xlsxInput.hidden = true;
       toolbar?.append(xlsxInput);
       const avatarInput = documentNode.createElement('input');
-      avatarInput.type = 'file'; avatarInput.accept = 'image/*'; avatarInput.hidden = true;
+      avatarInput.type = 'file';
+      avatarInput.accept = 'image/*';
+      avatarInput.hidden = true;
       toolbar?.append(avatarInput);
 
       function entityState() { return store.state; }
-      function tokenCount(actorId) { return entityState().tokens.filter(token => String(token.actorId) === String(actorId)).length; }
+      function canonicalTokens() { return api.tokens?.list?.() || []; }
+      function tokenCount(actorId) { return canonicalTokens().filter(token => String(token.actorId) === String(actorId)).length; }
       function setStatus(message) { const node = shell.querySelector('[data-role="map-status"]'); if (node) node.textContent = message; }
       function indicator(message) {
-        const node = documentNode.createElement('div'); node.className = 'entity-indicator'; node.textContent = message;
-        (mapElement.parentElement || mapElement).append(node); setTimeout(() => node.remove(), 1300);
+        const node = documentNode.createElement('div');
+        node.className = 'entity-indicator';
+        node.textContent = message;
+        (mapElement.parentElement || mapElement).append(node);
+        setTimeout(() => node.remove(), 1300);
       }
       function persistAndRender(options = {}) { store.persist(options); renderPanel(); renderSheet(); }
-      function capabilities() { return api.multiplayer?.getCapabilities?.() || { canManageStructure: true, canImportActors: true, canEditActor: () => true, canPlaceActor: () => true }; }
+      function capabilities() {
+        return api.multiplayer?.getCapabilities?.() || {
+          canManageStructure: true,
+          canImportActors: true,
+          canEditActor: () => true,
+          canPlaceActor: () => true,
+        };
+      }
       function requireStructure(message = '只有 GM 可以修改角色或 Token 结构') {
         if (capabilities().canManageStructure) return true;
         setStatus(message);
@@ -167,12 +180,13 @@ export function createEntityUiTool(options = {}) {
         setStatus('当前只能查看该角色：需要 OWNER 权限且必须轮到该角色行动');
         return false;
       }
+
       const statusUi = createStatusUiController({
         api,
         documentNode,
         getContext: () => {
           const actor = store.actor(openActorId);
-          const allTokens = entityState().tokens || [];
+          const allTokens = canonicalTokens();
           return {
             actor,
             allTokens,
@@ -182,35 +196,20 @@ export function createEntityUiTool(options = {}) {
         render: () => { renderPanel(); renderSheet(); },
         setStatus,
       });
-      function clearPlacement({ status = '已取消放置 Token', restoreTool = true } = {}) {
-        const hadPendingPlacement = Boolean(pendingPlacementActorId || pendingRelocationCharacterId);
-        pendingPlacementActorId = null;
-        pendingRelocationCharacterId = null;
-        documentNode.querySelector('.entity-placement-hud')?.remove();
-        if (!hadPendingPlacement) return false;
-        if (restoreTool) api.setTool('pan');
-        if (status) setStatus(status);
-        return true;
-      }
-      function renderPlacementHud(actorId) {
-        documentNode.querySelector('.entity-placement-hud')?.remove();
-        const actor = store.actor(actorId);
-        const hud = documentNode.createElement('div');
-        hud.className = 'entity-placement-hud';
-        hud.setAttribute('role', 'status');
-        hud.innerHTML = `<span>放置 Token：点击地图放置“${escapeHtml(actor?.name || '角色')}”</span><button type="button" class="small-button" data-entity-placement-cancel>取消</button>`;
-        documentNode.body.append(hud);
-      }
 
-      function renderRelocationHud(characterId) {
-        documentNode.querySelector('.entity-placement-hud')?.remove();
-        const character = api.getState().characters?.find(item => String(item.id) === String(characterId));
-        const hud = documentNode.createElement('div');
-        hud.className = 'entity-placement-hud';
-        hud.setAttribute('role', 'status');
-        hud.innerHTML = `<span>重新放置 Token：点击地图移动“${escapeHtml(character?.name || '角色')}”</span><button type="button" class="small-button" data-entity-placement-cancel>取消</button>`;
-        documentNode.body.append(hud);
-      }
+      const tokenController = createEntityTokenController({
+        api,
+        documentNode,
+        mapElement,
+        shell,
+        store,
+        capabilities,
+        setStatus,
+        closeSheet,
+        renderPanel,
+        renderSheet,
+        onSelectToken(tokenId) { selectedTokenId = tokenId ? String(tokenId) : null; },
+      });
 
       function renderPanel() {
         if (!panel) return;
@@ -225,7 +224,7 @@ export function createEntityUiTool(options = {}) {
               ${canManageStructure ? '<button type="button" class="small-button primary" data-entity-action="import">导入角色卡</button><button type="button" class="small-button" data-entity-action="new">新建空白角色</button>' : ''}
               ${canManageStructure && legacyMarkerCount ? `<button type="button" class="small-button" data-entity-action="migrate-markers">迁移 ${legacyMarkerCount} 个旧标记</button>` : ''}
             </div>
-            <div class="entity-help">Actor 保存角色数据；Token 只负责地图位置和表现。${legacyMarkerCount ? `检测到 ${legacyMarkerCount} 个旧标记；它们会保留，只有 GM 确认迁移后才会删除。` : '双击 Token 或按列表中的“角色卡”打开属性。选中有多个形态的 Token 后按 <b>V</b> 切换形态。'}</div>
+            <div class="entity-help">Actor 保存角色数据；Token 的位置、大小、显示、旋转、高度和删除均由当前 Scene 的 canonical Token Runtime 管理。${legacyMarkerCount ? `检测到 ${legacyMarkerCount} 个旧标记；它们会保留，只有 GM 确认迁移后才会删除。` : '双击 Token 或按列表中的“角色卡”打开属性。选中有多个形态的 Token 后按 <b>V</b> 切换形态。'}</div>
             <div data-entity-list>${actors.length ? actors.map(actor => {
               const form = currentForm(actor);
               const count = tokenCount(actor.id);
@@ -257,7 +256,7 @@ export function createEntityUiTool(options = {}) {
         const form = resolved?.form;
         if (!resolved || !form) return '<div class="entity-empty">角色没有可用形态。</div>';
         if (tab === 'status') {
-          const allTokens = entityState().tokens || [];
+          const allTokens = canonicalTokens();
           const tokens = allTokens.filter(token => String(token.actorId) === String(actor.id));
           return renderActorStatusSheet({
             api,
@@ -299,21 +298,7 @@ export function createEntityUiTool(options = {}) {
         if (tab === 'combat') {
           return `<section class="entity-section"><h3>攻击</h3><div class="entity-empty">攻击结构已预留，暂不从 Excel 导入。</div></section><section class="entity-section"><h3>防御</h3><div class="entity-empty">防御结构已预留，后续单独设计规则。</div></section>`;
         }
-        const tokens = entityState().tokens.filter(token => String(token.actorId) === String(actor.id));
-        const appState = api.getState();
-        return `<section class="entity-section"><h3>Token</h3>${tokens.length ? tokens.map(token => {
-          const character = appState.characters?.find(item => String(item.id) === String(token.characterId));
-          const pos = character?.location?.type === 'map' ? `${Math.round(character.location.x)}, ${Math.round(character.location.y)}` : character?.location?.type === 'building' ? `建筑 ${character.location.featureId}` : '未知';
-          const elevation = tokenElevationFt(appState, token.characterId);
-          const diameter = tokenDiameterMeters(token);
-          const editable = api.elevation?.canSetTokenElevation?.(token.characterId) !== false;
-          const sizeEditor = capabilities().canManageStructure
-            ? `<label>直径 <select data-token-diameter data-character-id="${escapeHtml(token.characterId)}">${TOKEN_DIAMETERS_METERS.map(value => `<option value="${value}" ${value === diameter ? 'selected' : ''}>${value} m</option>`).join('')}</select></label>`
-            : `<small>直径：${diameter} m（仅 GM 可修改）</small>`;
-          const relocate = capabilities().canManageStructure
-            ? `<button type="button" class="small-button" data-sheet-action="reposition-token" data-character-id="${escapeHtml(token.characterId)}">重新放置</button>` : '';
-          return `<div class="entity-card"><strong>Token ${escapeHtml(token.id)}</strong><small>位置：${escapeHtml(pos)} · 高度：${escapeHtml(elevation)} ft</small><div class="entity-card-actions">${sizeEditor}${relocate}<button type="button" class="small-button" data-sheet-action="edit-token-elevation" data-character-id="${escapeHtml(token.characterId)}" ${editable ? '' : 'disabled title="当前没有该 Actor 的控制权限或不在可行动回合"'}>调整高度</button></div></div>`;
-        }).join('') : '<div class="entity-empty">当前角色尚未放置 Token。</div>'}<button type="button" class="small-button" data-sheet-action="place-token">放置 Token</button></section>`;
+        return tokenController.renderActorTokenSection(actor);
       }
 
       function renderSheet() {
@@ -323,18 +308,19 @@ export function createEntityUiTool(options = {}) {
         if (!actor) { openActorId = null; existing?.remove(); return; }
         const tabs = [['overview','概览'],['attributes','属性'],['checks','鉴定'],['combat','战斗'],['status','状态'],['token','Token']];
         const canEdit = capabilities().canEditActor?.(actor.id);
-        const actorTokens = entityState().tokens.filter(token => String(token.actorId) === String(actor.id));
-        const selectedToken = actorTokens.find(token => String(token.id) === String(selectedTokenId) || String(token.characterId) === String(selectedTokenId));
+        const actorTokens = tokenController.actorTokens(actor.id);
+        const selectedToken = actorTokens.find(token => String(token.id) === String(selectedTokenId));
         const titleSnapshot = resolveStatusUiSnapshot(api, {
           actorId: actor.id,
-          ...(selectedToken ? { tokenId: selectedToken.id, characterId: selectedToken.characterId } : {}),
+          ...(selectedToken ? { tokenId: selectedToken.id } : {}),
         });
         const html = `<div class="entity-sheet-backdrop"><div class="entity-sheet ${canEdit ? '' : 'entity-sheet-readonly'}" role="dialog" aria-modal="true">
           <header class="entity-sheet-header">${avatarHtml(actor)}<div class="entity-sheet-title"><input type="text" maxlength="80" value="${escapeHtml(actor.name)}" data-actor-name><div class="entity-formbar"><span>当前形态</span><select data-form-select>${actor.forms.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === actor.currentFormId ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select><button type="button" class="small-button primary" data-sheet-action="cycle-form">V · 切换</button><button type="button" class="small-button" data-sheet-action="add-form">+ 形态</button><button type="button" class="small-button" data-sheet-action="avatar">更换头像</button></div><div class="status-title-band">${renderStatusStrip(titleSnapshot.statuses, { limit: 8, emptyText: '无机械状态' })}</div></div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>
           <nav class="entity-sheet-tabs">${tabs.map(([id,label]) => `<button type="button" class="entity-sheet-tab ${openTab === id ? 'active' : ''}" data-sheet-tab="${id}">${label}</button>`).join('')}</nav>
           <main class="entity-sheet-body">${actorSheetBody(actor, openTab)}</main>
         </div></div>`;
-        if (existing) existing.outerHTML = html; else documentNode.body.insertAdjacentHTML('beforeend', html);
+        if (existing) existing.outerHTML = html;
+        else documentNode.body.insertAdjacentHTML('beforeend', html);
       }
 
       function openSheet(actorId, tab = openTab) { openActorId = actorId; openTab = tab; renderSheet(); }
@@ -343,7 +329,8 @@ export function createEntityUiTool(options = {}) {
       async function parseImport(file, actorId = null) {
         if (!requireStructure('只有 GM 可以导入角色卡或形态')) return;
         if (!file || importBusy) return;
-        importBusy = true; setStatus('正在读取角色卡…');
+        importBusy = true;
+        setStatus('正在读取角色卡…');
         try {
           const imported = normalizeCharacterCard(await importCharacterXlsx(file));
           if (imported.avatarImage) {
@@ -378,66 +365,18 @@ export function createEntityUiTool(options = {}) {
           alert('角色卡导入失败：' + error.message);
           setStatus('角色卡导入失败');
         } finally {
-          importBusy = false; xlsxInput.value = ''; pendingImportActorId = null;
+          importBusy = false;
+          xlsxInput.value = '';
+          pendingImportActorId = null;
         }
       }
 
-      function chooseImport(actorId = null) { if (requireStructure('只有 GM 可以导入角色卡或形态')) { pendingImportActorId = actorId; xlsxInput.click(); } }
-      function placeActor(actorId) {
-        if (!capabilities().canPlaceActor?.(actorId)) { setStatus('只有 GM 可以放置或重新绑定 Token'); return; }
-        if (!store.actor(actorId)) return;
-        pendingPlacementActorId = actorId;
-        // The sheet backdrop is modal and otherwise captures the map click needed
-        // by the character-place tool. Placement deliberately uses a small HUD.
-        closeSheet();
-        renderPlacementHud(actorId);
-        setStatus(`放置 Token：请在地图上点击“${store.actor(actorId)?.name || '角色'}”的位置`);
+      function chooseImport(actorId = null) {
+        if (!requireStructure('只有 GM 可以导入角色卡或形态')) return;
+        pendingImportActorId = actorId;
+        xlsxInput.click();
       }
 
-      function relocateToken(characterId) {
-        if (!requireStructure('只有 GM 可以重新放置 Token')) return;
-        if (!api.getState().characters?.some(item => String(item.id) === String(characterId))) return;
-        pendingPlacementActorId = null;
-        pendingRelocationCharacterId = String(characterId);
-        closeSheet();
-        renderRelocationHud(characterId);
-        setStatus('重新放置 Token：请选择可通行的 1m 格子');
-      }
-
-      function placePendingTokenAtMapClick(event) {
-        if (!pendingPlacementActorId && !pendingRelocationCharacterId) return;
-        // Only map-background clicks belong to Token placement. Controls and
-        // existing Tokens keep their normal handlers and never consume a HUD.
-        if (event.target.closest?.('.leaflet-control, .rpg-character, .rpg-character-core, .leaflet-marker-icon')) return;
-        const latlng = api.map.mouseEventToLatLng?.(event);
-        if (!latlng) return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        const point = latLngToWorld(latlng, api.mapPackage.height);
-        if (pendingRelocationCharacterId) {
-          const characterId = pendingRelocationCharacterId;
-          if (api.repositionCharacter?.(characterId, point)) clearPlacement({ status: 'Token 已重新放置到可通行格子', restoreTool: false });
-          else setStatus('该位置不可放置 Token；请选择地图中的可通行位置，或点击取消');
-          return;
-        }
-        const character = api.placeCharacter?.(point, { suppressEditor: true });
-        if (!character) setStatus('该位置不可放置 Token；请选择地图中的可通行位置，或点击取消');
-      }
-      function deleteActor(actorId) {
-        if (!requireStructure('只有 GM 可以删除角色与关联 Token')) return;
-        const actor = store.actor(actorId); if (!actor) return;
-        const tokens = entityState().tokens.filter(token => String(token.actorId) === String(actorId));
-        if (!confirm(`删除“${actor.name}”及其 ${tokens.length} 个 Token？关联范围将转为自由锚点，战斗参战者会一并移除。`)) return;
-        removingActor = true;
-        try {
-          for (const token of tokens) api.deleteCharacter?.(String(token.characterId));
-          store.removeActor(actorId);
-          if (openActorId === actorId) closeSheet();
-          clearPlacement({ status: '', restoreTool: false });
-          store.persist(); renderPanel();
-          setStatus(`已删除角色“${actor.name}”及 ${tokens.length} 个 Token`);
-        } finally { removingActor = false; }
-      }
       function migrateLegacyMarkers() {
         if (!requireStructure('只有 GM 可以迁移旧标记')) return;
         const next = api.getState();
@@ -457,150 +396,200 @@ export function createEntityUiTool(options = {}) {
       }
 
       function handlePanelClick(event) {
-        const button = event.target.closest('[data-entity-action]'); if (!button) return;
-        const action = button.dataset.entityAction; const id = button.dataset.id;
+        const button = event.target.closest('[data-entity-action]');
+        if (!button) return;
+        const action = button.dataset.entityAction;
+        const id = button.dataset.id;
         if (action === 'import') chooseImport();
         else if (action === 'new') {
           if (!requireStructure()) return;
-          const actor = createActorFromImport(blankImport()); entityState().actors.push(actor); store.persist(); renderPanel(); openSheet(actor.id);
+          const actor = createActorFromImport(blankImport());
+          entityState().actors.push(actor);
+          store.persist();
+          renderPanel();
+          openSheet(actor.id);
         } else if (action === 'open') openSheet(id);
-        else if (action === 'place') placeActor(id);
+        else if (action === 'place') tokenController.beginPlacement(id);
         else if (action === 'add-form') chooseImport(id);
-        else if (action === 'delete') deleteActor(id);
+        else if (action === 'delete') tokenController.removeActor(id).catch(error => {
+          console.error('[RPGmap Entity UI] Actor delete failed', error);
+          setStatus(`删除失败：${error?.message || error}`);
+        });
         else if (action === 'migrate-markers') migrateLegacyMarkers();
       }
+
       panel?.addEventListener('click', handlePanelClick);
       importButton.addEventListener('click', () => chooseImport());
       xlsxInput.addEventListener('change', () => parseImport(xlsxInput.files?.[0], pendingImportActorId));
 
-      documentNode.addEventListener('click', event => {
+      documentNode.addEventListener('click', async event => {
         if (statusUi.handleClick(event)) return;
         if (event.target.closest?.('[data-entity-placement-cancel]')) {
           event.preventDefault();
-          clearPlacement();
+          tokenController.clearPlacement({ message: '已取消 Token 放置' });
           return;
         }
-        const sheet = event.target.closest('.entity-sheet'); if (!sheet) return;
-        const actor = store.actor(openActorId); if (!actor) return;
+        const sheet = event.target.closest('.entity-sheet');
+        if (!sheet) return;
+        const actor = store.actor(openActorId);
+        if (!actor) return;
         const tab = event.target.closest('[data-sheet-tab]');
         if (tab) { openTab = tab.dataset.sheetTab; renderSheet(); return; }
         const actionNode = event.target.closest('[data-sheet-action]');
         if (actionNode) {
+          if (await tokenController.handleSheetAction(actionNode, actor)) return;
           const action = actionNode.dataset.sheetAction;
           if (action === 'close') closeSheet();
-          else if (action === 'cycle-form') { if (!requireActorEdit(actor.id)) return; const form = cycleActorForm(actor); if (form) { store.persist(); renderPanel(); renderSheet(); indicator(`${actor.name} · ${form.name}`); } }
-          else if (action === 'add-form') chooseImport(actor.id);
-          else if (action === 'avatar') { if (requireActorEdit(actor.id)) avatarInput.click(); }
-          else if (action === 'add-resource') {
+          else if (action === 'cycle-form') {
             if (!requireActorEdit(actor.id)) return;
-            const name = prompt('特殊能量槽名称：', '特殊能量'); if (!name) return;
-            const max = Number(prompt('最大值：', '10') || 0); const current = Number(prompt('当前值：', String(max)) || max);
-            addCustomResource(actor, { name, max, current }); persistAndRender();
-          } else if (action === 'place-token') placeActor(actor.id);
-          else if (action === 'reposition-token') relocateToken(actionNode.dataset.characterId);
-          else if (action === 'edit-token-elevation') {
+            const form = cycleActorForm(actor);
+            if (form) {
+              store.persist();
+              renderPanel();
+              renderSheet();
+              indicator(`${actor.name} · ${form.name}`);
+            }
+          } else if (action === 'add-form') chooseImport(actor.id);
+          else if (action === 'avatar') {
+            if (requireActorEdit(actor.id)) avatarInput.click();
+          } else if (action === 'add-resource') {
             if (!requireActorEdit(actor.id)) return;
-            const rect = actionNode.getBoundingClientRect();
-            api.elevation?.openTokenElevationEditor?.(actionNode.dataset.characterId, {
-              clientX: rect.left + rect.width / 2,
-              clientY: rect.bottom,
-            });
+            const name = prompt('特殊能量槽名称：', '特殊能量');
+            if (!name) return;
+            const max = Number(prompt('最大值：', '10') || 0);
+            const current = Number(prompt('当前值：', String(max)) || max);
+            addCustomResource(actor, { name, max, current });
+            persistAndRender();
           }
           return;
         }
         const step = event.target.closest('[data-resource-step]');
-        if (step) { if (!requireActorEdit(actor.id)) return; const id = step.dataset.resourceId; const current = resolveActor(actor).resources.find(r => r.id === id)?.current || 0; setResourceCurrent(actor, id, current + Number(step.dataset.resourceStep)); persistAndRender({ source: 'entities:resource', immediate: true }); return; }
+        if (step) {
+          if (!requireActorEdit(actor.id)) return;
+          const id = step.dataset.resourceId;
+          const current = resolveActor(actor).resources.find(resource => resource.id === id)?.current || 0;
+          setResourceCurrent(actor, id, current + Number(step.dataset.resourceStep));
+          persistAndRender({ source: 'entities:resource', immediate: true });
+          return;
+        }
         const del = event.target.closest('[data-resource-delete]');
-        if (del && requireActorEdit(actor.id) && confirm('删除这个特殊能量槽？')) { removeCustomResource(actor, del.dataset.resourceDelete); persistAndRender(); }
+        if (del && requireActorEdit(actor.id) && confirm('删除这个特殊能量槽？')) {
+          removeCustomResource(actor, del.dataset.resourceDelete);
+          persistAndRender();
+        }
       });
 
       documentNode.addEventListener('submit', event => { statusUi.handleSubmit(event); });
 
-      documentNode.addEventListener('change', event => {
+      documentNode.addEventListener('change', async event => {
         if (statusUi.handleChange(event)) return;
-        const sheet = event.target.closest('.entity-sheet'); if (!sheet) return;
-        const actor = store.actor(openActorId); if (!actor) return;
+        if (await tokenController.handleChange(event.target)) return;
+        const sheet = event.target.closest('.entity-sheet');
+        if (!sheet) return;
+        const actor = store.actor(openActorId);
+        if (!actor) return;
         if (!requireActorEdit(actor.id)) { renderSheet(); return; }
-        if (event.target.matches('[data-actor-name]')) { actor.name = String(event.target.value || '未命名角色').trim().slice(0,80) || '未命名角色'; persistAndRender(); }
-        else if (event.target.matches('[data-form-select]')) { const form = setActorForm(actor, event.target.value); if (form) { store.persist(); renderPanel(); renderSheet(); indicator(`${actor.name} · ${form.name}`); } }
-        else if (event.target.matches('[data-resource-current]')) { setResourceCurrent(actor, event.target.dataset.resourceCurrent, event.target.value); persistAndRender({ source: 'entities:resource', immediate: true }); }
-        else if (event.target.matches('[data-resource-max]')) { setResourceMaxOverride(actor, event.target.dataset.resourceMax, event.target.value); persistAndRender({ source: 'entities:resource', immediate: true }); }
-        else if (event.target.matches('[data-attribute-adjust]')) { setAttributeAdjustment(actor, event.target.dataset.attributeAdjust, event.target.value); persistAndRender(); }
-        else if (event.target.matches('[data-token-diameter]')) {
-          if (!capabilities().canManageStructure) { renderSheet(); return; }
-          const token = store.token(event.target.dataset.characterId);
-          if (!token) { renderSheet(); return; }
-          token.diameterMeters = Number(event.target.value);
-          store.persist();
-          // EntityStore persists without a full import/render by design. Size
-          // changes affect collision and map chrome, so request one explicit
-          // safe render after the mutation is committed.
-          api.commitState?.(api.getState(), { source: 'entities:token-size', render: true });
-          api.emit?.('token:size-change', { characterId: String(token.characterId), diameterMeters: tokenDiameterMeters(token) });
-          renderPanel(); renderSheet();
-          setStatus(`Token 直径已设为 ${tokenDiameterMeters(token)} m`);
+        if (event.target.matches('[data-actor-name]')) {
+          actor.name = String(event.target.value || '未命名角色').trim().slice(0, 80) || '未命名角色';
+          persistAndRender();
+        } else if (event.target.matches('[data-form-select]')) {
+          const form = setActorForm(actor, event.target.value);
+          if (form) {
+            store.persist();
+            renderPanel();
+            renderSheet();
+            indicator(`${actor.name} · ${form.name}`);
+          }
+        } else if (event.target.matches('[data-resource-current]')) {
+          setResourceCurrent(actor, event.target.dataset.resourceCurrent, event.target.value);
+          persistAndRender({ source: 'entities:resource', immediate: true });
+        } else if (event.target.matches('[data-resource-max]')) {
+          setResourceMaxOverride(actor, event.target.dataset.resourceMax, event.target.value);
+          persistAndRender({ source: 'entities:resource', immediate: true });
+        } else if (event.target.matches('[data-attribute-adjust]')) {
+          setAttributeAdjustment(actor, event.target.dataset.attributeAdjust, event.target.value);
+          persistAndRender();
         }
       });
 
       avatarInput.addEventListener('change', async () => {
-        const actor = store.actor(openActorId); const file = avatarInput.files?.[0]; if (!actor || !file) return;
-        try { currentForm(actor).avatarDataUrl = await imageToAvatarDataUrl(file); store.persist(); renderPanel(); renderSheet(); }
-        catch (error) { alert('头像处理失败：' + error.message); }
-        finally { avatarInput.value = ''; }
+        const actor = store.actor(openActorId);
+        const file = avatarInput.files?.[0];
+        if (!actor || !file) return;
+        try {
+          currentForm(actor).avatarDataUrl = await imageToAvatarDataUrl(file);
+          store.persist();
+          renderPanel();
+          renderSheet();
+        } catch (error) {
+          alert('头像处理失败：' + error.message);
+        } finally {
+          avatarInput.value = '';
+        }
       });
 
       documentNode.addEventListener('keydown', event => {
-        if (event.key === 'Escape' && pendingPlacementActorId && !editableTarget(event.target)) {
-          event.preventDefault();
-          clearPlacement();
-          return;
-        }
+        if (tokenController.handleKeydown(event)) return;
         if (event.defaultPrevented || editableTarget(event.target) || event.key.toLowerCase() !== 'v' || event.ctrlKey || event.metaKey || event.altKey) return;
         if (!selectedTokenId) return;
-        const actor = store.actorForToken(selectedTokenId); if (!actor || actor.forms.length < 2) return;
-        event.preventDefault(); event.stopImmediatePropagation();
-        const form = cycleActorForm(actor); store.persist(); renderPanel(); renderSheet(); indicator(`${actor.name} · ${form.name}`); setStatus(`形态切换：${actor.name} → ${form.name}`);
+        const token = api.tokens.get?.(selectedTokenId);
+        const actor = token ? store.actor(token.actorId) : null;
+        if (!actor || actor.forms.length < 2) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const form = cycleActorForm(actor);
+        store.persist();
+        renderPanel();
+        renderSheet();
+        indicator(`${actor.name} · ${form.name}`);
+        setStatus(`形态切换：${actor.name} → ${form.name}`);
       }, true);
 
       mapElement.addEventListener('dblclick', event => {
-        if (!event.target.closest?.('.rpg-character, .rpg-character-core')) return;
-        event.preventDefault(); event.stopImmediatePropagation();
-        queueMicrotask(() => { const actor = selectedTokenId ? store.actorForToken(selectedTokenId) : null; if (actor) openSheet(actor.id); });
+        if (!event.target.closest?.('.rpg-token-v2, .rpg-character, .rpg-character-core')) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        queueMicrotask(() => {
+          const token = selectedTokenId ? api.tokens.get?.(selectedTokenId) : null;
+          if (token?.actorId) openSheet(token.actorId);
+        });
       }, true);
-      // Capture before Leaflet and Movement so one Token-placement click is a
-      // single atomic Entity action, not a chain through unrelated tools.
-      mapElement.addEventListener('click', placePendingTokenAtMapClick, true);
+      mapElement.addEventListener('click', tokenController.handleMapClick, true);
 
-      api.on('character:select', event => { selectedTokenId = event.detail?.id || null; renderSheet(); });
-      api.on('character:create', event => {
-        const characterId = event.detail?.id; if (!characterId) return;
-        if (pendingPlacementActorId) {
-          store.bindToken(pendingPlacementActorId, characterId);
-          clearPlacement({ status: '', restoreTool: false });
-          store.persist(); selectedTokenId = characterId; api.selectCharacter?.(characterId);
-          queueMicrotask(() => {
-            documentNode.querySelectorAll('.character-modal').forEach(modal => modal.closest('.modal-backdrop')?.remove());
-            renderPanel();
-          });
-        } else if (!store.saving) {
-          store.load({ migrateLegacy: true, dropMarkers: false }); renderPanel();
-        }
+      api.on('token:select', event => {
+        selectedTokenId = event.detail?.tokenId || event.detail?.id || null;
+        renderSheet();
       });
-      api.on('character:delete', event => { if (!removingActor && event.detail?.id) { store.removeToken(event.detail.id); if (!store.saving) store.persist(); renderPanel(); } });
+      api.on('token:create', () => { renderPanel(); renderSheet(); });
+      api.on('token:delete', event => {
+        if (selectedTokenId && String(event.detail?.tokenId || event.detail?.id) === String(selectedTokenId)) selectedTokenId = null;
+        renderPanel();
+        renderSheet();
+      });
+      api.on('token:move', () => { renderPanel(); renderSheet(); });
+      api.on('token:property-change', () => { renderPanel(); renderSheet(); });
       api.on('elevation:token-change', () => { renderPanel(); renderSheet(); });
-      api.on('state:import', () => {
-        clearPlacement({ status: '', restoreTool: false });
+      api.on('state:commit', () => {
         if (store.saving) return;
-        store.load({ migrateLegacy: true, dropMarkers: false }); renderPanel(); renderSheet();
+        store.load({ migrateLegacy: false, dropMarkers: false });
+        renderPanel();
+        renderSheet();
+      });
+      api.on('state:import', () => {
+        tokenController.clearPlacement({ restoreTool: false });
+        if (store.saving) return;
+        store.load({ migrateLegacy: false, dropMarkers: false });
+        renderPanel();
+        renderSheet();
       });
       api.on('app:destroy', () => {
-        clearPlacement({ status: '', restoreTool: false });
+        tokenController.destroy();
         statusUi.closeDefinitionEditor();
-        mapElement.removeEventListener('click', placePendingTokenAtMapClick, true);
+        mapElement.removeEventListener('click', tokenController.handleMapClick, true);
+        panelObserver?.disconnect();
       });
-      api.on('character:move', renderPanel);
       api.on('status:change', () => { renderPanel(); renderSheet(); });
-      api.on('multiplayer:capabilities', () => { renderPanel(); renderSheet(); if (pendingPlacementActorId && !capabilities().canPlaceActor?.(pendingPlacementActorId)) clearPlacement({ status: '权限已变化，已取消放置 Token' }); });
+      api.on('multiplayer:capabilities', () => { renderPanel(); renderSheet(); });
 
       if (migration.droppedMarkers || migration.migratedCharacters || migration.migratedTokenLocations || migration.blockedTokenLocations) {
         setStatus(`Entity System 已启用：迁移 ${migration.migratedCharacters} 个旧角色${migration.migratedTokenLocations ? `，吸附 ${migration.migratedTokenLocations} 个 Token 到 1m 格子` : ''}${migration.blockedTokenLocations ? `，${migration.blockedTokenLocations} 个 Token 位于阻挡格，需 GM 重新放置` : ''}${migration.droppedMarkers ? `，移除 ${migration.droppedMarkers} 个旧标记` : ''}`);
