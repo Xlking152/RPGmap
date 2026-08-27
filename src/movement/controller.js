@@ -7,7 +7,7 @@ import {
   inspectDirectNavigationPath,
 } from '../engine/navigation.js';
 import { deriveSceneState } from '../engine/state.js';
-import { moverContextForCharacter, tokenDiameterMeters } from '../elevation/model.js';
+import { tokenDiameterMeters, tokenElevationFt } from '../elevation/model.js';
 import { calculateWaypointRoute } from './path.js';
 import { TokenDragPhase, TokenDragPlan } from './state.js';
 import { snapMovementPoint } from './snap.js';
@@ -15,26 +15,59 @@ import { snapMovementPoint } from './snap.js';
 const DRAG_THRESHOLD_PX = 5;
 const LIVE_ROUTE_DELAY_MS = 70;
 
-function mapCharacter(state, id) {
-  return state.characters?.find(item => item.id === id && item.location?.type === 'map') || null;
+function mapToken(api, id) {
+  const token = id == null ? null : api.tokens?.get?.(id);
+  return token?.placement === 'map' ? token : null;
 }
 
 function pointInside(point, mapPackage) {
   return point.x >= 0 && point.y >= 0 && point.x <= mapPackage.width && point.y <= mapPackage.height;
 }
 
-function nearestMapCharacter(state, point) {
+function nearestMapToken(api, point) {
   let best = null;
   let bestDistance = Infinity;
-  for (const character of state.characters || []) {
-    if (character.location?.type !== 'map' || character.visible === false) continue;
-    const distance = Math.hypot(character.location.x - point.x, character.location.y - point.y);
+  for (const token of api.tokens?.list?.() || []) {
+    if (token?.placement !== 'map' || token.hidden === true) continue;
+    const distance = Math.hypot(Number(token.x) - point.x, Number(token.y) - point.y);
     if (distance < bestDistance) {
-      best = character;
+      best = token;
       bestDistance = distance;
     }
   }
   return best;
+}
+
+function tokenPoint(token) {
+  return token?.placement === 'map' ? { x: Number(token.x), y: Number(token.y) } : null;
+}
+
+function tokenColor(api, token) {
+  try {
+    const actor = api.tokens?.resolveActor?.(token.id)?.actor;
+    const forms = Array.isArray(actor?.forms) ? actor.forms : [];
+    const form = forms.find(item => String(item?.id) === String(actor?.currentFormId)) || forms[0] || null;
+    const color = String(form?.tokenAppearance?.color || '');
+    return /^#[0-9a-f]{6}$/i.test(color) ? color : '#176d76';
+  } catch {
+    return '#176d76';
+  }
+}
+
+function movementContext(api, token) {
+  let snapshot = null;
+  try { snapshot = api.status?.resolve?.({ tokenId: token.id, actorId: token.actorId }) || null; }
+  catch { snapshot = null; }
+  return Object.freeze({
+    tokenId: String(token.id),
+    // Navigation accepts this compatibility field, but its value is now the
+    // canonical Scene Token id rather than a separate Character identity.
+    characterId: String(token.id),
+    elevationFt: tokenElevationFt(token),
+    diameterMeters: tokenDiameterMeters(token),
+    statusVersion: snapshot?.statusVersion || 'none',
+    collisionBypassGroups: Object.freeze([...(snapshot?.capabilities?.collisionBypassGroups || [])]),
+  });
 }
 
 function createConfirmControls(mapElement) {
@@ -72,6 +105,9 @@ export function createMovementController({ settings } = {}) {
       const staticBase = createNavigationBase(api.mapPackage);
       const drag = new TokenDragPlan();
       if (!settings) throw new Error('MovementController requires MovementSettings');
+      if (!api.movement?.canonicalSceneTokens || !api.tokens?.get || !api.tokens?.list) {
+        throw new Error('MovementController requires canonical Scene Token runtime');
+      }
       const controls = createConfirmControls(mapElement);
       let routeRequest = 0;
       let routeTimer = null;
@@ -82,7 +118,7 @@ export function createMovementController({ settings } = {}) {
       let previousTool = 'pan';
       let navigationGrid = null;
       let navigationRevision = null;
-      let selectedCharacterId = null;
+      let selectedTokenId = null;
 
       const status = message => {
         const node = shell.querySelector?.('[data-role="map-status"]');
@@ -94,19 +130,31 @@ export function createMovementController({ settings } = {}) {
         routeTimer = null;
         pendingPoint = null;
       };
-      const invalidateNavigation = () => { navigationGrid = null; navigationRevision = null; };
-      const navigation = (characterId = drag.characterId || selectedCharacterId) => {
+      const invalidateNavigation = () => {
+        navigationGrid = null;
+        navigationRevision = null;
+        api.movement?.invalidateNavigation?.();
+      };
+      const navigation = (tokenId = drag.tokenId || selectedTokenId) => {
+        const token = mapToken(api, tokenId);
         const appState = api.getState();
-        const moverContext = moverContextForCharacter(appState, characterId);
+        const scene = api.world?.getActiveScene?.() || null;
+        const moverContext = token
+          ? movementContext(api, token)
+          : Object.freeze({
+              tokenId: null, characterId: null, elevationFt: 0, diameterMeters: 1,
+              statusVersion: 'none', collisionBypassGroups: Object.freeze([]),
+            });
         const revision = JSON.stringify({
-          sceneEvents: appState.sceneEvents || [],
+          sceneId: scene?.id || null,
+          sceneEvents: scene?.sceneEvents || appState.sceneEvents || [],
           featureStates: appState.preferences?.featureStates || {},
           moverContext,
         });
         if (!navigationGrid || navigationRevision !== revision) {
           navigationGrid = createNavigationGrid(
             api.mapPackage,
-            deriveSceneState(appState.sceneEvents),
+            deriveSceneState(scene?.sceneEvents || appState.sceneEvents || []),
             staticBase,
             { appState, moverContext },
           );
@@ -122,66 +170,74 @@ export function createMovementController({ settings } = {}) {
       });
       const snapPointer = rawPoint => clampMovementPoint(snapMovementPoint(rawPoint, settings.step));
 
-      function canControlCharacter(character) {
+      function canControlToken(token) {
+        if (!token) return false;
         const multiplayer = api.multiplayer?.getStatus?.();
         if (!multiplayer?.connected) return true;
-        return api.multiplayer?.canControlCharacter?.(character?.id) !== false;
+        // Keep the current combat-turn preflight while Character remains a UI
+        // compatibility alias. The authoritative server still validates Actor
+        // ownership and the current combat turn on commit.
+        if (typeof api.multiplayer?.canControlCharacter === 'function') {
+          return api.multiplayer.canControlCharacter(token.id) !== false;
+        }
+        return api.multiplayer?.canControlActor?.(token.actorId) !== false;
       }
 
-      function movementCapability(character) {
-        if (!character) return { canMove: false, reasons: ['角色不存在'] };
+      function movementCapability(token) {
+        if (!token) return { canMove: false, reasons: ['Token 不存在'] };
         try {
-          return api.status?.resolveCapabilities?.({ characterId: character.id })
+          return api.status?.resolveCapabilities?.({ tokenId: token.id, actorId: token.actorId })
             || { canMove: true, reasons: [] };
         } catch {
-          // A status rendering failure must fail closed for movement rather than
-          // allowing a stale preview to bypass an immobilizing condition.
-          return { canMove: false, reasons: ['无法确认角色状态'] };
+          // A status resolution failure must fail closed so an immobilizing
+          // Synthetic Actor effect cannot be bypassed by a stale preview.
+          return { canMove: false, reasons: ['无法确认 Token 状态'] };
         }
       }
 
-      function canMoveCharacter(character) {
-        return canControlCharacter(character) && movementCapability(character).canMove !== false;
+      function canMoveToken(token) {
+        return canControlToken(token) && movementCapability(token).canMove !== false;
       }
 
       function permissionMessage() {
         const multiplayer = api.multiplayer?.getStatus?.();
         const active = api.getState()?.preferences?.combatSystem?.combat?.state === 'active';
         return active && multiplayer?.session?.role === 'player'
-          ? '当前无法移动该角色：你需要 OWNER 权限，并且战斗中必须轮到该角色行动'
-          : '当前无法移动该角色：你没有该 Actor 的 OWNER 权限';
+          ? '当前无法移动该 Token：你需要 OWNER 权限，并且战斗中必须轮到该 Actor 行动'
+          : '当前无法移动该 Token：你没有该 Actor 的 OWNER 权限';
       }
 
-      function movementDeniedMessage(character) {
-        if (!canControlCharacter(character)) return permissionMessage();
-        const capability = movementCapability(character);
+      function movementDeniedMessage(token) {
+        if (!canControlToken(token)) return permissionMessage();
+        const capability = movementCapability(token);
         const reason = Array.isArray(capability.reasons) ? capability.reasons.find(Boolean) : '';
-        return reason ? `当前无法移动该角色：${reason}` : '当前状态禁止该角色移动';
+        return reason ? `当前无法移动该 Token：${reason}` : '当前状态禁止该 Token 移动';
       }
 
-      function beginSessionForCharacter(character, { pointerId = null, client = null, phase = TokenDragPhase.PLANNING } = {}) {
-        if (!character || character.location?.type !== 'map') return false;
-        if (!canMoveCharacter(character)) { status(movementDeniedMessage(character)); return false; }
+      function beginSessionForToken(token, { pointerId = null, client = null, phase = TokenDragPhase.PLANNING } = {}) {
+        const start = tokenPoint(token);
+        if (!start) return false;
+        if (!canMoveToken(token)) { status(movementDeniedMessage(token)); return false; }
         settings.beginSession(api.map, api.mapPackage);
-        drag.begin({ characterId: character.id, start: character.location, pointerId, client, snapStep: settings.step });
+        drag.begin({ tokenId: token.id, start, pointerId, client, snapStep: settings.step });
         if (phase === TokenDragPhase.PLANNING) drag.continuePlanning();
         return true;
       }
 
-      function pathWeight(character = null) {
-        const diameter = character ? tokenDiameterMeters(api.getState(), character.id) : 1;
+      function pathWeight(token = null) {
+        const diameter = token ? tokenDiameterMeters(token) : 1;
         const origin = api.map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, api.mapPackage.height));
         const unit = api.map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 0 }, api.mapPackage.height));
         return Math.max(2, diameter * Math.hypot(unit.x - origin.x, unit.y - origin.y));
       }
 
-      function draw(route, character = null) {
+      function draw(route, token = null) {
         previewLayer.clearLayers();
         if (!drag.session) return;
         const routePoints = route?.points || [];
         if (routePoints.length > 1) {
           L.polyline(routePoints.map(point => worldToLatLng(point, api.mapPackage.height)), {
-            pane: 'measurePane', color: '#176d76', weight: pathWeight(character), dashArray: '10 7', interactive: false,
+            pane: 'measurePane', color: '#176d76', weight: pathWeight(token), dashArray: '10 7', interactive: false,
             className: 'character-route-preview',
           }).addTo(previewLayer);
         }
@@ -189,9 +245,9 @@ export function createMovementController({ settings } = {}) {
           const from = route.controls?.[route.failedSegmentIndex];
           const to = route.controls?.[route.failedSegmentIndex + 1];
           if (from && to) {
-          L.polyline([worldToLatLng(from, api.mapPackage.height), worldToLatLng(to, api.mapPackage.height)], {
-            pane: 'measurePane', color: '#b52f2a', weight: pathWeight(character), dashArray: '5 8', interactive: false,
-            className: 'character-route-preview character-route-blocked',
+            L.polyline([worldToLatLng(from, api.mapPackage.height), worldToLatLng(to, api.mapPackage.height)], {
+              pane: 'measurePane', color: '#b52f2a', weight: pathWeight(token), dashArray: '5 8', interactive: false,
+              className: 'character-route-preview character-route-blocked',
             }).addTo(previewLayer);
           }
         }
@@ -213,7 +269,7 @@ export function createMovementController({ settings } = {}) {
         });
         const endpoint = route?.destination || drag.current;
         if (endpoint) {
-          const color = route?.valid === false ? '#b52f2a' : (character?.color || '#176d76');
+          const color = route?.valid === false ? '#b52f2a' : (token ? tokenColor(api, token) : '#176d76');
           L.circleMarker(worldToLatLng(endpoint, api.mapPackage.height), {
             pane: 'measurePane', radius: 9, color, weight: 2, fillColor: color, fillOpacity: 0.22, interactive: false,
           }).addTo(previewLayer);
@@ -234,6 +290,7 @@ export function createMovementController({ settings } = {}) {
         clearRouteTimer();
         moving = false;
         drag.reset();
+        api.movement?.cancelPending?.();
         previewLayer.clearLayers();
         showControls(false);
         mapElement.classList.remove('fvtt-token-dragging');
@@ -262,7 +319,7 @@ export function createMovementController({ settings } = {}) {
         }
         if (currentRequest !== routeRequest || !drag.session) return null;
         drag.setRoute(route);
-        draw(route, mapCharacter(api.getState(), drag.characterId));
+        draw(route, mapToken(api, drag.tokenId));
         if (route.valid) {
           if (ready) drag.ready(route);
           const action = drag.phase === TokenDragPhase.READY
@@ -306,7 +363,7 @@ export function createMovementController({ settings } = {}) {
           destination: candidate,
         };
         drag.setRoute(route);
-        draw(route, mapCharacter(api.getState(), drag.characterId));
+        draw(route, mapToken(api, drag.tokenId));
         showControls(false);
         status('拐点直线路径受阻 · 请换一个位置，或右键 / Alt+F 撤销上一个拐点');
       }
@@ -344,16 +401,16 @@ export function createMovementController({ settings } = {}) {
         return true;
       }
 
-      function waitForCharacterMove(characterId) {
+      function waitForTokenMove(tokenId) {
         return new Promise(resolve => {
-          const off = api.on('character:move', event => {
-            if (event.detail?.id && event.detail.id !== characterId) return;
+          const off = api.on('token:move', event => {
+            if (event.detail?.tokenId && String(event.detail.tokenId) !== String(tokenId)) return;
             off();
             offCancelled();
             resolve(true);
           });
-          const offCancelled = api.on('character:move-cancelled', event => {
-            if (event.detail?.id && event.detail.id !== characterId) return;
+          const offCancelled = api.on('token:move-cancelled', event => {
+            if (event.detail?.tokenId && String(event.detail.tokenId) !== String(tokenId)) return;
             off();
             offCancelled();
             resolve(false);
@@ -363,9 +420,9 @@ export function createMovementController({ settings } = {}) {
 
       async function commit() {
         if (moving || drag.phase !== TokenDragPhase.READY || !drag.route?.valid) return false;
-        const characterId = drag.characterId;
-        const character = mapCharacter(api.getState(), characterId);
-        if (!canMoveCharacter(character)) { reset(movementDeniedMessage(character)); return false; }
+        const tokenId = drag.tokenId;
+        const token = mapToken(api, tokenId);
+        if (!canMoveToken(token)) { reset(movementDeniedMessage(token)); return false; }
         const targets = drag.movementTargets();
         if (!targets.length || !drag.startMoving()) return false;
         moving = true;
@@ -373,14 +430,14 @@ export function createMovementController({ settings } = {}) {
         status('正在沿规划路径移动…');
         previewLayer.clearLayers();
         for (const target of targets) {
-          const route = await api.planCharacterMove(characterId, target);
+          const route = await api.movement.planTokenMove(tokenId, target);
           if (!route) { reset('移动中止：执行时有一段路径已不可通行'); return false; }
-          const moved = waitForCharacterMove(characterId);
-          if (!api.commitCharacterMove()) { reset('移动中止：当前路线无法提交'); return false; }
+          const moved = waitForTokenMove(tokenId);
+          if (!api.movement.commitTokenMove()) { reset('移动中止：当前路线无法提交'); return false; }
           if (!await moved) { reset('移动未获服务器确认，已恢复服务器状态'); return false; }
         }
         const waypointCount = drag.session?.waypoints.length || 0;
-        reset('角色移动完成 · ' + waypointCount + ' 个拐点');
+        reset('Token 移动完成 · ' + waypointCount + ' 个拐点');
         return true;
       }
 
@@ -388,21 +445,24 @@ export function createMovementController({ settings } = {}) {
 
       function beginTokenDrag(event) {
         if (event.button !== 0 || moving) return;
-        const token = event.target.closest?.('.rpg-character, .rpg-character-core');
-        if (!token) return;
+        const tokenNode = event.target.closest?.('.rpg-character, .rpg-character-core');
+        if (!tokenNode) return;
         const point = worldPointFromPointer(event);
-        const character = nearestMapCharacter(api.getState(), point);
-        if (!character) return;
-        if (!canMoveCharacter(character)) {
-          status(movementDeniedMessage(character));
+        const token = nearestMapToken(api, point);
+        if (!token) return;
+        if (!canMoveToken(token)) {
+          status(movementDeniedMessage(token));
           return;
         }
         event.preventDefault();
         event.stopImmediatePropagation();
         previousTool = shell.querySelector?.('[data-tool].active')?.dataset.tool || 'pan';
-        api.selectCharacter(character.id);
+        // Selection/renderer still expose Character-named compatibility events;
+        // the selected id is the canonical Token id projected into that shell.
+        api.selectCharacter?.(token.id);
         api.setTool('character-move');
-        if (!beginSessionForCharacter(character, {
+        selectedTokenId = token.id;
+        if (!beginSessionForToken(token, {
           pointerId: event.pointerId,
           client: { x: event.clientX, y: event.clientY },
           phase: TokenDragPhase.DRAGGING,
@@ -412,7 +472,7 @@ export function createMovementController({ settings } = {}) {
         mapElement.setPointerCapture?.(event.pointerId);
         mapElement.classList.add('fvtt-token-dragging');
         mapElement.style.cursor = 'grabbing';
-        status('拖动角色规划路线 · Ctrl/Cmd+松开进入拐点规划 · F 添加拐点 · Esc 取消');
+        status('拖动 Token 规划路线 · Ctrl/Cmd+松开进入拐点规划 · F 添加拐点 · Esc 取消');
       }
 
       function moveTokenDrag(event) {
@@ -440,7 +500,7 @@ export function createMovementController({ settings } = {}) {
         restoreMapDragging = false;
         suppressClickUntil = performance.now() + 250;
         const dragged = drag.draggedPixels({ x: event.clientX, y: event.clientY });
-        if (dragged < DRAG_THRESHOLD_PX) { reset('已选择角色 · 拖动 Token 可直接规划移动'); return; }
+        if (dragged < DRAG_THRESHOLD_PX) { reset('已选择 Token · 拖动可直接规划移动'); return; }
         const waypointPlanning = event.ctrlKey || event.metaKey;
         const point = worldPointFromPointer(event);
         const route = await calculate(point);
@@ -454,13 +514,13 @@ export function createMovementController({ settings } = {}) {
         if (waypointPlanning) {
           drag.continuePlanning({ nextClickCreatesWaypoint: true });
           drag.setRoute(route);
-          draw(route, mapCharacter(api.getState(), drag.characterId));
+          draw(route, mapToken(api, drag.tokenId));
           showControls(false);
           status('已进入拐点规划 · 松开位置只是预览，不计为拐点；下一次左键点击设置第 1 个拐点');
           return;
         }
         drag.ready(route);
-        draw(route, mapCharacter(api.getState(), drag.characterId));
+        draw(route, mapToken(api, drag.tokenId));
         showControls(true);
         status('路线已就绪 · ' + formatDistance(route.distance) + ' · 确认移动 / Enter，Esc 取消');
       }
@@ -472,11 +532,11 @@ export function createMovementController({ settings } = {}) {
         }
         if (!drag.active) {
           const activeTool = shell.querySelector?.('[data-tool].active')?.dataset.tool;
-          if (activeTool !== 'character-move' || !selectedCharacterId) return;
-          const character = mapCharacter(api.getState(), selectedCharacterId);
-          if (!character) return;
+          if (activeTool !== 'character-move' || !selectedTokenId) return;
+          const token = mapToken(api, selectedTokenId);
+          if (!token) return;
           previousTool = 'character-move';
-          if (!beginSessionForCharacter(character)) return;
+          if (!beginSessionForToken(token)) return;
         }
         if (![TokenDragPhase.PLANNING, TokenDragPhase.READY].includes(drag.phase)) return;
         if (event.target.closest?.('.fvtt-move-confirm')) return;
@@ -496,7 +556,7 @@ export function createMovementController({ settings } = {}) {
           const route = await calculate(point);
           if (!route?.valid) return;
           drag.ready(route);
-          draw(route, mapCharacter(api.getState(), drag.characterId));
+          draw(route, mapToken(api, drag.tokenId));
           showControls(true);
           status('最终终点已设置 · ' + formatDistance(route.distance) + ' · 确认移动 / Enter');
         }
@@ -531,7 +591,7 @@ export function createMovementController({ settings } = {}) {
       async function keydown(event) {
         if (!drag.active || moving) return;
         if (event.key === 'Escape') {
-          event.preventDefault(); event.stopImmediatePropagation(); reset('已取消角色移动规划'); return;
+          event.preventDefault(); event.stopImmediatePropagation(); reset('已取消 Token 移动规划'); return;
         }
         if (event.key === 'Enter' && drag.phase === TokenDragPhase.READY) {
           event.preventDefault(); event.stopImmediatePropagation(); await commit(); return;
@@ -543,21 +603,34 @@ export function createMovementController({ settings } = {}) {
       }
 
       controls.confirm.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); commit(); });
-      controls.cancel.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); reset('已取消角色移动规划'); });
+      controls.cancel.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); reset('已取消 Token 移动规划'); });
       mapElement.addEventListener('pointerdown', beginTokenDrag, true);
       mapElement.addEventListener('pointermove', moveTokenDrag, true);
       mapElement.addEventListener('pointerup', endTokenDrag, true);
-      mapElement.addEventListener('pointercancel', () => reset('已取消角色移动规划'), true);
+      mapElement.addEventListener('pointercancel', () => reset('已取消 Token 移动规划'), true);
       mapElement.addEventListener('click', planningClick, true);
       mapElement.addEventListener('contextmenu', planningContextMenu, true);
       mapElement.addEventListener('wheel', wheel, { capture: true, passive: false });
       document.addEventListener('keydown', keydown, true);
-      api.on('character:select', event => {
-        selectedCharacterId = event.detail?.id || null;
+
+      const selectToken = id => {
+        const token = id == null ? null : api.tokens.get(id);
+        selectedTokenId = token?.id || null;
         if (!drag.active && !moving) settings.beginSession(api.map, api.mapPackage);
+      };
+      api.on('token:select', event => selectToken(event.detail?.tokenId ?? event.detail?.id));
+      api.on('character:select', event => selectToken(event.detail?.id));
+      api.on('token:create', event => selectToken(event.detail?.tokenId ?? event.detail?.id));
+      api.on('character:create', event => {
+        if (event.detail?.id && api.tokens.get(event.detail.id)) selectedTokenId = event.detail.id;
       });
-      api.on('character:create', event => { if (event.detail?.id) selectedCharacterId = event.detail.id; });
-      api.on('character:delete', event => { if (event.detail?.id === selectedCharacterId) selectedCharacterId = null; });
+      api.on('token:delete', event => {
+        const id = event.detail?.tokenId ?? event.detail?.id;
+        if (String(id) === String(selectedTokenId)) selectedTokenId = null;
+      });
+      api.on('character:delete', event => {
+        if (String(event.detail?.id) === String(selectedTokenId)) selectedTokenId = null;
+      });
       api.on('scene:damage', () => { invalidateNavigation(); reset(); });
       api.on('scene:restore', () => { invalidateNavigation(); reset(); });
       api.on('scene:undo', () => { invalidateNavigation(); reset(); });
@@ -572,7 +645,7 @@ export function createMovementController({ settings } = {}) {
       });
       api.on('status:change', () => {
         invalidateNavigation();
-        if (drag.active || moving) reset('角色状态已变化，请重新规划移动');
+        if (drag.active || moving) reset('Token 状态已变化，请重新规划移动');
       });
       api.on('multiplayer:capabilities', () => {
         // A GM may revoke OWNER or advance Combat while a Player is still
@@ -580,7 +653,7 @@ export function createMovementController({ settings } = {}) {
         // decision available for confirmation.
         if (drag.active || moving) reset('联机权限已变化，请重新规划移动');
       });
-      status('浏览模式：拖动地图；直接拖动角色 Token 可规划移动，规划中滚轮切换吸附档位');
+      status('浏览模式：拖动地图；直接拖动 Token 可规划移动，规划中滚轮切换吸附档位');
     },
   };
 }
