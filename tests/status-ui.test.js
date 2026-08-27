@@ -118,7 +118,7 @@ test('custom definition change editor accepts only the white-listed line format'
 
 test('status UI is wired into Actor cards, Token inspector and app startup', () => {
   const entityUi = readFileSync(new URL('../src/entities/ui.js', import.meta.url), 'utf8');
-  const appShell = readFileSync(new URL('../src/ui/app-shell.js', import.meta.url), 'utf8');
+  const appShell = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
   const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
   const statusUi = readFileSync(new URL('../src/status/ui.js', import.meta.url), 'utf8');
   assert.match(entityUi, /\['status','状态'\]/);
