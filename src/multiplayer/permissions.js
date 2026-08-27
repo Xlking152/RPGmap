@@ -14,6 +14,17 @@ function entityState(state) {
     : { actors: [], tokens: [] };
 }
 
+function worldV2(state) {
+  const world = state?.preferences?.worldV2;
+  return world && typeof world === 'object' && !Array.isArray(world) ? world : null;
+}
+
+function activeScene(state) {
+  const world = worldV2(state);
+  if (!world || !Array.isArray(world.scenes)) return null;
+  return world.scenes.find(scene => String(scene?.id ?? '') === String(world.activeSceneId ?? '')) || null;
+}
+
 function combatState(state) {
   const combat = state?.preferences?.combatSystem?.combat;
   return combat && typeof combat === 'object' ? combat : null;
@@ -28,9 +39,11 @@ function tokenActors(state) {
   const map = new Map();
   for (const token of entityState(state).tokens || []) {
     const actorId = token?.actorId == null ? null : String(token.actorId);
-    if (!actorId) continue;
-    if (token.id != null) map.set(String(token.id), actorId);
-    if (token.characterId != null) map.set(String(token.characterId), actorId);
+    if (actorId && token.id != null) map.set(String(token.id), actorId);
+  }
+  for (const token of activeScene(state)?.tokens || []) {
+    const actorId = token?.actorId == null ? null : String(token.actorId);
+    if (actorId && token.id != null) map.set(String(token.id), actorId);
   }
   return map;
 }
@@ -50,7 +63,11 @@ function statusProjection(state) {
   return {
     definitions: entities.statusDefinitions ?? [],
     actors: (entities.actors || []).map(actor => ({ id: actor?.id, effects: actor?.effects ?? [] })),
-    tokens: (entities.tokens || []).map(token => ({ id: token?.id, effects: token?.effects ?? [] })),
+    tokens: (entities.tokens || []).map(token => ({
+      id: token?.id,
+      effects: token?.effects ?? [],
+      actorDeltaEffects: token?.actorDelta?.effects ?? null,
+    })),
   };
 }
 
@@ -83,24 +100,13 @@ function worldV2GlobalProjection(raw) {
 
 function globalProjection(state) {
   const copy = structuredClone(state);
-  delete copy.characters;
   if (copy.preferences && typeof copy.preferences === 'object') {
     delete copy.preferences.entitySystem;
     delete copy.preferences.chatSystem;
     delete copy.preferences.combatSystem;
-    if (copy.preferences.worldV2 !== undefined) {
-      copy.preferences.worldV2 = worldV2GlobalProjection(copy.preferences.worldV2);
-    }
+    if (copy.preferences.worldV2 !== undefined) copy.preferences.worldV2 = worldV2GlobalProjection(copy.preferences.worldV2);
   }
   return copy;
-}
-
-function appendOnly(before, next) {
-  const oldMessages = chatMessages(before);
-  const newMessages = chatMessages(next);
-  if (newMessages.length < oldMessages.length) return false;
-  for (let i = 0; i < oldMessages.length; i += 1) if (!same(oldMessages[i], newMessages[i])) return false;
-  return true;
 }
 
 function currentActorId(state) {
@@ -108,66 +114,96 @@ function currentActorId(state) {
   if (!combat || combat.state !== 'active' || !Array.isArray(combat.combatants) || !combat.combatants.length) return null;
   const index = Math.max(0, Math.min(combat.combatants.length - 1, Number(combat.turnIndex) || 0));
   const current = combat.combatants[index];
-  // The Token binding is authoritative. Old combat records may omit actorId,
-  // and a GM can later rebind a Token, so a cached combatant actorId must not
-  // turn a valid OWNER turn into an unowned, immovable turn.
   return tokenActors(state).get(String(current?.tokenId || ''))
     || (current?.actorId != null && String(current.actorId).trim() ? String(current.actorId) : null);
 }
 
-export function actorIdForCharacter(state, characterId) {
-  return tokenActors(state).get(String(characterId || '')) || null;
+function tokenPlacement(token) {
+  if (!token) return null;
+  return token.placement === 'feature'
+    ? { placement: 'feature', featureId: token.featureId == null ? null : String(token.featureId) }
+    : { placement: 'map', x: Number(token.x), y: Number(token.y) };
+}
+
+function changedSceneTokenIds(before, next) {
+  const beforeScene = activeScene(before);
+  const nextScene = activeScene(next);
+  if (!beforeScene || !nextScene || String(beforeScene.id) !== String(nextScene.id)) return [];
+  const nextTokens = mapById(nextScene.tokens || []);
+  return (beforeScene.tokens || []).flatMap(token => {
+    const id = String(token?.id ?? '');
+    const other = nextTokens.get(id);
+    return id && other && !same(tokenPlacement(token), tokenPlacement(other)) ? [id] : [];
+  });
+}
+
+function hasLegacyIdentity(state) {
+  if (Object.hasOwn(state || {}, 'characters')) return true;
+  return (entityState(state).tokens || []).some(token => Object.hasOwn(token || {}, 'characterId'));
+}
+
+export function actorIdForToken(state, tokenId) {
+  return tokenActors(state).get(String(tokenId || '')) || null;
 }
 
 export function validateLocalPlayerChange({ before, next, permissions = {} } = {}) {
   if (!before || !next) return { ok: true };
   if (permissions.actorOwnerIds?.includes?.('*')) return { ok: true };
+  if (hasLegacyIdentity(before) || hasLegacyIdentity(next)) {
+    return { ok: false, code: 'legacy_character_forbidden', message: 'Runtime V2 不接受 Character identity' };
+  }
+  if (!worldV2(before) || !worldV2(next)) {
+    return { ok: false, code: 'world_v2_required', message: 'Player preflight requires World V2' };
+  }
 
   const owners = new Set((permissions.actorOwnerIds || []).map(String));
   const beforeActors = mapById(entityState(before).actors || []);
   const nextActors = mapById(entityState(next).actors || []);
   const beforeTokens = mapById(entityState(before).tokens || []);
   const nextTokens = mapById(entityState(next).tokens || []);
-  const beforeCharacters = mapById(before.characters || []);
-  const nextCharacters = mapById(next.characters || []);
+  const beforeSceneTokens = mapById(activeScene(before)?.tokens || []);
+  const nextSceneTokens = mapById(activeScene(next)?.tokens || []);
 
-  if (!sameIds(beforeActors, nextActors) || !sameIds(beforeTokens, nextTokens) || !sameIds(beforeCharacters, nextCharacters)) {
+  if (!sameIds(beforeActors, nextActors) || !sameIds(beforeTokens, nextTokens) || !sameIds(beforeSceneTokens, nextSceneTokens)) {
     return { ok: false, code: 'actor_structure_gm_only', message: '创建、删除或重新绑定 Actor / Token 只能由 GM 完成' };
   }
   for (const [id, token] of beforeTokens) {
     const other = nextTokens.get(id);
-    if (String(token.actorId ?? '') !== String(other?.actorId ?? '') || String(token.characterId ?? '') !== String(other?.characterId ?? '')) {
+    if (String(token.actorId ?? '') !== String(other?.actorId ?? '') || (token.actorLink !== false) !== (other?.actorLink !== false)) {
       return { ok: false, code: 'actor_structure_gm_only', message: '重新绑定 Actor / Token 只能由 GM 完成' };
     }
     if (!same(tokenSizeFields(token), tokenSizeFields(other))) {
       return { ok: false, code: 'token_size_gm_only', message: 'Token 直径只能由 GM 修改' };
     }
   }
+  for (const [id, token] of beforeSceneTokens) {
+    const other = nextSceneTokens.get(id);
+    if (String(token.actorId ?? '') !== String(other?.actorId ?? '') || (token.actorLink !== false) !== (other?.actorLink !== false)) {
+      return { ok: false, code: 'actor_structure_gm_only', message: 'Scene Token 重新绑定只能由 GM 完成' };
+    }
+  }
   if (!same(combatState(before), combatState(next))) return { ok: false, code: 'combat_gm_only', message: '先攻、参战者和回合推进只能由 GM 修改' };
   if (!same(statusProjection(before), statusProjection(next))) {
     return { ok: false, code: 'status_server_only', message: '状态定义与 Actor / Token 状态只能通过 GM 状态操作提交' };
   }
-  if (!same(globalProjection(before), globalProjection(next))) return { ok: false, code: 'world_scope_forbidden', message: 'Player 只能修改自己拥有的角色与聊天内容' };
+  if (!same(globalProjection(before), globalProjection(next))) return { ok: false, code: 'world_scope_forbidden', message: 'Player 只能修改自己拥有的 Actor、Token 与聊天内容' };
   if (!same(chatMessages(before), chatMessages(next))) return { ok: false, code: 'chat_server_only', message: '聊天记录只能通过服务器提交' };
 
   const changed = new Set();
   for (const [id, actor] of beforeActors) if (!same(actor, nextActors.get(id))) changed.add(id);
   for (const [id, token] of beforeTokens) if (!same(token, nextTokens.get(id))) changed.add(String(token.actorId));
-  const beforeTokenActors = tokenActors(before);
-  const nextTokenActors = tokenActors(next);
-  for (const [id, character] of beforeCharacters) {
-    if (!same(character, nextCharacters.get(id))) {
-      const actorId = nextTokenActors.get(id) || beforeTokenActors.get(id);
-      if (!actorId) return { ok: false, code: 'unbound_character_forbidden', message: '未绑定 Actor 的角色状态只能由 GM 修改' };
-      changed.add(actorId);
-    }
+  const actorByToken = tokenActors(before);
+  for (const tokenId of changedSceneTokenIds(before, next)) {
+    const actorId = actorByToken.get(String(tokenId));
+    if (!actorId) return { ok: false, code: 'unbound_token_forbidden', message: '未绑定 Actor 的 Token 只能由 GM 修改' };
+    changed.add(actorId);
   }
 
-  for (const actorId of changed) if (!owners.has(String(actorId))) return { ok: false, code: 'actor_not_owned', message: '你没有这个角色的 OWNER 权限', actorId };
+  for (const actorId of changed) if (!owners.has(String(actorId))) return { ok: false, code: 'actor_not_owned', message: '你没有这个 Actor 的 OWNER 权限', actorId };
   if (changed.size && combatState(before)?.state === 'active') {
     const activeActorId = currentActorId(before);
     if (!activeActorId || [...changed].some(id => String(id) !== activeActorId)) {
-      return { ok: false, code: 'combat_turn_locked', message: '当前处于战斗中，只能操控先攻顺序中正在行动的角色', activeActorId };
+      return { ok: false, code: 'combat_turn_locked', message: '当前处于战斗中，只能操控先攻顺序中正在行动的 Actor', activeActorId };
     }
   }
   return { ok: true, changedActorIds: [...changed] };
