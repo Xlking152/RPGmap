@@ -38,7 +38,7 @@ jobs:
           test -f "$ROOT/status-operations.mjs"
           test -f "$ROOT/app/index.html"
           test -d "$ROOT/map/backups"
-          sha256sum -c "artifact/RPGmap-v${VERSION}.zip.sha256"
+          (cd artifact && sha256sum -c "RPGmap-v${VERSION}.zip.sha256")
           test "$(find "$ROOT" -maxdepth 1 -name '*.bat' | wc -l)" -eq 1
           test ! -e "$ROOT/cloudflared.exe"
           test ! -e "$ROOT/start-rpgmap.sh"
