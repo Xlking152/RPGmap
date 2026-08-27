@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { assertWorldState, isSameChat } from './world-schema.mjs';
-import { resolveStatusCapabilitiesForCharacter, statusStateChanged } from './status-operations.mjs';
+import { statusStateChanged } from './status-operations.mjs';
+import { resolveStatusCapabilitiesForToken } from './status-capabilities-v2.mjs';
 
 export const OWNERSHIP = Object.freeze({ NONE: 'none', OBSERVER: 'observer', OWNER: 'owner' });
 const OWNERSHIP_VALUES = new Set(Object.values(OWNERSHIP));
@@ -268,7 +269,6 @@ export function validatePlayerWorldPush({ before, next, user } = {}) {
   if (!activeWorld(before) || !activeWorld(next)) return { ok: false, code: 'world_v2_required', message: 'Player authority requires World V2' };
   try { assertWorldState(before); assertWorldState(next); }
   catch (error) { return { ok: false, code: error?.code || 'invalid_state', message: error?.message || 'World state 无效' }; }
-
   if (!actorSetsMatch(before, next) || !tokenSetsMatch(before, next) || !sceneTokenStructureMatches(before, next)) {
     return { ok: false, code: 'actor_structure_gm_only', message: '创建、删除或重新绑定 Actor / Token 只能由 GM 完成' };
   }
@@ -276,13 +276,11 @@ export function validatePlayerWorldPush({ before, next, user } = {}) {
   if (!same(combatState(before), combatState(next))) return { ok: false, code: 'combat_gm_only', message: '参战者、先攻顺序、轮次与当前回合只能由 GM 修改' };
   if (!same(globalProjection(before), globalProjection(next))) return { ok: false, code: 'world_scope_forbidden', message: 'Player 只能修改自己拥有的 Actor、Token 与聊天内容' };
   if (!isSameChat(before, next)) return { ok: false, code: 'chat_server_only', message: '聊天记录只能通过服务器提交' };
-
   const beforeTokens = mapById(entityState(before).tokens || []);
   const nextTokens = mapById(entityState(next).tokens || []);
   for (const [id, token] of beforeTokens) {
     if (!same(tokenSizeFields(token), tokenSizeFields(nextTokens.get(id)))) return { ok: false, code: 'token_size_gm_only', message: 'Token 直径只能由 GM 修改' };
   }
-
   const changed = changedActorIds(before, next);
   for (const actorId of changed) {
     if (ownershipLevel(user, actorId) !== OWNERSHIP.OWNER) return { ok: false, code: 'actor_not_owned', message: `你没有 Actor ${actorId} 的 OWNER 权限`, actorId };
@@ -291,14 +289,13 @@ export function validatePlayerWorldPush({ before, next, user } = {}) {
   if (combatState(before)?.state === 'active' && changed.size && (!activeActorId || [...changed].some(actorId => actorId !== activeActorId))) {
     return { ok: false, code: 'combat_turn_locked', message: '当前处于战斗中，只能操控先攻顺序中正在行动的 Actor', activeActorId };
   }
-
   const sceneTokens = tokenMapFromScene(before);
   for (const tokenId of movedWorldTokenIds(before, next)) {
     const token = sceneTokens.get(String(tokenId));
     const actorId = cleanActorId(token?.actorId);
     if (!actorId || ownershipLevel(user, actorId) !== OWNERSHIP.OWNER) return { ok: false, code: 'actor_not_owned', message: '你没有该 Token 所属 Actor 的 OWNER 权限', tokenId, actorId };
     if (activeActorId && String(activeActorId) !== actorId) return { ok: false, code: 'combat_turn_locked', message: '战斗中只能移动当前回合 Actor 的 Token', tokenId, actorId };
-    const capabilities = resolveStatusCapabilitiesForCharacter(before, tokenId);
+    const capabilities = resolveStatusCapabilitiesForToken(before, tokenId);
     if (capabilities.canMove === false) {
       const reason = capabilities.reasons?.length ? `（${capabilities.reasons.join('、')}）` : '';
       return { ok: false, code: 'status_movement_forbidden', message: `该 Token 当前状态禁止移动${reason}`, tokenId };
