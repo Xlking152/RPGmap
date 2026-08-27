@@ -1,5 +1,3 @@
-const LEGACY_FEATURE_LOCATION_TYPES = new Set(['feature', 'building']);
-
 function stringValue(value, fallback = '') {
   const text = String(value ?? '').trim();
   return text || fallback;
@@ -41,22 +39,21 @@ export function featureDetailRows(mapPackage, feature) {
   return Object.freeze(rows);
 }
 
-export function characterFeatureId(character) {
-  const location = character?.location;
-  if (!LEGACY_FEATURE_LOCATION_TYPES.has(location?.type)) return null;
-  return location.featureId == null ? null : String(location.featureId);
+export function tokenFeatureId(token) {
+  if (!token || token.placement === 'map') return null;
+  return token.featureId == null ? null : String(token.featureId);
 }
 
-export function charactersInsideFeature(state, featureId) {
+export function tokensInsideFeature(tokens, featureId) {
   const id = String(featureId ?? '');
   if (!id) return Object.freeze([]);
-  return Object.freeze((state?.characters || []).filter((character) => characterFeatureId(character) === id));
+  return Object.freeze((Array.isArray(tokens) ? tokens : []).filter(token => tokenFeatureId(token) === id));
 }
 
-export function featureLocationLabel(character, mapPackage) {
-  const featureId = characterFeatureId(character);
+export function featureLocationLabel(token, mapPackage) {
+  const featureId = tokenFeatureId(token);
   if (!featureId) return null;
-  const feature = (mapPackage?.features || []).find((item) => String(item.id) === featureId);
+  const feature = (mapPackage?.features || []).find(item => String(item.id) === featureId);
   return `位于：${feature?.name || featureId}`;
 }
 
