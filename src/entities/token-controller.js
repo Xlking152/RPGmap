@@ -50,7 +50,6 @@ export function createEntityTokenController({
   api,
   documentNode,
   mapElement,
-  shell,
   store,
   capabilities,
   setStatus,
@@ -147,7 +146,7 @@ export function createEntityTokenController({
   async function handleMapClick(event) {
     if (destroyed || placementBusy || (!pendingActorId && !pendingRelocationTokenId)) return false;
     if (!mapElement.contains(event.target)) return false;
-    if (event.target.closest?.('.leaflet-control, .rpg-token-v2, .rpg-character, .rpg-character-core, .leaflet-marker-icon')) return false;
+    if (event.target.closest?.('.leaflet-control, .rpg-token-v2, .leaflet-marker-icon')) return false;
     const latlng = api.map.mouseEventToLatLng?.(event);
     if (!latlng) return false;
 
@@ -242,7 +241,7 @@ export function createEntityTokenController({
         source: 'entity-editor',
       });
       if (property === 'diameterMeters') {
-        api.emit?.('token:size-change', { tokenId: token.id, characterId: token.id, diameterMeters: token.diameterMeters });
+        api.emit?.('token:size-change', { tokenId: token.id, diameterMeters: token.diameterMeters });
       }
       if (property === 'hidden') api.emit?.('token:visibility-change', { tokenId: token.id, hidden: token.hidden });
       if (property === 'rotation') api.emit?.('token:rotation-change', { tokenId: token.id, rotation: token.rotation });
@@ -267,7 +266,7 @@ export function createEntityTokenController({
     try {
       const updated = await setTokenElevationFt(api, target, value);
       api.emit?.('elevation:token-change', {
-        tokenId: updated.id, characterId: updated.id, elevationFt: updated.elevationFt,
+        tokenId: updated.id, elevationFt: updated.elevationFt,
       });
       api.emit?.('token:property-change', {
         id: updated.id, tokenId: updated.id, actorId: updated.actorId,
