@@ -1,3 +1,5 @@
+import { canonicalAttackAreas, legacyRuntimeAttackAreas } from './attack-anchors.js';
+
 export const WORLD_SCHEMA_VERSION = 2;
 export const WORLD_STATE_KEY = 'worldV2';
 
@@ -113,7 +115,7 @@ function normalizeScene(raw, { mapPackage = null, actorIds = new Set() } = {}) {
     mapPackage: { id: mapId, version: mapVersion },
     tokens,
     markers: clone(array(source.markers)),
-    attackAreas: clone(array(source.attackAreas)),
+    attackAreas: canonicalAttackAreas(source.attackAreas),
     sceneEvents: clone(array(source.sceneEvents)),
     settings: { gridVisible: source.settings?.gridVisible !== false },
   };
@@ -186,7 +188,7 @@ export function createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worl
       mapPackage: mapRef,
       tokens,
       markers: clone(array(state?.markers)),
-      attackAreas: clone(array(state?.attackAreas)),
+      attackAreas: canonicalAttackAreas(state?.attackAreas),
       sceneEvents: clone(array(state?.sceneEvents)),
       settings: { gridVisible: state?.preferences?.gridVisible !== false },
     }],
@@ -232,7 +234,7 @@ export function synchronizeWorldV2FromRuntimeState(state, { mapPackage, ruleset,
           .filter(token => actorIds.has(String(token.actorId)))
           .map(token => mergeRuntimeTokenFields(token, runtimeTokens.get(String(token.id)))),
         markers: clone(array(state?.markers)),
-        attackAreas: clone(array(state?.attackAreas)),
+        attackAreas: canonicalAttackAreas(state?.attackAreas),
         sceneEvents: clone(array(state?.sceneEvents)),
         settings: { ...object(item.settings), gridVisible: state?.preferences?.gridVisible !== false },
       }
@@ -280,7 +282,9 @@ export function projectWorldV2ToRuntimeState(state, rawWorld, { mapPackage, rule
   const tokens = scene.tokens.filter(token => actorIds.has(String(token.actorId)));
   const next = clone(state || {});
   next.markers = clone(scene.markers);
-  next.attackAreas = clone(scene.attackAreas);
+  // Attack-area Token anchors are canonical in World V2. Only the legacy flat
+  // SaveV2/AppCore shell receives a translated Character-shaped anchor.
+  next.attackAreas = legacyRuntimeAttackAreas(scene.attackAreas);
   next.sceneEvents = clone(scene.sceneEvents);
   // SaveV2/AppCore still expects the property to exist, but it is now a sealed
   // empty tombstone rather than a Token projection. No runtime system may store
