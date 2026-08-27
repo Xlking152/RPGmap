@@ -25,6 +25,7 @@ import {
   createTokenRuntimeSystem,
   createTokenStatusBridgeSystem,
   createActorTokenPlacementUiSystem,
+  createTokenPropertyUiSystem,
 } from './token/index.js';
 import { createTokenRendererSystem } from './render/token-layer.js';
 
@@ -126,6 +127,10 @@ export async function startRpgMap() {
       createTokenRendererSystem(),
       createFeatureInteractionSystem(),
       createElevationSystem(),
+      // Keep the old Entity/Elevation surfaces, but intercept their Token
+      // property edits so hidden/diameter/rotation/elevation persist only on
+      // the canonical active Scene Token through api.tokens.update().
+      createTokenPropertyUiSystem(),
       createHealthSystem(),
       createChatSystem({ selection: selectionSystem }),
       createDamageSystem({ selection: selectionSystem }),
