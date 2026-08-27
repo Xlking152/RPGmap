@@ -10,7 +10,8 @@ function withoutComments(source) {
 
 const entityUi = withoutComments(await readFile(new URL('../src/entities/ui.js', import.meta.url), 'utf8'));
 const tokenController = withoutComments(await readFile(new URL('../src/entities/token-controller.js', import.meta.url), 'utf8'));
-const panelOwnership = withoutComments(await readFile(new URL('../src/ui/panel-ownership.js', import.meta.url), 'utf8'));
+const runtimeSource = withoutComments(await readFile(new URL('../src/engine/runtime.js', import.meta.url), 'utf8'));
+const appShellSource = withoutComments(await readFile(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8'));
 const interactionIndex = withoutComments(await readFile(new URL('../src/interaction/index.js', import.meta.url), 'utf8'));
 
 test('modern Entity UI owns an Actor panel and recognizes only canonical Token DOM', () => {
@@ -30,12 +31,11 @@ test('Entity Token controller emits only Token runtime identities', () => {
   assert.doesNotMatch(tokenController, /characterId|character:create|character:move|character:delete|\.rpg-character|api\.placeCharacter|api\.repositionCharacter/);
 });
 
-test('legacy characters panel name is encapsulated by canonical Actor panel ownership', () => {
-  assert.match(panelOwnership, /const actors = takePanelOwnership\(shell, documentNode, 'characters'\)/);
-  assert.match(panelOwnership, /actors,/);
-  assert.match(panelOwnership, /if \(String\(name\) === 'actors'\) return actors/);
-  assert.match(panelOwnership, /panels: \['actors', 'inspect'\]/);
-  assert.doesNotMatch(entityUi, /data-panel=["']characters["']|data-tab=["']characters["']/);
+test('Actor panel is created directly by Runtime V2 with no legacy characters panel bridge', () => {
+  assert.match(runtimeSource, /actors:/);
+  assert.match(appShellSource, /api\.uiPanels\?\.actors/);
+  assert.doesNotMatch(runtimeSource, /data-panel=["']characters["']|panel-ownership|characterPane/);
+  assert.doesNotMatch(appShellSource, /data-panel=["']characters["']|legacyProxy|legacyAction/);
 });
 
 test('Feature UI public helpers use Token terminology', () => {
