@@ -35,6 +35,7 @@ jobs:
           ROOT="artifact/RPGmap-v${VERSION}"
           test -f "$ROOT/start-rpgmap.bat"
           test -f "$ROOT/world-schema.mjs"
+          test -f "$ROOT/world-v2.mjs"
           test -f "$ROOT/status-operations.mjs"
           test -f "$ROOT/app/index.html"
           test -d "$ROOT/map/backups"
