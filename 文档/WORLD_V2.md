@@ -152,7 +152,7 @@ This synchronization also means a Player cannot move a Token by forging only `wo
 
 ## Next migrations
 
-The next runtime migration is **Renderer → `Scene.tokens[]`**:
+The next runtime migration is **Renderer → `Scene.tokens[]`**. Renderer is intentionally next because Movement is already canonical while the visible Leaflet Token layer still consumes the Character compatibility projection.
 
 1. Render map Tokens from `api.tokens.list()` / active `Scene.tokens[]` rather than `state.characters[]`.
 2. Resolve display name/avatar/color from `Token + resolved Actor/Synthetic Actor`.
