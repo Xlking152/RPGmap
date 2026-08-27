@@ -25,7 +25,6 @@ function state({ x = 1, y = 2 } = {}) {
   return {
     version: 2,
     mapId: 'test',
-    characters: [],
     markers: [], attackAreas: [], sceneEvents: [],
     preferences: {
       entitySystem: {
@@ -61,9 +60,8 @@ test('canonical Scene Token placement survives server normalization', () => {
   assertWorldState(value);
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].x, 17);
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].y, 18);
-  // Reducer projection cannot overwrite placement; it remains a non-positional
-  // compatibility/mechanical view of the canonical Token.
   assert.equal(value.preferences.entitySystem.tokens[0].x, 1);
+  assert.equal(Object.hasOwn(value, 'characters'), false);
 });
 
 test('owned canonical Scene Token movement survives authorization without Character mirror', () => {
@@ -73,8 +71,8 @@ test('owned canonical Scene Token movement survives authorization without Charac
   moved.preferences.worldV2.scenes[0].tokens[0].y = 7;
   const user = createBoundUser({ name: 'Player', defaultActorId: 'actor-a' }).user;
   const result = validatePlayerWorldPush({ before, next: moved, user });
-  assert.equal(result.ok, true);
+  assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(moved.preferences.worldV2.scenes[0].tokens[0].x, 6);
   assert.equal(moved.preferences.worldV2.scenes[0].tokens[0].y, 7);
-  assert.deepEqual(moved.characters, []);
+  assert.equal(Object.hasOwn(moved, 'characters'), false);
 });
