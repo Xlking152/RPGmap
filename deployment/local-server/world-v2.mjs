@@ -1,3 +1,5 @@
+import { assertStatusState } from './status-operations.mjs';
+
 export const WORLD_V2_SCHEMA_VERSION = 2;
 export const WORLD_V2_STATE_KEY = 'worldV2';
 
@@ -38,6 +40,25 @@ function unique(items, label) {
     seen.add(value);
   });
   return seen;
+}
+
+function isObject(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function mergeValue(base, delta) {
+  if (delta === undefined) return structuredClone(base);
+  if (Array.isArray(delta)) return structuredClone(delta);
+  if (!isObject(delta)) return structuredClone(delta);
+  const result = isObject(base) ? structuredClone(base) : {};
+  for (const [key, value] of Object.entries(delta)) result[key] = mergeValue(result[key], value);
+  return result;
+}
+
+function syntheticActor(baseActor, actorDelta) {
+  const actor = mergeValue(baseActor, actorDelta || {});
+  actor.id = baseActor.id;
+  return actor;
 }
 
 function entityState(state) {
@@ -126,6 +147,8 @@ export function assertWorldV2(value) {
   cleanId(ruleset.id, 'worldV2.ruleset.id');
   if (typeof ruleset.version !== 'string' || !ruleset.version.trim()) fail('worldV2.ruleset.version is required');
   const actorIds = unique(world.actors, 'worldV2.actors');
+  const actorById = new Map(world.actors.map(actor => [String(actor?.id ?? ''), actor]));
+  const statusDefinitions = Array.isArray(world.statusDefinitions) ? world.statusDefinitions : [];
   const sceneIds = unique(world.scenes, 'worldV2.scenes');
   const activeSceneId = cleanId(world.activeSceneId, 'worldV2.activeSceneId');
   if (!sceneIds.has(activeSceneId)) fail(`worldV2.activeSceneId references missing Scene: ${activeSceneId}`, 'invalid_reference');
@@ -142,11 +165,33 @@ export function assertWorldV2(value) {
       const token = object(tokenRaw, `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}]`);
       const actorId = cleanId(token.actorId, `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}].actorId`);
       if (!actorIds.has(actorId)) fail(`World V2 Token references missing Actor: ${actorId}`, 'invalid_reference');
-      if (typeof token.actorLink !== 'boolean') fail(`worldV2 token.actorLink must be boolean`);
+      if (typeof token.actorLink !== 'boolean') fail('worldV2 token.actorLink must be boolean');
       if (token.actorDelta !== null && token.actorDelta !== undefined
         && (!token.actorDelta || typeof token.actorDelta !== 'object' || Array.isArray(token.actorDelta))) {
         fail('worldV2 token.actorDelta must be an object or null');
       }
+
+      // actorDelta is flexible for Ruleset data, but its resolved Actor effects
+      // are still mechanical Status data. Rebuild the Synthetic Actor on the
+      // server and run the same Status schema used for normal World Actors.
+      // This makes atomic world.push authoritative rather than trusting the
+      // browser to have produced a legal effect instance.
+      if (token.actorLink === false && token.actorDelta) {
+        const baseActor = actorById.get(actorId);
+        const resolved = syntheticActor(baseActor, token.actorDelta);
+        try {
+          assertStatusState({
+            schemaVersion: 3,
+            statusDefinitions: structuredClone(statusDefinitions),
+            actors: [resolved],
+            tokens: [],
+          });
+        } catch (error) {
+          error.message = `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}].actorDelta: ${error.message}`;
+          throw error;
+        }
+      }
+
       if (token.placement === 'feature') {
         cleanId(token.featureId, `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}].featureId`);
       } else if (token.placement === 'map') {
