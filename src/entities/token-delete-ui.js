@@ -39,6 +39,7 @@ export function createEntityTokenDeleteUiSystem() {
       const mapElement = api.map?.getContainer?.();
       const documentNode = mapElement?.ownerDocument || document;
       const shell = mapElement?.closest?.('.app-shell') || documentNode;
+      const legacyDeleteCharacter = api.deleteCharacter;
       let destroyed = false;
       let syncQueued = false;
       let deleteBusy = false;
@@ -90,6 +91,18 @@ export function createEntityTokenDeleteUiSystem() {
         syncActorCards();
         syncTokenDeleteButtons();
       }
+
+      async function canonicalDeleteCharacter(tokenId) {
+        const target = id(tokenId);
+        if (!target) return null;
+        return deleteCanonicalToken(api, target);
+      }
+
+      // Public compatibility callers must not be able to bypass the canonical
+      // Scene Token runtime by calling the old AppCore Character deletion API.
+      // Interactive buttons are captured below so they can still show the GM
+      // confirmation dialog before this no-UI compatibility facade runs.
+      api.deleteCharacter = canonicalDeleteCharacter;
 
       async function removeToken(tokenId) {
         const token = api.tokens.get(tokenId);
@@ -167,6 +180,7 @@ export function createEntityTokenDeleteUiSystem() {
         destroyed = true;
         observer.disconnect();
         documentNode.removeEventListener('click', captureDelete, true);
+        if (api.deleteCharacter === canonicalDeleteCharacter) api.deleteCharacter = legacyDeleteCharacter;
         off.splice(0).forEach(dispose => dispose?.());
       }));
 
