@@ -79,21 +79,23 @@ test('Token rotation is normalized into [0, 360)', () => {
   assert.equal(normalizeTokenRotation(-15), 345);
 });
 
-test('Token property bridge cannot write Character or Entity compatibility storage', async () => {
-  const path = fileURLToPath(new URL('../src/token/property-ui.js', import.meta.url));
+test('Entity Token controller owns property edits without Character or Entity projection writes', async () => {
+  const path = fileURLToPath(new URL('../src/entities/token-controller.js', import.meta.url));
   const source = withoutComments(await readFile(path, 'utf8'));
   assert.match(source, /setTokenDiameterMeters/);
   assert.match(source, /setTokenElevationFt/);
   assert.match(source, /setTokenHidden/);
   assert.match(source, /setTokenRotation/);
   assert.doesNotMatch(source, /state\.characters|preferences\.entitySystem|store\.persist|api\.commitState|api\.importState/);
+  assert.doesNotMatch(source, /data-character-id|api\.elevation\?\.setTokenElevation/);
 });
 
-test('Token property bridge is registered after Elevation so it can replace public Token-height methods', async () => {
-  const path = fileURLToPath(new URL('../src/main.js', import.meta.url));
-  const source = await readFile(path, 'utf8');
-  const elevation = source.indexOf('createElevationSystem(),');
-  const properties = source.indexOf('createTokenPropertyUiSystem(),');
-  const health = source.indexOf('createHealthSystem(),');
-  assert.ok(elevation >= 0 && properties > elevation && health > properties);
+test('startup no longer registers the Token property bridge', async () => {
+  const main = withoutComments(await readFile(fileURLToPath(new URL('../src/main.js', import.meta.url)), 'utf8'));
+  const tokenIndex = withoutComments(await readFile(fileURLToPath(new URL('../src/token/index.js', import.meta.url)), 'utf8'));
+  const entityUi = withoutComments(await readFile(fileURLToPath(new URL('../src/entities/ui.js', import.meta.url)), 'utf8'));
+
+  assert.doesNotMatch(main, /createTokenPropertyUiSystem/);
+  assert.doesNotMatch(tokenIndex, /createTokenPropertyUiSystem|property-ui/);
+  assert.match(entityUi, /tokenController\.handleChange\(event\.target\)/);
 });
