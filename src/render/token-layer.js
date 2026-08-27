@@ -24,11 +24,13 @@ function ensurePane(map, name, zIndex, { pointerEvents = null } = {}) {
   return pane;
 }
 
-function hideLegacyPane(map, name) {
+function retireLegacyPane(map, name) {
   const pane = map.getPane?.(name);
   if (!pane) return;
-  pane.style.visibility = 'hidden';
+  pane.replaceChildren?.();
+  pane.style.display = 'none';
   pane.style.pointerEvents = 'none';
+  pane.dataset.retired = 'true';
 }
 
 function installStyles(documentNode) {
@@ -36,10 +38,9 @@ function installStyles(documentNode) {
   const style = documentNode.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
-    /* Leaflet removes the trailing "Pane" from custom pane DOM class names. */
-    .leaflet-character-pane { visibility:hidden !important; pointer-events:none !important; }
+    .leaflet-character-pane { display:none !important; pointer-events:none !important; }
     .leaflet-tooltip.character-tooltip { display:none !important; }
-    .leaflet-statusBadge-pane { visibility:hidden !important; pointer-events:none !important; }
+    .leaflet-statusBadge-pane { display:none !important; pointer-events:none !important; }
     .rpg-token-v2 { background:transparent !important; border:0 !important; overflow:visible !important; }
     .rpg-token-v2 .rpg-character-core { border-radius:50%; overflow:hidden; }
     .rpg-token-v2 .rpg-token-v2-portrait { width:100%; height:100%; display:grid; place-items:center; border-radius:inherit; overflow:hidden; }
@@ -103,10 +104,8 @@ export function createTokenRendererSystem() {
 
       const documentNode = api.map.getContainer().ownerDocument || document;
       installStyles(documentNode);
-      // The legacy Character layer remains in AppCore only for sidebar/editor
-      // compatibility. It must never compete with the canonical visible layer.
-      hideLegacyPane(api.map, 'characterPane');
-      hideLegacyPane(api.map, 'statusBadgePane');
+      retireLegacyPane(api.map, 'characterPane');
+      retireLegacyPane(api.map, 'statusBadgePane');
       ensurePane(api.map, TOKEN_PANE, 515);
       ensurePane(api.map, STATUS_PANE, 540, { pointerEvents: 'none' });
 
@@ -120,11 +119,7 @@ export function createTokenRendererSystem() {
       function resolveModel(token) {
         try {
           const resolved = api.tokens.resolveActor(token.id);
-          return createTokenViewModel({
-            token,
-            actor: resolved.actor,
-            selected: selectedIds.has(String(token.id)),
-          });
+          return createTokenViewModel({ token, actor: resolved.actor, selected: selectedIds.has(String(token.id)) });
         } catch (error) {
           console.warn('[RPGmap Token Renderer] cannot resolve Token Actor', token?.id, error);
           return null;
@@ -136,10 +131,7 @@ export function createTokenRendererSystem() {
         for (const model of models) {
           const token = tokensById.get(model.id);
           if (!token) continue;
-          const snapshot = resolveStatusUiSnapshot(api, {
-            actorId: token.actorId,
-            tokenId: token.id,
-          });
+          const snapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
           const html = renderTokenStatusBadges(snapshot.statuses, { limit: 4 });
           if (!html) continue;
           const tokenPixels = renderSize(api, { ...model, selected: false });
@@ -184,11 +176,8 @@ export function createTokenRendererSystem() {
               L.DomEvent.stopPropagation(event);
               const token = api.tokens.get(model.id);
               if (!token) return;
-              // Token Selection is canonical. The Character call only keeps the
-              // not-yet-migrated sidebar editor focused on the same Token id.
               api.selection?.replace?.([token.id], token.id);
               api.emit?.('token:select', { id: token.id, tokenId: token.id, actorId: token.actorId });
-              api.selectCharacter?.(token.id);
             });
             views.set(model.id, view);
           }
