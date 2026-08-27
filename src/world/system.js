@@ -83,7 +83,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       }
 
       if (typeof coreImportState === 'function') {
-        api.importState = (nextState) => coreImportState(hydrateCanonical(nextState));
+        api.importState = (nextState, ...args) => coreImportState(hydrateCanonical(nextState), ...args);
       }
 
       function snapshot() {
@@ -121,6 +121,10 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         getActiveScene() { return clone(activeWorldScene(snapshot())); },
         listScenes() { return clone(snapshot().scenes); },
         listActors() { return clone(snapshot().actors); },
+        async commit(world, options = {}) {
+          await commitWorld(world, options);
+          return snapshot();
+        },
         async createScene(options = {}) {
           const next = createEmptyWorldScene(snapshot(), { mapPackage, ...options });
           await commitWorld(next, { source: 'world-v2:scene.create', reason: 'scene.create', render: false });
