@@ -21,6 +21,7 @@ import { createDefaultMapPackage } from './map-package/default-map.js';
 import { createStatusSystem, createStatusUiSystem } from './status/index.js';
 import { chooseRulesetBeforeMap } from './ruleset/setup.js';
 import { createWorldSystem } from './world/index.js';
+import { createTokenRuntimeSystem } from './token/index.js';
 
 function setBootStatus(message, { error = false } = {}) {
   const node = document.querySelector('[data-rpgmap-boot-status]');
@@ -96,6 +97,10 @@ export async function startRpgMap() {
       // import boundaries before Entity, Status, Movement, Combat, or LAN tools
       // begin mutating the active-scene compatibility projection.
       createWorldSystem(),
+      // Token Runtime V2 is the canonical Scene-token mutation surface. It is
+      // registered before legacy Movement/Entity tools so new code never needs
+      // to write characters[] or preferences.entitySystem directly.
+      createTokenRuntimeSystem(),
       createMovementSystem({ defaultStep: 5, autoStep: true }),
       // Legacy markers are data.  They remain untouched until a GM explicitly
       // confirms their migration from the in-app review flow.
