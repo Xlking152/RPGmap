@@ -1,6 +1,6 @@
 import L from 'leaflet';
 import { latLngToWorld, worldToLatLng } from '../engine/geometry.js';
-import { TokenSelectionState, tokenIdsInBounds } from './state.js';
+import { tokenIdsInBounds } from './state.js';
 
 const STYLE_ID = 'rpgmap-token-selection-style';
 const DRAG_THRESHOLD_PX = 4;
@@ -15,11 +15,8 @@ function installStyles(documentNode) {
   style.id = STYLE_ID;
   style.textContent = `
     .rpgmap-selection-marquee {
-      position:absolute;
-      z-index:710;
-      border:1px solid rgba(23,109,118,.95);
-      background:rgba(23,109,118,.12);
-      box-shadow:0 0 0 1px rgba(255,255,255,.55) inset;
+      position:absolute; z-index:710; border:1px solid rgba(23,109,118,.95);
+      background:rgba(23,109,118,.12); box-shadow:0 0 0 1px rgba(255,255,255,.55) inset;
       pointer-events:none;
     }
   `;
@@ -35,19 +32,8 @@ function ensureSelectionPane(map) {
   }
 }
 
-function legacyProjectedTokens(api) {
-  return (api.getState().characters || []).map(character => ({
-    id: String(character.id),
-    placement: character.location?.type === 'building' ? 'feature' : 'map',
-    x: character.location?.type === 'map' ? Number(character.location.x) : null,
-    y: character.location?.type === 'map' ? Number(character.location.y) : null,
-    featureId: character.location?.type === 'building' ? character.location.featureId : null,
-    hidden: character.visible === false,
-  }));
-}
-
 function mapTokens(api) {
-  return api.tokens?.list?.() || legacyProjectedTokens(api);
+  return api.tokens?.list?.() || [];
 }
 
 function nearestMapToken(api, point) {
@@ -76,6 +62,7 @@ function modeFromEvent(event) {
 export function createSelectionController(state, notify) {
   return {
     register(api) {
+      if (!api.tokens?.list) throw new Error('Token Selection requires canonical Token Runtime V2');
       const mapElement = api.map.getContainer();
       const documentNode = mapElement.ownerDocument || document;
       const shell = mapElement.closest('.app-shell') || documentNode;
@@ -100,10 +87,7 @@ export function createSelectionController(state, notify) {
         const node = shell.querySelector?.('[data-role="map-status"]');
         if (node) node.textContent = message;
       };
-
-      function tokens() {
-        return mapTokens(api);
-      }
+      const tokens = () => mapTokens(api);
 
       function renderSelection() {
         highlightLayer.clearLayers();
@@ -116,13 +100,9 @@ export function createSelectionController(state, notify) {
           if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
           const primary = String(token.id) === String(primaryId);
           L.circleMarker(worldToLatLng({ x, y }, api.mapPackage.height), {
-            pane: 'selectionPane',
-            radius: primary ? 18 : 16,
-            color: primary ? '#176d76' : '#4e8f96',
-            weight: primary ? 4 : 3,
-            opacity: 1,
-            fill: false,
-            interactive: false,
+            pane: 'selectionPane', radius: primary ? 18 : 16,
+            color: primary ? '#176d76' : '#4e8f96', weight: primary ? 4 : 3,
+            opacity: 1, fill: false, interactive: false,
             className: primary ? 'rpgmap-token-selected primary' : 'rpgmap-token-selected',
           }).addTo(highlightLayer);
         }
@@ -158,10 +138,7 @@ export function createSelectionController(state, notify) {
         const width = Math.abs(end.x - start.x);
         const height = Math.abs(end.y - start.y);
         Object.assign(marquee.node.style, {
-          left: `${left}px`,
-          top: `${top}px`,
-          width: `${width}px`,
-          height: `${height}px`,
+          left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px`,
           display: marquee.moved ? 'block' : 'none',
         });
       }
@@ -178,11 +155,11 @@ export function createSelectionController(state, notify) {
         if (!mapElement.contains(event.target)) return;
         if (event.target.closest?.('.leaflet-control, .ui-menu, .ui-context-menu')) return;
 
-        const tokenElement = event.target.closest?.('.rpg-character, .rpg-character-core');
+        const tokenElement = event.target.closest?.('.rpg-token-v2');
         if (tokenElement) {
           if (!event.shiftKey && !event.altKey) return;
-          const point = pointFromClient(event.clientX, event.clientY);
-          const token = nearestMapToken(api, point);
+          const tokenId = tokenElement.querySelector?.('[data-token-id]')?.dataset?.tokenId;
+          const token = tokenId ? api.tokens.get?.(tokenId) : nearestMapToken(api, pointFromClient(event.clientX, event.clientY));
           if (!token) return;
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -191,9 +168,7 @@ export function createSelectionController(state, notify) {
           return;
         }
 
-        if (spaceHeld) return;
-        if (shell.querySelector?.('.ui-ruler-tool.active')) return;
-        if (currentTool !== 'pan') return;
+        if (spaceHeld || shell.querySelector?.('.ui-ruler-tool.active') || currentTool !== 'pan') return;
         event.preventDefault();
         event.stopImmediatePropagation();
 
@@ -216,8 +191,7 @@ export function createSelectionController(state, notify) {
       }, true);
 
       documentNode.addEventListener('click', event => {
-        if (!mapElement.contains(event.target)) return;
-        if (!event.target.closest?.('.rpg-character, .rpg-character-core')) return;
+        if (!mapElement.contains(event.target) || !event.target.closest?.('.rpg-token-v2')) return;
         if (!event.shiftKey && !event.altKey) return;
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -237,16 +211,13 @@ export function createSelectionController(state, notify) {
         event.preventDefault();
         event.stopImmediatePropagation();
         mapElement.releasePointerCapture?.(event.pointerId);
-
         const drag = marquee;
         const endWorld = pointFromClient(event.clientX, event.clientY);
         cleanupMarquee();
-
         if (!drag.moved) {
           if (drag.mode === 'replace') apply([], 'replace');
           return;
         }
-
         const ids = tokenIdsInBounds(tokens(), drag.startWorld, endWorld);
         apply(ids, drag.mode, ids.at(-1) || null);
       }, true);
@@ -261,21 +232,20 @@ export function createSelectionController(state, notify) {
         spaceHeld = true;
         event.preventDefault();
       }, true);
-      documentNode.addEventListener('keyup', event => {
-        if (event.code === 'Space') spaceHeld = false;
-      }, true);
+      documentNode.addEventListener('keyup', event => { if (event.code === 'Space') spaceHeld = false; }, true);
       globalThis.addEventListener?.('blur', () => { spaceHeld = false; });
 
-      api.on('character:select', event => {
-        const id = event.detail?.id;
+      api.on('token:select', event => {
+        const id = event.detail?.tokenId || event.detail?.id;
         if (!id) return;
         state.replace([id], id);
         publish('single');
       });
-      api.on('character:move', renderSelection);
-      api.on('character:delete', event => {
-        if (!event.detail?.id) return;
-        state.remove([event.detail.id]);
+      api.on('token:move', renderSelection);
+      api.on('token:delete', event => {
+        const id = event.detail?.tokenId || event.detail?.id;
+        if (!id) return;
+        state.remove([id]);
         publish('delete');
       });
       api.on('state:import', () => {
@@ -285,7 +255,8 @@ export function createSelectionController(state, notify) {
       });
       api.on('state:commit', event => {
         const source = String(event.detail?.source || '');
-        if (!source.startsWith('token-v2:') && !source.startsWith('world-v2:')) return;
+        if (!source.startsWith('token-v2:') && !source.startsWith('world-v2:')
+          && !source.startsWith('movement:') && !source.startsWith('feature:')) return;
         const valid = new Set(tokens().map(token => String(token.id)));
         state.replace(state.snapshot().ids.filter(id => valid.has(id)), state.primaryId);
         publish(source);
