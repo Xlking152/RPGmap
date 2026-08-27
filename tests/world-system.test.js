@@ -73,3 +73,15 @@ test('WorldSystem import gives canonical World V2 precedence over stale flat pro
   fixture.api.importState(imported);
   assert.deepEqual(fixture.current().characters[0].location, { type: 'map', x: 77.5, y: 66.5 });
 });
+
+test('WorldSystem can create and activate another Scene using the loaded MapPackage', async () => {
+  const fixture = apiFixture();
+  createWorldSystem().register(fixture.api);
+  const scene = await fixture.api.world.createScene({ id: 'scene-second', name: '第二场景' });
+  assert.equal(scene.id, 'scene-second');
+  assert.equal(fixture.api.world.listScenes().length, 2);
+  await fixture.api.world.setActiveScene('scene-second');
+  assert.equal(fixture.api.world.get().activeSceneId, 'scene-second');
+  assert.equal(fixture.current().characters.length, 0);
+  assert.equal(fixture.current().markers.length, 0);
+});
