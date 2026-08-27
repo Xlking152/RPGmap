@@ -153,6 +153,36 @@ The old AppCore `characterPane` is still constructed because the current charact
 
 Selection remains Token-based. A Token click updates canonical Token selection and emits `token:select`; `selectCharacter(tokenId)` is invoked only as a temporary sidebar-focus bridge until the character editor is replaced.
 
+## Actor placement ownership
+
+Modern Actor placement now creates the Scene Token directly. The Entity panel may still provide the temporary Actor-selection HUD, but it no longer creates a Character first and then binds that Character into a Token.
+
+```text
+Entity panel selects Actor
+        ↓
+placement HUD / map click
+        ↓
+snapActorTokenPlacementPoint()
+        ↓
+current-map placement validation
+        ↓
+createActorTokenAtPoint()
+        ↓
+api.tokens.create({ actorId, x, y, ... })
+        ↓
+Scene.tokens[]
+        ↓
+api.world.commit()
+        ↓
+World V2 projects temporary Character/Entity compatibility views
+```
+
+`src/token/placement.js` owns the current map shell's 1 m cell-centre snapping and placement check. `api.tokens.create()` itself deliberately remains geometry/UI agnostic so future scripts, teleport operations and Scene initialization are not forced through the interactive placement policy.
+
+`src/token/actor-placement-ui.js` is explicitly transitional. It captures the modern Entity placement map click before the legacy Entity/AppCore handlers, so that click cannot also reach `placeCharacter()`. After the canonical World commit, it only asks the old Entity panel to reload the projected compatibility state. It does not bind or manufacture a second Token.
+
+The legacy `placeCharacter()` function still exists for obsolete AppCore compatibility paths and tests; it is no longer the write path used by the modern Actor panel's “放置 Token” action.
+
 ## Server behavior
 
 The Local/LAN server accepts legacy states without World V2 for backward compatibility.
@@ -178,15 +208,16 @@ This synchronization also means a Player cannot move a Token by forging only `wo
 5. Selection and Combat reading canonical Tokens.
 6. Movement, collision planning, Feature enter/exit and movement authority using `Scene.tokens[]`.
 7. Visible Leaflet Token renderer, Token status badges and Token health bars reading canonical `Scene.tokens[]`.
+8. Modern Actor map placement writing directly through `api.tokens.create()` instead of `placeCharacter()` + `bindToken()`.
 
 ## Next migrations
 
-The next runtime migration is **Actor placement/editor UI → canonical Token APIs**. The map surface is already canonical; the remaining Character facade is now primarily a sidebar/editor compatibility concern.
+Actor placement creation is canonical. The remaining Character facade is now concentrated in Token editing/relocation and parts of the sidebar.
 
-1. Replace `placeCharacter()` with Actor selection/creation plus `api.tokens.create()`.
-2. Replace `repositionCharacter()` and Character visibility/size edits with `api.tokens.move()` / `api.tokens.update()`.
-3. Resolve editor display from World Actor + selected Token rather than `state.characters[]`.
-4. Migrate Feature occupant/editor lists to canonical Tokens and resolved Actors where they still use Character records.
+1. Replace `repositionCharacter()` and Character visibility/size edits with `api.tokens.move()` / `api.tokens.update()`.
+2. Resolve editor Token lists/position/display from `api.tokens.list()` + World Actor rather than `state.characters[]` / Entity Token mirrors.
+3. Replace Token deletion with `api.tokens.remove()` and migrate remaining Feature occupant/editor lists to canonical Tokens.
+4. Remove the temporary Actor-placement UI bridge once the Entity editor owns canonical Actor/Token state directly.
 5. Remove `characterId` as a Token compatibility alias and finally retire `state.characters[]`.
 6. Add MapPackage registry/reload so `setActiveScene()` can switch across different maps.
 7. Move remaining subsystem state into explicit World/Scene documents where appropriate.
