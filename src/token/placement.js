@@ -11,8 +11,8 @@ function finite(value, fallback = 0) {
  * UI placement policy for the current square-grid map shell.
  *
  * Token Runtime intentionally accepts arbitrary world coordinates; this adapter
- * owns the legacy shell's 1 m cell-centre snapping without teaching
- * api.tokens.create() about one particular map UI.
+ * owns the legacy shell's 1 m cell-centre snapping without teaching canonical
+ * Token mutation APIs about one particular map UI.
  */
 export function snapActorTokenPlacementPoint(api, point = {}) {
   const width = Math.max(1, finite(api?.mapPackage?.width, 1));
@@ -25,9 +25,10 @@ export function snapActorTokenPlacementPoint(api, point = {}) {
   });
 }
 
-export function inspectActorTokenPlacement(api, point = {}) {
+export function inspectActorTokenPlacement(api, point = {}, { tokenId = null } = {}) {
   const snapped = snapActorTokenPlacementPoint(api, point);
-  const inspection = api?.inspectTokenPlacement?.(null, snapped) || { valid: true };
+  const placementTokenId = tokenId == null ? null : String(tokenId).trim() || null;
+  const inspection = api?.inspectTokenPlacement?.(placementTokenId, snapped) || { valid: true };
   return Object.freeze({
     point: snapped,
     valid: inspection?.valid !== false,
@@ -63,5 +64,25 @@ export async function createActorTokenAtPoint(api, actorId, point, options = {})
     effects: Array.isArray(options.effects) ? options.effects : [],
   });
 
+  return Object.freeze({ ok: true, token, ...placement });
+}
+
+/**
+ * Reposition an existing canonical Scene Token without touching the temporary
+ * Character projection. The current Token id is supplied to the placement
+ * inspector so navigation can ignore the mover's own occupied cell.
+ */
+export async function relocateActorTokenAtPoint(api, tokenId, point) {
+  if (!api?.tokens?.get || !api?.tokens?.move) {
+    throw new Error('Actor Token relocation requires api.tokens.get() + api.tokens.move()');
+  }
+  const targetTokenId = String(tokenId || '').trim();
+  if (!targetTokenId) throw new Error('Actor Token relocation requires tokenId');
+  if (!api.tokens.get(targetTokenId)) throw new Error(`Unknown Token: ${targetTokenId}`);
+
+  const placement = inspectActorTokenPlacement(api, point, { tokenId: targetTokenId });
+  if (!placement.valid) return Object.freeze({ ok: false, token: null, ...placement });
+
+  const token = await api.tokens.move(targetTokenId, placement.point);
   return Object.freeze({ ok: true, token, ...placement });
 }
