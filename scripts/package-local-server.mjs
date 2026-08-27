@@ -45,10 +45,14 @@ await writeFile(path.join(root, 'VERSION.json'), `${JSON.stringify({
 }, null, 2)}\n`);
 
 try {
-  // Windows ships bsdtar and GitHub's Linux runners ship GNU tar; both support
-  // -a for ZIP selected by the archive extension.  Keep archiving here so the
-  // candidate and release jobs verify the exact same bytes.
-  await execFileAsync('tar', ['-a', '-c', '-f', archiveName, path.basename(root)], { cwd: outputRoot });
+  // Windows ships bsdtar, which selects ZIP from the archive extension. GNU
+  // tar on Linux does not create ZIP archives, so CI must call zip directly.
+  // Both paths archive the same versioned root directory.
+  if (process.platform === 'win32') {
+    await execFileAsync('tar', ['-a', '-c', '-f', archiveName, path.basename(root)], { cwd: outputRoot });
+  } else {
+    await execFileAsync('zip', ['-r', '-9', '-q', archiveName, path.basename(root)], { cwd: outputRoot });
+  }
 } catch (error) {
   throw new Error(`无法创建 Windows 发布 ZIP：${error.message}`);
 }
