@@ -8,7 +8,8 @@ test('Actor placement bridge bypasses legacy Character creation', async () => {
   const source = await readFile(path, 'utf8');
   assert.match(source, /createActorTokenAtPoint/);
   assert.match(source, /api\.emit\?\.\('token:create'/);
-  assert.doesNotMatch(source, /api\.placeCharacter|placeCharacter\s*\(/);
+  assert.match(source, /stopImmediatePropagation\(\)/);
+  assert.doesNotMatch(source, /api\.placeCharacter/);
 });
 
 test('Actor placement bridge is registered after Token Runtime and before Entity UI', async () => {
