@@ -1,4 +1,3 @@
-import { createHealthRuntime, normalizeHealthRuntime } from '../health/model.js';
 import { normalizeElevationFt, normalizeTokenDiameterMeters } from '../elevation/model.js';
 import { normalizeEntityStatusState, STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { getActiveRuleset } from '../ruleset/index.js';
@@ -19,6 +18,10 @@ function activeBadStatusDefs() {
 
 function defaultHealthMode(sourceType) {
   return getActiveRuleset().health.defaultModeForSource(sourceType);
+}
+
+function healthRules() {
+  return getActiveRuleset().health;
 }
 
 function uid(prefix) {
@@ -130,7 +133,7 @@ export function createActorFromImport(imported, { id = uid('actor'), formId, for
       customResources: [],
       attributeAdjustments: {},
       badStatuses,
-      health: createHealthRuntime({
+      health: healthRules().createRuntime({
         mode: defaultHealthMode(normalized.source.type),
         max: form.resourceBases.hp?.baseMax || 0,
         simpleCurrent: resources.hp?.current ?? form.resourceBases.hp?.baseMax ?? 0,
@@ -196,7 +199,7 @@ export function normalizeEntityState(raw) {
         customResources: Array.isArray(actor.runtime?.customResources) ? clone(actor.runtime.customResources) : [],
         attributeAdjustments: clone(actor.runtime?.attributeAdjustments || {}),
         badStatuses,
-        health: normalizeHealthRuntime(actor.runtime?.health, {
+        health: healthRules().normalizeRuntime(actor.runtime?.health, {
           defaultMode: defaultHealthMode(activeForm?.source?.type),
           max: hpMax,
           simpleCurrent: hpCurrent,

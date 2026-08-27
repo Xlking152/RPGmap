@@ -8,7 +8,7 @@ function sourceType(actor) {
 
 function healthRules() {
   const health = getActiveRuleset().health;
-  const required = ['normalizeRuntime', 'resolve', 'switchMode', 'applyDamage', 'applyHealing'];
+  const required = ['normalizeRuntime', 'resolve', 'switchMode', 'applyRuntimeOperation', 'applyDamage', 'applyHealing'];
   for (const key of required) {
     if (typeof health?.[key] !== 'function') {
       throw new Error(`Active ruleset does not implement health.${key}`);
@@ -54,14 +54,11 @@ export function setActorHealthMode(actor, mode) {
   return resolveActorHealth(actor);
 }
 
-export function setActorWounds(actor, wounds = {}) {
+export function performActorHealthOperation(actor, operation = {}) {
   const before = resolveActorHealth(actor);
   const { hp, rules } = healthContext(actor);
-  if (typeof rules.setWounds !== 'function') {
-    return { before, after: before, changed: false, blocked: 'unsupported' };
-  }
   const runtime = ensureActorHealth(actor);
-  const result = rules.setWounds(runtime, wounds, { max: hp.max, simpleCurrent: hp.current });
+  const result = rules.applyRuntimeOperation(runtime, operation, { max: hp.max, simpleCurrent: hp.current });
   if (!result?.changed) {
     return { before, after: result?.state || before, changed: false, blocked: result?.blocked || 'unsupported' };
   }
@@ -71,7 +68,7 @@ export function setActorWounds(actor, wounds = {}) {
   return { before, after: resolveActorHealth(actor), changed: true, blocked: null };
 }
 
-export function applyDamageToActor(actor, { amount = 0, type = 'L' } = {}) {
+export function applyDamageToActor(actor, { amount = 0, type } = {}) {
   const before = resolveActorHealth(actor);
   const { hp, rules } = healthContext(actor);
   const runtime = ensureActorHealth(actor);
@@ -95,7 +92,7 @@ export function applyDamageToActor(actor, { amount = 0, type = 'L' } = {}) {
   };
 }
 
-export function applyHealingToActor(actor, { amount = 0, type = 'L' } = {}) {
+export function applyHealingToActor(actor, { amount = 0, type } = {}) {
   const before = resolveActorHealth(actor);
   const { hp, rules } = healthContext(actor);
   const runtime = ensureActorHealth(actor);

@@ -1,4 +1,4 @@
-import { defaultHealthMode, normalizeHealthRuntime, resolveHealth } from '../health/model.js';
+import { getActiveRuleset } from '../ruleset/index.js';
 import { currentForm } from './model.js';
 
 function finite(value, fallback = 0) {
@@ -82,8 +82,9 @@ export function resolveActor(actor) {
   const resources = [...Object.keys(form.resourceBases || {}), ...(actor.runtime?.customResources || []).map(item => item.id)]
     .map(id => resolveResource(actor, id)).filter(Boolean);
   const hp = resources.find(resource => resource.id === 'hp') || { max: 0, current: 0 };
-  const healthRuntime = normalizeHealthRuntime(actor.runtime?.health, {
-    defaultMode: defaultHealthMode(form.source?.type),
+  const healthRules = getActiveRuleset().health;
+  const healthRuntime = healthRules.normalizeRuntime(actor.runtime?.health, {
+    defaultMode: healthRules.defaultModeForSource(form.source?.type),
     max: hp.max,
     simpleCurrent: hp.current,
   });
@@ -92,7 +93,7 @@ export function resolveActor(actor) {
     name: actor.name,
     form,
     resources,
-    health: resolveHealth(healthRuntime, { max: hp.max, simpleCurrent: hp.current }),
+    health: healthRules.resolve(healthRuntime, { max: hp.max, simpleCurrent: hp.current }),
     attributes: (form.attributes || []).map(item => resolveAttribute(actor, item.id)).filter(Boolean),
     checks: form.checks || { skills: [], saves: [] },
     badStatuses: (form.badStatuses || []).map(item => resolveBadStatus(actor, item.id)).filter(Boolean),

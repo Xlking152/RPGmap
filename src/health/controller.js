@@ -1,6 +1,6 @@
 import { EntityStore } from '../entities/store.js';
 import { createActorDelta } from '../token/actor.js';
-import { applyDamageToActor, applyHealingToActor, resolveActorHealth, setActorHealthMode, setActorWounds } from './actor.js';
+import { applyDamageToActor, applyHealingToActor, performActorHealthOperation, resolveActorHealth, setActorHealthMode } from './actor.js';
 
 function healthTargetsForTokens(store, api, tokenIds = []) {
   const seen = new Set();
@@ -89,12 +89,12 @@ export function createHealthController() {
           persistHealth(store, [actor.id]);
           return state;
         },
-        setWounds(actorId, wounds) {
+        performActorOperation(actorId, operation) {
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });
           const actor = store.actor(actorId);
           if (!actor || !canEditActor(actor.id)) return null;
-          const result = setActorWounds(actor, wounds);
+          const result = performActorHealthOperation(actor, operation);
           if (!result.changed) return result;
           persistHealth(store, [actor.id]);
           return result;

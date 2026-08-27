@@ -76,7 +76,10 @@ test('health B/L/A editor commits the same World path as recovery', () => {
   });
   createHealthController().register(api);
 
-  const result = api.health.setWounds('actor-a', { bashing: 2, lethal: 3, aggravated: 1 });
+  const result = api.health.performActorOperation('actor-a', {
+    type: 'set-wounds',
+    wounds: { bashing: 2, lethal: 3, aggravated: 1 },
+  });
   assert.equal(result.after.current, 4);
   assert.equal(resolveActorHealth(api.current.preferences.entitySystem.actors[0]).current, 4);
   assert.equal(api.committed.at(-1).options.source, 'health');

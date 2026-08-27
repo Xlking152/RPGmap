@@ -1,7 +1,7 @@
 import L from 'leaflet';
 import { worldToLatLng } from '../engine/geometry.js';
 import { tokenDiameterMeters } from '../elevation/model.js';
-import { HEALTH_MODE_WOUND_TRACK, formatHealthSummary } from './model.js';
+import { describeHealth } from './model.js';
 
 const PANE = 'healthBarPane';
 const STYLE_ID = 'rpgmap-token-healthbar-style';
@@ -27,27 +27,23 @@ function installStyles(documentNode) {
     .rpgmap-healthbar-marker { background:transparent !important; border:0 !important; pointer-events:none !important; }
     .rpgmap-token-healthbar { width:46px; height:7px; display:flex; overflow:hidden; border:1px solid rgba(20,28,28,.72); border-radius:4px; background:rgba(25,30,30,.5); box-shadow:0 1px 3px rgba(0,0,0,.45); }
     .rpgmap-token-healthbar > span { height:100%; min-width:0; }
-    .rpgmap-token-healthbar .healthy,.rpgmap-token-healthbar .simple { background:#4b9f69; }
-    .rpgmap-token-healthbar .bashing { background:#d9b84a; }
-    .rpgmap-token-healthbar .lethal { background:#d77c42; }
-    .rpgmap-token-healthbar .aggravated { background:#a94442; }
   `;
   documentNode.head.append(style);
 }
 
-function segment(width, className) {
-  return width > 0 ? `<span class="${className}" style="width:${Math.max(0, width)}%"></span>` : '';
+function segment(width, color, label) {
+  return width > 0
+    ? `<span style="width:${Math.max(0, width)}%;background:${escapeHtml(color || '#4b9f69')}" title="${escapeHtml(label || '')}"></span>`
+    : '';
 }
 
 function barHtml(health) {
   const max = Math.max(0, Number(health?.max) || 0);
   if (!max) return '';
-  if (health.mode !== HEALTH_MODE_WOUND_TRACK) {
-    const pct = Math.max(0, Math.min(100, (Number(health.current) || 0) / max * 100));
-    return `<div class="rpgmap-token-healthbar" title="${escapeHtml(formatHealthSummary(health))}">${segment(pct, 'simple')}</div>`;
-  }
+  const view = describeHealth(health);
   const pct = value => Math.max(0, Math.min(100, (Number(value) || 0) / max * 100));
-  return `<div class="rpgmap-token-healthbar" title="${escapeHtml(formatHealthSummary(health))}">${segment(pct(health.healthy), 'healthy')}${segment(pct(health.bashing), 'bashing')}${segment(pct(health.lethal), 'lethal')}${segment(pct(health.aggravated), 'aggravated')}</div>`;
+  const segments = (view.segments || []).map(item => segment(pct(item.value), item.color, item.label)).join('');
+  return segments ? `<div class="rpgmap-token-healthbar" title="${escapeHtml(view.summary)}">${segments}</div>` : '';
 }
 
 export function createHealthTokenBars() {
