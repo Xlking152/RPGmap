@@ -139,11 +139,12 @@ api.tokens.resolveActor(tokenId)
 Base Actor or Synthetic Actor
   ↓
 Token ViewModel
-  ├── x / y / diameter / hidden / showName
+  ├── x / y / diameter / rotation / elevation / hidden / showName
   └── Actor name / active-form avatar / token color
   ↓
 Leaflet Token layer
   ├── Token body + name tooltip
+  ├── elevation label
   └── canonical Status badges
 ```
 
@@ -153,7 +154,7 @@ The old AppCore `characterPane` is still constructed because the current charact
 
 Selection remains Token-based. A Token click updates canonical Token selection and emits `token:select`; `selectCharacter(tokenId)` is invoked only as a temporary sidebar-focus bridge until the character editor is replaced.
 
-## Actor placement ownership
+## Actor placement and reposition ownership
 
 Modern Actor placement now creates the Scene Token directly. The Entity panel may still provide the temporary Actor-selection HUD, but it no longer creates a Character first and then binds that Character into a Token.
 
@@ -177,11 +178,69 @@ api.world.commit()
 World V2 projects temporary Character/Entity compatibility views
 ```
 
-`src/token/placement.js` owns the current map shell's 1 m cell-centre snapping and placement check. `api.tokens.create()` itself deliberately remains geometry/UI agnostic so future scripts, teleport operations and Scene initialization are not forced through the interactive placement policy.
+Modern reposition follows the same placement policy but updates the existing Scene Token:
 
-`src/token/actor-placement-ui.js` is explicitly transitional. It captures the modern Entity placement map click before the legacy Entity/AppCore handlers, so that click cannot also reach `placeCharacter()`. After the canonical World commit, it only asks the old Entity panel to reload the projected compatibility state. It does not bind or manufacture a second Token.
+```text
+Token editor “重新放置”
+        ↓
+canonical tokenId
+        ↓
+map click + 1 m snap
+        ↓
+inspectTokenPlacement(tokenId, point)
+        ↓
+relocateActorTokenAtPoint()
+        ↓
+api.tokens.move(tokenId, point)
+        ↓
+Scene.tokens[]
+```
 
-The legacy `placeCharacter()` function still exists for obsolete AppCore compatibility paths and tests; it is no longer the write path used by the modern Actor panel's “放置 Token” action.
+Passing the current Token id into placement inspection lets navigation exclude the mover's own occupied cell. Blocked locations never call `api.tokens.move()`.
+
+`src/token/placement.js` owns the current map shell's 1 m cell-centre snapping and placement check. `api.tokens.create()` / `api.tokens.move()` themselves deliberately remain UI agnostic so future scripts, teleport operations and Scene initialization are not forced through the interactive placement policy.
+
+`src/token/actor-placement-ui.js` is explicitly transitional. It captures the modern Entity create/reposition actions before the legacy Entity/AppCore handlers, so those actions cannot also reach `placeCharacter()` or `repositionCharacter()`. Compatibility `character:create` / `character:move` events are notifications after the canonical commit, not data writes.
+
+## Token property ownership
+
+Token presentation/geometry properties are now written through the canonical Token runtime as well. `src/token/properties.js` is the DOM-free property boundary:
+
+```text
+tokenId
+  ↓
+api.tokens.get(tokenId)
+  ↓
+normalize requested value
+  ↓
+api.tokens.update(tokenId, patch)
+  ↓
+Scene.tokens[]
+  ↓
+api.world.commit()
+```
+
+Canonical helpers cover:
+
+- `hidden` / visible state.
+- `diameterMeters`.
+- `rotation` normalized to `[0, 360)`.
+- `elevationFt` normalized to a non-negative value.
+
+`src/token/property-ui.js` is a transitional editor bridge around the current Entity/Elevation surfaces. It captures the old Token-page diameter/elevation controls before their Character-era handlers run, and adds visible/rotation controls to the same Token cards. These edits never call `EntityStore.persist()`, `api.commitState()` or write `state.characters[]` directly.
+
+The public Token-height methods on `api.elevation` are wrapped after the Elevation system registers, so Token elevation edits use `api.tokens.update()` while Feature blocking-height editing remains owned by the existing Feature/Elevation subsystem. The existing elevation permission preflight is preserved.
+
+The canonical renderer consumes these fields directly:
+
+```text
+hidden          → Token map visibility
+diameterMeters  → rendered diameter + collision context
+rotation        → Token portrait rotation
+elevationFt     → elevation label + movement/collision context
+```
+
+`token:size-change` and `elevation:token-change` remain compatibility/runtime invalidation events so an already-previewed movement route is discarded when size or height changes.
 
 ## Server behavior
 
@@ -209,17 +268,18 @@ This synchronization also means a Player cannot move a Token by forging only `wo
 6. Movement, collision planning, Feature enter/exit and movement authority using `Scene.tokens[]`.
 7. Visible Leaflet Token renderer, Token status badges and Token health bars reading canonical `Scene.tokens[]`.
 8. Modern Actor map placement writing directly through `api.tokens.create()` instead of `placeCharacter()` + `bindToken()`.
+9. Modern Token reposition writing through `api.tokens.move()` instead of `repositionCharacter()` / `characters[].location`.
+10. Token hidden/diameter/rotation/elevation edits writing through `api.tokens.update()`, with renderer output driven by the same canonical fields.
 
 ## Next migrations
 
-Actor placement creation is canonical. The remaining Character facade is now concentrated in Token editing/relocation and parts of the sidebar.
+Actor placement, reposition and Token property writes are canonical. The remaining Character facade is now concentrated in editor reads/deletion and a few sidebar/Feature views.
 
-1. Replace `repositionCharacter()` and Character visibility/size edits with `api.tokens.move()` / `api.tokens.update()`.
-2. Resolve editor Token lists/position/display from `api.tokens.list()` + World Actor rather than `state.characters[]` / Entity Token mirrors.
-3. Replace Token deletion with `api.tokens.remove()` and migrate remaining Feature occupant/editor lists to canonical Tokens.
-4. Remove the temporary Actor-placement UI bridge once the Entity editor owns canonical Actor/Token state directly.
-5. Remove `characterId` as a Token compatibility alias and finally retire `state.characters[]`.
-6. Add MapPackage registry/reload so `setActiveScene()` can switch across different maps.
-7. Move remaining subsystem state into explicit World/Scene documents where appropriate.
+1. Resolve the Entity editor's Token lists, position labels, display values and selected Token context from `api.tokens.list()` / `api.tokens.get()` + World Actor rather than `state.characters[]` / `preferences.entitySystem.tokens`.
+2. Replace Token deletion with `api.tokens.remove()` and migrate remaining Feature occupant/editor lists to canonical Tokens.
+3. Remove the temporary Actor-placement/property UI bridges once the Entity editor owns canonical Actor/Token state directly.
+4. Remove `characterId` as a Token compatibility alias and finally retire `state.characters[]`.
+5. Add MapPackage registry/reload so `setActiveScene()` can switch across different maps.
+6. Move remaining subsystem state into explicit World/Scene documents where appropriate.
 
 Until those migrations land, code must treat World V2 as canonical and the flat SaveV2 fields as compatibility projections only.
