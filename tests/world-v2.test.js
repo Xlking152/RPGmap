@@ -9,6 +9,7 @@ import {
   projectWorldV2ToRuntimeState,
   synchronizeWorldV2FromRuntimeState,
 } from '../src/world/model.js';
+import { migrateLegacySaveV2 } from '../src/legacy/save-v2.js';
 
 const mapPackage = { id: 'test-map', version: '2.3.0', title: '测试地图' };
 const ruleset = { id: 'infinite-horror', version: '1.0.0', title: '无限跑团' };
@@ -22,9 +23,18 @@ function legacyState() {
     preferences: { gridVisible: true, entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [{ id: 'token-1', actorId: 'actor-1', diameterMeters: 1, rotation: 0, elevationFt: 5, hidden: false, locked: false, showName: true, effects: [] }] } },
   };
 }
+function modernState() {
+  return {
+    saveVersion: 2, mapId: mapPackage.id, mapVersion: mapPackage.version,
+    markers: [{ id: 'marker-1', name: 'M', x: 2, y: 3, color: '#3498db', visible: true }],
+    attackAreas: [], sceneEvents: [],
+    preferences: { gridVisible: true, entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [{ id: 'token-1', actorId: 'actor-1', placement: 'map', x: 10.5, y: 20.5, diameterMeters: 1, rotation: 0, elevationFt: 5, hidden: false, locked: false, showName: true, effects: [] }] } },
+  };
+}
 
-test('legacy single-map state migrates once into World V2 with World Actors and Scene Tokens', () => {
-  const world = createWorldV2FromRuntimeState(legacyState(), { mapPackage, ruleset });
+test('legacy SaveV2 migration boundary converts Character placement once into World Actors and Scene Tokens', () => {
+  const migration = migrateLegacySaveV2(legacyState(), { mapPackage, ruleset });
+  const world = migration.world;
   assert.equal(world.schemaVersion, WORLD_SCHEMA_VERSION);
   assert.equal(world.ruleset.id, 'infinite-horror');
   assert.equal(world.actors[0].id, 'actor-1');
@@ -32,15 +42,16 @@ test('legacy single-map state migrates once into World V2 with World Actors and 
   assert.deepEqual({ x: scene.tokens[0].x, y: scene.tokens[0].y }, { x: 10.5, y: 20.5 });
   assert.equal(scene.tokens[0].actorLink, true);
   assert.equal(scene.tokens[0].actorDelta, null);
+  assert.equal(Object.hasOwn(migration.state, 'characters'), false);
 });
 
-test('World V2 projects canonical Scene Tokens into Entity reducer state but not Character documents', () => {
-  const state = legacyState();
+test('World V2 projects canonical Scene Tokens into Entity reducer state without Character documents', () => {
+  const state = modernState();
   const world = createWorldV2FromRuntimeState(state, { mapPackage, ruleset });
   const scene = activeWorldScene(world);
   scene.tokens[0].x = 44.5; scene.tokens[0].y = 55.5; scene.tokens[0].hidden = true;
   const projected = projectWorldV2ToRuntimeState(state, world, { mapPackage, ruleset });
-  assert.deepEqual(projected.characters, []);
+  assert.equal(Object.hasOwn(projected, 'characters'), false);
   assert.equal(projected.preferences.entitySystem.tokens[0].x, 44.5);
   assert.equal(projected.preferences.entitySystem.tokens[0].actorId, 'actor-1');
   assert.equal(projected.preferences.entitySystem.tokens[0].characterId, undefined);
@@ -48,24 +59,26 @@ test('World V2 projects canonical Scene Tokens into Entity reducer state but not
 });
 
 test('runtime reducer synchronization preserves canonical active Scene placement', () => {
-  const state = legacyState();
+  const state = modernState();
   let world = createWorldV2FromRuntimeState(state, { mapPackage, ruleset });
   world = createEmptyWorldScene(world, { mapPackage, id: 'scene-second', name: '第二场景' });
   const draft = projectWorldV2ToRuntimeState(state, world, { mapPackage, ruleset });
   draft.preferences.entitySystem.tokens[0].effects = [{ id: 'effect-1', definitionId: 'x', stacks: 1, enabled: true }];
+  draft.preferences.entitySystem.tokens[0].x = 99;
+  draft.preferences.entitySystem.tokens[0].y = 88;
   const synced = synchronizeWorldV2FromRuntimeState(draft, { mapPackage, ruleset, existingWorld: world });
   assert.equal(activeWorldScene(synced).tokens[0].x, 10.5);
   assert.equal(activeWorldScene(synced).tokens[0].y, 20.5);
   assert.equal(synced.scenes.find(scene => scene.id === 'scene-second').tokens.length, 0);
 });
 
-test('feature placement is canonical in Scene Token and Character projection stays retired', () => {
-  const state = legacyState();
+test('feature placement is canonical in Scene Token and Character projection stays absent', () => {
+  const state = modernState();
   const world = createWorldV2FromRuntimeState(state, { mapPackage, ruleset });
   const token = activeWorldScene(world).tokens[0];
   token.placement = 'feature'; token.featureId = 'building-7'; token.x = null; token.y = null;
   const projected = projectWorldV2ToRuntimeState(state, world, { mapPackage, ruleset });
-  assert.deepEqual(projected.characters, []);
+  assert.equal(Object.hasOwn(projected, 'characters'), false);
   assert.equal(projected.preferences.entitySystem.tokens[0].placement, 'feature');
   assert.equal(projected.preferences.entitySystem.tokens[0].featureId, 'building-7');
 });
