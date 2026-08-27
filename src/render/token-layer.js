@@ -1,5 +1,6 @@
 import L from 'leaflet';
 import { worldToLatLng } from '../engine/geometry.js';
+import { formatFt } from '../elevation/model.js';
 import { resolveStatusUiSnapshot, renderTokenStatusBadges } from '../status/ui.js';
 import { createTokenViewModel } from './token-view-model.js';
 
@@ -39,7 +40,7 @@ function installStyles(documentNode) {
     .leaflet-character-pane { visibility:hidden !important; pointer-events:none !important; }
     .leaflet-tooltip.character-tooltip { display:none !important; }
     .leaflet-statusBadge-pane { visibility:hidden !important; pointer-events:none !important; }
-    .rpg-token-v2 { background:transparent !important; border:0 !important; }
+    .rpg-token-v2 { background:transparent !important; border:0 !important; overflow:visible !important; }
     .rpg-token-v2 .rpg-character-core { border-radius:50%; overflow:hidden; }
     .rpg-token-v2 .rpg-token-v2-portrait { width:100%; height:100%; display:grid; place-items:center; border-radius:inherit; overflow:hidden; }
     .rpg-token-v2 .rpg-token-v2-portrait img { width:100%; height:100%; object-fit:cover; }
@@ -65,9 +66,10 @@ function tokenIcon(api, model) {
   const portrait = model.avatarDataUrl
     ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="">`
     : `<span>${escapeHtml((Array.from(model.name)[0] || '?').toUpperCase())}</span>`;
+  const elevation = `<div class="token-elevation-label">${escapeHtml(formatFt(model.elevationFt))} ft</div>`;
   return L.divIcon({
     className: 'rpg-token-v2',
-    html: `<div class="rpg-character-core rpg-token-v2-core${model.selected ? ' selected' : ''}" data-token-id="${escapeHtml(model.id)}" style="--character-color:${model.color};--token-size:${size}px"><div class="rpg-token-v2-portrait" style="transform:rotate(${model.rotation}deg)">${portrait}</div></div>`,
+    html: `<div class="rpg-character-core rpg-token-v2-core${model.selected ? ' selected' : ''}" data-token-id="${escapeHtml(model.id)}" style="--character-color:${model.color};--token-size:${size}px"><div class="rpg-token-v2-portrait" style="transform:rotate(${model.rotation}deg)">${portrait}</div></div>${elevation}`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
