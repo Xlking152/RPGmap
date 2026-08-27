@@ -44,7 +44,7 @@ function world({ activeActorId = null } = {}) {
 
 function addWorldV2(value) {
   const actors = structuredClone(value.preferences.entitySystem.actors);
-  value.characters = [];
+  delete value.characters;
   value.preferences.entitySystem.tokens = value.preferences.entitySystem.tokens.map((token, index) => {
     const { characterId: _legacyCharacterId, ...canonical } = token;
     return {
@@ -234,7 +234,7 @@ test('server Player permissions allow canonical World V2 movement but protect Wo
   const movementResult = validatePlayerWorldPush({ before, next: moved, user });
   assert.equal(movementResult.ok, true, JSON.stringify(movementResult));
   assert.equal(moved.preferences.worldV2.scenes[0].tokens[0].x, 9);
-  assert.deepEqual(moved.characters, []);
+  assert.equal(Object.hasOwn(moved, 'characters'), false);
 
   const rulesetTamper = structuredClone(before);
   rulesetTamper.preferences.worldV2.ruleset.id = 'forged-ruleset';
