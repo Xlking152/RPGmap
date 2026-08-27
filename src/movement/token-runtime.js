@@ -66,8 +66,15 @@ function updateAnchoredAreas(world, tokenId, point) {
   const next = clone(world);
   const index = activeSceneIndex(next);
   next.scenes[index].attackAreas = array(next.scenes[index].attackAreas).map(area => {
-    if (area?.anchor?.type !== 'character' || String(area.anchor.characterId) !== String(tokenId)) return area;
-    return { ...area, origin: { x: Number(point.x), y: Number(point.y) } };
+    const anchor = area?.anchor || {};
+    const canonical = anchor.type === 'token' && String(anchor.tokenId) === String(tokenId);
+    const legacy = anchor.type === 'character' && String(anchor.characterId) === String(tokenId);
+    if (!canonical && !legacy) return area;
+    return {
+      ...area,
+      origin: { x: Number(point.x), y: Number(point.y) },
+      anchor: { type: 'token', tokenId: String(tokenId) },
+    };
   });
   return next;
 }
@@ -84,9 +91,6 @@ function moverContext(api, token) {
   const status = movementStatusContext(api, token);
   return Object.freeze({
     tokenId: String(token.id),
-    // Navigation still accepts the historical field name. Its value is now the
-    // canonical Token id, not a separate Character document id.
-    characterId: String(token.id),
     elevationFt: tokenElevationFt(token),
     diameterMeters: tokenDiameterMeters(token),
     statusVersion: status?.statusVersion || 'none',
@@ -115,12 +119,6 @@ function applyStatusOperationToWorld(rawWorld, operation, context = {}) {
   return world;
 }
 
-/**
- * Apply Feature side-effect statuses to the canonical World rather than the
- * active Character compatibility projection. Actor-scoped mutations aimed at
- * an unlinked Token are automatically redirected to that Token's Synthetic
- * Actor so one NPC instance never contaminates its template or siblings.
- */
 export function applyMovementStatusMutations(rawWorld, tokenId, mutations = [], context = {}) {
   let world = clone(rawWorld);
   for (const raw of array(mutations)) {
@@ -185,12 +183,8 @@ export function createMovementTokenRuntimeSystem() {
         navigationRevision = null;
       }
 
-      function compatibilityCharacter(tokenId) {
-        return array(api.getState?.()?.characters).find(character => String(character?.id) === String(tokenId)) || null;
-      }
-
       function emitMoved(token, { from = null, to = null, arrival = null, reason = 'token.move' } = {}) {
-        const detail = {
+        api.emit?.('token:move', {
           id: token.id,
           tokenId: token.id,
           actorId: token.actorId,
@@ -199,21 +193,15 @@ export function createMovementTokenRuntimeSystem() {
           to: clone(to),
           arrival: clone(arrival),
           reason,
-        };
-        api.emit?.('token:move', detail);
-        const character = compatibilityCharacter(token.id);
-        api.emit?.('character:move', character ? clone(character) : {
-          id: token.id,
-          location: token.placement === 'feature'
-            ? { type: 'building', featureId: token.featureId }
-            : { type: 'map', x: token.x, y: token.y },
         });
       }
 
       function emitCancelled(tokenId, error) {
-        const detail = { id: tokenId, tokenId, reason: error?.message || String(error || 'movement cancelled') };
-        api.emit?.('token:move-cancelled', detail);
-        api.emit?.('character:move-cancelled', detail);
+        api.emit?.('token:move-cancelled', {
+          id: tokenId,
+          tokenId,
+          reason: error?.message || String(error || 'movement cancelled'),
+        });
       }
 
       async function planTokenMove(tokenId, destination, arrival = null) {
@@ -254,19 +242,17 @@ export function createMovementTokenRuntimeSystem() {
           throw new Error(capability.reasons?.[0] || '当前状态禁止 Token 移动');
         }
 
-        // Revalidate against the latest Scene/Feature/status snapshot immediately
-        // before the authoritative World commit.
         const route = await findDirectNavigationPath(navigation(current), from, plan.destination);
         if (!route) throw new Error('执行时路径已不可通行');
 
         let world = api.world.get();
         let reason = 'token.move';
         let anchorPoint = route.destination || plan.destination;
-        if (plan.arrival?.type === 'building' || plan.arrival?.type === 'feature') {
+        if (plan.arrival?.type === 'feature') {
           const featureId = String(plan.arrival.featureId || '');
           const feature = featureById(api.mapPackage, featureId);
           if (!feature) throw new Error(`Feature 不存在：${featureId}`);
-          const action = api.interaction?.actionsForFeature?.(featureId, { characterId: current.id })
+          const action = api.interaction?.actionsForFeature?.(featureId, { tokenId: current.id })
             ?.find?.(entry => entry.id === 'enter');
           if (action?.enabled === false) throw new Error(action.reason || '当前无法进入 Feature');
           world = placeSceneTokenInFeature(world, current.id, featureId).world;
@@ -345,8 +331,6 @@ export function createMovementTokenRuntimeSystem() {
           reason: `feature.exit:${feature.id}`,
         });
         api.emit?.('token:exit-feature', { id: token.id, tokenId: token.id, featureId: feature.id, token: clone(committed) });
-        const character = compatibilityCharacter(token.id);
-        api.emit?.('character:exit-building', character ? clone(character) : { id: token.id, location: { type: 'map', ...safe } });
         return true;
       }
 
@@ -358,7 +342,7 @@ export function createMovementTokenRuntimeSystem() {
         return inspectDirectNavigationPath(navigation(token), from, to);
       }
 
-      const movement = {
+      api.movement = Object.freeze({
         canonicalSceneTokens: true,
         planTokenMove,
         commitTokenMove,
@@ -367,16 +351,7 @@ export function createMovementTokenRuntimeSystem() {
         cancelPending() { pendingPlan = null; },
         invalidateNavigation,
         getPendingPlan() { return clone(pendingPlan); },
-      };
-      api.movement = movement;
-
-      // Compatibility façade for the existing map shell and Feature operations.
-      // The old names remain callable, but their implementation no longer writes
-      // characters[].location.
-      api.planCharacterMove = planTokenMove;
-      api.commitCharacterMove = commitTokenMove;
-      api.exitFeature = exitFeature;
-      api.exitBuilding = exitFeature;
+      });
 
       for (const eventName of ['scene:damage', 'scene:restore', 'scene:undo', 'state:import', 'status:change', 'token:size-change', 'elevation:token-change']) {
         api.on?.(eventName, invalidateNavigation);
