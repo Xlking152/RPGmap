@@ -1,0 +1,114 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createWorldSystem } from '../src/world/system.js';
+import { createTokenRuntimeSystem } from '../src/token/system.js';
+import { WORLD_STATE_KEY, activeWorldScene } from '../src/world/model.js';
+
+const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图' };
+
+function actor() {
+  return {
+    id: 'actor-1', name: '角色', currentFormId: 'form-1',
+    forms: [{ id: 'form-1', tokenAppearance: { color: '#3d9b63' }, avatarDataUrl: null }],
+    runtime: {}, effects: [],
+  };
+}
+
+function state() {
+  return {
+    saveVersion: 2, mapId: 'test-map', mapVersion: '1.0.0',
+    markers: [], attackAreas: [], sceneEvents: [], characters: [],
+    preferences: {
+      gridVisible: true,
+      entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [] },
+    },
+  };
+}
+
+function apiFixture() {
+  let current = state();
+  const events = [];
+  const api = {
+    mapPackage,
+    getState() { return structuredClone(current); },
+    commitState(next, options = {}) {
+      current = structuredClone(next);
+      events.push(['commit', options.source, options.reason]);
+      return true;
+    },
+    importState(next, ...args) {
+      current = structuredClone(next);
+      events.push(['import', ...args]);
+      return true;
+    },
+    emit(type, detail) { events.push([type, detail]); },
+  };
+  createWorldSystem().register(api);
+  createTokenRuntimeSystem().register(api);
+  return { api, events, current: () => structuredClone(current) };
+}
+
+test('TokenSystem creates a canonical Scene Token and only projects a compatibility Character', async () => {
+  const fixture = apiFixture();
+  const token = await fixture.api.tokens.create({
+    actorId: 'actor-1', id: 'token-instance-1', x: 12.5, y: 13.5,
+  });
+  assert.equal(token.id, 'token-instance-1');
+  assert.equal(token.actorId, 'actor-1');
+
+  const current = fixture.current();
+  const world = current.preferences[WORLD_STATE_KEY];
+  assert.equal(activeWorldScene(world).tokens[0].x, 12.5);
+  assert.deepEqual(current.characters[0].location, { type: 'map', x: 12.5, y: 13.5 });
+  assert.equal(current.preferences.entitySystem.tokens[0].characterId, 'token-instance-1');
+});
+
+test('TokenSystem supports multiple Token instances for the same Actor', async () => {
+  const fixture = apiFixture();
+  await fixture.api.tokens.create({ actorId: 'actor-1', id: 'token-one', x: 1, y: 1 });
+  await fixture.api.tokens.create({ actorId: 'actor-1', id: 'token-two', x: 2, y: 2 });
+  assert.equal(fixture.api.tokens.list().length, 2);
+  assert.deepEqual(fixture.api.tokens.list().map(token => token.actorId), ['actor-1', 'actor-1']);
+  assert.deepEqual(fixture.current().characters.map(character => character.id), ['token-one', 'token-two']);
+});
+
+test('TokenSystem move and feature placement update canonical World then refresh compatibility projection', async () => {
+  const fixture = apiFixture();
+  await fixture.api.tokens.create({ actorId: 'actor-1', id: 'token-one', x: 1, y: 1 });
+  await fixture.api.tokens.move('token-one', { x: 20.5, y: 21.5 });
+  assert.deepEqual(fixture.current().characters[0].location, { type: 'map', x: 20.5, y: 21.5 });
+
+  await fixture.api.tokens.placeInFeature('token-one', 'building-a');
+  assert.deepEqual(fixture.current().characters[0].location, { type: 'building', featureId: 'building-a' });
+  const canonical = fixture.api.tokens.get('token-one');
+  assert.equal(canonical.placement, 'feature');
+  assert.equal(canonical.x, null);
+  assert.equal(canonical.y, null);
+});
+
+test('TokenSystem preserves actorLink/actorDelta and removes projected compatibility state on delete', async () => {
+  const fixture = apiFixture();
+  await fixture.api.tokens.create({
+    actorId: 'actor-1', id: 'npc-one', actorLink: false,
+    actorDelta: { runtime: { resources: { hp: { current: 5 } } } },
+  });
+  await fixture.api.tokens.update('npc-one', { hidden: true, elevationFt: 15 });
+  const token = fixture.api.tokens.get('npc-one');
+  assert.equal(token.actorLink, false);
+  assert.equal(token.actorDelta.runtime.resources.hp.current, 5);
+  assert.equal(token.hidden, true);
+  assert.equal(token.elevationFt, 15);
+
+  await fixture.api.tokens.remove('npc-one');
+  assert.equal(fixture.api.tokens.get('npc-one'), null);
+  assert.equal(fixture.current().characters.length, 0);
+  assert.equal(fixture.current().preferences.entitySystem.tokens.length, 0);
+});
+
+test('WorldSystem import wrapper preserves extra import arguments', () => {
+  const fixture = apiFixture();
+  const snapshot = fixture.api.getState();
+  fixture.api.importState(snapshot, false, 'remote-snapshot');
+  const importEvent = fixture.events.find(event => event[0] === 'import');
+  assert.deepEqual(importEvent, ['import', false, 'remote-snapshot']);
+});
