@@ -41,6 +41,8 @@ function installStyles(documentNode) {
     .leaflet-statusBadge-pane { visibility:hidden !important; pointer-events:none !important; }
     .rpg-token-v2 { background:transparent !important; border:0 !important; }
     .rpg-token-v2 .rpg-character-core { border-radius:50%; overflow:hidden; }
+    .rpg-token-v2 .rpg-token-v2-portrait { width:100%; height:100%; display:grid; place-items:center; border-radius:inherit; overflow:hidden; }
+    .rpg-token-v2 .rpg-token-v2-portrait img { width:100%; height:100%; object-fit:cover; }
     .rpgmap-token-status-v2-marker { background:transparent !important; border:0 !important; pointer-events:none !important; overflow:visible !important; }
   `;
   documentNode.head.append(style);
@@ -65,7 +67,7 @@ function tokenIcon(api, model) {
     : `<span>${escapeHtml((Array.from(model.name)[0] || '?').toUpperCase())}</span>`;
   return L.divIcon({
     className: 'rpg-token-v2',
-    html: `<div class="rpg-character-core rpg-token-v2-core${model.selected ? ' selected' : ''}" data-token-id="${escapeHtml(model.id)}" style="--character-color:${model.color};--token-size:${size}px">${portrait}</div>`,
+    html: `<div class="rpg-character-core rpg-token-v2-core${model.selected ? ' selected' : ''}" data-token-id="${escapeHtml(model.id)}" style="--character-color:${model.color};--token-size:${size}px"><div class="rpg-token-v2-portrait" style="transform:rotate(${model.rotation}deg)">${portrait}</div></div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
@@ -204,7 +206,7 @@ export function createTokenRendererSystem() {
 
       for (const eventName of [
         'token:create', 'token:delete', 'token:move', 'token:size-change',
-        'status:change', 'state:import', 'state:saved',
+        'token:property-change', 'status:change', 'state:import', 'state:saved',
       ]) off.push(api.on(eventName, render));
       off.push(api.on('state:commit', render));
 
