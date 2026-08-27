@@ -138,6 +138,11 @@ function globalProjection(state) {
     delete copy.preferences.entitySystem;
     delete copy.preferences.chatSystem;
     delete copy.preferences.combatSystem;
+    // World V2 mirrors the authoritative Actor/Token/active-Scene projection.
+    // assertWorldState() synchronizes it before permission checks, so treating
+    // the mirror as an independent global field would reject every legitimate
+    // owned-Actor/Token Player mutation as a world-scope change.
+    delete copy.preferences.worldV2;
   }
   return copy;
 }
@@ -347,7 +352,7 @@ export function validatePlayerWorldPush({ before, next, user } = {}) {
   if (!next || typeof next !== 'object' || Array.isArray(next)) return { ok: false, code: 'invalid_state', message: 'World state must be an object' };
 
   try {
-    // Do this before any Set/Map projection.  A Map silently overwrites duplicate
+    // Do this before any Set/Map projection. A Map silently overwrites duplicate
     // keys, which previously allowed the validator and UI to see different data.
     assertWorldState(before);
     assertWorldState(next);
