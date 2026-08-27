@@ -8,8 +8,8 @@ function uid(prefix) {
 
 /**
  * Normalize imported character cards before they enter the entity runtime.
- * Invalid/empty cards are converted into safe placeholders instead of
- * propagating undefined fields into token creation.
+ * Ruleset-specific defaults (resources, status tracks, health mode, etc.) are
+ * intentionally not introduced here; the active Ruleset owns those choices.
  */
 export function normalizeCharacterCard(input = {}) {
   const source = input && typeof input === 'object' ? input : {};
@@ -25,7 +25,7 @@ export function normalizeCharacterCard(input = {}) {
       : {},
     resources: source.resources && typeof source.resources === 'object'
       ? source.resources
-      : { hp: { max: 0 }, stamina: { max: 0 }, willpower: { max: 0 } },
+      : {},
     attributes: Array.isArray(source.attributes) ? source.attributes : [],
     checks: source.checks && typeof source.checks === 'object'
       ? source.checks
