@@ -68,36 +68,35 @@ function entityState(state) {
     : { actors: [], tokens: [], statusDefinitions: [] };
 }
 
-function runtimePlacement(character, token) {
-  const location = character?.location && typeof character.location === 'object' ? character.location : {};
-  if (location.type === 'building' && location.featureId != null) {
-    return { placement: 'feature', x: null, y: null, featureId: String(location.featureId) };
+function canonicalAttackArea(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return structuredClone(raw);
+  const area = structuredClone(raw);
+  const anchor = area.anchor;
+  if (anchor && typeof anchor === 'object' && !Array.isArray(anchor)
+    && anchor.type === 'character' && anchor.characterId != null) {
+    area.anchor = { type: 'token', tokenId: String(anchor.characterId) };
   }
-  const x = Number.isFinite(Number(location.x)) ? Number(location.x) : Number(token?.x || 0);
-  const y = Number.isFinite(Number(location.y)) ? Number(location.y) : Number(token?.y || 0);
-  return { placement: 'map', x, y, featureId: null };
+  return area;
 }
 
-function tokenFromRuntime(token, character, actorIds) {
-  const tokenId = String(token?.id ?? token?.characterId ?? '').trim();
-  const actorId = String(token?.actorId ?? '').trim();
-  if (!tokenId || !actorId || !actorIds.has(actorId)) return null;
-  return {
-    id: tokenId,
-    actorId,
-    actorLink: token?.actorLink !== false,
-    actorDelta: token?.actorDelta && typeof token.actorDelta === 'object' && !Array.isArray(token.actorDelta)
-      ? structuredClone(token.actorDelta)
-      : null,
-    ...runtimePlacement(character, token),
-    diameterMeters: Number(token?.diameterMeters ?? token?.size ?? 1),
-    rotation: Number(token?.rotation || 0),
-    elevationFt: Number(token?.elevationFt || 0),
-    hidden: token?.hidden === true,
-    locked: token?.locked === true,
-    showName: token?.showName !== false,
-    effects: Array.isArray(token?.effects) ? structuredClone(token.effects) : [],
-  };
+function mergeRuntimeTokenFields(canonicalToken, runtimeToken) {
+  if (!runtimeToken || String(runtimeToken.id ?? '') !== String(canonicalToken.id ?? '')) {
+    return structuredClone(canonicalToken);
+  }
+  const next = structuredClone(canonicalToken);
+  next.actorLink = runtimeToken.actorLink !== false;
+  if (runtimeToken.actorDelta && typeof runtimeToken.actorDelta === 'object' && !Array.isArray(runtimeToken.actorDelta)) {
+    next.actorDelta = structuredClone(runtimeToken.actorDelta);
+  }
+  if (runtimeToken.actorDelta === null) next.actorDelta = null;
+  if (runtimeToken.diameterMeters !== undefined) next.diameterMeters = Number(runtimeToken.diameterMeters);
+  if (runtimeToken.rotation !== undefined) next.rotation = Number(runtimeToken.rotation);
+  if (runtimeToken.elevationFt !== undefined) next.elevationFt = Number(runtimeToken.elevationFt);
+  if (runtimeToken.hidden !== undefined) next.hidden = runtimeToken.hidden === true;
+  if (runtimeToken.locked !== undefined) next.locked = runtimeToken.locked === true;
+  if (runtimeToken.showName !== undefined) next.showName = runtimeToken.showName !== false;
+  if (Array.isArray(runtimeToken.effects)) next.effects = structuredClone(runtimeToken.effects);
+  return next;
 }
 
 export function synchronizeWorldV2Mirror(state) {
@@ -105,24 +104,27 @@ export function synchronizeWorldV2Mirror(state) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const world = structuredClone(raw);
   const entity = entityState(state);
-  const actors = Array.isArray(entity.actors) ? structuredClone(entity.actors) : [];
+  const actors = Array.isArray(entity.actors) && entity.actors.length
+    ? structuredClone(entity.actors)
+    : (Array.isArray(world.actors) ? structuredClone(world.actors) : []);
   const actorIds = new Set(actors.map(actor => String(actor?.id ?? '')).filter(Boolean));
-  const characters = new Map((Array.isArray(state.characters) ? state.characters : [])
-    .map(character => [String(character?.id ?? ''), character]));
-  const tokens = (Array.isArray(entity.tokens) ? entity.tokens : []).flatMap(token => {
-    const characterId = String(token?.characterId ?? token?.id ?? '');
-    const next = tokenFromRuntime(token, characters.get(characterId), actorIds);
-    return next ? [next] : [];
-  });
+  const runtimeTokens = new Map((Array.isArray(entity.tokens) ? entity.tokens : [])
+    .filter(token => token?.id != null)
+    .map(token => [String(token.id), token]));
   const scenes = Array.isArray(world.scenes) ? world.scenes : [];
   const activeSceneId = String(world.activeSceneId ?? '');
   const activeIndex = scenes.findIndex(scene => String(scene?.id ?? '') === activeSceneId);
   if (activeIndex >= 0) {
+    const canonicalTokens = Array.isArray(scenes[activeIndex]?.tokens) ? scenes[activeIndex].tokens : [];
     scenes[activeIndex] = {
       ...scenes[activeIndex],
-      tokens,
+      // Placement/id/Actor binding are canonical Scene data. Flat Entity state
+      // can only feed reducer-owned mechanical/display fields back into them.
+      tokens: canonicalTokens
+        .filter(token => actorIds.has(String(token?.actorId ?? '')))
+        .map(token => mergeRuntimeTokenFields(token, runtimeTokens.get(String(token?.id ?? '')))),
       markers: Array.isArray(state.markers) ? structuredClone(state.markers) : [],
-      attackAreas: Array.isArray(state.attackAreas) ? structuredClone(state.attackAreas) : [],
+      attackAreas: Array.isArray(state.attackAreas) ? state.attackAreas.map(canonicalAttackArea) : [],
       sceneEvents: Array.isArray(state.sceneEvents) ? structuredClone(state.sceneEvents) : [],
       settings: {
         ...(scenes[activeIndex]?.settings && typeof scenes[activeIndex].settings === 'object' ? scenes[activeIndex].settings : {}),
@@ -132,7 +134,9 @@ export function synchronizeWorldV2Mirror(state) {
   }
   world.schemaVersion = WORLD_V2_SCHEMA_VERSION;
   world.actors = actors;
-  world.statusDefinitions = Array.isArray(entity.statusDefinitions) ? structuredClone(entity.statusDefinitions) : [];
+  world.statusDefinitions = Array.isArray(entity.statusDefinitions) && entity.statusDefinitions.length
+    ? structuredClone(entity.statusDefinitions)
+    : (Array.isArray(world.statusDefinitions) ? structuredClone(world.statusDefinitions) : []);
   world.scenes = scenes;
   world.updatedAt = new Date().toISOString();
   state.preferences[WORLD_V2_STATE_KEY] = world;
@@ -160,7 +164,7 @@ export function assertWorldV2(value) {
     if (typeof mapPackage.version !== 'string' || !mapPackage.version.trim()) {
       fail(`worldV2.scenes[${sceneIndex}].mapPackage.version is required`);
     }
-    unique(scene.tokens, `worldV2.scenes[${sceneIndex}].tokens`);
+    const tokenIds = unique(scene.tokens, `worldV2.scenes[${sceneIndex}].tokens`);
     for (const [tokenIndex, tokenRaw] of scene.tokens.entries()) {
       const token = object(tokenRaw, `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}]`);
       const actorId = cleanId(token.actorId, `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}].actorId`);
@@ -171,11 +175,6 @@ export function assertWorldV2(value) {
         fail('worldV2 token.actorDelta must be an object or null');
       }
 
-      // actorDelta is flexible for Ruleset data, but its resolved Actor effects
-      // are still mechanical Status data. Rebuild the Synthetic Actor on the
-      // server and run the same Status schema used for normal World Actors.
-      // This makes atomic world.push authoritative rather than trusting the
-      // browser to have produced a legal effect instance.
       if (token.actorLink === false && token.actorDelta) {
         const baseActor = actorById.get(actorId);
         const resolved = syntheticActor(baseActor, token.actorDelta);
@@ -204,7 +203,16 @@ export function assertWorldV2(value) {
       if (Number(token.diameterMeters) <= 0) fail('worldV2 token.diameterMeters must be positive');
     }
     array(scene.markers, `worldV2.scenes[${sceneIndex}].markers`);
-    array(scene.attackAreas, `worldV2.scenes[${sceneIndex}].attackAreas`);
+    const attackAreas = array(scene.attackAreas, `worldV2.scenes[${sceneIndex}].attackAreas`);
+    for (const [areaIndex, rawArea] of attackAreas.entries()) {
+      const area = object(rawArea, `worldV2.scenes[${sceneIndex}].attackAreas[${areaIndex}]`);
+      const anchor = area.anchor;
+      if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor)) continue;
+      if (anchor.type === 'token') {
+        const tokenId = cleanId(anchor.tokenId, `worldV2.scenes[${sceneIndex}].attackAreas[${areaIndex}].anchor.tokenId`);
+        if (!tokenIds.has(tokenId)) fail(`Attack area references missing Token: ${tokenId}`, 'invalid_reference');
+      }
+    }
     array(scene.sceneEvents, `worldV2.scenes[${sceneIndex}].sceneEvents`);
   }
   return world;
