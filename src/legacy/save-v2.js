@@ -30,6 +30,30 @@ function sceneIdForMap(mapId) {
   return `scene-${slug || 'default'}`;
 }
 
+function legacyEntityState(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const next = clone(raw);
+  next.tokens = (Array.isArray(next.tokens) ? next.tokens : []).map(token => {
+    if (!token || typeof token !== 'object' || Array.isArray(token)) return token;
+    const migrated = { ...token, id: String(token.id ?? token.characterId ?? '').trim() };
+    delete migrated.characterId;
+    return migrated;
+  });
+  return next;
+}
+
+function legacyAttackAreas(rawAreas) {
+  const converted = (Array.isArray(rawAreas) ? rawAreas : []).map(raw => {
+    const area = clone(raw);
+    const anchor = area?.anchor;
+    if (anchor?.type === 'character' && anchor.characterId != null) {
+      area.anchor = { type: 'token', tokenId: String(anchor.characterId) };
+    }
+    return area;
+  });
+  return canonicalAttackAreas(converted);
+}
+
 function legacyTokenToWorldToken(token, characterById) {
   const tokenId = String(token?.id ?? '').trim();
   const actorId = String(token?.actorId ?? '').trim();
@@ -77,7 +101,7 @@ export function isLegacySaveV2Payload(raw) {
  *
  * Legacy SaveV1/V2 is parsed with the historical validator, converted to a
  * World V2 graph, and immediately projected into the modern reducer shell.
- * Character documents never escape this function.
+ * Character documents and Character-era Token/anchor fields never escape.
  */
 export function migrateLegacySaveV2(raw, {
   mapPackage,
@@ -91,7 +115,7 @@ export function migrateLegacySaveV2(raw, {
   const schemaMigration = migrateLegacySchema(raw, mapPackage);
   const legacy = validateLegacySave(schemaMigration.save, mapPackage);
   const entityMigration = migrateLegacyCharacters(
-    legacy.preferences?.entitySystem,
+    legacyEntityState(legacy.preferences?.entitySystem),
     legacy.characters || [],
   );
   const entity = entityMigration.state;
@@ -99,6 +123,7 @@ export function migrateLegacySaveV2(raw, {
   const tokens = (entity.tokens || [])
     .map(token => legacyTokenToWorldToken(token, characterById))
     .filter(Boolean);
+  const attackAreas = legacyAttackAreas(legacy.attackAreas || []);
   const mapRef = mapMetadata(mapPackage);
   const sceneId = sceneIdForMap(mapRef.id);
   const now = new Date().toISOString();
@@ -116,7 +141,7 @@ export function migrateLegacySaveV2(raw, {
       mapPackage: mapRef,
       tokens,
       markers: clone(legacy.markers || []),
-      attackAreas: canonicalAttackAreas(legacy.attackAreas || []),
+      attackAreas,
       sceneEvents: clone(legacy.sceneEvents || []),
       settings: { gridVisible: legacy.preferences?.gridVisible !== false },
     }],
@@ -129,7 +154,7 @@ export function migrateLegacySaveV2(raw, {
     mapId: legacy.mapId,
     mapVersion: legacy.mapVersion,
     markers: clone(legacy.markers || []),
-    attackAreas: canonicalAttackAreas(legacy.attackAreas || []),
+    attackAreas: clone(attackAreas),
     sceneEvents: clone(legacy.sceneEvents || []),
     preferences: clone(legacy.preferences || {}),
   };
