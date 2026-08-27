@@ -6,6 +6,7 @@ const appSource = readFileSync(new URL('../src/engine/app.js', import.meta.url),
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const appShellSource = readFileSync(new URL('../src/ui/app-shell.js', import.meta.url), 'utf8');
 const entityUiSource = readFileSync(new URL('../src/entities/ui.js', import.meta.url), 'utf8');
+const tokenControllerSource = readFileSync(new URL('../src/entities/token-controller.js', import.meta.url), 'utf8');
 const sceneRenderer = readFileSync(new URL('../src/render/scene-renderer.js', import.meta.url), 'utf8');
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -66,11 +67,15 @@ test('modern sidebar synchronizes real panels and cannot revive the retired mark
   assert.match(appShellSource, /if \(name !== 'current'\) api\.setActivePanel\?\.\(name\);/);
 });
 
-test('Token placement owns the map click instead of chaining through the legacy character tool', () => {
-  assert.match(appSource, /setTool,\s*\n\s*setActivePanel,\s*\n\s*placeCharacter,/);
-  assert.match(entityUiSource, /api\.placeCharacter\?\.\(point, \{ suppressEditor: true \}\)/);
-  assert.match(entityUiSource, /mapElement\.addEventListener\('click', placePendingTokenAtMapClick, true\)/);
-  assert.doesNotMatch(entityUiSource, /api\.setTool\('character-place'\)/);
+test('Token placement owns the map click directly through the canonical Entity controller', () => {
+  assert.match(entityUiSource, /mapElement\.addEventListener\('click', tokenController\.handleMapClick, true\)/);
+  assert.match(entityUiSource, /tokenController\.beginPlacement\(id\)/);
+  assert.match(tokenControllerSource, /createActorTokenAtPoint\(api, actorId, point\)/);
+  assert.match(tokenControllerSource, /relocateActorTokenAtPoint\(api, target, point\)/);
+  assert.doesNotMatch(entityUiSource, /api\.placeCharacter|placePendingTokenAtMapClick|api\.setTool\('character-place'\)/);
+  assert.doesNotMatch(tokenControllerSource, /api\.placeCharacter|api\.repositionCharacter|character:create|character:move|state\.characters/);
+  // AppCore still exposes its dormant Character placement facade until ⑤-F-2.
+  assert.match(appSource, /\bplaceCharacter,/);
 });
 
 test('destruction rendering separates buildings, pontoon bridges and wall breaches', () => {
