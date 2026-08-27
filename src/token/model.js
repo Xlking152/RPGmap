@@ -83,6 +83,23 @@ function normalizeToken(raw, { actorId, tokenId } = {}) {
   };
 }
 
+function detachTokenAreaAnchors(scene, token) {
+  const tokenId = String(token?.id ?? '');
+  if (!tokenId) return scene;
+  scene.attackAreas = array(scene.attackAreas).map(area => {
+    const anchor = object(area?.anchor);
+    const anchorTokenId = String(anchor.tokenId ?? anchor.characterId ?? '');
+    if (anchor.type !== 'character' || anchorTokenId !== tokenId) return area;
+    const next = clone(area);
+    next.anchor = { type: 'free', markerId: null };
+    if (token.placement === 'map' && Number.isFinite(Number(token.x)) && Number.isFinite(Number(token.y))) {
+      next.origin = { x: Number(token.x), y: Number(token.y) };
+    }
+    return next;
+  });
+  return scene;
+}
+
 export function listActiveSceneTokens(world) {
   const index = activeSceneIndex(world);
   return clone(array(world.scenes[index]?.tokens));
@@ -194,6 +211,7 @@ export function removeSceneToken(world, tokenId) {
   const next = withActiveScene(world, scene => {
     const { index, token } = requireToken(scene, tokenId);
     removed = clone(token);
+    detachTokenAreaAnchors(scene, token);
     scene.tokens.splice(index, 1);
     return scene;
   });
