@@ -20,6 +20,7 @@ import { createMultiplayerHostBootstrapSystem } from './multiplayer/host-bootstr
 import { createDefaultMapPackage } from './map-package/default-map.js';
 import { createStatusSystem, createStatusUiSystem } from './status/index.js';
 import { chooseRulesetBeforeMap } from './ruleset/setup.js';
+import { createWorldSystem } from './world/index.js';
 
 function setBootStatus(message, { error = false } = {}) {
   const node = document.querySelector('[data-rpgmap-boot-status]');
@@ -61,9 +62,9 @@ async function yieldForFirstPaint() {
 export async function startRpgMap() {
   const appContainer = document.getElementById('app');
 
-  // Ruleset selection is a bootstrap concern and happens before any MapPackage
-  // or Scene runtime exists. This lightweight browser setting is a bridge for
-  // V1.x; World V2 will move the canonical ruleset id into the World manifest.
+  // Before a World exists we still need a ruleset to interpret legacy actors.
+  // World V2 now stores the canonical ruleset reference; this browser value is
+  // only the first-run/default choice used while opening or migrating a World.
   const bootstrapStorage = createBrowserStorage();
   const ruleset = await chooseRulesetBeforeMap({
     container: appContainer,
@@ -77,8 +78,8 @@ export async function startRpgMap() {
   // Do not synchronously load a stale browser localStorage World first.
   const storageAdapter = serverRuntime ? createMemoryStorage() : createBrowserStorage();
   setBootStatus(serverRuntime
-    ? `规则包：${ruleset.title} · 服务器已连接，正在载入地图…`
-    : `规则包：${ruleset.title} · 正在载入本地地图…`);
+    ? `规则包：${ruleset.title} · 服务器已连接，正在载入 World…`
+    : `规则包：${ruleset.title} · 正在载入本地 World…`);
 
   await yieldForFirstPaint();
 
@@ -91,6 +92,10 @@ export async function startRpgMap() {
     storageAdapter,
     tools: [
       createAppLifecycleSystem(),
+      // World V2 owns Ruleset + Actors + Scenes. It must wrap AppCore commit /
+      // import boundaries before Entity, Status, Movement, Combat, or LAN tools
+      // begin mutating the active-scene compatibility projection.
+      createWorldSystem(),
       createMovementSystem({ defaultStep: 5, autoStep: true }),
       // Legacy markers are data.  They remain untouched until a GM explicitly
       // confirms their migration from the in-app review flow.
