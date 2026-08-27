@@ -7,7 +7,6 @@ import {
   reduceStatusOperation,
   resolveStatuses,
 } from '../src/status/model.js';
-import { moverContextForCharacter } from '../src/elevation/model.js';
 import { resolveResource } from '../src/entities/resolver.js';
 
 function actor(id = 'actor-1') {
@@ -33,7 +32,7 @@ function emptyState() {
     schemaVersion: 3,
     statusDefinitions: [],
     actors: [actor()],
-    tokens: [{ id: 'token-1', characterId: 'token-1', actorId: 'actor-1', effects: [] }],
+    tokens: [{ id: 'token-1', actorId: 'actor-1', effects: [] }],
   };
 }
 
@@ -146,20 +145,21 @@ test('bad-status points derive the highest reached light, severe, or destruction
   assert.equal(destruction.derivedStatuses.find(status => status.definitionId.includes('bad-status-fear')).label, '恐惧点数 · 毁灭');
 });
 
-test('mover context carries authoritative status version and structure bypass', () => {
+test('Token status resolution carries authoritative version and structure bypass metadata', () => {
   const entities = emptyState();
   entities.tokens[0].effects = [{
     id: 'spirit', definitionId: 'status-spirit', stacks: 1, enabled: true,
   }];
-  const context = moverContextForCharacter({ preferences: { entitySystem: entities } }, 'token-1');
-  assert.deepEqual(context.collisionBypassGroups, ['structure']);
-  assert.match(context.statusVersion, /^[0-9a-f]{8}$/);
+  const resolved = resolveStatuses(entities, { tokenId: 'token-1' });
+  assert.deepEqual(resolved.capabilities.collisionBypassGroups, ['structure']);
+  assert.match(resolved.statusVersion, /^[0-9a-f]{8}$/);
 
   entities.tokens[0].effects.push({
     id: 'rooted', definitionId: 'status-rooted', stacks: 1, enabled: true,
   });
-  const changed = moverContextForCharacter({ preferences: { entitySystem: entities } }, 'token-1');
-  assert.notEqual(changed.statusVersion, context.statusVersion);
+  const changed = resolveStatuses(entities, { tokenId: 'token-1' });
+  assert.notEqual(changed.statusVersion, resolved.statusVersion);
+  assert.equal(changed.capabilities.canMove, false);
 });
 
 test('disabled effects remain editable but do not affect resolved capabilities', () => {
