@@ -28,6 +28,7 @@ function token(overrides = {}) {
     x: 12.5,
     y: 18.5,
     diameterMeters: 5,
+    rotation: 45,
     hidden: false,
     showName: true,
     ...overrides,
@@ -36,13 +37,18 @@ function token(overrides = {}) {
 
 test('Token renderer view model uses canonical Token placement and resolved Actor display data', () => {
   const model = createTokenViewModel({ token: token(), actor: actor(), selected: true });
-  assert.deepEqual({ id: model.id, x: model.x, y: model.y, diameterMeters: model.diameterMeters }, {
-    id: 'token-instance', x: 12.5, y: 18.5, diameterMeters: 5,
+  assert.deepEqual({ id: model.id, x: model.x, y: model.y, diameterMeters: model.diameterMeters, rotation: model.rotation }, {
+    id: 'token-instance', x: 12.5, y: 18.5, diameterMeters: 5, rotation: 45,
   });
   assert.equal(model.name, '模板士兵');
   assert.equal(model.avatarDataUrl, 'data:image/webp;base64,BASE');
   assert.equal(model.color, '#336699');
   assert.equal(model.selected, true);
+});
+
+test('Token renderer normalizes rotation from the canonical Scene Token', () => {
+  assert.equal(createTokenViewModel({ token: token({ rotation: 725 }), actor: actor() }).rotation, 5);
+  assert.equal(createTokenViewModel({ token: token({ rotation: -15 }), actor: actor() }).rotation, 345);
 });
 
 test('Token renderer displays Synthetic Actor instance overrides without mutating the template', () => {
@@ -81,4 +87,5 @@ test('canonical map Token and health overlay sources do not read compatibility p
     assert.doesNotMatch(source, /state\.characters|preferences\.entitySystem/);
   }
   assert.match(renderer, /api\.tokens\.resolveActor/);
+  assert.match(renderer, /model\.rotation/);
 });
