@@ -10,6 +10,10 @@ function isObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+function same(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 function mergeValue(base, delta) {
   if (delta === undefined) return clone(base);
   if (Array.isArray(delta)) return clone(delta);
@@ -22,6 +26,20 @@ function mergeValue(base, delta) {
   return result;
 }
 
+function diffValue(base, current) {
+  if (same(base, current)) return undefined;
+  if (Array.isArray(current)) return clone(current);
+  if (!isObject(current)) return clone(current);
+
+  const result = {};
+  const baseObject = isObject(base) ? base : {};
+  for (const [key, value] of Object.entries(current)) {
+    const difference = diffValue(baseObject[key], value);
+    if (difference !== undefined) result[key] = difference;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
 export function mergeActorDelta(baseActor, actorDelta) {
   if (!baseActor || typeof baseActor !== 'object') throw new Error('Synthetic Actor requires a Base Actor');
   const merged = mergeValue(baseActor, object(actorDelta));
@@ -29,6 +47,15 @@ export function mergeActorDelta(baseActor, actorDelta) {
   // Actor is its template. Keep the canonical Actor id invariant intact.
   merged.id = baseActor.id;
   return merged;
+}
+
+export function createActorDelta(baseActor, resolvedActor) {
+  if (!baseActor || typeof baseActor !== 'object') throw new Error('ActorDelta requires a Base Actor');
+  if (!resolvedActor || typeof resolvedActor !== 'object') throw new Error('ActorDelta requires a resolved Actor');
+  const delta = object(diffValue(baseActor, resolvedActor));
+  // Never persist identity rebinding in a Token delta.
+  delete delta.id;
+  return delta;
 }
 
 export function resolveTokenActor(world, tokenId) {
