@@ -117,18 +117,22 @@ test('Feature occupant views use canonical Token placement and resolved Syntheti
   assert.equal(views[1].avatarDataUrl, 'data:image/png;base64,B');
 });
 
-test('canonical delete and Feature bridges have no Character-storage mutation dependency', async () => {
+test('Entity controller deletion and Feature bridge have no Character-storage mutation dependency', async () => {
   const deleteCore = await readFile(new URL('../src/entities/canonical-delete.js', import.meta.url), 'utf8');
-  const deleteUi = await readFile(new URL('../src/entities/token-delete-ui.js', import.meta.url), 'utf8');
+  const controller = await readFile(new URL('../src/entities/token-controller.js', import.meta.url), 'utf8');
+  const entityUi = await readFile(new URL('../src/entities/ui.js', import.meta.url), 'utf8');
+  const entityIndex = await readFile(new URL('../src/entities/index.js', import.meta.url), 'utf8');
   const featureView = await readFile(new URL('../src/entities/feature-token-view.js', import.meta.url), 'utf8');
   const featureUi = await readFile(new URL('../src/entities/feature-token-ui.js', import.meta.url), 'utf8');
 
   assert.match(deleteCore, /api\.tokens\.remove\(/);
   assert.match(deleteCore, /api\.world\.commit\(/);
   assert.doesNotMatch(deleteCore, /deleteCharacter|character:delete|state\.characters|preferences\.entitySystem|\.removeToken\(|\.removeActor\(/);
-  assert.match(deleteUi, /api\.deleteCharacter = canonicalDeleteCharacter/);
-  assert.match(deleteUi, /return deleteCanonicalToken\(api, target\)/);
-  assert.doesNotMatch(deleteUi, /legacyDeleteCharacter\?\.|legacyDeleteCharacter\(|store\.removeToken|store\.removeActor|commitState\(|importState\(|state\.characters/);
+  assert.match(controller, /deleteCanonicalToken\(api, target\)/);
+  assert.match(controller, /deleteCanonicalActor\(api, target\)/);
+  assert.doesNotMatch(controller, /api\.deleteCharacter|store\.removeToken|store\.removeActor|commitState\(|importState\(|state\.characters|character:delete/);
+  assert.doesNotMatch(entityUi, /api\.deleteCharacter|store\.removeToken|store\.removeActor|character:delete|character:create|character:move/);
+  assert.doesNotMatch(entityIndex, /token-delete-ui|token-read-ui|withCanonicalEntityTokenReadView/);
   assert.match(featureView, /api\.tokens\.list\(\)/);
   assert.match(featureView, /api\.tokens\.resolveActor\(/);
   assert.doesNotMatch(featureView, /state\.characters|preferences\.entitySystem/);
