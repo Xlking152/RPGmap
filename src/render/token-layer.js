@@ -23,16 +23,22 @@ function ensurePane(map, name, zIndex, { pointerEvents = null } = {}) {
   return pane;
 }
 
+function hideLegacyPane(map, name) {
+  const pane = map.getPane?.(name);
+  if (!pane) return;
+  pane.style.visibility = 'hidden';
+  pane.style.pointerEvents = 'none';
+}
+
 function installStyles(documentNode) {
   if (!documentNode?.head || documentNode.getElementById(STYLE_ID)) return;
   const style = documentNode.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
-    /* V1.6 compatibility shell: keep the legacy Character renderer alive for
-       sidebar/editor code, but it is no longer a visible map renderer. */
-    .leaflet-characterPane-pane { visibility:hidden !important; pointer-events:none !important; }
+    /* Leaflet removes the trailing "Pane" from custom pane DOM class names. */
+    .leaflet-character-pane { visibility:hidden !important; pointer-events:none !important; }
     .leaflet-tooltip.character-tooltip { display:none !important; }
-    .leaflet-statusBadgePane-pane { visibility:hidden !important; pointer-events:none !important; }
+    .leaflet-statusBadge-pane { visibility:hidden !important; pointer-events:none !important; }
     .rpg-token-v2 { background:transparent !important; border:0 !important; }
     .rpg-token-v2 .rpg-character-core { border-radius:50%; overflow:hidden; }
     .rpgmap-token-status-v2-marker { background:transparent !important; border:0 !important; pointer-events:none !important; overflow:visible !important; }
@@ -65,12 +71,12 @@ function tokenIcon(api, model) {
   });
 }
 
-function setTooltip(view, model) {
+function setTooltip(documentNode, view, model) {
   if (!model.showName) {
     if (view.getTooltip?.()) view.unbindTooltip();
     return;
   }
-  const node = document.createElement('span');
+  const node = documentNode.createElement('span');
   node.textContent = model.name;
   if (!view.getTooltip?.()) {
     view.bindTooltip(node, {
@@ -93,6 +99,10 @@ export function createTokenRendererSystem() {
 
       const documentNode = api.map.getContainer().ownerDocument || document;
       installStyles(documentNode);
+      // The legacy Character layer remains in AppCore only for sidebar/editor
+      // compatibility. It must never compete with the canonical visible layer.
+      hideLegacyPane(api.map, 'characterPane');
+      hideLegacyPane(api.map, 'statusBadgePane');
       ensurePane(api.map, TOKEN_PANE, 515);
       ensurePane(api.map, STATUS_PANE, 540, { pointerEvents: 'none' });
 
@@ -170,16 +180,18 @@ export function createTokenRendererSystem() {
               L.DomEvent.stopPropagation(event);
               const token = api.tokens.get(model.id);
               if (!token) return;
-              const selected = api.selectCharacter?.(token.id);
-              if (selected === false) api.selection?.replace?.([token.id], token.id);
+              // Token Selection is canonical. The Character call only keeps the
+              // not-yet-migrated sidebar editor focused on the same Token id.
+              api.selection?.replace?.([token.id], token.id);
               api.emit?.('token:select', { id: token.id, tokenId: token.id, actorId: token.actorId });
+              api.selectCharacter?.(token.id);
             });
             views.set(model.id, view);
           }
           view.setLatLng(worldToLatLng({ x: model.x, y: model.y }, api.mapPackage.height));
           view.setIcon(tokenIcon(api, model));
           view.options.title = model.showName ? model.name : 'Token';
-          setTooltip(view, model);
+          setTooltip(documentNode, view, model);
         }
         renderStatuses(models, tokensById);
       }
