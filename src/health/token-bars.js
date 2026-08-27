@@ -50,31 +50,21 @@ function barHtml(health) {
   return `<div class="rpgmap-token-healthbar" title="${escapeHtml(formatHealthSummary(health))}">${segment(pct(health.healthy), 'healthy')}${segment(pct(health.bashing), 'bashing')}${segment(pct(health.lethal), 'lethal')}${segment(pct(health.aggravated), 'aggravated')}</div>`;
 }
 
-function legacyProjectedTokens(api) {
-  const state = api.getState?.() || {};
-  const characters = new Map((state.characters || []).map(character => [String(character.id), character]));
-  return (state.preferences?.entitySystem?.tokens || []).flatMap(token => {
-    const character = characters.get(String(token.characterId || token.id));
-    if (!character) return [];
-    if (character.location?.type === 'building') {
-      return [{ ...token, placement: 'feature', featureId: character.location.featureId, x: null, y: null, hidden: token.hidden === true || character.visible === false }];
-    }
-    return [{ ...token, placement: 'map', x: character.location?.x, y: character.location?.y, featureId: null, hidden: token.hidden === true || character.visible === false }];
-  });
-}
-
 export function createHealthTokenBars() {
   return {
     register(api) {
+      if (!api.tokens?.list) throw new Error('Token health bars require canonical Token Runtime V2');
       const documentNode = api.map.getContainer().ownerDocument || document;
       ensurePane(api.map);
       installStyles(documentNode);
       const layer = L.layerGroup([], { pane: PANE }).addTo(api.map);
+      let destroyed = false;
+      const off = [];
 
       function render() {
+        if (destroyed) return;
         layer.clearLayers();
-        const tokens = api.tokens?.list?.() || legacyProjectedTokens(api);
-        for (const token of tokens) {
+        for (const token of api.tokens.list()) {
           if (token?.hidden === true || token?.placement !== 'map') continue;
           const x = Number(token.x);
           const y = Number(token.y);
@@ -100,21 +90,20 @@ export function createHealthTokenBars() {
         }
       }
 
-      api.on('character:move', render);
-      api.on('character:delete', render);
-      api.on('state:import', render);
-      api.on('state:saved', render);
-      api.on('state:commit', event => {
-        const source = String(event.detail?.source || '');
-        if (
-          source === 'health'
-          || source.startsWith('entities:resource')
-          || source.startsWith('token-v2:')
-          || source.startsWith('world-v2:')
-        ) render();
-      });
-      api.on('health:change', render);
-      api.on('token:size-change', render);
+      for (const eventName of ['token:create', 'token:move', 'token:delete', 'state:import', 'state:saved', 'health:change', 'token:size-change']) {
+        off.push(api.on(eventName, render));
+      }
+      off.push(api.on('state:commit', render));
+      api.map.on('zoomend', render);
+      api.map.on('resize', render);
+      off.push(api.on('app:destroy', () => {
+        destroyed = true;
+        api.map.off('zoomend', render);
+        api.map.off('resize', render);
+        layer.clearLayers();
+        api.map.removeLayer?.(layer);
+        off.splice(0).forEach(dispose => dispose?.());
+      }));
       render();
     },
   };
