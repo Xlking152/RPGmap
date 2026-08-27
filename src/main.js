@@ -22,6 +22,7 @@ import { createStatusSystem, createStatusUiSystem } from './status/index.js';
 import { chooseRulesetBeforeMap } from './ruleset/setup.js';
 import { createWorldSystem } from './world/index.js';
 import { createTokenRuntimeSystem, createTokenStatusBridgeSystem } from './token/index.js';
+import { createTokenRendererSystem } from './render/token-layer.js';
 
 function setBootStatus(message, { error = false } = {}) {
   const node = document.querySelector('[data-rpgmap-boot-status]');
@@ -113,6 +114,9 @@ export async function startRpgMap() {
       createAppShellUi(),
       createMeasurementSystem(),
       selectionSystem,
+      // The visible Leaflet Token layer is canonical from this point onward.
+      // The old Character layer remains hidden solely as an editor/panel bridge.
+      createTokenRendererSystem(),
       createFeatureInteractionSystem(),
       createElevationSystem(),
       createHealthSystem(),
