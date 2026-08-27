@@ -30,14 +30,16 @@ Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
 
 Write-Host "[smoke] root: $rootPath"
 Write-Host "[smoke] port: $port"
-$launcher = Start-Process \
-  -FilePath 'cmd.exe' \
-  -ArgumentList @('/D', '/S', '/C', 'start-rpgmap.bat') \
-  -WorkingDirectory $rootPath \
-  -PassThru \
-  -WindowStyle Hidden \
-  -RedirectStandardOutput $stdout \
-  -RedirectStandardError $stderr
+$processArgs = @{
+  FilePath = 'cmd.exe'
+  ArgumentList = @('/D', '/S', '/C', 'start-rpgmap.bat')
+  WorkingDirectory = $rootPath
+  PassThru = $true
+  WindowStyle = 'Hidden'
+  RedirectStandardOutput = $stdout
+  RedirectStandardError = $stderr
+}
+$launcher = Start-Process @processArgs
 
 function Show-RpgMapSmokeLogs {
   Write-Host '--- RPGmap launcher stdout ---'
