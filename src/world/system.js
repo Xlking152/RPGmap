@@ -63,9 +63,11 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       }
 
       // Migrate the current single-map SaveV2 into the canonical World V2
-      // envelope before Entity/Status/Combat tools register.  Existing map UI
+      // envelope before Entity/Status/Combat tools register. Existing map UI
       // continues to consume a flat active-scene projection.
-      const initial = hydrateCanonical(api.getState?.() || {});
+      const initialState = api.getState?.() || {};
+      const migrated = !currentWorldFromState(initialState);
+      const initial = hydrateCanonical(initialState);
       coreCommitState(initial, { source: 'world-v2:hydrate', render: false });
 
       api.commitState = (nextState, options = {}) => coreCommitState(
@@ -151,7 +153,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
 
       api.emit?.('world:ready', {
         world: snapshot(),
-        migrated: !currentWorldFromState(api.getState?.()),
+        migrated,
       });
     },
   });
