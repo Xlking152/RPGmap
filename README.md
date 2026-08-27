@@ -1,50 +1,49 @@
 # RPGmap
 
-RPGmap 是面向 TRPG / VTT 的自托管地图与跑团工具。当前版本为 **v1.7.0**，Windows 仅支持本机与局域网（Local / LAN）联机。
+RPGmap is an offline-first browser VTT/map runtime with a packaged Local/LAN server option.
 
-## 快速开始
+## Current architecture checkpoint
 
-从发布 ZIP 解压后双击 `start-rpgmap.bat`。启动器使用系统默认浏览器打开 GM 页面，并显示：
+The ongoing V1.6 refactor separates generic VTT capabilities from game-system rules and makes World/Scene/Token ownership explicit:
 
-- Local URL（主机 GM 使用）；
-- LAN URL 与 Join Code（发送给 Player）；
-- GM Secret（仅 GM 自己使用）。
+```text
+RPGmap Core
+├── World V2
+│   ├── Ruleset
+│   ├── Actors
+│   └── Scenes
+│       └── Tokens
+├── Ruleset runtime
+├── Token Runtime V2
+├── Synthetic Actor (Base Actor + actorDelta)
+├── Movement → Scene Token
+└── Renderer → Scene Token
+```
 
-完整步骤见 [操作指南](文档/操作指南.md)。请不要将 Local/LAN 服务或 GM Secret 暴露到公网。
+The built-in `infinite-horror` ruleset owns its health/status/XLSX semantics. MapPackages own map content and Feature declarations. Core owns Actor/Token/Scene existence, movement, interaction, multiplayer synchronization and rendering.
 
-## 当前能力
+### Canonical Token runtime
 
-- Actor / Form / Token、角色卡导入与 GM 放置 Token；
-- 1m 格子中心的直线移动、Ctrl/Cmd 手动拐点、受阻红线、Token 高度与尺寸；
-- 普通 HP 与 B/L/A 伤势生命槽、伤害、恢复、角色卡直接编辑伤势；
-- Actor / Token 状态与 Buff、地图徽章、派生昏迷/死亡，以及灵体、定身、失能等机械效果；
-- 先攻表、回合锁定、聊天与共享战斗记录；
-- LAN WebSocket 同步、GM / OWNER / OBSERVER 权限，以及服务器权威 World；
-- 原子保存、滚动备份、损坏存档隔离与 Windows 打包启动器。
+Scene Tokens have independent ids and may share one Actor template. Unlinked Tokens use `actorLink:false + actorDelta` so HP, B/L/A wounds and Actor-scoped status effects can remain instance-local.
 
-## 文档入口
+Movement and the visible Leaflet Token stack now consume active `Scene.tokens[]` through `api.tokens` rather than using `state.characters[]` as their source of truth. Token display data resolves through `api.tokens.resolveActor()`, so unlinked instances render their Synthetic Actor name/avatar/form data correctly.
 
-| 文档 | 用途 |
-| --- | --- |
-| [操作指南](文档/操作指南.md) | GM 建房、Player 加入、权限、移动、战斗、生命、存档与故障排查。 |
-| [开发说明](文档/开发说明.md) | 目录边界、数据模型、测试和发布约定。 |
-| [未来规划](文档/未来规划.md) | 已知边界与后续架构方向。 |
-| [变更日志](CHANGELOG.md) | 版本级别变更。 |
-| [地图参考](reference/README.md) | 自定义 MapPackage 与参考地图资料。 |
+The legacy Character projection is still retained temporarily for the sidebar placement/editor UI. It is not the canonical map renderer and is scheduled for removal after that UI is migrated to Token APIs.
 
-## 本地开发
+See [`文档/WORLD_V2.md`](./文档/WORLD_V2.md) for the ownership model and migration sequence.
+
+## Development
 
 ```bash
 npm ci
 npm test
-npm run dev
+npm run build
 ```
 
-生产构建与 Windows 包：
+Build the Windows Local/LAN package with:
 
 ```bash
-npm run build
 npm run package:local-server
 ```
 
-生成物位于 `artifact/RPGmap-vX.Y.Z.zip`，并附带 SHA256 校验文件。运行数据只存在于发布包的 `map/` 目录；升级前请备份整个该目录。
+The CI candidate workflow also validates JavaScript syntax, package contents and starts the packaged Windows server to verify `/api/health`.
