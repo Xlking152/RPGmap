@@ -49,7 +49,7 @@ import {
 } from './navigation.js';
 import { createBrowserStorage, createStatePersistence } from '../app/storage.js';
 import { MovementSession, calculateWaypointRoute } from './movement-path.js';
-import { moverContextForCharacter, tokenDiameterMeters } from '../elevation/model.js';
+import { tokenDiameterMeters } from '../elevation/model.js';
 import { createMapPresentation } from '../render/map-presentation.js';
 import { createSceneRenderer } from '../render/scene-renderer.js';
 import {
@@ -2030,8 +2030,20 @@ export function createRpgMapApp({
     runtime.characterMoveRequest += 1;
   }
 
+  function legacyNavigationToken(tokenId) {
+    if (tokenId == null) return null;
+    return state.preferences?.entitySystem?.tokens?.find(item => String(item?.id) === String(tokenId)) || null;
+  }
+
   function ensureNavigationGrid(characterId = runtime.selectedCharacterId) {
-    const moverContext = moverContextForCharacter(state, characterId);
+    // This block belongs to the retired AppCore Character shell. Keep its
+    // compatibility lookup self-contained so Elevation V2 stays Token/Feature-only.
+    const token = legacyNavigationToken(characterId);
+    const elevation = Number(token?.elevationFt);
+    const moverContext = {
+      tokenId: token?.id == null ? null : String(token.id),
+      elevationFt: Number.isFinite(elevation) && elevation >= 0 ? elevation : 0,
+    };
     const revision = JSON.stringify({
       sceneEvents: state.sceneEvents,
       featureStates: state.preferences?.featureStates || {},
@@ -2283,7 +2295,7 @@ export function createRpgMapApp({
   }
 
   function tokenRenderSize(character) {
-    const diameter = tokenDiameterMeters(state, character.id);
+    const diameter = tokenDiameterMeters(legacyNavigationToken(character.id));
     return clamp(diameter * tokenPixelsPerMeter(), 18, 144);
   }
 
@@ -2487,7 +2499,7 @@ export function createRpgMapApp({
     layers.characterRoute.clearLayers();
     const preview = runtime.characterMovePreview;
     if (!preview || preview.calculating) return;
-    const routeWeight = characterId => Math.max(2, tokenDiameterMeters(state, characterId) * tokenPixelsPerMeter());
+    const routeWeight = characterId => Math.max(2, tokenDiameterMeters(legacyNavigationToken(characterId)) * tokenPixelsPerMeter());
     if (preview.points?.length > 1) {
       L.polyline(preview.points.map(point => worldToLatLng(point, mapPackage.height)), {
         pane: 'measurePane',
@@ -3206,67 +3218,6 @@ export function createRpgMapApp({
       iconSize: [18, 18],
       iconAnchor: [9, 9]
     });
-  }
-
-  function renderAreaLayers() {
-    layers.areas.clearLayers();
-    layers.areaHandles.clearLayers();
-    areaViews.clear();
-    state.attackAreas.forEach(area => {
-      if (!area.visible) return;
-      let latLngs;
-      try {
-        latLngs = areaLatLngs(area);
-      } catch (error) {
-        console.warn('跳过无效攻击范围', area.id, error);
-        return;
-      }
-      const selected = runtime.selectedAreaId === area.id;
-      const view = L.polygon(latLngs, {
-        pane: 'aoePane',
-        color: safeColor(area.color, AREA_COLORS[0]),
-        weight: selected ? 4 : 2.5,
-        opacity: 0.95,
-        fillColor: safeColor(area.color, AREA_COLORS[0]),
-        fillOpacity: area.opacity,
-        dashArray: area.destructionEnabled ? null : '10 6',
-        interactive: true
-      }).addTo(layers.areas);
-      view.bindTooltip(createElement('span', '', area.name + ' · ' + areaDimensions(area)), { sticky: true, className: 'marker-tooltip' });
-      view.on('click', event => {
-        L.DomEvent.stopPropagation(event.originalEvent);
-        runtime.selectedAreaId = area.id;
-        runtime.damagePreview = null;
-        setTab('areas');
-        renderAreas();
-        renderAreaLayers();
-        renderScene();
-      });
-      areaViews.set(area.id, view);
-      if (selected) renderAreaHandles(area);
-    });
-  }
-
-  function addAreaHandle(area, point, options, onDrag, onEnd = onDrag) {
-    const handle = L.marker(worldToLatLng(point, mapPackage.height), {
-      pane: 'handlePane',
-      draggable: true,
-      keyboard: true,
-      icon: areaHandleIcon(options.secondary, options.label),
-      title: options.title
-    }).addTo(layers.areaHandles);
-    handle.on('drag', () => {
-      const next = snapForPreference(latLngToWorld(handle.getLatLng(), mapPackage.height));
-      onDrag(next);
-    });
-    handle.on('dragend', () => {
-      const next = snapForPreference(latLngToWorld(handle.getLatLng(), mapPackage.height));
-      onEnd(next);
-      renderAreas();
-      renderAreaLayers();
-      scheduleSave();
-    });
-    return handle;
   }
 
   function renderAreaHandles(area) {
