@@ -8,6 +8,7 @@ import {
   projectWorldV2ToRuntimeState,
   synchronizeWorldV2FromRuntimeState,
 } from './model.js';
+import { pruneProjectedWorldReferences } from './references.js';
 import { getActiveRuleset, rulesetRegistry, setActiveRuleset } from '../ruleset/index.js';
 
 function clone(value) {
@@ -107,7 +108,14 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           error.code = 'world_scene_map_reload_required';
           throw error;
         }
-        const projected = projectWorldV2ToRuntimeState(api.getState?.() || {}, normalized, { mapPackage, ruleset });
+        // World structure may remove an Actor or active-Scene Token while the
+        // temporary Combat projection still refers to it. Prune those dangling
+        // runtime references before Local/LAN authority validates the request so
+        // deletion is one atomic, server-valid operation instead of a rejected
+        // World push followed by a too-late client cleanup.
+        const projected = pruneProjectedWorldReferences(
+          projectWorldV2ToRuntimeState(api.getState?.() || {}, normalized, { mapPackage, ruleset }),
+        );
         if (typeof coreCommitAuthoritativeState === 'function') {
           return coreCommitAuthoritativeState(projected, { source, reason, render });
         }
