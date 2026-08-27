@@ -21,7 +21,7 @@ import { createDefaultMapPackage } from './map-package/default-map.js';
 import { createStatusSystem, createStatusUiSystem } from './status/index.js';
 import { chooseRulesetBeforeMap } from './ruleset/setup.js';
 import { createWorldSystem } from './world/index.js';
-import { createTokenRuntimeSystem } from './token/index.js';
+import { createTokenRuntimeSystem, createTokenStatusBridgeSystem } from './token/index.js';
 
 function setBootStatus(message, { error = false } = {}) {
   const node = document.querySelector('[data-rpgmap-boot-status]');
@@ -102,10 +102,13 @@ export async function startRpgMap() {
       // to write characters[] or preferences.entitySystem directly.
       createTokenRuntimeSystem(),
       createMovementSystem({ defaultStep: 5, autoStep: true }),
-      // Legacy markers are data.  They remain untouched until a GM explicitly
+      // Legacy markers are data. They remain untouched until a GM explicitly
       // confirms their migration from the in-app review flow.
       createEntitySystem({ dropLegacyMarkers: false }),
       createStatusSystem(),
+      // Status writes still use the existing server-authoritative protocol,
+      // while reads for unlinked Tokens resolve Base Actor + actorDelta.
+      createTokenStatusBridgeSystem(),
       createStatusUiSystem(),
       createAppShellUi(),
       createMeasurementSystem(),
