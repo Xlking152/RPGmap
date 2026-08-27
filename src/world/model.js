@@ -34,38 +34,13 @@ function mapMetadata(mapPackage = {}) {
   return { id: mapId, version };
 }
 
-function activeForm(actor) {
-  const forms = array(actor?.forms);
-  return forms.find(form => String(form?.id) === String(actor?.currentFormId)) || forms[0] || null;
+function runtimeEntityState(state) {
+  return object(state?.preferences?.entitySystem);
 }
 
 function sceneIdForMap(mapId) {
   const slug = String(mapId || 'default-map').replace(/[^A-Za-z0-9._:-]+/g, '-').slice(0, 120);
   return `scene-${slug || 'default'}`;
-}
-
-function runtimeEntityState(state) {
-  return object(state?.preferences?.entitySystem);
-}
-
-function placementFromCharacter(character, token = {}) {
-  const location = object(character?.location);
-  if (location.type === 'building' && location.featureId != null) {
-    return {
-      placement: 'feature',
-      featureId: id(location.featureId),
-      x: null,
-      y: null,
-    };
-  }
-  const tokenX = Number(token.x);
-  const tokenY = Number(token.y);
-  return {
-    placement: 'map',
-    featureId: null,
-    x: finite(location.x, Number.isFinite(tokenX) ? tokenX : 0),
-    y: finite(location.y, Number.isFinite(tokenY) ? tokenY : 0),
-  };
 }
 
 function normalizeWorldToken(raw, actorIds) {
@@ -95,26 +70,27 @@ function normalizeWorldToken(raw, actorIds) {
   };
 }
 
-function worldTokenFromRuntime(token, character, actorIds) {
+/**
+ * One-way SaveV2 migration adapter. Character location is accepted here only
+ * when a World V2 envelope does not exist yet. Once a World exists, Scene Token
+ * placement never flows through this legacy representation again.
+ */
+function worldTokenFromLegacyRuntime(token, character, actorIds) {
   const tokenId = id(token?.id ?? token?.characterId ?? character?.id);
   const actorId = id(token?.actorId);
   if (!tokenId || !actorId || !actorIds.has(actorId)) return null;
-  return {
+  const location = object(character?.location);
+  const featurePlaced = (location.type === 'building' || location.type === 'feature') && location.featureId != null;
+  const placement = token?.placement === 'feature' || token?.featureId != null || featurePlaced ? 'feature' : 'map';
+  return normalizeWorldToken({
+    ...token,
     id: tokenId,
     actorId,
-    actorLink: token?.actorLink !== false,
-    actorDelta: token?.actorDelta && typeof token.actorDelta === 'object' && !Array.isArray(token.actorDelta)
-      ? clone(token.actorDelta)
-      : null,
-    ...placementFromCharacter(character, token),
-    diameterMeters: Math.max(0.1, finite(token?.diameterMeters ?? token?.size, 1)),
-    rotation: finite(token?.rotation, 0),
-    elevationFt: finite(token?.elevationFt, 0),
-    hidden: token?.hidden === true,
-    locked: token?.locked === true,
-    showName: token?.showName !== false,
-    effects: clone(array(token?.effects)),
-  };
+    placement,
+    featureId: placement === 'feature' ? (token?.featureId ?? location.featureId) : null,
+    x: placement === 'map' ? finite(token?.x, finite(location.x, 0)) : null,
+    y: placement === 'map' ? finite(token?.y, finite(location.y, 0)) : null,
+  }, actorIds);
 }
 
 function normalizeScene(raw, { mapPackage = null, actorIds = new Set() } = {}) {
@@ -139,9 +115,7 @@ function normalizeScene(raw, { mapPackage = null, actorIds = new Set() } = {}) {
     markers: clone(array(source.markers)),
     attackAreas: clone(array(source.attackAreas)),
     sceneEvents: clone(array(source.sceneEvents)),
-    settings: {
-      gridVisible: source.settings?.gridVisible !== false,
-    },
+    settings: { gridVisible: source.settings?.gridVisible !== false },
   };
 }
 
@@ -189,10 +163,10 @@ export function createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worl
   const entity = runtimeEntityState(state);
   const actors = clone(array(entity.actors));
   const actorIds = new Set(actors.map(actor => id(actor?.id)).filter(Boolean));
-  const characterById = new Map(array(state?.characters).map(character => [String(character?.id), character]));
+  const legacyCharacterById = new Map(array(state?.characters).map(character => [String(character?.id), character]));
   const tokens = array(entity.tokens).flatMap(token => {
-    const characterId = String(token?.characterId ?? token?.id ?? '');
-    const normalized = worldTokenFromRuntime(token, characterById.get(characterId), actorIds);
+    const tokenId = String(token?.id ?? token?.characterId ?? '');
+    const normalized = worldTokenFromLegacyRuntime(token, legacyCharacterById.get(tokenId), actorIds);
     return normalized ? [normalized] : [];
   });
   const mapRef = mapMetadata(mapPackage || {});
@@ -221,25 +195,42 @@ export function createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worl
   }, { mapPackage, ruleset });
 }
 
+function mergeRuntimeTokenFields(canonicalToken, runtimeToken) {
+  if (!runtimeToken || String(runtimeToken.id) !== String(canonicalToken.id)) return canonicalToken;
+  return {
+    ...canonicalToken,
+    actorLink: runtimeToken.actorLink !== false,
+    actorDelta: runtimeToken.actorDelta && typeof runtimeToken.actorDelta === 'object' && !Array.isArray(runtimeToken.actorDelta)
+      ? clone(runtimeToken.actorDelta)
+      : canonicalToken.actorDelta,
+    diameterMeters: Math.max(0.1, finite(runtimeToken.diameterMeters, canonicalToken.diameterMeters)),
+    rotation: finite(runtimeToken.rotation, canonicalToken.rotation),
+    elevationFt: finite(runtimeToken.elevationFt, canonicalToken.elevationFt),
+    hidden: runtimeToken.hidden === true,
+    locked: runtimeToken.locked === true,
+    showName: runtimeToken.showName !== false,
+    effects: clone(array(runtimeToken.effects)),
+  };
+}
+
 export function synchronizeWorldV2FromRuntimeState(state, { mapPackage, ruleset, existingWorld = null } = {}) {
   const base = existingWorld || state?.preferences?.[WORLD_STATE_KEY];
   if (!base) return createWorldV2FromRuntimeState(state, { mapPackage, ruleset });
   const world = normalizeWorldV2(base, { mapPackage, ruleset });
   const entity = runtimeEntityState(state);
-  const actors = clone(array(entity.actors));
+  const actors = clone(array(entity.actors).length ? entity.actors : world.actors);
   const actorIds = new Set(actors.map(actor => id(actor?.id)).filter(Boolean));
-  const characterById = new Map(array(state?.characters).map(character => [String(character?.id), character]));
-  const runtimeTokens = array(entity.tokens).flatMap(token => {
-    const characterId = String(token?.characterId ?? token?.id ?? '');
-    const normalized = worldTokenFromRuntime(token, characterById.get(characterId), actorIds);
-    return normalized ? [normalized] : [];
-  });
+  const runtimeTokens = new Map(array(entity.tokens).map(token => [String(token?.id ?? ''), token]));
   const scene = activeWorldScene(world);
   const nextScenes = world.scenes.map(item => String(item.id) === String(scene?.id)
     ? {
         ...item,
         mapPackage: mapMetadata(mapPackage || item.mapPackage),
-        tokens: runtimeTokens,
+        // Placement is canonical World data. Flat Entity drafts may update
+        // effects/property fields, but can never move or rebind a Scene Token.
+        tokens: item.tokens
+          .filter(token => actorIds.has(String(token.actorId)))
+          .map(token => mergeRuntimeTokenFields(token, runtimeTokens.get(String(token.id)))),
         markers: clone(array(state?.markers)),
         attackAreas: clone(array(state?.attackAreas)),
         sceneEvents: clone(array(state?.sceneEvents)),
@@ -249,34 +240,19 @@ export function synchronizeWorldV2FromRuntimeState(state, { mapPackage, ruleset,
   return normalizeWorldV2({
     ...world,
     actors,
-    statusDefinitions: clone(array(entity.statusDefinitions)),
+    statusDefinitions: clone(array(entity.statusDefinitions).length ? entity.statusDefinitions : world.statusDefinitions),
     scenes: nextScenes,
     updatedAt: new Date().toISOString(),
   }, { mapPackage, ruleset });
 }
 
-function runtimeCharacterFromToken(token, actor) {
-  const form = activeForm(actor);
-  const location = token.placement === 'feature' && token.featureId
-    ? { type: 'building', featureId: token.featureId }
-    : { type: 'map', x: finite(token.x, 0), y: finite(token.y, 0) };
-  return {
-    id: token.id,
-    name: text(actor?.name, '未命名角色'),
-    color: text(form?.tokenAppearance?.color, '#3d9b63'),
-    avatarDataUrl: form?.avatarDataUrl || null,
-    visible: token.hidden !== true,
-    location,
-  };
-}
-
 function runtimeTokenFromWorld(token) {
   return {
     id: token.id,
-    characterId: token.id,
     actorId: token.actorId,
     actorLink: token.actorLink !== false,
     actorDelta: token.actorDelta ? clone(token.actorDelta) : null,
+    placement: token.placement,
     x: token.placement === 'map' ? finite(token.x, 0) : null,
     y: token.placement === 'map' ? finite(token.y, 0) : null,
     featureId: token.placement === 'feature' ? token.featureId : null,
@@ -300,13 +276,16 @@ export function projectWorldV2ToRuntimeState(state, rawWorld, { mapPackage, rule
     error.code = 'world_scene_map_reload_required';
     throw error;
   }
-  const actorById = new Map(world.actors.map(actor => [String(actor?.id), actor]));
-  const tokens = scene.tokens.filter(token => actorById.has(String(token.actorId)));
+  const actorIds = new Set(world.actors.map(actor => String(actor?.id)));
+  const tokens = scene.tokens.filter(token => actorIds.has(String(token.actorId)));
   const next = clone(state || {});
   next.markers = clone(scene.markers);
   next.attackAreas = clone(scene.attackAreas);
   next.sceneEvents = clone(scene.sceneEvents);
-  next.characters = tokens.map(token => runtimeCharacterFromToken(token, actorById.get(String(token.actorId))));
+  // SaveV2/AppCore still expects the property to exist, but it is now a sealed
+  // empty tombstone rather than a Token projection. No runtime system may store
+  // identity, placement, HP, status, or display state here.
+  next.characters = [];
   next.preferences ||= {};
   next.preferences.gridVisible = scene.settings?.gridVisible !== false;
   next.preferences.entitySystem = {
