@@ -2,29 +2,6 @@ import { createEmptyEntityState, migrateLegacyCharacters, normalizeEntityState, 
 import { STATUS_SCHEMA_VERSION } from '../status/model.js';
 
 const PREFERENCE_KEY = 'entitySystem';
-let canonicalEntityUiStoreDepth = 0;
-let canonicalEntityUiStore = null;
-
-/**
- * Construct an EntityStore for the editor while marking only that instance as
- * a canonical Token reader. Reducer/controller stores created elsewhere must
- * retain mutable draft Token objects so atomic ActorDelta/health writes persist.
- */
-export function withCanonicalEntityTokenReadView(callback) {
-  canonicalEntityUiStoreDepth += 1;
-  try { return callback(); }
-  finally { canonicalEntityUiStoreDepth -= 1; }
-}
-
-export function refreshCanonicalEntityUiStore() {
-  if (!canonicalEntityUiStore) return null;
-  canonicalEntityUiStore.load({ migrateLegacy: false, dropMarkers: false });
-  return canonicalEntityUiStore;
-}
-
-export function getCanonicalEntityUiStore() {
-  return canonicalEntityUiStore;
-}
 
 function entityContentChanged(raw, normalized) {
   const before = {
@@ -52,8 +29,6 @@ function migrateTokenLocationsToGrid(appState, entityState, mapPackage, api, sou
     if (character?.location?.type !== 'map' || !linked.has(String(character.id))) continue;
     const x = Math.max(0.5, Math.min(width - 0.5, Math.floor(Number(character.location.x)) + 0.5));
     const y = Math.max(0.5, Math.min(height - 0.5, Math.floor(Number(character.location.y)) + 0.5));
-    // A bad legacy coordinate must never be silently moved into a wall. Keep
-    // it intact and surface a GM-only re-placement action instead.
     const inspection = api?.inspectTokenPlacement?.(character.id, { x, y });
     if (inspection && inspection.valid === false) { blocked += 1; continue; }
     if (character.location.x === x && character.location.y === y) continue;
@@ -64,12 +39,11 @@ function migrateTokenLocationsToGrid(appState, entityState, mapPackage, api, sou
 }
 
 export class EntityStore {
-  constructor(api) {
+  constructor(api, { canonicalTokenReads = false } = {}) {
     this.api = api;
     this.state = createEmptyEntityState();
     this.compatTokens = [];
-    this.canonicalTokenReadView = canonicalEntityUiStoreDepth > 0;
-    if (this.canonicalTokenReadView) canonicalEntityUiStore = this;
+    this.canonicalTokenReadView = canonicalTokenReads === true;
     this.saving = false;
   }
 
@@ -91,8 +65,6 @@ export class EntityStore {
   }
 
   installCanonicalTokenReadView(state) {
-    this.canonicalTokenReadView = true;
-    canonicalEntityUiStore = this;
     this.compatTokens = Array.isArray(state?.tokens) ? state.tokens : [];
     Object.defineProperty(state, 'tokens', {
       configurable: true,
@@ -108,9 +80,6 @@ export class EntityStore {
     if (!this.canonicalTokenReadView) return structuredClone(this.state);
     return structuredClone({
       ...this.state,
-      // Entity UI reads the live active-Scene Token catalog. Persisting Actor
-      // edits carries that same catalog into the temporary Entity projection
-      // instead of reviving a stale editor snapshot.
       tokens: this.canonicalTokens(),
     });
   }
@@ -118,14 +87,18 @@ export class EntityStore {
   load({ migrateLegacy = true, dropMarkers = true } = {}) {
     const appState = this.api.getState();
     const raw = appState.preferences?.[PREFERENCE_KEY];
-    const migrated = migrateLegacy ? migrateLegacyCharacters(raw, appState.characters || []) : { state: normalizeEntityState(raw), migrated: 0 };
-    const tokenLocationMigration = migrateTokenLocationsToGrid(appState, migrated.state, this.api.mapPackage, this.api, raw?.schemaVersion);
+    const migrated = migrateLegacy
+      ? migrateLegacyCharacters(raw, appState.characters || [])
+      : { state: normalizeEntityState(raw), migrated: 0 };
+    const tokenLocationMigration = migrateTokenLocationsToGrid(
+      appState,
+      migrated.state,
+      this.api.mapPackage,
+      this.api,
+      raw?.schemaVersion,
+    );
     const migratedTokenLocations = tokenLocationMigration.migrated;
     const blockedTokenLocations = tokenLocationMigration.blocked;
-    // Read-only subsystem stores may normalize an otherwise canonical v2
-    // snapshot in memory. Do not create a standalone "entities" commit merely
-    // for that version number; the next real mutation persists v3 naturally.
-    // The primary Entity System load still commits a schema-only migration.
     let changed = migrated.migrated > 0
       || migratedTokenLocations > 0
       || entityContentChanged(raw, migrated.state)
@@ -159,10 +132,6 @@ export class EntityStore {
     if (syncTokens) this.syncCharacters(nextApp);
     this.saving = true;
     try {
-      // Entity changes are ordinary in-memory World mutations. They must not
-      // enter the external-save import path: that path broadcasts state:import
-      // to every runtime system and made placing one Token re-import the whole
-      // map while its click handler was still running.
       if (typeof this.api.commitState === 'function') this.api.commitState(nextApp, { source, render });
       else this.api.importState(nextApp);
       if (immediate) this.api.persistNow?.();
@@ -188,6 +157,7 @@ export class EntityStore {
   }
 
   actor(id) { return this.state.actors.find(actor => String(actor.id) === String(id)) || null; }
+
   token(id) {
     if (this.canonicalTokenReadView) {
       return this.api.tokens?.get?.(id)
@@ -198,14 +168,13 @@ export class EntityStore {
       String(token.id) === String(id) || String(token.characterId) === String(id)
     )) || null;
   }
+
   actorForToken(tokenId) {
     const token = this.token(tokenId);
     return token ? this.actor(token.actorId) : null;
   }
 
   bindToken(actorId, characterId) {
-    // Compatibility-only for the Entity UI store. Other reducer stores retain
-    // the original mutable draft behavior through mutableTokens().
     const tokens = this.mutableTokens();
     let existing = tokens.find(token => (
       String(token.id) === String(characterId) || String(token.characterId) === String(characterId)
