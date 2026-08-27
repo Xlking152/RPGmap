@@ -4,7 +4,7 @@ import {
   ownershipLevel,
   validatePlayerWorldPush as validateLegacyPlayerWorldPush,
 } from './access-control-legacy.mjs';
-import { resolveStatusCapabilitiesForCharacter } from './status-operations.mjs';
+import { resolveStatusCapabilitiesForCharacter as resolveStatusCapabilitiesForToken } from './status-operations.mjs';
 
 function activeScene(state) {
   const world = state?.preferences?.worldV2;
@@ -83,10 +83,10 @@ function legacyValidationView(before, next, movedTokenIds) {
 /**
  * World V2 authorization wrapper.
  *
- * The V1 validator remains responsible for Actor data, chat, combat and the
- * GM-only World/Scene structure. Canonical Scene Token placement is removed
- * from that compatibility comparison and authorized here directly by token.id
- * -> actorId ownership, combat turn and authoritative movement capabilities.
+ * The compatibility validator remains responsible for Actor data, chat,
+ * combat, and GM-only World/Scene structure. Canonical Scene Token placement
+ * is removed from that comparison and authorized here directly by token.id ->
+ * actorId ownership, combat turn, and authoritative movement capabilities.
  */
 export function validatePlayerWorldPush(options = {}) {
   const movedTokenIds = movedWorldTokenIds(options.before, options.next);
@@ -127,9 +127,7 @@ export function validatePlayerWorldPush(options = {}) {
       };
     }
 
-    // The low-level status resolver accepts canonical token.id. Its historical
-    // function name remains contained in this server-only migration boundary.
-    const capabilities = resolveStatusCapabilitiesForCharacter(options.before, tokenId);
+    const capabilities = resolveStatusCapabilitiesForToken(options.before, tokenId);
     if (capabilities.canMove === false) {
       const reason = capabilities.reasons?.length ? `（${capabilities.reasons.join('、')}）` : '';
       return {
