@@ -1,9 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createActorTokenAtPoint, snapActorTokenPlacementPoint } from '../src/token/placement.js';
+import {
+  createActorTokenAtPoint,
+  relocateActorTokenAtPoint,
+  snapActorTokenPlacementPoint,
+} from '../src/token/placement.js';
 
 function api({ valid = true } = {}) {
   const calls = [];
+  const tokens = new Map([
+    ['token-existing', { id: 'token-existing', actorId: 'actor-7', x: 4.5, y: 5.5, placement: 'map' }],
+  ]);
   return {
     calls,
     mapPackage: { width: 100, height: 80 },
@@ -12,9 +19,21 @@ function api({ valid = true } = {}) {
       return { valid };
     },
     tokens: {
+      get(tokenId) {
+        return tokens.get(String(tokenId)) || null;
+      },
       async create(options) {
         calls.push({ type: 'create', options });
-        return { id: 'token-created', ...options };
+        const token = { id: 'token-created', ...options };
+        tokens.set(token.id, token);
+        return token;
+      },
+      async move(tokenId, point) {
+        calls.push({ type: 'move', tokenId, point });
+        const current = tokens.get(String(tokenId));
+        const token = { ...current, placement: 'map', featureId: null, ...point };
+        tokens.set(String(tokenId), token);
+        return token;
       },
     },
   };
@@ -65,4 +84,26 @@ test('blocked placement never creates a Scene Token', async () => {
   assert.equal(result.ok, false);
   assert.equal(result.token, null);
   assert.equal(runtime.calls.filter(call => call.type === 'create').length, 0);
+});
+
+test('Token repositioning validates while excluding itself and writes only through api.tokens.move', async () => {
+  const runtime = api();
+  const result = await relocateActorTokenAtPoint(runtime, 'token-existing', { x: 21.2, y: 31.9 });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.point, { x: 21.5, y: 31.5 });
+  assert.deepEqual(result.token, {
+    id: 'token-existing', actorId: 'actor-7', placement: 'map', featureId: null, x: 21.5, y: 31.5,
+  });
+  assert.deepEqual(runtime.calls, [
+    { type: 'inspect', characterId: 'token-existing', point: { x: 21.5, y: 31.5 } },
+    { type: 'move', tokenId: 'token-existing', point: { x: 21.5, y: 31.5 } },
+  ]);
+});
+
+test('blocked Token repositioning never calls api.tokens.move', async () => {
+  const runtime = api({ valid: false });
+  const result = await relocateActorTokenAtPoint(runtime, 'token-existing', { x: 21.2, y: 31.9 });
+  assert.equal(result.ok, false);
+  assert.equal(result.token, null);
+  assert.equal(runtime.calls.filter(call => call.type === 'move').length, 0);
 });
