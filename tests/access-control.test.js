@@ -45,21 +45,23 @@ function world({ activeActorId = null } = {}) {
 function addWorldV2(value) {
   const actors = structuredClone(value.preferences.entitySystem.actors);
   value.characters = [];
-  value.preferences.entitySystem.tokens = value.preferences.entitySystem.tokens.map((token, index) => ({
-    ...token,
-    characterId: undefined,
-    actorLink: true,
-    actorDelta: null,
-    diameterMeters: 1,
-    rotation: 0,
-    elevationFt: 0,
-    hidden: false,
-    locked: false,
-    showName: true,
-    effects: [],
-    x: index + 1,
-    y: index + 1,
-  }));
+  value.preferences.entitySystem.tokens = value.preferences.entitySystem.tokens.map((token, index) => {
+    const { characterId: _legacyCharacterId, ...canonical } = token;
+    return {
+      ...canonical,
+      actorLink: true,
+      actorDelta: null,
+      diameterMeters: 1,
+      rotation: 0,
+      elevationFt: 0,
+      hidden: false,
+      locked: false,
+      showName: true,
+      effects: [],
+      x: index + 1,
+      y: index + 1,
+    };
+  });
   value.preferences.worldV2 = {
     schemaVersion: 2,
     id: 'world-test',
