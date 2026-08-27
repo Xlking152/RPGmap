@@ -22,17 +22,22 @@ export const FEATURE_ACTION_META = Object.freeze({
 });
 
 function featureById(mapPackage, featureId) {
-  return (mapPackage?.features || []).find((feature) => String(feature.id) === String(featureId)) || null;
+  return (mapPackage?.features || []).find(feature => String(feature.id) === String(featureId)) || null;
 }
 
-function characterById(state, characterId) {
-  return (state?.characters || []).find((character) => String(character.id) === String(characterId)) || null;
+function entityState(state) {
+  const entity = state?.preferences?.entitySystem;
+  return entity && typeof entity === 'object' ? entity : { actors: [], tokens: [] };
 }
 
-function characterFeatureId(character) {
-  const type = character?.location?.type;
-  if (type !== 'feature' && type !== 'building') return null;
-  return character.location.featureId == null ? null : String(character.location.featureId);
+function tokenById(state, tokenId) {
+  if (tokenId == null) return null;
+  return (entityState(state).tokens || []).find(token => String(token?.id) === String(tokenId)) || null;
+}
+
+function tokenFeatureId(token) {
+  if (!token || token.placement === 'map') return null;
+  return token.featureId == null ? null : String(token.featureId);
 }
 
 function actionEnabled(feature, action) {
@@ -72,15 +77,15 @@ function descriptor(action, enabled, reason = '') {
   });
 }
 
-export function listFeatureInteractions({ mapPackage, state, featureId, characterId = null, resolveStatus = null } = {}) {
+export function listFeatureInteractions({ mapPackage, state, featureId, tokenId = null, resolveStatus = null } = {}) {
   const feature = featureById(mapPackage, featureId);
   if (!feature) return Object.freeze([]);
 
   const featureState = getFeatureRuntimeState(state, feature);
-  const character = characterId ? characterById(state, characterId) : null;
+  const token = tokenId ? tokenById(state, tokenId) : null;
   const actions = [];
   const statusReason = action => {
-    const result = evaluateFeatureStatusRule({ feature, action, characterId, resolveStatus });
+    const result = evaluateFeatureStatusRule({ feature, action, tokenId, resolveStatus });
     return result.ok ? '' : result.reason;
   };
 
@@ -94,15 +99,15 @@ export function listFeatureInteractions({ mapPackage, state, featureId, characte
     if (!Array.isArray(feature.entrance) || feature.entrance.length < 2) reason = 'Feature 未声明 entrance';
     else if (featureState.destroyed) reason = '对象已经被摧毁';
     else if (actionEnabled(feature, 'open') && !featureState.open) reason = '对象当前处于关闭状态';
-    else if (!character) reason = '请先选择角色';
-    else if (character.location?.type !== 'map') reason = '角色当前不在地图上';
+    else if (!token) reason = '请先选择 Token';
+    else if (token.placement !== 'map') reason = 'Token 当前不在地图上';
     else reason = statusReason('enter');
     actions.push(descriptor('enter', !reason, reason));
   }
 
   if (actionEnabled(feature, 'exit')) {
-    const inside = characterFeatureId(character) === String(feature.id);
-    const reason = inside ? statusReason('exit') : '所选角色当前不在该 Feature 内';
+    const inside = tokenFeatureId(token) === String(feature.id);
+    const reason = inside ? statusReason('exit') : '所选 Token 当前不在该 Feature 内';
     actions.push(descriptor('exit', !reason, reason));
   }
 
@@ -149,7 +154,7 @@ function featureCenter(feature) {
 function wholeFeatureRadius(feature, center) {
   const points = feature?.geometry?.points || [];
   if (!points.length) return 10;
-  return Math.max(10, ...points.map((point) => Math.hypot(
+  return Math.max(10, ...points.map(point => Math.hypot(
     Number(point[0]) - center.x,
     Number(point[1]) - center.y,
   ))) + 2;
@@ -168,14 +173,11 @@ export function damageFeatureState(state, mapPackage, featureId) {
     center,
     radius: wholeFeatureRadius(feature, center),
   };
-  // The explicit Feature operation already selected its target by ID and Capability.
-  // Passing only that Feature removes the old need to route a direct action through
-  // a map category filter.
   const preview = createDamagePreview(area, [feature], null);
   return commitDamageEvent(state, area, preview);
 }
 
-export function featureInteractionSnapshot({ mapPackage, state, featureId, characterId = null, resolveStatus = null } = {}) {
+export function featureInteractionSnapshot({ mapPackage, state, featureId, tokenId = null, resolveStatus = null } = {}) {
   const feature = featureById(mapPackage, featureId);
   if (!feature) return null;
   const featureState = getFeatureRuntimeState(state, feature);
@@ -184,6 +186,6 @@ export function featureInteractionSnapshot({ mapPackage, state, featureId, chara
     featureState,
     sceneStatus: featureState.status,
     interactionState: Object.freeze({ open: featureState.open }),
-    actions: listFeatureInteractions({ mapPackage, state, featureId, characterId, resolveStatus }),
+    actions: listFeatureInteractions({ mapPackage, state, featureId, tokenId, resolveStatus }),
   });
 }
