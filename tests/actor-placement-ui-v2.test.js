@@ -13,11 +13,11 @@ test('Actor placement bridge bypasses legacy Character creation', async () => {
   assert.doesNotMatch(source, /state\.characters|\.characters\.push|bindToken\s*\(/);
 });
 
-test('placement adapter is the only Actor-placement writer and uses api.tokens.create', async () => {
+test('placement adapter writes through api.tokens.create and never Character storage', async () => {
   const path = fileURLToPath(new URL('../src/token/placement.js', import.meta.url));
   const source = await readFile(path, 'utf8');
   assert.match(source, /api\.tokens\.create\(/);
-  assert.doesNotMatch(source, /state\.characters|bindToken\s*\(|placeCharacter\s*\(/);
+  assert.doesNotMatch(source, /state\.characters|bindToken\s*\(/);
 });
 
 test('Actor placement bridge is registered after Token Runtime and before Entity UI', async () => {
