@@ -336,6 +336,39 @@ export function createMovementController({ settings } = {}) {
         return route;
       }
 
+      async function beginInteractivePlan(tokenId, destination, arrival = null) {
+        if (moving) return null;
+        const token = mapToken(api, tokenId);
+        if (!token) {
+          status('请先选择一个位于地图上的 Token');
+          return null;
+        }
+        if (!canMoveToken(token)) {
+          status(movementDeniedMessage(token));
+          return null;
+        }
+        if (drag.active) reset();
+        previousTool = shell.querySelector?.('[data-tool].active')?.dataset.tool || 'pan';
+        selectedTokenId = token.id;
+        api.selectCharacter?.(token.id);
+        api.setTool?.('character-move');
+        if (!beginSessionForToken(token)) return null;
+        drag.session.arrival = arrival == null ? null : structuredClone(arrival);
+        const route = await calculate(destination);
+        if (!route?.valid) {
+          drag.continuePlanning();
+          showControls(false);
+          return null;
+        }
+        drag.ready(route);
+        draw(route, token);
+        showControls(true);
+        status(arrival?.featureId
+          ? '进入路线已就绪 · ' + formatDistance(route.distance) + ' · 确认移动 / Enter，Esc 取消'
+          : '路线已就绪 · ' + formatDistance(route.distance) + ' · 确认移动 / Enter，Esc 取消');
+        return route;
+      }
+
       function scheduleCalculate(point) {
         pendingPoint = point;
         if (routeTimer) return;
@@ -429,8 +462,10 @@ export function createMovementController({ settings } = {}) {
         showControls(false);
         status('正在沿规划路径移动…');
         previewLayer.clearLayers();
-        for (const target of targets) {
-          const route = await api.movement.planTokenMove(tokenId, target);
+        for (let index = 0; index < targets.length; index += 1) {
+          const target = targets[index];
+          const arrival = index === targets.length - 1 ? (drag.session?.arrival || null) : null;
+          const route = await api.movement.planTokenMove(tokenId, target, arrival);
           if (!route) { reset('移动中止：执行时有一段路径已不可通行'); return false; }
           const moved = waitForTokenMove(tokenId);
           if (!api.movement.commitTokenMove()) { reset('移动中止：当前路线无法提交'); return false; }
@@ -601,6 +636,12 @@ export function createMovementController({ settings } = {}) {
           if (event.altKey) await removeWaypoint(); else await addWaypointAtCurrent();
         }
       }
+
+      // Feature enter and other external UI surfaces need the same preview /
+      // confirm flow as direct dragging. Keep planTokenMove as the low-level
+      // authority primitive and expose this controller entry for interaction UI.
+      api.movement.beginTokenPlan = beginInteractivePlan;
+      api.planCharacterMove = beginInteractivePlan;
 
       controls.confirm.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); commit(); });
       controls.cancel.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); reset('已取消 Token 移动规划'); });
