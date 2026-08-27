@@ -1,4 +1,4 @@
-import { validatePlayerWorldPush as validateLegacyPlayerWorldPush } from './access-control.mjs';
+import { validatePlayerWorldPush as validateLegacyPlayerWorldPush } from './access-control-legacy.mjs';
 import { resolveStatusCapabilitiesForCharacter } from './status-operations.mjs';
 
 function activeScene(state) {
@@ -34,7 +34,7 @@ export function movedWorldTokenIds(before, next) {
 /**
  * World V2 authorization wrapper.
  *
- * The mature access-control module still handles Actor ownership, combat-turn,
+ * The frozen V1 access-control core still handles Actor ownership, combat-turn,
  * chat and GM-only structure rules. This additional gate removes its last
  * security dependency on the legacy Character location mirror: movement is
  * detected directly from active Scene Token placement and status capabilities
@@ -45,9 +45,8 @@ export function validatePlayerWorldPush(options = {}) {
   if (!result?.ok) return result;
 
   for (const tokenId of movedWorldTokenIds(options.before, options.next)) {
-    // The legacy-named resolver already resolves token.id first-class; keeping
-    // that low-level alias isolated here avoids exposing Character terminology
-    // to the server entrypoint or modern client runtime.
+    // The low-level compatibility resolver accepts token.id directly. Its old
+    // name is intentionally contained in this server-only migration boundary.
     const capabilities = resolveStatusCapabilitiesForCharacter(options.before, tokenId);
     if (capabilities.canMove === false) {
       const reason = capabilities.reasons?.length ? `（${capabilities.reasons.join('、')}）` : '';
