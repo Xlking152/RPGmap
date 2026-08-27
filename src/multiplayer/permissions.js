@@ -54,6 +54,33 @@ function statusProjection(state) {
   };
 }
 
+function worldV2GlobalProjection(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const world = structuredClone(raw);
+  const activeSceneId = String(world.activeSceneId ?? '');
+  delete world.actors;
+  delete world.statusDefinitions;
+  delete world.updatedAt;
+  if (Array.isArray(world.scenes)) {
+    world.scenes = world.scenes.map(scene => {
+      if (!scene || typeof scene !== 'object' || Array.isArray(scene)) return scene;
+      if (String(scene.id ?? '') !== activeSceneId) return scene;
+      const projected = structuredClone(scene);
+      delete projected.tokens;
+      delete projected.markers;
+      delete projected.attackAreas;
+      delete projected.sceneEvents;
+      if (projected.settings && typeof projected.settings === 'object' && !Array.isArray(projected.settings)) {
+        projected.settings = { ...projected.settings };
+        delete projected.settings.gridVisible;
+        if (!Object.keys(projected.settings).length) delete projected.settings;
+      }
+      return projected;
+    });
+  }
+  return world;
+}
+
 function globalProjection(state) {
   const copy = structuredClone(state);
   delete copy.characters;
@@ -61,6 +88,9 @@ function globalProjection(state) {
     delete copy.preferences.entitySystem;
     delete copy.preferences.chatSystem;
     delete copy.preferences.combatSystem;
+    if (copy.preferences.worldV2 !== undefined) {
+      copy.preferences.worldV2 = worldV2GlobalProjection(copy.preferences.worldV2);
+    }
   }
   return copy;
 }
