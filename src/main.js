@@ -1,12 +1,12 @@
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
-import { createRpgMapApp } from './engine/app.js';
+import { createRpgMapRuntime } from './engine/runtime.js';
 import { createBrowserStorage, createMemoryStorage } from './app/storage.js';
 import { createAppLifecycleSystem } from './engine/lifecycle.js';
 import { createMovementSystem } from './movement/index.js';
 import { createMeasurementSystem } from './measurement/index.js';
 import { createEntitySystem } from './entities/index.js';
-import { createAppShellUi, createCanonicalPanelOwnershipSystem } from './ui/index.js';
+import { createAppShellUi } from './ui/index.js';
 import { createSelectionSystem } from './selection/index.js';
 import { createFeatureInteractionSystem } from './interaction/index.js';
 import { createTokenElevationSystem } from './elevation/index.js';
@@ -26,7 +26,7 @@ import {
   createTokenStatusBridgeSystem,
 } from './token/index.js';
 import { createTokenRendererSystem } from './render/token-layer.js';
-import { createCharacterRetirementSystem } from './legacy/character-retirement.js';
+import { createSceneAreaSystem } from './scene/areas.js';
 
 function setBootStatus(message, { error = false } = {}) {
   const node = document.querySelector('[data-rpgmap-boot-status]');
@@ -67,10 +67,6 @@ async function yieldForFirstPaint() {
 
 export async function startRpgMap() {
   const appContainer = document.getElementById('app');
-
-  // Before a World exists we still need a ruleset to interpret legacy actors.
-  // World V2 now stores the canonical ruleset reference; this browser value is
-  // only the first-run/default choice used while opening or migrating a World.
   const bootstrapStorage = createBrowserStorage();
   const ruleset = await chooseRulesetBeforeMap({
     container: appContainer,
@@ -81,7 +77,7 @@ export async function startRpgMap() {
   const serverRuntime = await detectRpgMapServer();
 
   // The packaged multiplayer server owns the canonical World under map/.
-  // Do not synchronously load a stale browser localStorage World first.
+  // Do not synchronously install a stale browser snapshot before LAN sync.
   const storageAdapter = serverRuntime ? createMemoryStorage() : createBrowserStorage();
   setBootStatus(serverRuntime
     ? `规则包：${ruleset.title} · 服务器已连接，正在载入 World…`
@@ -92,35 +88,27 @@ export async function startRpgMap() {
   const mapPackage = createDefaultMapPackage();
   const selectionSystem = createSelectionSystem();
 
-  return createRpgMapApp({
+  return createRpgMapRuntime({
     container: appContainer,
     mapPackage,
+    ruleset,
     storageAdapter,
     tools: [
       createAppLifecycleSystem(),
-      // World V2 owns Ruleset + Actors + Scenes. It must wrap AppCore commit /
-      // import boundaries before Entity, Status, Movement, Combat, or LAN tools
-      // begin mutating the active-scene projection.
       createWorldSystem(),
-      // Token Runtime V2 is the canonical Scene-token mutation surface.
       createTokenRuntimeSystem(),
+      selectionSystem,
       createMovementSystem({ defaultStep: 5, autoStep: true }),
-      // The legacy AppCore panel nodes are detached once. Modern Entity and
-      // Feature UI owns the visible panels directly instead of observing and
-      // replacing legacy Character DOM after every render.
-      createCanonicalPanelOwnershipSystem(),
       createEntitySystem({ dropLegacyMarkers: false }),
       createStatusSystem(),
-      // Status writes still use the existing server-authoritative protocol,
-      // while reads for unlinked Tokens resolve Base Actor + actorDelta.
       createTokenStatusBridgeSystem(),
       createStatusUiSystem(),
-      createAppShellUi(),
-      createMeasurementSystem(),
-      selectionSystem,
       createTokenRendererSystem(),
       createFeatureInteractionSystem(),
       createTokenElevationSystem(),
+      createSceneAreaSystem(),
+      createAppShellUi(),
+      createMeasurementSystem(),
       createHealthSystem(),
       createChatSystem({ selection: selectionSystem }),
       createDamageSystem({ selection: selectionSystem }),
@@ -128,11 +116,7 @@ export async function startRpgMap() {
       createCombatSystem({ selection: selectionSystem }),
       createMultiplayerSystem(),
       createMultiplayerHostBootstrapSystem(),
-      // Register last: all live workflows are canonical at this point. The old
-      // Character parser can remain for one-way SaveV2 migration, but no public
-      // Character mutation/selection API or Leaflet pane survives into runtime.
-      createCharacterRetirementSystem(),
-    ]
+    ],
   });
 }
 
