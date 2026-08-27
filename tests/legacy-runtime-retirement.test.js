@@ -14,10 +14,9 @@ const retiredFiles = [
   'src/movement/distance-renderer.js',
   'src/measurement/controller.js',
 ];
-const modernFiles = [
+const liveRuntimeFiles = [
   'src/main.js',
   'src/engine/runtime.js',
-  'src/engine/runtime-state.js',
   'src/ui/app-shell-v2.js',
   'src/world/model.js',
   'src/world/system.js',
@@ -45,16 +44,20 @@ test('retired Character AppCore and bridge files are physically absent', () => {
   }
 });
 
-test('modern runtime sources cannot restore Character document identity, events, APIs, or panes', () => {
+test('live runtime sources cannot restore Character document identity, events, APIs, or panes', () => {
   const forbidden = /state\.characters|\bcharacterId\b|character:(?:create|move|delete|select)|\b(?:selectCharacter|placeCharacter|repositionCharacter|deleteCharacter|moverContextForCharacter)\b|characterPane/;
-  for (const path of modernFiles) {
+  for (const path of liveRuntimeFiles) {
     const value = withoutComments(source(path));
     assert.doesNotMatch(value, forbidden, `${path} restored a Character runtime dependency`);
   }
 });
 
-test('legacy SaveV2 adapter is the explicit Character migration boundary', () => {
+test('SaveV2 migration is isolated to the import/persistence boundary', () => {
+  const runtimeState = source('src/engine/runtime-state.js');
   const legacy = source('src/legacy/save-v2.js');
+  assert.match(runtimeState, /isLegacySaveV2Payload/);
+  assert.match(runtimeState, /migrateLegacySaveV2/);
+  assert.match(runtimeState, /delete next\.characters/);
   assert.match(legacy, /legacy\.characters/);
   assert.match(legacy, /token\.characterId/);
   assert.match(legacy, /anchor\?\.type === 'character'/);
