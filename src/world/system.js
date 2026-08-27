@@ -51,10 +51,15 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           world = normalizeWorldV2(world, { mapPackage, ruleset });
           if (preferCanonical) return projectWorldV2ToRuntimeState(state, world, { mapPackage, ruleset });
           world = synchronizeWorldV2FromRuntimeState(state, { mapPackage, ruleset, existingWorld: world });
-        } else {
-          world = createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worldId, worldName });
+          return attachWorldV2(state, world);
         }
-        return attachWorldV2(state, world);
+
+        // Character exists only as a one-way SaveV2 migration input. Once the
+        // initial World is constructed, immediately project the canonical World
+        // back into the reducer shell. This consumes the legacy roster instead
+        // of leaving live Character documents beside Scene Tokens.
+        world = createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worldId, worldName });
+        return projectWorldV2ToRuntimeState(state, world, { mapPackage, ruleset });
       }
 
       function hydrateCanonical(state) {
@@ -64,8 +69,8 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       }
 
       // Migrate the current single-map SaveV2 into the canonical World V2
-      // envelope before Entity/Status/Combat tools register. Existing map UI
-      // continues to consume a flat active-scene projection.
+      // envelope before Entity/Status/Combat tools register. Character data is
+      // consumed here and is not kept as a parallel runtime document model.
       const initialState = api.getState?.() || {};
       const migrated = !currentWorldFromState(initialState);
       const initial = hydrateCanonical(initialState);
@@ -108,11 +113,6 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           error.code = 'world_scene_map_reload_required';
           throw error;
         }
-        // World structure may remove an Actor or active-Scene Token while the
-        // temporary Combat projection still refers to it. Prune those dangling
-        // runtime references before Local/LAN authority validates the request so
-        // deletion is one atomic, server-valid operation instead of a rejected
-        // World push followed by a too-late client cleanup.
         const projected = pruneProjectedWorldReferences(
           projectWorldV2ToRuntimeState(api.getState?.() || {}, normalized, { mapPackage, ruleset }),
         );
