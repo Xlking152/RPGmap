@@ -38,7 +38,6 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       const mapPackage = api.mapPackage;
       const coreCommitState = api.commitState?.bind(api);
       const coreCommitAuthoritativeState = api.commitAuthoritativeState?.bind(api);
-      const coreImportState = api.importState?.bind(api);
       if (typeof coreCommitState !== 'function') throw new Error('World V2 requires api.commitState()');
 
       function normalizeForRuntime(state, { preferCanonical = false } = {}) {
@@ -54,10 +53,9 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           return attachWorldV2(state, world);
         }
 
-        // Character exists only as a one-way SaveV2 migration input. Once the
-        // initial World is constructed, immediately project the canonical World
-        // back into the reducer shell. This consumes the legacy roster instead
-        // of leaving live Character documents beside Scene Tokens.
+        // Legacy save conversion happens before WorldSystem, at the persistence
+        // and import boundary. A state without World V2 here is therefore only
+        // a new modern runtime seed.
         world = createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worldId, worldName });
         return projectWorldV2ToRuntimeState(state, world, { mapPackage, ruleset });
       }
@@ -68,11 +66,8 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         return normalizeForRuntime(state, { preferCanonical: true });
       }
 
-      // Migrate the current single-map SaveV2 into the canonical World V2
-      // envelope before Entity/Status/Combat tools register. Character data is
-      // consumed here and is not kept as a parallel runtime document model.
       const initialState = api.getState?.() || {};
-      const migrated = !currentWorldFromState(initialState);
+      const created = !currentWorldFromState(initialState);
       const initial = hydrateCanonical(initialState);
       coreCommitState(initial, { source: 'world-v2:hydrate', render: false });
 
@@ -86,10 +81,6 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           normalizeForRuntime(nextState),
           options,
         );
-      }
-
-      if (typeof coreImportState === 'function') {
-        api.importState = (nextState, ...args) => coreImportState(hydrateCanonical(nextState), ...args);
       }
 
       function snapshot() {
@@ -165,7 +156,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
 
       api.emit?.('world:ready', {
         world: snapshot(),
-        migrated,
+        created,
       });
     },
   });
