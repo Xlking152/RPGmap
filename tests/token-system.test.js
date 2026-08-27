@@ -17,7 +17,7 @@ function actor() {
 function state() {
   return {
     saveVersion: 2, mapId: 'test-map', mapVersion: '1.0.0',
-    markers: [], attackAreas: [], sceneEvents: [], characters: [],
+    markers: [], attackAreas: [], sceneEvents: [],
     preferences: {
       gridVisible: true,
       entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [] },
@@ -40,6 +40,10 @@ function apiFixture() {
   return { api, events, current: () => structuredClone(current) };
 }
 
+function assertNoCharacterProjection(current) {
+  assert.equal(Object.hasOwn(current, 'characters'), false);
+}
+
 test('TokenSystem creates only a canonical Scene Token', async () => {
   const fixture = apiFixture();
   const token = await fixture.api.tokens.create({ actorId: 'actor-1', id: 'token-instance-1', x: 12.5, y: 13.5 });
@@ -48,7 +52,7 @@ test('TokenSystem creates only a canonical Scene Token', async () => {
   const current = fixture.current();
   const world = current.preferences[WORLD_STATE_KEY];
   assert.equal(activeWorldScene(world).tokens[0].x, 12.5);
-  assert.equal(current.characters.length, 0);
+  assertNoCharacterProjection(current);
   assert.equal(current.preferences.entitySystem.tokens[0].id, 'token-instance-1');
   assert.equal(current.preferences.entitySystem.tokens[0].characterId, undefined);
 });
@@ -59,7 +63,7 @@ test('TokenSystem supports multiple Token instances for the same Actor without C
   await fixture.api.tokens.create({ actorId: 'actor-1', id: 'token-two', x: 2, y: 2 });
   assert.deepEqual(fixture.api.tokens.list().map(token => token.id), ['token-one', 'token-two']);
   assert.deepEqual(fixture.api.tokens.list().map(token => token.actorId), ['actor-1', 'actor-1']);
-  assert.equal(fixture.current().characters.length, 0);
+  assertNoCharacterProjection(fixture.current());
 });
 
 test('TokenSystem move and feature placement update canonical World placement', async () => {
@@ -75,7 +79,7 @@ test('TokenSystem move and feature placement update canonical World placement', 
   assert.equal(canonical.featureId, 'building-a');
   assert.equal(canonical.x, null);
   assert.equal(canonical.y, null);
-  assert.equal(fixture.current().characters.length, 0);
+  assertNoCharacterProjection(fixture.current());
 });
 
 test('TokenSystem preserves actorLink/actorDelta and deletes canonical state only', async () => {
@@ -90,7 +94,7 @@ test('TokenSystem preserves actorLink/actorDelta and deletes canonical state onl
 
   await fixture.api.tokens.remove('npc-one');
   assert.equal(fixture.api.tokens.get('npc-one'), null);
-  assert.equal(fixture.current().characters.length, 0);
+  assertNoCharacterProjection(fixture.current());
   assert.equal(fixture.current().preferences.entitySystem.tokens.length, 0);
 });
 
