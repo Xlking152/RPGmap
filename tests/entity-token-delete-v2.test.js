@@ -126,7 +126,9 @@ test('canonical delete and Feature bridges have no Character-storage mutation de
   assert.match(deleteCore, /api\.tokens\.remove\(/);
   assert.match(deleteCore, /api\.world\.commit\(/);
   assert.doesNotMatch(deleteCore, /deleteCharacter|character:delete|state\.characters|preferences\.entitySystem|\.removeToken\(|\.removeActor\(/);
-  assert.doesNotMatch(deleteUi, /api\.deleteCharacter|store\.removeToken|store\.removeActor|commitState\(|importState\(|state\.characters/);
+  assert.match(deleteUi, /api\.deleteCharacter = canonicalDeleteCharacter/);
+  assert.match(deleteUi, /return deleteCanonicalToken\(api, target\)/);
+  assert.doesNotMatch(deleteUi, /legacyDeleteCharacter\?\.|legacyDeleteCharacter\(|store\.removeToken|store\.removeActor|commitState\(|importState\(|state\.characters/);
   assert.match(featureView, /api\.tokens\.list\(\)/);
   assert.match(featureView, /api\.tokens\.resolveActor\(/);
   assert.doesNotMatch(featureView, /state\.characters|preferences\.entitySystem/);
