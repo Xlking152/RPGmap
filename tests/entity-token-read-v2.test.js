@@ -105,6 +105,9 @@ test('Entity Token Read V2 is read-only and has no Character/Entity projection d
   assert.match(source, /api\.tokens\.list\(\)/);
   assert.match(source, /api\.tokens\.get\(/);
   assert.match(source, /api\.tokens\.resolveActor\(/);
+  assert.match(source, /tokenListSource = 'api\.tokens\.list'/);
+  assert.match(source, /tokenValueSource = 'api\.tokens\.get'/);
+  assert.match(source, /actorValueSource = 'api\.tokens\.resolveActor'/);
   assert.doesNotMatch(source, /state\.characters|preferences\.entitySystem|entityState\(\)/);
   assert.doesNotMatch(source, /api\.tokens\.(?:create|move|update|remove)\(/);
   assert.doesNotMatch(source, /commitState\(|importState\(/);
