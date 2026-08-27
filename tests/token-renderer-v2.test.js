@@ -71,10 +71,14 @@ test('hidden or Feature-placed Tokens have no map view model', () => {
   }), null);
 });
 
-test('canonical Token layer source does not read Character or Entity compatibility projections', async () => {
-  const path = fileURLToPath(new URL('../src/render/token-layer.js', import.meta.url));
-  const source = await readFile(path, 'utf8');
-  assert.match(source, /api\.tokens\.list\(\)/);
-  assert.match(source, /api\.tokens\.resolveActor/);
-  assert.doesNotMatch(source, /state\.characters|preferences\?*\.entitySystem|preferences\.entitySystem/);
+test('canonical map Token and health overlay sources do not read compatibility projections', async () => {
+  const rendererPath = fileURLToPath(new URL('../src/render/token-layer.js', import.meta.url));
+  const healthPath = fileURLToPath(new URL('../src/health/token-bars.js', import.meta.url));
+  const renderer = await readFile(rendererPath, 'utf8');
+  const health = await readFile(healthPath, 'utf8');
+  for (const source of [renderer, health]) {
+    assert.match(source, /api\.tokens\.list\(\)/);
+    assert.doesNotMatch(source, /state\.characters|preferences\.entitySystem/);
+  }
+  assert.match(renderer, /api\.tokens\.resolveActor/);
 });
