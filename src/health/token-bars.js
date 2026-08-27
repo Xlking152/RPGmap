@@ -1,8 +1,6 @@
 import L from 'leaflet';
 import { worldToLatLng } from '../engine/geometry.js';
-import { EntityStore } from '../entities/store.js';
 import { tokenDiameterMeters } from '../elevation/model.js';
-import { resolveActorHealth } from './actor.js';
 import { HEALTH_MODE_WOUND_TRACK, formatHealthSummary } from './model.js';
 
 const PANE = 'healthBarPane';
@@ -52,6 +50,19 @@ function barHtml(health) {
   return `<div class="rpgmap-token-healthbar" title="${escapeHtml(formatHealthSummary(health))}">${segment(pct(health.healthy), 'healthy')}${segment(pct(health.bashing), 'bashing')}${segment(pct(health.lethal), 'lethal')}${segment(pct(health.aggravated), 'aggravated')}</div>`;
 }
 
+function legacyProjectedTokens(api) {
+  const state = api.getState?.() || {};
+  const characters = new Map((state.characters || []).map(character => [String(character.id), character]));
+  return (state.preferences?.entitySystem?.tokens || []).flatMap(token => {
+    const character = characters.get(String(token.characterId || token.id));
+    if (!character) return [];
+    if (character.location?.type === 'building') {
+      return [{ ...token, placement: 'feature', featureId: character.location.featureId, x: null, y: null, hidden: token.hidden === true || character.visible === false }];
+    }
+    return [{ ...token, placement: 'map', x: character.location?.x, y: character.location?.y, featureId: null, hidden: token.hidden === true || character.visible === false }];
+  });
+}
+
 export function createHealthTokenBars() {
   return {
     register(api) {
@@ -62,21 +73,20 @@ export function createHealthTokenBars() {
 
       function render() {
         layer.clearLayers();
-        const store = new EntityStore(api);
-        store.load({ migrateLegacy: false, dropMarkers: false });
-        for (const character of api.getState().characters || []) {
-          if (character?.visible === false || character?.location?.type !== 'map') continue;
-          const actor = store.actorForToken(character.id);
-          if (!actor) continue;
-          const health = resolveActorHealth(actor);
+        const tokens = api.tokens?.list?.() || legacyProjectedTokens(api);
+        for (const token of tokens) {
+          if (token?.hidden === true || token?.placement !== 'map') continue;
+          const x = Number(token.x);
+          const y = Number(token.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+          const health = api.health?.resolveToken?.(token.id);
           const html = barHtml(health);
           if (!html) continue;
-          const token = store.token(character.id);
           const origin = api.map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, api.mapPackage.height));
           const unit = api.map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 0 }, api.mapPackage.height));
           const tokenPixels = Math.max(18, Math.min(144, tokenDiameterMeters(token) * (Math.hypot(unit.x - origin.x, unit.y - origin.y) || 1)));
           const barWidth = Math.max(28, Math.min(160, tokenPixels * 1.1));
-          L.marker(worldToLatLng(character.location, api.mapPackage.height), {
+          L.marker(worldToLatLng({ x, y }, api.mapPackage.height), {
             pane: PANE,
             interactive: false,
             keyboard: false,
@@ -96,7 +106,12 @@ export function createHealthTokenBars() {
       api.on('state:saved', render);
       api.on('state:commit', event => {
         const source = String(event.detail?.source || '');
-        if (source === 'health' || source.startsWith('entities:resource')) render();
+        if (
+          source === 'health'
+          || source.startsWith('entities:resource')
+          || source.startsWith('token-v2:')
+          || source.startsWith('world-v2:')
+        ) render();
       });
       api.on('health:change', render);
       api.on('token:size-change', render);
