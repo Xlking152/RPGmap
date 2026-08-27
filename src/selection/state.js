@@ -4,14 +4,9 @@ function normalizeId(value) {
   return id || null;
 }
 
-function mapPosition(item) {
-  if (item?.placement === 'map') {
-    return item.hidden === true ? null : { x: Number(item.x), y: Number(item.y) };
-  }
-  if (item?.location?.type === 'map') {
-    return item.visible === false ? null : { x: Number(item.location.x), y: Number(item.location.y) };
-  }
-  return null;
+function mapPosition(token) {
+  if (token?.placement !== 'map' || token.hidden === true) return null;
+  return { x: Number(token.x), y: Number(token.y) };
 }
 
 export function tokenIdsInBounds(tokens, start, end) {
