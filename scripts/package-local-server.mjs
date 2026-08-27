@@ -31,6 +31,8 @@ await copy('reference');
 for (const file of [
   'server.mjs',
   'access-control.mjs',
+  'access-control-legacy.mjs',
+  'token-access-v2.mjs',
   'portable-storage.mjs',
   'world-schema.mjs',
   'world-v2.mjs',
