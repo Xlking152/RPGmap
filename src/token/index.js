@@ -17,3 +17,12 @@ export {
   relocateActorTokenAtPoint,
 } from './placement.js';
 export { createActorTokenPlacementUiSystem } from './actor-placement-ui.js';
+export {
+  normalizeTokenRotation,
+  tokenPropertySnapshot,
+  setTokenHidden,
+  setTokenDiameterMeters,
+  setTokenRotation,
+  setTokenElevationFt,
+} from './properties.js';
+export { createTokenPropertyUiSystem } from './property-ui.js';
