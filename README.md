@@ -30,7 +30,7 @@ Movement and the visible Leaflet Token stack now consume active `Scene.tokens[]`
 
 The legacy Character projection is still retained temporarily for the sidebar placement/editor UI. It is not the canonical map renderer and is scheduled for removal after that UI is migrated to Token APIs.
 
-See [`文档/WORLD_V2.md`](./文档/WORLD_V2.md) for the ownership model and migration sequence.
+See [`文档/WORLD_V2.md`](%E6%96%87%E6%A1%A3/WORLD_V2.md) for the ownership model and migration sequence.
 
 ## Development
 
