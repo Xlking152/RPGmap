@@ -42,6 +42,25 @@ function world({ activeActorId = null } = {}) {
   };
 }
 
+function addWorldV2(value) {
+  value.preferences.worldV2 = {
+    schemaVersion: 2,
+    id: 'world-test',
+    name: 'Test World',
+    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    activeSceneId: 'scene-test',
+    actors: [],
+    statusDefinitions: [],
+    scenes: [{
+      id: 'scene-test', name: 'Test Scene', mapPackage: { id: 'test', version: '1' },
+      tokens: [], markers: [], attackAreas: [], sceneEvents: [], settings: { gridVisible: true },
+    }],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  return value;
+}
+
 test('persistent User stores hashes while returning portable Player Key and browser credential', () => {
   const { user, authToken, playerKey } = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' });
   assert.equal(authToken, playerKey);
@@ -191,4 +210,24 @@ test('authoritative status and derived health capabilities block Player movement
     const denied = validatePlayerWorldPush({ before: incapacitated, next: moved, user });
     assert.equal(denied.code, 'status_movement_forbidden', label);
   }
+});
+
+test('server Player permissions allow mirrored World V2 movement but protect World structure', () => {
+  const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
+  const before = addWorldV2(world());
+  const moved = structuredClone(before);
+  moved.characters[0].location.x = 9;
+  assert.equal(validatePlayerWorldPush({ before, next: moved, user }).ok, true);
+  assert.equal(moved.preferences.worldV2.scenes[0].tokens[0].x, 9);
+
+  const rulesetTamper = structuredClone(before);
+  rulesetTamper.preferences.worldV2.ruleset.id = 'forged-ruleset';
+  assert.equal(validatePlayerWorldPush({ before, next: rulesetTamper, user }).code, 'world_scope_forbidden');
+
+  const sceneTamper = structuredClone(before);
+  sceneTamper.preferences.worldV2.scenes.push({
+    id: 'scene-forged', name: 'Forged', mapPackage: { id: 'test', version: '1' },
+    tokens: [], markers: [], attackAreas: [], sceneEvents: [], settings: { gridVisible: true },
+  });
+  assert.equal(validatePlayerWorldPush({ before, next: sceneTamper, user }).code, 'world_scope_forbidden');
 });
