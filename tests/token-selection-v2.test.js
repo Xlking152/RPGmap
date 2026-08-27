@@ -12,11 +12,7 @@ test('selection bounds use canonical Scene Token x/y and ignore hidden or featur
   assert.deepEqual(tokenIdsInBounds(tokens, { x: 0, y: 0 }, { x: 10, y: 10 }), ['a']);
 });
 
-test('selection bounds retain legacy Character compatibility during migration', () => {
-  const characters = [
-    { id: 'legacy-a', visible: true, location: { type: 'map', x: 2, y: 3 } },
-    { id: 'legacy-hidden', visible: false, location: { type: 'map', x: 2, y: 3 } },
-    { id: 'legacy-room', visible: true, location: { type: 'building', featureId: 'room' } },
-  ];
-  assert.deepEqual(tokenIdsInBounds(characters, { x: 0, y: 0 }, { x: 5, y: 5 }), ['legacy-a']);
+test('Character-shaped inputs are not accepted by the runtime selection contract', () => {
+  const legacy = [{ id: 'legacy-a', visible: true, location: { type: 'map', x: 2, y: 3 } }];
+  assert.deepEqual(tokenIdsInBounds(legacy, { x: 0, y: 0 }, { x: 5, y: 5 }), []);
 });
