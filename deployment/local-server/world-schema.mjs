@@ -82,10 +82,13 @@ export function assertSafeJson(value, label = 'world') {
 export function assertWorldState(value) {
   assertSafeJson(value, 'state');
   const state = object(value, 'state');
+
+  // SaveV2 may still carry a legacy Character array during one-way migration,
+  // but World V2 runtime authority never requires or joins through it.
   const characters = state.characters === undefined ? [] : array(state.characters, 'state.characters');
   const markers = state.markers === undefined ? [] : array(state.markers, 'state.markers');
   const attackAreas = state.attackAreas === undefined ? [] : array(state.attackAreas, 'state.attackAreas');
-  const characterIds = assertUniqueIds(characters, 'state.characters');
+  assertUniqueIds(characters, 'state.characters');
   assertUniqueIds(markers, 'state.markers');
   assertUniqueIds(attackAreas, 'state.attackAreas');
 
@@ -97,14 +100,14 @@ export function assertWorldState(value) {
     const entityState = object(entities, 'state.preferences.entitySystem');
     actorIds = assertUniqueIds(entityState.actors, 'entitySystem.actors');
     tokenIds = assertUniqueIds(entityState.tokens, 'entitySystem.tokens');
-    const characterTokenIds = new Set();
     for (const [index, token] of entityState.tokens.entries()) {
       const actorId = id(token.actorId, `entitySystem.tokens[${index}].actorId`);
-      const characterId = id(token.characterId, `entitySystem.tokens[${index}].characterId`);
       if (!actorIds.has(actorId)) fail(`Token references missing Actor: ${actorId}`, 'invalid_reference');
-      if (!characterIds.has(characterId)) fail(`Token references missing Character: ${characterId}`, 'invalid_reference');
-      if (characterTokenIds.has(characterId)) fail(`Multiple Tokens reference Character: ${characterId}`, 'duplicate_id');
-      characterTokenIds.add(characterId);
+      // characterId is accepted only as inert legacy input. Canonical runtime
+      // identity is token.id; there is no one-Character-per-Token invariant.
+      if (token.characterId !== undefined && token.characterId !== null && String(token.characterId).trim() !== '') {
+        id(token.characterId, `entitySystem.tokens[${index}].characterId`);
+      }
       if (token.diameterMeters !== undefined && ![1, 5, 10, 20].includes(Number(token.diameterMeters))) {
         fail(`entitySystem.tokens[${index}].diameterMeters must be 1, 5, 10, or 20`);
       }
@@ -112,10 +115,9 @@ export function assertWorldState(value) {
     assertStatusState(entityState);
   }
 
-  // New clients persist the canonical World V2 model beside the active-scene
-  // compatibility projection. Server-side Status operations mutate the flat
-  // projection directly, so synchronize that projection back into World V2
-  // before validating/persisting. Legacy states without World V2 remain valid.
+  // World V2 is canonical. Flat entity/scene fields remain a temporary reducer
+  // projection, so merge only mutable mechanical fields back into the active
+  // Scene without routing placement through Character documents.
   const worldV2 = synchronizeWorldV2Mirror(state);
   if (worldV2) assertWorldV2(worldV2);
 
