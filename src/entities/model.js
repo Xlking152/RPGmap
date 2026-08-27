@@ -1,36 +1,25 @@
-import { createHealthRuntime, defaultHealthMode, normalizeHealthRuntime } from '../health/model.js';
+import { createHealthRuntime, normalizeHealthRuntime } from '../health/model.js';
 import { normalizeElevationFt, normalizeTokenDiameterMeters } from '../elevation/model.js';
 import { normalizeEntityStatusState, STATUS_SCHEMA_VERSION } from '../status/model.js';
+import { getActiveRuleset } from '../ruleset/index.js';
 import { normalizeCharacterCard } from './schema.js';
-const CORE_RESOURCE_DEFS = Object.freeze([
-  { id: 'hp', name: '生命', kind: 'hp' },
-  { id: 'stamina', name: '精力', kind: 'stamina' },
-  { id: 'willpower', name: '意志', kind: 'willpower' },
-]);
 
-const BAD_STATUS_DEFS = Object.freeze([
-  { id: 'bad-status-32', name: '冻结点数', group: 0 },
-  { id: 'bad-status-33', name: '失速点数', group: 0 },
-  { id: 'bad-status-34', name: '燃烧点数', group: 0 },
-  { id: 'bad-status-35', name: '纠缠点数', group: 0 },
-  { id: 'bad-status-36', name: '恶心点数', group: 1 },
-  { id: 'bad-status-37', name: '晶化点数', group: 1 },
-  { id: 'bad-status-38', name: '麻痹点数', group: 1 },
-  { id: 'bad-status-39', name: '剧痛点数', group: 1 },
-  { id: 'bad-status-40', name: '眩晕点数', group: 1 },
-  { id: 'bad-status-41', name: '肢体妨碍', group: 2 },
-  { id: 'bad-status-42', name: '流血点数', group: 2 },
-  { id: 'bad-status-43', name: '疲乏点数', group: 2 },
-  { id: 'bad-status-44', name: '耳鸣点数', group: 3 },
-  { id: 'bad-status-45', name: '目眩点数', group: 3 },
-  { id: 'bad-status-46', name: '沮丧点数', group: 4 },
-  { id: 'bad-status-47', name: '亢奋点数', group: 4 },
-  { id: 'bad-status-48', name: '恐惧点数', group: 4 },
-  { id: 'bad-status-49', name: '仇恨点数', group: 4 },
-  { id: 'bad-status-50', name: '欲眠点数', group: 4 },
-  { id: 'bad-status-51', name: '精神束缚', group: 4 },
-  { id: 'bad-status-52', name: '魅惑点数', group: 5 },
-]);
+// Compatibility exports for code that still imports these names from entities.
+// New code should query getActiveRuleset().actor instead.
+const CORE_RESOURCE_DEFS = Object.freeze(getActiveRuleset().actor.resourceDefinitions.map(def => ({ ...def })));
+const BAD_STATUS_DEFS = Object.freeze(getActiveRuleset().actor.badStatusDefinitions.map(def => ({ ...def })));
+
+function activeResourceDefs() {
+  return getActiveRuleset().actor.resourceDefinitions;
+}
+
+function activeBadStatusDefs() {
+  return getActiveRuleset().actor.badStatusDefinitions;
+}
+
+function defaultHealthMode(sourceType) {
+  return getActiveRuleset().health.defaultModeForSource(sourceType);
+}
 
 function uid(prefix) {
   const value = globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -51,7 +40,7 @@ function clone(value) {
 }
 
 function emptyBadStatuses() {
-  return BAD_STATUS_DEFS.map(def => ({ id: def.id, name: def.name, light: 0, severe: 0, destruction: 0 }));
+  return activeBadStatusDefs().map(def => ({ id: def.id, name: def.name, light: 0, severe: 0, destruction: 0 }));
 }
 
 function migrateBadStatuses(form) {
@@ -61,7 +50,7 @@ function migrateBadStatuses(form) {
     Number.isFinite(Number(item?.light)) && Number.isFinite(Number(item?.severe)) && Number.isFinite(Number(item?.devastating))
   );
   if (!legacyThresholds.length) return emptyBadStatuses();
-  return BAD_STATUS_DEFS.map(def => {
+  return activeBadStatusDefs().map(def => {
     const threshold = legacyThresholds[def.group] || {};
     return {
       id: def.id,
@@ -92,7 +81,7 @@ export function createEmptyEntityState() {
 export function createFormFromImport(imported, { id = uid('form'), name } = {}) {
   const normalized = normalizeCharacterCard(imported);
   const resourceBases = {};
-  for (const def of CORE_RESOURCE_DEFS) {
+  for (const def of activeResourceDefs()) {
     resourceBases[def.id] = {
       id: def.id,
       name: def.name,
@@ -126,7 +115,7 @@ export function createActorFromImport(imported, { id = uid('actor'), formId, for
   const normalized = normalizeCharacterCard(imported);
   const form = createFormFromImport(normalized, { id: formId || uid('form'), name: formName || normalized.formName });
   const resources = {};
-  for (const def of CORE_RESOURCE_DEFS) {
+  for (const def of activeResourceDefs()) {
     const maximum = form.resourceBases[def.id]?.baseMax || 0;
     resources[def.id] = { current: maximum, maxOverride: null, policy: 'preserve' };
   }
@@ -159,7 +148,7 @@ export function createLegacyActor(character, { actorId = uid('actor') } = {}) {
     formName: '默认形态',
     identity: { name: character.name || '未命名角色' },
     avatarDataUrl: character.avatarDataUrl || null,
-    resources: { hp: 0, stamina: 0, willpower: 0 },
+    resources: Object.fromEntries(activeResourceDefs().map(def => [def.id, 0])),
     attributes: [],
     checks: { skills: [], saves: [] },
     badStatuses: emptyBadStatuses(),
@@ -272,7 +261,7 @@ export function addFormToActor(actor, imported, options = {}) {
   actor.forms.push(form);
   actor.currentFormId = form.id;
   actor.updatedAt = new Date().toISOString();
-  for (const def of CORE_RESOURCE_DEFS) {
+  for (const def of activeResourceDefs()) {
     actor.runtime.resources[def.id] ||= {
       current: form.resourceBases[def.id]?.baseMax || 0,
       maxOverride: null,
