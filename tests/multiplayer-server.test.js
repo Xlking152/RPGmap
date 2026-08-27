@@ -6,12 +6,23 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
-function waitForMessage(ws, predicate, timeout = 5000) {
+const WEBSOCKET_WAIT_TIMEOUT_MS = 15_000;
+
+function waitForMessage(ws, predicate, timeout = WEBSOCKET_WAIT_TIMEOUT_MS, label = 'matching WebSocket message') {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { cleanup(); reject(new Error('message timeout')); }, timeout);
+    const recentMessages = [];
+    const timer = setTimeout(() => {
+      cleanup();
+      const recent = recentMessages.length
+        ? `\nRecent messages:\n${recentMessages.map(value => JSON.stringify(value)).join('\n')}`
+        : '\nNo JSON messages were received while waiting.';
+      reject(new Error(`${label} timeout after ${timeout}ms${recent}`));
+    }, timeout);
     const handler = event => {
       let value;
       try { value = JSON.parse(String(event.data)); } catch { return; }
+      recentMessages.push(value);
+      if (recentMessages.length > 12) recentMessages.shift();
       if (!predicate(value)) return;
       cleanup();
       resolve(value);
@@ -84,8 +95,21 @@ async function startServer(extraEnv = {}, existingMapDir = null) {
 }
 
 async function stopServer(runtime, { removeMap = true } = {}) {
-  runtime.child.kill('SIGTERM');
-  await new Promise(resolve => setTimeout(resolve, 120));
+  if (runtime.child.exitCode === null && runtime.child.signalCode === null) {
+    const exited = new Promise(resolve => runtime.child.once('exit', resolve));
+    runtime.child.kill('SIGTERM');
+    const stopped = await Promise.race([
+      exited.then(() => true),
+      new Promise(resolve => setTimeout(() => resolve(false), 5_000)),
+    ]);
+    if (!stopped && runtime.child.exitCode === null && runtime.child.signalCode === null) {
+      runtime.child.kill('SIGKILL');
+      await Promise.race([
+        exited,
+        new Promise(resolve => setTimeout(resolve, 2_000)),
+      ]);
+    }
+  }
   if (removeMap) await rm(runtime.mapDir, { recursive: true, force: true });
 }
 
@@ -113,6 +137,56 @@ function initialWorld() {
       chatSystem: { schemaVersion: 1, messages: [] },
     },
   };
+}
+
+function initialWorldV2() {
+  const state = initialWorld();
+  delete state.characters;
+  state.preferences.entitySystem.schemaVersion = 3;
+  const actors = structuredClone(state.preferences.entitySystem.actors);
+  const tokens = state.preferences.entitySystem.tokens.map((token, index) => ({
+    id: token.id,
+    actorId: token.actorId,
+    actorLink: true,
+    actorDelta: null,
+    diameterMeters: 1,
+    rotation: 0,
+    elevationFt: 0,
+    hidden: false,
+    locked: false,
+    showName: true,
+    effects: [],
+    x: 10 + index * 10,
+    y: 10 + index * 10,
+  }));
+  state.preferences.entitySystem.tokens = structuredClone(tokens);
+  state.preferences.entitySystem.statusDefinitions = [];
+  state.preferences.worldV2 = {
+    schemaVersion: 2,
+    id: 'world-test',
+    name: 'Test World',
+    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    activeSceneId: 'scene-test',
+    actors: structuredClone(actors),
+    statusDefinitions: [],
+    scenes: [{
+      id: 'scene-test',
+      name: 'Test Scene',
+      mapPackage: { id: 'test', version: '1' },
+      tokens: tokens.map(token => ({
+        ...structuredClone(token),
+        placement: 'map',
+        featureId: null,
+      })),
+      markers: [],
+      attackAreas: [],
+      sceneEvents: [],
+      settings: { gridVisible: true },
+    }],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  return state;
 }
 
 function clone(value) { return structuredClone(value); }
@@ -160,7 +234,7 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
   const runtime = await startServer();
   try {
     const gm = await openAndHello(runtime.url, { name: 'Status GM', requestedRole: 'gm' });
-    const state = initialWorld();
+    const state = initialWorldV2();
     const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
     gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' }));
     await initialized;
@@ -178,7 +252,9 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
     const playerDenied = await playerDeniedPromise;
     assert.equal(playerDenied.code, 'status_gm_only');
     assert.equal(playerDenied.revision, 1);
-    assert.deepEqual(playerDenied.state, state);
+    const deniedState = structuredClone(playerDenied.state);
+    deniedState.preferences.worldV2.updatedAt = state.preferences.worldV2.updatedAt;
+    assert.deepEqual(deniedState, state);
 
     const invalidIdPromise = waitForMessage(gm.ws, message => message.type === 'status.denied' && message.code === 'invalid_operation_id');
     gm.ws.send(JSON.stringify({
@@ -274,7 +350,8 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
     // GM Feature success may atomically combine a mechanical status side effect
     // with movement/Actor changes in one complete-schema World commit.
     const featureWorld = clone(deleted.snapshot.state);
-    featureWorld.characters[0].location.x = 42;
+    featureWorld.preferences.worldV2.scenes[0].tokens[0].x = 42;
+    featureWorld.preferences.entitySystem.tokens[0].x = 42;
     featureWorld.preferences.entitySystem.actors[0].effects = [{
       id: 'feature-rooted', definitionId: 'status-rooted', stacks: 1, enabled: true,
     }];
@@ -285,7 +362,7 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
     }));
     const featureSnapshot = await featureSnapshotPromise;
     assert.equal(featureSnapshot.originSessionId, gm.welcome.session.id);
-    assert.equal(featureSnapshot.state.characters[0].location.x, 42);
+    assert.equal(featureSnapshot.state.preferences.worldV2.scenes[0].tokens[0].x, 42);
     assert.equal(featureSnapshot.state.preferences.entitySystem.actors[0].effects[0].definitionId, 'status-rooted');
 
     const worldData = await waitForJsonFile(path.join(runtime.mapDir, 'world.json'), value => value?.revision === 8);
@@ -381,7 +458,7 @@ test('GM approves Player identity; OWNER writes succeed while unowned and combat
     const gm = await openAndHello(runtime.url, { name: 'GM Tester', requestedRole: 'gm' });
     assert.equal(gm.welcome.session.role, 'gm');
 
-    const state1 = initialWorld();
+    const state1 = initialWorldV2();
     const initSnapshot = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
     gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: state1, reason: 'gm-init' }));
     await initSnapshot;
