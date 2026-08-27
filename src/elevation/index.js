@@ -1,8 +1,6 @@
-import { createElevationSystem as createCoreElevationSystem } from './system.js';
-import { createPlacementContextGuard } from './placement-context.js';
+import { createTokenElevationSystem } from './token-system.js';
 
 export {
-  actorForCharacter,
   entityStateFromAppState,
   featureBlockingHeightFt,
   featureBlocksMover,
@@ -13,7 +11,6 @@ export {
   TOKEN_DIAMETERS_METERS,
   tokenDiameterMeters,
   tokenElevationFt,
-  tokenForCharacter,
 } from './model.js';
 
 export {
@@ -25,17 +22,8 @@ export {
   withActiveMoverContext,
 } from './runtime-context.js';
 
-export {
-  GROUND_PLACEMENT_MOVER_CONTEXT,
-  isCharacterPlacementControl,
-} from './placement-context.js';
-export { createPlacementContextGuard };
+export { createTokenElevationSystem } from './token-system.js';
 
 export function createElevationSystem() {
-  return {
-    register(api) {
-      createCoreElevationSystem().register(api);
-      createPlacementContextGuard().register(api);
-    },
-  };
+  return createTokenElevationSystem();
 }
