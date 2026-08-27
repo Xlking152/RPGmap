@@ -19,6 +19,7 @@ import { createMultiplayerSystem } from './multiplayer/index.js';
 import { createMultiplayerHostBootstrapSystem } from './multiplayer/host-bootstrap.js';
 import { createDefaultMapPackage } from './map-package/default-map.js';
 import { createStatusSystem, createStatusUiSystem } from './status/index.js';
+import { getActiveRuleset } from './ruleset/index.js';
 
 function setBootStatus(message, { error = false } = {}) {
   const node = document.querySelector('[data-rpgmap-boot-status]');
@@ -58,15 +59,19 @@ async function yieldForFirstPaint() {
 }
 
 export async function startRpgMap() {
-  setBootStatus('正在检查 Windows RPGmap Server…');
+  // Ruleset is resolved before any MapPackage/Scene runtime is constructed.
+  // Today the built-in default is Infinite Horror; World V2 will later supply
+  // the ruleset id here instead of the bootstrap default.
+  const ruleset = getActiveRuleset();
+  setBootStatus(`规则包：${ruleset.title} · 正在检查 Windows RPGmap Server…`);
   const serverRuntime = await detectRpgMapServer();
 
   // The packaged multiplayer server owns the canonical World under map/.
   // Do not synchronously load a stale browser localStorage World first.
   const storageAdapter = serverRuntime ? createMemoryStorage() : createBrowserStorage();
   setBootStatus(serverRuntime
-    ? '服务器已连接，正在载入地图…'
-    : '正在载入本地地图…');
+    ? `规则包：${ruleset.title} · 服务器已连接，正在载入地图…`
+    : `规则包：${ruleset.title} · 正在载入本地地图…`);
 
   await yieldForFirstPaint();
 
