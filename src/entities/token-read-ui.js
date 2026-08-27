@@ -111,8 +111,7 @@ export function createEntityTokenReadUiSystem() {
           if (!actorId || !summary) continue;
           const count = counts.get(actorId) || 0;
           const current = String(summary.textContent || '');
-          const separator = current.indexOf(' · ');
-          const formLabel = separator >= 0 ? current.slice(0, separator) : current;
+          const formLabel = current.replace(/ · (?:\d+ 个 Token|未放置)$/, '');
           setText(summary, `${formLabel} · ${count ? `${count} 个 Token` : '未放置'}`);
           summary.dataset.tokenCountSource = 'api.tokens.list';
         }
