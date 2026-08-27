@@ -453,6 +453,28 @@ function healthMovementBlock(actor, actorStatuses) {
   return null;
 }
 
+function plainObject(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function mergeActorDeltaValue(base, delta) {
+  if (delta === undefined) return structuredClone(base);
+  if (Array.isArray(delta)) return structuredClone(delta);
+  if (!plainObject(delta)) return structuredClone(delta);
+  const result = plainObject(base) ? structuredClone(base) : {};
+  for (const [key, value] of Object.entries(delta)) {
+    result[key] = mergeActorDeltaValue(result[key], value);
+  }
+  return result;
+}
+
+function resolveAuthoritativeTokenActor(baseActor, token) {
+  if (!baseActor || token?.actorLink !== false || !plainObject(token?.actorDelta)) return baseActor;
+  const actor = mergeActorDeltaValue(baseActor, token.actorDelta);
+  actor.id = baseActor.id;
+  return actor;
+}
+
 /**
  * Resolve the same movement capability that the browser displays, using only
  * the latest authoritative World snapshot. This is the final server-side gate
@@ -464,7 +486,8 @@ export function resolveStatusCapabilitiesForCharacter(state, characterId) {
   const actors = Array.isArray(entities?.actors) ? entities.actors : [];
   const token = tokens.find(item => String(item?.characterId) === String(characterId)
     || String(item?.id) === String(characterId)) || null;
-  const actor = token ? actors.find(item => String(item?.id) === String(token.actorId)) || null : null;
+  const baseActor = token ? actors.find(item => String(item?.id) === String(token.actorId)) || null : null;
+  const actor = resolveAuthoritativeTokenActor(baseActor, token);
   if (!token || !actor) {
     return { canMove: false, canInteract: false, canActInCombat: false, collisionBypassGroups: [], reasons: ['Actor / Token binding is missing'] };
   }
@@ -521,12 +544,25 @@ export function statusStateChanged(before, next) {
   const beforeEntities = before?.preferences?.entitySystem;
   const nextEntities = next?.preferences?.entitySystem;
   if (JSON.stringify(beforeEntities?.statusDefinitions ?? []) !== JSON.stringify(nextEntities?.statusDefinitions ?? [])) return true;
-  const projectTargets = targets => (Array.isArray(targets) ? targets : [])
+  const projectActors = targets => (Array.isArray(targets) ? targets : [])
     .map(target => ({ id: target?.id, effects: target?.effects ?? [] }))
     .sort((left, right) => String(left.id ?? '').localeCompare(String(right.id ?? '')));
+  const projectTokens = targets => (Array.isArray(targets) ? targets : [])
+    .map(target => ({
+      id: target?.id,
+      effects: target?.effects ?? [],
+      // Synthetic Actor effects are Actor-scoped mechanics persisted inside the
+      // unlinked Token's ActorDelta. Treat them exactly like Actor effects for
+      // permission purposes so an OWNER Player cannot forge GM-only statuses
+      // through a raw world.push.
+      actorDeltaEffects: plainObject(target?.actorDelta) && Array.isArray(target.actorDelta.effects)
+        ? target.actorDelta.effects
+        : null,
+    }))
+    .sort((left, right) => String(left.id ?? '').localeCompare(String(right.id ?? '')));
   const projection = entities => ({
-    actors: projectTargets(entities?.actors),
-    tokens: projectTargets(entities?.tokens),
+    actors: projectActors(entities?.actors),
+    tokens: projectTokens(entities?.tokens),
   });
   return JSON.stringify(projection(beforeEntities)) !== JSON.stringify(projection(nextEntities));
 }
