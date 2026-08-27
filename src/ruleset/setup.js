@@ -104,14 +104,16 @@ export async function chooseRulesetBeforeMap({
   const root = renderRulesetSetup(container, { rulesets });
 
   return new Promise((resolve, reject) => {
-    root.addEventListener('click', event => {
+    const onClick = event => {
       const button = event.target?.closest?.('[data-ruleset-id]');
       if (!button) return;
+      root.removeEventListener('click', onClick);
       try {
         resolve(writeRulesetBootstrap(storageAdapter, button.dataset.rulesetId));
       } catch (error) {
         reject(error);
       }
-    }, { once: true });
+    };
+    root.addEventListener('click', onClick);
   });
 }
