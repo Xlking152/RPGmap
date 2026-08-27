@@ -31,8 +31,7 @@ await copy('reference');
 for (const file of [
   'server.mjs',
   'access-control.mjs',
-  'access-control-legacy.mjs',
-  'token-access-v2.mjs',
+  'status-capabilities-v2.mjs',
   'portable-storage.mjs',
   'world-schema.mjs',
   'world-v2.mjs',
@@ -53,7 +52,7 @@ await writeFile(path.join(root, 'VERSION.json'), `${JSON.stringify({
   app: 'RPGmap', version, releaseTag: `v${version}`,
   commit: process.env.RPGMAP_SOURCE_COMMIT || process.env.GITHUB_SHA || 'local-build',
   serverMode: 'multiplayer', platform: 'windows', storageMode: 'portable-map-root-server-authoritative',
-  launcherMode: 'local-lan-only-v1', defaultPort: 30000,
+  launcherMode: 'local-lan-v2', defaultPort: 30000,
 }, null, 2)}\n`);
 
 try {
