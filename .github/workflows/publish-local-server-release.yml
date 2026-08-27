@@ -14,8 +14,8 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       commit: ${{ steps.meta.outputs.commit }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.12.0'
           cache: npm
@@ -46,7 +46,7 @@ jobs:
           test "$(find "RPGmap-v${{ steps.meta.outputs.version }}" -maxdepth 1 -name '*.bat' | wc -l)" -eq 1
           test ! -e "RPGmap-v${{ steps.meta.outputs.version }}/cloudflared.exe"
           test ! -e "RPGmap-v${{ steps.meta.outputs.version }}/start-rpgmap.sh"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-candidate-v${{ steps.meta.outputs.version }}
           path: |
@@ -58,10 +58,10 @@ jobs:
     needs: candidate
     runs-on: windows-latest
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.12.0'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-candidate-v${{ needs.candidate.outputs.version }}
           path: release
@@ -96,7 +96,7 @@ jobs:
     needs: [candidate, windows-smoke]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-candidate-v${{ needs.candidate.outputs.version }}
           path: release
