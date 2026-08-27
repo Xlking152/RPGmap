@@ -3,6 +3,7 @@ import { createLegacyUiBridge } from './legacy-bridge.js';
 
 export { UI_CONTEXT_PANELS, entityStateFromApp, findSelectedEntity, isMovementStatus, selectionStatus } from './model.js';
 export { createLegacyUiBridge } from './legacy-bridge.js';
+export { createCanonicalPanelOwnershipSystem } from './panel-ownership.js';
 
 export function createAppShellUi() {
   const shell = createShellUi();
