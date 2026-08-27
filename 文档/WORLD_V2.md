@@ -242,6 +242,40 @@ elevationFt     → elevation label + movement/collision context
 
 `token:size-change` and `elevation:token-change` remain compatibility/runtime invalidation events so an already-previewed movement route is discarded when size or height changes.
 
+## Entity editor Token read ownership
+
+The Entity editor now treats the active Scene Token catalog as a read-only canonical view instead of using the Entity Token mirror as its display source.
+
+```text
+Actor card Token count / Status Token list
+        ↓
+api.tokens.list()
+
+Token card placement / geometry / flags
+        ↓
+api.tokens.get(tokenId)
+
+Token card Actor display
+        ↓
+api.tokens.resolveActor(tokenId)
+        ↓
+World Actor or Synthetic Actor
+```
+
+`src/entities/token-read-ui.js` is the current read bridge. It refreshes Actor Token counts and Token card placement/display data from the canonical runtime and exposes `api.entityTokenReads` for the remaining editor migration. The bridge is deliberately read-only: it does not call Token create/move/update/remove operations and does not read `state.characters[]` or `preferences.entitySystem`.
+
+The long-lived Entity editor store also receives a UI-scoped live Token catalog, so existing editor/status code that still asks its local `state.tokens` view is backed by `api.tokens.list()`. This scope is intentionally limited to the Entity UI instance:
+
+```text
+Entity UI EntityStore
+  → canonical Token read view
+
+Health / Status / Damage reducer EntityStore
+  → mutable World draft Tokens
+```
+
+This distinction is required for Synthetic Actor operations. Reducers must mutate the Token object inside their draft (for example `token.actorDelta`) and persist that exact draft atomically; replacing reducer Tokens with clones returned by `api.tokens.get()` / `list()` would discard those changes.
+
 ## Server behavior
 
 The Local/LAN server accepts legacy states without World V2 for backward compatibility.
@@ -270,14 +304,15 @@ This synchronization also means a Player cannot move a Token by forging only `wo
 8. Modern Actor map placement writing directly through `api.tokens.create()` instead of `placeCharacter()` + `bindToken()`.
 9. Modern Token reposition writing through `api.tokens.move()` instead of `repositionCharacter()` / `characters[].location`.
 10. Token hidden/diameter/rotation/elevation edits writing through `api.tokens.update()`, with renderer output driven by the same canonical fields.
+11. Entity editor Token counts/lists/placement/display reading `api.tokens.list()` / `get()` / `resolveActor()` through a UI-scoped canonical read view.
 
 ## Next migrations
 
-Actor placement, reposition and Token property writes are canonical. The remaining Character facade is now concentrated in editor reads/deletion and a few sidebar/Feature views.
+Actor placement, reposition, Token property writes, and Entity editor Token reads are canonical. The remaining Character facade is now concentrated in deletion and a few sidebar/Feature views.
 
-1. Resolve the Entity editor's Token lists, position labels, display values and selected Token context from `api.tokens.list()` / `api.tokens.get()` + World Actor rather than `state.characters[]` / `preferences.entitySystem.tokens`.
-2. Replace Token deletion with `api.tokens.remove()` and migrate remaining Feature occupant/editor lists to canonical Tokens.
-3. Remove the temporary Actor-placement/property UI bridges once the Entity editor owns canonical Actor/Token state directly.
+1. Replace Token deletion with `api.tokens.remove()` and make Actor deletion remove all canonical Scene Tokens before removing the Actor.
+2. Migrate remaining Feature occupant/editor lists from `state.characters[]` to canonical Tokens and resolved Actors.
+3. Remove the temporary Actor-placement/property/read UI bridges once the Entity editor owns canonical Actor/Token state directly.
 4. Remove `characterId` as a Token compatibility alias and finally retire `state.characters[]`.
 5. Add MapPackage registry/reload so `setActiveScene()` can switch across different maps.
 6. Move remaining subsystem state into explicit World/Scene documents where appropriate.
