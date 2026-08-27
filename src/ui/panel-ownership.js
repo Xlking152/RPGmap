@@ -10,20 +10,20 @@ function clonePanelShell(documentNode, legacy, name) {
   return panel;
 }
 
-function takePanelOwnership(shell, documentNode, name) {
-  const current = shell?.querySelector?.(`[data-panel="${name}"]`);
-  if (!current || current.dataset?.canonicalPanelOwner === 'true') return current || null;
-  const panel = clonePanelShell(documentNode, current, name);
+function takePanelOwnership(shell, documentNode, legacyName, canonicalName = legacyName) {
+  const current = shell?.querySelector?.(`[data-panel="${legacyName}"]`);
+  if (!current) return shell?.querySelector?.(`[data-panel="${canonicalName}"]`) || null;
+  if (current.dataset?.canonicalPanelOwner === 'true') return current;
+  const panel = clonePanelShell(documentNode, current, canonicalName);
   current.replaceWith(panel);
   return panel;
 }
 
 /**
- * AppCore still contains the pre-World-V2 panel renderers while the refactor is
- * being completed. Those renderers retain direct references to the DOM nodes
- * created by shellMarkup(). Replacing the two runtime panels once gives the
- * Token/Actor systems exclusive ownership without MutationObserver/capture
- * bridges: AppCore can only render into its now-detached nodes.
+ * AppCore still contains pre-World-V2 panel renderers for one-way legacy
+ * compatibility. Replacing their DOM nodes once leaves those renderers attached
+ * only to detached elements, while the visible runtime panels use canonical
+ * Actor/Token terminology and ownership.
  */
 export function createCanonicalPanelOwnershipSystem() {
   return Object.freeze({
@@ -33,15 +33,15 @@ export function createCanonicalPanelOwnershipSystem() {
       const shell = mapElement?.closest?.('.app-shell') || documentNode;
       if (!shell || !documentNode) return;
 
-      const characters = takePanelOwnership(shell, documentNode, 'characters');
+      const actors = takePanelOwnership(shell, documentNode, 'characters', 'actors');
       const inspect = takePanelOwnership(shell, documentNode, 'inspect');
       api.uiPanels = Object.freeze({
         canonical: true,
-        characters,
+        actors,
         inspect,
         get(name) { return shell.querySelector?.(`[data-panel="${String(name)}"]`) || null; },
       });
-      api.emit?.('ui:canonical-panels-ready', { panels: ['characters', 'inspect'] });
+      api.emit?.('ui:canonical-panels-ready', { panels: ['actors', 'inspect'] });
     },
   });
 }
