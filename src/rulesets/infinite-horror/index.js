@@ -1,7 +1,7 @@
 import { prepareRuleset } from '../../ruleset/contract.js';
 import { INFINITE_HORROR_RESOURCE_DEFS, INFINITE_HORROR_BAD_STATUS_DEFS } from './definitions.js';
 import { INFINITE_HORROR_HEALTH } from './health.js';
-import { INFINITE_HORROR_STATUS_DEFINITIONS } from './statuses.js';
+import { deriveInfiniteHorrorStatuses, INFINITE_HORROR_STATUS_DEFINITIONS } from './statuses.js';
 import {
   guessInfiniteHorrorFormName,
   parseInfiniteHorrorCharacterSheets,
@@ -20,6 +20,7 @@ export const infiniteHorrorRuleset = prepareRuleset({
   health: INFINITE_HORROR_HEALTH,
   statuses: {
     definitions: INFINITE_HORROR_STATUS_DEFINITIONS,
+    derive: deriveInfiniteHorrorStatuses,
   },
   importers: {
     xlsx: {

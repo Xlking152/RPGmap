@@ -1,8 +1,6 @@
 import { createStatusController } from './controller.js';
 
 export {
-  BUILTIN_STATUS_DEFINITIONS,
-  BUILTIN_STATUS_IDS,
   MAX_STACKS,
   STATUS_SCHEMA_VERSION,
   STATUS_ICON_NAMES,

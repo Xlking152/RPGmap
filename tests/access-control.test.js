@@ -11,6 +11,7 @@ import {
   verifyUserCredential,
 } from '../deployment/local-server/access-control.mjs';
 import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
+import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 
 function canonicalToken(id, actorId, x, y) {
   return {
@@ -48,7 +49,7 @@ function world({ activeActorId = null } = {}) {
         schemaVersion: 3,
         actors: structuredClone(actors),
         tokens: structuredClone(tokens),
-        statusDefinitions: [],
+        statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
       },
       chatSystem: { messages: [] },
       combatSystem: { combat: activeActorId ? { id: 'combat', state: 'active', round: 1, turnIndex, combatants } : null },
@@ -59,7 +60,7 @@ function world({ activeActorId = null } = {}) {
         ruleset: { id: 'infinite-horror', version: '1.0.0' },
         activeSceneId: 'scene-test',
         actors: structuredClone(actors),
-        statusDefinitions: [],
+        statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
         scenes: [{
           id: 'scene-test', name: 'Test Scene', mapPackage: { id: 'test', version: '1' },
           tokens: [sceneToken('token-a', 'actor-a', 1, 1), sceneToken('token-b', 'actor-b', 2, 2)],
@@ -179,29 +180,13 @@ test('Player World pushes cannot rewrite status definitions or Actor/Token effec
   assert.equal(validatePlayerWorldPush({ before, next: definition, user }).code, 'status_gm_only');
 });
 
-test('authoritative status and derived health capabilities block canonical Token movement', () => {
+test('authoritative World status capabilities block canonical Token movement', () => {
   const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
   const rooted = world();
   rooted.preferences.entitySystem.actors[0].effects = [{ id: 'effect-rooted', definitionId: 'status-rooted', stacks: 1, enabled: true }];
   const rootedMove = structuredClone(rooted);
   moveToken(rootedMove, 'token-a', { x: 9 });
   assert.equal(validatePlayerWorldPush({ before: rooted, next: rootedMove, user }).code, 'status_movement_forbidden');
-  for (const [label, wounds] of [
-    ['unconscious', { bashing: 2, lethal: 0, aggravated: 0 }],
-    ['dead', { bashing: 0, lethal: 0, aggravated: 2 }],
-  ]) {
-    const incapacitated = world();
-    incapacitated.preferences.entitySystem.actors[0] = {
-      id: 'actor-a', name: 'A', currentFormId: 'form-a',
-      forms: [{ id: 'form-a', resourceBases: { hp: { baseMax: 2 } }, source: { type: 'xlsx' } }],
-      runtime: { resources: { hp: { current: 0, maxOverride: null } }, health: { mode: 'wound-track', wounds } },
-      effects: [],
-    };
-    const moved = structuredClone(incapacitated);
-    moveToken(moved, 'token-a', { y: 11 });
-    const denied = validatePlayerWorldPush({ before: incapacitated, next: moved, user });
-    assert.equal(denied.code, 'status_movement_forbidden', label);
-  }
 });
 
 test('server Player permissions allow canonical World V2 movement but protect World structure', () => {

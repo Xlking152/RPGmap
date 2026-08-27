@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBoundUser, validatePlayerWorldPush } from '../deployment/local-server/access-control.mjs';
 import { resolveStatusCapabilitiesForCharacter as resolveStatusCapabilitiesForToken } from '../deployment/local-server/status-operations.mjs';
+import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 
 function state() {
   const actor = { id: 'actor-a', name: 'A', runtime: { hp: 10 }, effects: [] };
@@ -15,7 +16,7 @@ function state() {
     mapId: 'test',
     markers: [], attackAreas: [], sceneEvents: [],
     preferences: {
-      entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor], tokens: [token] },
+      entitySystem: { schemaVersion: 3, statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS), actors: [actor], tokens: [token] },
       chatSystem: { messages: [] },
       combatSystem: { combat: null },
       worldV2: {
@@ -25,7 +26,7 @@ function state() {
         ruleset: { id: 'infinite-horror', version: '1.0.0' },
         activeSceneId: 'scene-test',
         actors: [structuredClone(actor)],
-        statusDefinitions: [],
+        statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
         scenes: [{
           id: 'scene-test', name: 'Test Scene', mapPackage: { id: 'test', version: '1' },
           tokens: [{

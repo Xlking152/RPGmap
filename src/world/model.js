@@ -29,6 +29,17 @@ function array(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function rulesetStatusDefinitions(value, ruleset) {
+  const source = array(value);
+  const builtIns = array(ruleset?.statuses?.definitions).map(definition => ({ ...clone(definition), builtIn: true }));
+  if (!builtIns.length) return clone(source);
+  const builtInIds = new Set(builtIns.map(definition => String(definition.id)));
+  const custom = source
+    .filter(definition => definition && !builtInIds.has(String(definition.id)))
+    .map(definition => ({ ...clone(definition), builtIn: false }));
+  return [...builtIns, ...custom];
+}
+
 function mapMetadata(mapPackage = {}) {
   const manifest = object(mapPackage.manifest);
   const mapId = id(mapPackage.mapId ?? mapPackage.id ?? manifest.mapId ?? manifest.id, 'default-map');
@@ -124,7 +135,7 @@ export function normalizeWorldV2(raw, { mapPackage = null, ruleset = null } = {}
     },
     activeSceneId,
     actors,
-    statusDefinitions: clone(array(source.statusDefinitions)),
+    statusDefinitions: rulesetStatusDefinitions(source.statusDefinitions, ruleset),
     scenes,
     createdAt: text(source.createdAt, now),
     updatedAt: text(source.updatedAt, now),

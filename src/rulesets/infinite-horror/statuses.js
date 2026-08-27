@@ -42,3 +42,125 @@ export const INFINITE_HORROR_STATUS_DEFINITIONS = Object.freeze([
     builtIn: true,
   }),
 ]);
+
+function finite(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function cleanText(value, fallback = '') {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function applyChange(current, change, stacks) {
+  const amount = finite(change?.value);
+  if (change?.mode === 'set') return amount;
+  if (change?.mode === 'multiply') return current * amount;
+  if (change?.mode === 'min') return Math.min(current, amount);
+  if (change?.mode === 'max') return Math.max(current, amount);
+  return current + amount * stacks;
+}
+
+function resolveActorHealth(actor, statuses) {
+  if (!actor) return null;
+  const forms = Array.isArray(actor.forms) ? actor.forms : [];
+  const form = forms.find(item => String(item?.id) === String(actor.currentFormId)) || forms[0] || null;
+  const hpBase = form?.resourceBases?.hp;
+  const hpRuntime = actor.runtime?.resources?.hp;
+  const healthRuntime = actor.runtime?.health;
+  if (!hpBase && !hpRuntime && !healthRuntime) return null;
+  let max = Math.max(0, finite(hpRuntime?.maxOverride ?? hpBase?.baseMax));
+  let current = finite(hpRuntime?.current, max);
+  for (const status of statuses.filter(item => item?.enabled !== false)) {
+    for (const change of status.changes || []) {
+      if (change.target === 'resources.hp.max') max = applyChange(max, change, status.stacks);
+      if (change.target === 'resources.hp.current') current = applyChange(current, change, status.stacks);
+    }
+  }
+  max = Math.max(0, max);
+  const runtime = normalizeHealthRuntime(healthRuntime, {
+    defaultMode: defaultHealthMode(form?.source?.type),
+    max,
+    simpleCurrent: current,
+  });
+  return resolveHealth(runtime, { max, simpleCurrent: current });
+}
+
+function derivedStatus(definitionId, label, stacks, options = {}) {
+  return {
+    id: `${definitionId}:derived`,
+    definitionId,
+    name: label,
+    label,
+    description: options.description || '',
+    icon: options.icon || '',
+    color: options.color || '#64748b',
+    category: 'derived',
+    scope: 'derived',
+    targetId: options.targetId == null ? null : String(options.targetId),
+    stacks: Math.max(1, Math.min(99, Math.floor(finite(stacks, 1)))),
+    maxStacks: 99,
+    enabled: true,
+    derived: true,
+    readOnly: true,
+    readonly: true,
+    capabilities: { ...(options.capabilities || {}) },
+    changes: [],
+    builtIn: true,
+  };
+}
+
+function deriveBadStatusThresholds(actor) {
+  const forms = Array.isArray(actor?.forms) ? actor.forms : [];
+  const form = forms.find(item => String(item?.id) === String(actor?.currentFormId)) || forms[0] || null;
+  const currentById = actor?.runtime?.badStatuses || {};
+  const targetId = actor?.id;
+  return (Array.isArray(form?.badStatuses) ? form.badStatuses : []).flatMap(status => {
+    const current = Math.max(0, finite(currentById?.[status?.id]));
+    const thresholds = [
+      { key: 'destruction', label: '毁灭', icon: 'skull', color: '#8f3333' },
+      { key: 'severe', label: '重度', icon: 'triangle-alert', color: '#b35e2e' },
+      { key: 'light', label: '轻度', icon: 'circle-alert', color: '#a47a22' },
+    ];
+    const level = thresholds.find(entry => finite(status?.[entry.key]) > 0 && current >= finite(status?.[entry.key]));
+    if (!level) return [];
+    const statusId = String(status?.id || 'unknown');
+    const name = cleanText(status?.name, '不良状态');
+    return [derivedStatus(`derived-bad-${statusId}-${level.key}`, `${name} · ${level.label}`, current || 1, {
+      targetId,
+      icon: level.icon,
+      color: level.color,
+      description: `当前 ${current} 点，已达到${level.label}阈值。`,
+    })];
+  });
+}
+
+export function deriveInfiniteHorrorStatuses(actor, { statuses = [] } = {}) {
+  const health = resolveActorHealth(actor, statuses);
+  const badStatusThresholds = deriveBadStatusThresholds(actor);
+  if (!health) return badStatusThresholds;
+  const targetId = actor?.id;
+  const disabled = { canMove: false, canInteract: false, canActInCombat: false };
+  const derived = [];
+  if (health.dead) {
+    derived.push(derivedStatus('derived-dead', '死亡', 1, {
+      targetId, icon: 'skull', color: '#762d2d', description: '生命状态自动派生，不可手动移除。', capabilities: disabled,
+    }));
+  } else if (health.unconscious) {
+    derived.push(derivedStatus('derived-unconscious', '昏迷', 1, {
+      targetId, icon: 'moon', color: '#495c78', description: '生命状态自动派生，不可手动移除。', capabilities: disabled,
+    }));
+  }
+  if (health.mode === HEALTH_MODE_WOUND_TRACK) {
+    if (health.bashing > 0) derived.push(derivedStatus('derived-wound-b', 'B 伤势', health.bashing, { targetId, icon: 'B', color: '#6d7780' }));
+    if (health.lethal > 0) derived.push(derivedStatus('derived-wound-l', 'L 伤势', health.lethal, { targetId, icon: 'L', color: '#a05a32' }));
+    if (health.aggravated > 0) derived.push(derivedStatus('derived-wound-a', 'A 伤势', health.aggravated, { targetId, icon: 'A', color: '#8f3333' }));
+  }
+  return [...derived, ...badStatusThresholds];
+}
+import {
+  HEALTH_MODE_WOUND_TRACK,
+  defaultHealthMode,
+  normalizeHealthRuntime,
+  resolveHealth,
+} from './health.js';

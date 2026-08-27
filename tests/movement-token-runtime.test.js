@@ -4,6 +4,7 @@ import {
   applyMovementStatusMutations,
   createMovementTokenRuntimeSystem,
 } from '../src/movement/token-runtime.js';
+import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 
 function actor() {
   return { id: 'actor-a', name: 'Template', effects: [] };
@@ -25,7 +26,7 @@ function world(tokenValue = token()) {
     id: 'world-test', name: 'World',
     ruleset: { id: 'infinite-horror', version: '1.0.0' },
     actors: [actor()],
-    statusDefinitions: [],
+    statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
     activeSceneId: 'scene-a',
     scenes: [{
       id: 'scene-a', name: 'Scene', mapPackage: { id: 'map', version: '1' },

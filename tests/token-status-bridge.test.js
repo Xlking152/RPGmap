@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveStatuses } from '../src/status/model.js';
 import { createTokenStatusBridgeSystem } from '../src/token/status-bridge.js';
+import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 
 function baseActor() {
   return {
@@ -25,7 +26,7 @@ function fixture({ synthetic = true } = {}) {
   };
   const entityState = {
     schemaVersion: 3,
-    statusDefinitions: [],
+    statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
     actors: [actor],
     tokens: [token],
   };

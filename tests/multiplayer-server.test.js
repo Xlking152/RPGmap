@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 
 const WEBSOCKET_WAIT_TIMEOUT_MS = 15_000;
 
@@ -160,7 +161,7 @@ function initialWorldV2() {
     y: 10 + index * 10,
   }));
   state.preferences.entitySystem.tokens = structuredClone(tokens);
-  state.preferences.entitySystem.statusDefinitions = [];
+  state.preferences.entitySystem.statusDefinitions = structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS);
   state.preferences.worldV2 = {
     schemaVersion: 2,
     id: 'world-test',
@@ -168,7 +169,7 @@ function initialWorldV2() {
     ruleset: { id: 'infinite-horror', version: '1.0.0' },
     activeSceneId: 'scene-test',
     actors: structuredClone(actors),
-    statusDefinitions: [],
+    statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
     scenes: [{
       id: 'scene-test',
       name: 'Test Scene',
@@ -204,7 +205,7 @@ test('clearing shared chat preserves active combat and actor health in LAN World
   const runtime = await startServer();
   try {
     const gm = await openAndHello(runtime.url, { name: 'GM', requestedRole: 'gm' });
-    const state = initialWorld();
+    const state = initialWorldV2();
     state.preferences.entitySystem.actors[0].runtime.health = { mode: 'wound-track', wounds: { bashing: 2, lethal: 1, aggravated: 0 } };
     state.preferences.combatSystem.combat = {
       id: 'combat-keep', state: 'active', round: 3, turnIndex: 1,
@@ -284,7 +285,7 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
     assert.equal(upsert.snapshot.originSessionId, gm.welcome.session.id);
     assert.equal(upsert.snapshot.reason, 'status.definition.upsert');
     assert.equal(upsert.snapshot.state.preferences.entitySystem.schemaVersion, 3);
-    assert.equal(upsert.snapshot.state.preferences.entitySystem.statusDefinitions[0].id, 'status-focus');
+    assert.equal(upsert.snapshot.state.preferences.entitySystem.statusDefinitions.some(item => item.id === 'status-focus'), true);
     assert.equal(upsert.ack.duplicate, false);
 
     const duplicate = await sendStatusAndWait(gm.ws, upsertMessage);
@@ -345,7 +346,10 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
       definitionId: 'status-focus',
     });
     assert.equal(deleted.snapshot.revision, 7);
-    assert.deepEqual(deleted.snapshot.state.preferences.entitySystem.statusDefinitions, []);
+    assert.deepEqual(
+      deleted.snapshot.state.preferences.entitySystem.statusDefinitions.map(item => item.id),
+      INFINITE_HORROR_STATUS_DEFINITIONS.map(item => item.id),
+    );
 
     // GM Feature success may atomically combine a mechanical status side effect
     // with movement/Actor changes in one complete-schema World commit.
@@ -379,7 +383,7 @@ test('failed status persistence does not advance revision, broadcast, or consume
   const runtime = await startServer();
   try {
     const gm = await openAndHello(runtime.url, { name: 'Status GM', requestedRole: 'gm' });
-    const state = initialWorld();
+    const state = initialWorldV2();
     const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
     gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' }));
     await initialized;
@@ -423,7 +427,7 @@ test('status operation idempotency survives a LAN server restart', async () => {
   try {
     const gm = await openAndHello(runtime.url, { name: 'Restart GM', requestedRole: 'gm' });
     const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
-    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorld(), reason: 'init' }));
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
     await initialized;
 
     const operation = {

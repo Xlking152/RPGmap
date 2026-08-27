@@ -21,11 +21,14 @@ test('infinite horror is registered as the default built-in ruleset', () => {
   assert.equal(ruleset.health.defaultModeForSource('legacy-character'), 'simple');
   assert.equal(typeof ruleset.health.normalizeRuntime, 'function');
   assert.equal(typeof ruleset.health.resolve, 'function');
+  assert.equal(typeof ruleset.health.applyRuntimeOperation, 'function');
   assert.equal(typeof ruleset.health.applyDamage, 'function');
   assert.equal(typeof ruleset.health.applyHealing, 'function');
+  assert.equal(typeof ruleset.health.presentation.describe, 'function');
   assert.deepEqual(ruleset.statuses.definitions.map(item => item.id), [
     'status-spirit', 'status-rooted', 'status-incapacitated',
   ]);
+  assert.equal(typeof ruleset.statuses.derive, 'function');
   assert.equal(typeof ruleset.importers.xlsx.importFile, 'function');
 });
 

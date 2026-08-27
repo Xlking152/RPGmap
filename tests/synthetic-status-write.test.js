@@ -5,6 +5,7 @@ import { resolveTokenActor } from '../src/token/actor.js';
 import { createTokenStatusBridgeSystem } from '../src/token/status-bridge.js';
 import { resolveStatuses } from '../src/status/model.js';
 import { assertWorldV2 } from '../deployment/local-server/world-v2.mjs';
+import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 
 function actor() {
   return {
@@ -52,7 +53,7 @@ function world() {
     name: 'Synthetic status test',
     ruleset: { id: 'infinite-horror', version: '1.0.0' },
     actors: [actor()],
-    statusDefinitions: [],
+    statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
     activeSceneId: 'scene-test',
     scenes: [{
       id: 'scene-test',

@@ -1,9 +1,4 @@
-import {
-  HEALTH_MODE_WOUND_TRACK,
-  defaultHealthMode,
-  normalizeHealthRuntime,
-  resolveHealth,
-} from '../health/model.js';
+import { getActiveRuleset } from '../ruleset/index.js';
 
 export const STATUS_SCHEMA_VERSION = 3;
 export const MAX_STACKS = 99;
@@ -12,7 +7,6 @@ const STATUS_SCOPES = new Set(['actor', 'token']);
 const STATUS_CATEGORIES = new Set(['buff', 'debuff', 'trait', 'status']);
 const STATUS_CHANGE_MODES = new Set(['add', 'set', 'multiply', 'min', 'max']);
 const BOOLEAN_CAPABILITIES = Object.freeze(['canMove', 'canInteract', 'canActInCombat']);
-const BUILTIN_IDS = new Set(['status-spirit', 'status-rooted', 'status-incapacitated']);
 export const STATUS_ICON_NAMES = new Set([
   'activity', 'anchor', 'ban', 'bomb', 'building', 'building-2', 'circle-alert',
   'circle-dot', 'circle-slash', 'door-closed', 'droplet', 'eye', 'eye-off',
@@ -23,35 +17,6 @@ export const STATUS_ICON_NAMES = new Set([
 const MAX_DEFINITIONS = 128;
 const MAX_EFFECTS_PER_TARGET = 64;
 const MAX_BATCH_OPERATIONS = 64;
-
-function deepFreeze(value) {
-  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
-  Object.freeze(value);
-  for (const child of Object.values(value)) deepFreeze(child);
-  return value;
-}
-
-export const BUILTIN_STATUS_DEFINITIONS = deepFreeze([
-  {
-    id: 'status-spirit', name: '灵体', label: '灵体',
-    description: '可穿越结构类碰撞，但不会绕过地图边界或其他未声明的阻挡。',
-    icon: 'ghost', color: '#6f57a5', category: 'trait', scopes: ['actor', 'token'], maxStacks: 1,
-    changes: [], capabilities: { collisionBypassGroups: ['structure'] }, builtIn: true,
-  },
-  {
-    id: 'status-rooted', name: '定身', label: '定身',
-    description: '无法移动，但仍可进行交互与战斗行动。',
-    icon: 'anchor', color: '#b96c24', category: 'debuff', scopes: ['actor', 'token'], maxStacks: 1,
-    changes: [], capabilities: { canMove: false }, builtIn: true,
-  },
-  {
-    id: 'status-incapacitated', name: '失能', label: '失能',
-    description: '无法移动、交互或进行战斗行动。',
-    icon: 'circle-slash', color: '#a83f3f', category: 'debuff', scopes: ['actor', 'token'], maxStacks: 1,
-    changes: [], capabilities: { canMove: false, canInteract: false, canActInCombat: false }, builtIn: true,
-  },
-]);
-const BUILTIN_BY_ID = new Map(BUILTIN_STATUS_DEFINITIONS.map(definition => [definition.id, definition]));
 
 function clone(value) { return value === undefined ? undefined : structuredClone(value); }
 function plainObject(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
@@ -95,7 +60,7 @@ function normalizeCapabilities(value) {
 export function normalizeStatusDefinition(value, { fallbackScopes = ['actor'], tokenOnly = false } = {}) {
   if (!plainObject(value)) return null;
   const id = cleanText(value.id || value.definitionId, '', 160);
-  if (!id || BUILTIN_IDS.has(id)) return null;
+  if (!id) return null;
   const scopes = normalizeScopes(value.scopes ?? value.allowedScopes ?? value.scope, fallbackScopes);
   if (!scopes.length) return null;
   const changes = normalizeChanges(value.changes, { token: tokenOnly || scopes.every(scope => scope === 'token') });
@@ -113,7 +78,7 @@ export function normalizeStatusDefinition(value, { fallbackScopes = ['actor'], t
     maxStacks,
     changes,
     capabilities: normalizeCapabilities(value.capabilities),
-    builtIn: false,
+    builtIn: value.builtIn === true,
   };
 }
 
@@ -122,18 +87,15 @@ function definitionView(definition) {
 }
 
 export function getStatusDefinitions(entityState) {
-  const custom = Array.isArray(entityState?.statusDefinitions)
+  const definitions = Array.isArray(entityState?.statusDefinitions)
     ? entityState.statusDefinitions.map(definition => normalizeStatusDefinition(definition)).filter(Boolean)
     : [];
-  const seen = new Set(BUILTIN_STATUS_DEFINITIONS.map(definition => definition.id));
-  return [
-    ...BUILTIN_STATUS_DEFINITIONS.map(definitionView),
-    ...custom.filter(definition => {
-      if (seen.has(definition.id)) return false;
-      seen.add(definition.id);
-      return true;
-    }).map(definitionView),
-  ];
+  const seen = new Set();
+  return definitions.filter(definition => {
+    if (seen.has(definition.id)) return false;
+    seen.add(definition.id);
+    return true;
+  }).map(definitionView);
 }
 
 function stableValue(value) {
@@ -165,7 +127,7 @@ function legacyDefinition(effect, scope, forcedId = '') {
     scopes: [scope], maxStacks, changes, capabilities,
   };
   const supplied = cleanText(forcedId);
-  const id = supplied && !BUILTIN_IDS.has(supplied) ? supplied : `status-legacy-${idSlug(name)}-${stableHash(semantic)}`;
+  const id = supplied || `status-legacy-${idSlug(name)}-${stableHash(semantic)}`;
   return { id, ...semantic, builtIn: false };
 }
 
@@ -193,7 +155,7 @@ function normalizeInstance(effect, { definition, scope, targetId, index, usedIds
 export function normalizeEntityStatusState(raw) {
   const source = plainObject(raw) ? raw : {};
   const definitions = [];
-  const definitionsById = new Map(BUILTIN_BY_ID);
+  const definitionsById = new Map();
   for (const candidate of (Array.isArray(source.statusDefinitions) ? source.statusDefinitions : []).slice(0, MAX_DEFINITIONS)) {
     const definition = normalizeStatusDefinition(candidate);
     if (!definition || definitionsById.has(definition.id)) continue;
@@ -281,79 +243,9 @@ function resolveTargetEffects(target, scope, definitionsById) {
   });
 }
 
-function applyChange(current, change, stacks) {
-  const amount = finite(change?.value);
-  if (change?.mode === 'set') return amount;
-  if (change?.mode === 'multiply') return current * amount;
-  if (change?.mode === 'min') return Math.min(current, amount);
-  if (change?.mode === 'max') return Math.max(current, amount);
-  return current + amount * stacks;
-}
-function resolveActorHealthForStatuses(actor, actorStatuses) {
-  if (!actor) return null;
-  const forms = Array.isArray(actor.forms) ? actor.forms : [];
-  const form = forms.find(item => String(item?.id) === String(actor.currentFormId)) || forms[0] || null;
-  const hpBase = form?.resourceBases?.hp;
-  const hpRuntime = actor.runtime?.resources?.hp;
-  const healthRuntime = actor.runtime?.health;
-  if (!hpBase && !hpRuntime && !healthRuntime) return null;
-  let max = Math.max(0, finite(hpRuntime?.maxOverride ?? hpBase?.baseMax));
-  let current = finite(hpRuntime?.current, max);
-  for (const status of actorStatuses.filter(item => item?.enabled !== false)) {
-    for (const change of status.changes || []) {
-      if (change.target === 'resources.hp.max') max = applyChange(max, change, status.stacks);
-      if (change.target === 'resources.hp.current') current = applyChange(current, change, status.stacks);
-    }
-  }
-  max = Math.max(0, max);
-  const runtime = normalizeHealthRuntime(healthRuntime, { defaultMode: defaultHealthMode(form?.source?.type), max, simpleCurrent: current });
-  return resolveHealth(runtime, { max, simpleCurrent: current });
-}
-function derivedStatus(definitionId, label, stacks, options = {}) {
-  return {
-    id: `${definitionId}:derived`, definitionId, name: label, label,
-    description: options.description || '', icon: options.icon || '', color: options.color || '#64748b',
-    category: 'derived', scope: 'derived', targetId: options.targetId == null ? null : String(options.targetId),
-    stacks: integer(stacks, 1), maxStacks: MAX_STACKS, enabled: true, derived: true, readOnly: true, readonly: true,
-    capabilities: normalizeCapabilities(options.capabilities), changes: [], builtIn: true,
-  };
-}
-function deriveBadStatusThresholds(actor) {
-  const forms = Array.isArray(actor?.forms) ? actor.forms : [];
-  const form = forms.find(item => String(item?.id) === String(actor?.currentFormId)) || forms[0] || null;
-  const currentById = actor?.runtime?.badStatuses || {};
-  const targetId = actor?.id;
-  return (Array.isArray(form?.badStatuses) ? form.badStatuses : []).flatMap(status => {
-    const current = Math.max(0, finite(currentById?.[status?.id]));
-    const thresholds = [
-      { key: 'destruction', label: '毁灭', icon: 'skull', color: '#8f3333' },
-      { key: 'severe', label: '重度', icon: 'triangle-alert', color: '#b35e2e' },
-      { key: 'light', label: '轻度', icon: 'circle-alert', color: '#a47a22' },
-    ];
-    const level = thresholds.find(entry => finite(status?.[entry.key]) > 0 && current >= finite(status?.[entry.key]));
-    if (!level) return [];
-    const statusId = String(status?.id || 'unknown');
-    const name = cleanText(status?.name, '不良状态');
-    return [derivedStatus(`derived-bad-${statusId}-${level.key}`, `${name} · ${level.label}`, current || 1, {
-      targetId, icon: level.icon, color: level.color, description: `当前 ${current} 点，已达到${level.label}阈值。`,
-    })];
-  });
-}
 export function deriveActorStatuses(actor, actorStatuses = []) {
-  const health = resolveActorHealthForStatuses(actor, actorStatuses);
-  const badStatusThresholds = deriveBadStatusThresholds(actor);
-  if (!health) return badStatusThresholds;
-  const targetId = actor?.id;
-  const disabled = { canMove: false, canInteract: false, canActInCombat: false };
-  const statuses = [];
-  if (health.dead) statuses.push(derivedStatus('derived-dead', '死亡', 1, { targetId, icon: 'skull', color: '#762d2d', description: '生命状态自动派生，不可手动移除。', capabilities: disabled }));
-  else if (health.unconscious) statuses.push(derivedStatus('derived-unconscious', '昏迷', 1, { targetId, icon: 'moon', color: '#495c78', description: '生命状态自动派生，不可手动移除。', capabilities: disabled }));
-  if (health.mode === HEALTH_MODE_WOUND_TRACK) {
-    if (health.bashing > 0) statuses.push(derivedStatus('derived-wound-b', 'B 伤势', health.bashing, { targetId, icon: 'B', color: '#6d7780' }));
-    if (health.lethal > 0) statuses.push(derivedStatus('derived-wound-l', 'L 伤势', health.lethal, { targetId, icon: 'L', color: '#a05a32' }));
-    if (health.aggravated > 0) statuses.push(derivedStatus('derived-wound-a', 'A 伤势', health.aggravated, { targetId, icon: 'A', color: '#8f3333' }));
-  }
-  return [...statuses, ...badStatusThresholds];
+  const derive = getActiveRuleset().statuses?.derive;
+  return typeof derive === 'function' ? derive(actor, { statuses: actorStatuses }) : [];
 }
 
 export function resolveStatusCapabilities(statuses = []) {
@@ -399,7 +291,6 @@ function strictDefinition(value) {
   if (!plainObject(value)) throw statusError('definition must be an object');
   const id = requiredId(value.id, 'definition.id');
   if (!/^[a-z0-9][a-z0-9._:-]{0,159}$/i.test(id)) throw statusError('definition.id contains unsupported characters', 'invalid_status_id');
-  if (BUILTIN_IDS.has(id)) throw statusError('Built-in status definitions are read-only', 'status_builtin_readonly');
   if (!cleanText(value.name || value.label)) throw statusError('definition.name is required');
   if (value.icon !== undefined && !STATUS_ICON_NAMES.has(cleanText(value.icon).toLowerCase())) throw statusError('definition.icon is not an allowed Lucide icon', 'status_icon_invalid');
   const rawScopes = normalizeScopes(value.scopes ?? value.scope, []);
@@ -416,7 +307,7 @@ function strictDefinition(value) {
     const bypass = value.capabilities.collisionBypassGroups;
     if (bypass !== undefined && (!Array.isArray(bypass) || bypass.some(group => group !== 'structure'))) throw statusError('collisionBypassGroups may only contain structure');
   }
-  return normalizeStatusDefinition({ ...value, id, scopes: rawScopes });
+  return normalizeStatusDefinition({ ...value, id, scopes: rawScopes, builtIn: false });
 }
 function targetForOperation(entityState, message) {
   const target = plainObject(message?.target) ? message.target : message;
@@ -438,6 +329,9 @@ function applySingleOperation(entityState, message, context) {
   if (type === 'status.definition.upsert') {
     const definition = strictDefinition(message.definition);
     const index = entityState.statusDefinitions.findIndex(item => String(item?.id) === definition.id);
+    if (index >= 0 && entityState.statusDefinitions[index]?.builtIn === true) {
+      throw statusError('Built-in status definitions are read-only', 'status_builtin_readonly');
+    }
     if (index < 0) {
       if (entityState.statusDefinitions.length >= MAX_DEFINITIONS) throw statusError('Too many status definitions', 'status_limit');
       entityState.statusDefinitions.push(definition);
@@ -455,9 +349,9 @@ function applySingleOperation(entityState, message, context) {
   }
   if (type === 'status.definition.delete') {
     const definitionId = requiredId(message.definitionId ?? message.statusId, 'definitionId');
-    if (BUILTIN_IDS.has(definitionId)) throw statusError('Built-in status definitions are read-only', 'status_builtin_readonly');
     const index = entityState.statusDefinitions.findIndex(item => String(item?.id) === definitionId);
     if (index < 0) throw statusError(`Status definition does not exist: ${definitionId}`, 'status_definition_not_found');
+    if (entityState.statusDefinitions[index]?.builtIn === true) throw statusError('Built-in status definitions are read-only', 'status_builtin_readonly');
     const referenced = [...entityState.actors, ...entityState.tokens].some(target => (target.effects || []).some(effect => String(effect.definitionId) === definitionId));
     if (referenced) throw statusError('Status definition is still in use', 'status_definition_in_use');
     entityState.statusDefinitions.splice(index, 1);
@@ -523,5 +417,3 @@ export function statusStateFingerprint(rawEntityState) {
     tokens: state.tokens.map(token => ({ id: token.id, actorId: token.actorId, actorLink: token.actorLink !== false, actorDelta: token.actorDelta || null, effects: token.effects })),
   });
 }
-
-export { BUILTIN_IDS as BUILTIN_STATUS_IDS };
