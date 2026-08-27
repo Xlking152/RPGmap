@@ -44,14 +44,41 @@ export class EntityStore {
   constructor(api) {
     this.api = api;
     this.state = createEmptyEntityState();
+    this.compatTokens = [];
     this.saving = false;
+  }
+
+  canonicalTokens() {
+    const tokens = this.api.tokens?.list?.();
+    return Array.isArray(tokens) ? tokens : this.compatTokens;
+  }
+
+  installCanonicalTokenReadView(state) {
+    this.compatTokens = Array.isArray(state?.tokens) ? state.tokens : [];
+    Object.defineProperty(state, 'tokens', {
+      configurable: true,
+      enumerable: true,
+      get: () => this.canonicalTokens(),
+      set: value => { this.compatTokens = Array.isArray(value) ? value : []; },
+    });
+    this.state = state;
+    return state;
+  }
+
+  materializeState() {
+    return structuredClone({
+      ...this.state,
+      // Entity UI reads the live active-Scene Token catalog. Persisting Actor
+      // edits carries the same canonical list into the temporary Entity mirror
+      // instead of reviving a stale compatibility Token snapshot.
+      tokens: this.canonicalTokens(),
+    });
   }
 
   load({ migrateLegacy = true, dropMarkers = true } = {}) {
     const appState = this.api.getState();
     const raw = appState.preferences?.[PREFERENCE_KEY];
     const migrated = migrateLegacy ? migrateLegacyCharacters(raw, appState.characters || []) : { state: normalizeEntityState(raw), migrated: 0 };
-    this.state = migrated.state;
     const tokenLocationMigration = migrateTokenLocationsToGrid(appState, migrated.state, this.api.mapPackage, this.api, raw?.schemaVersion);
     const migratedTokenLocations = tokenLocationMigration.migrated;
     const blockedTokenLocations = tokenLocationMigration.blocked;
@@ -63,6 +90,7 @@ export class EntityStore {
       || migratedTokenLocations > 0
       || entityContentChanged(raw, migrated.state)
       || (migrateLegacy && Number(raw?.schemaVersion) !== STATUS_SCHEMA_VERSION);
+    this.installCanonicalTokenReadView(migrated.state);
     let droppedMarkers = 0;
     if (dropMarkers && Array.isArray(appState.markers) && appState.markers.length) {
       droppedMarkers = appState.markers.length;
@@ -76,12 +104,12 @@ export class EntityStore {
     return { migratedCharacters: migrated.migrated, migratedTokenLocations, blockedTokenLocations, droppedMarkers };
   }
 
-  snapshot() { return structuredClone(this.state); }
+  snapshot() { return this.materializeState(); }
 
   persist({ appState = null, syncTokens = true, source = 'entities', render = false, immediate = false } = {}) {
     const nextApp = appState || this.api.getState();
     nextApp.preferences ||= {};
-    nextApp.preferences[PREFERENCE_KEY] = structuredClone(this.state);
+    nextApp.preferences[PREFERENCE_KEY] = this.materializeState();
     if (syncTokens) this.syncCharacters(nextApp);
     this.saving = true;
     try {
@@ -100,7 +128,7 @@ export class EntityStore {
 
   syncCharacters(appState) {
     const characterMap = new Map((appState.characters || []).map(character => [String(character.id), character]));
-    for (const token of this.state.tokens) {
+    for (const token of this.canonicalTokens()) {
       const character = characterMap.get(String(token.characterId || token.id));
       const actor = this.state.actors.find(item => String(item.id) === String(token.actorId));
       const form = currentForm(actor);
@@ -113,16 +141,26 @@ export class EntityStore {
   }
 
   actor(id) { return this.state.actors.find(actor => String(actor.id) === String(id)) || null; }
-  token(id) { return this.state.tokens.find(token => String(token.id) === String(id) || String(token.characterId) === String(id)) || null; }
-  actorForToken(tokenId) { const token = this.token(tokenId); return token ? this.actor(token.actorId) : null; }
+  token(id) {
+    return this.api.tokens?.get?.(id)
+      || this.compatTokens.find(token => String(token.id) === String(id) || String(token.characterId) === String(id))
+      || null;
+  }
+  actorForToken(tokenId) {
+    const token = this.token(tokenId);
+    return token ? this.actor(token.actorId) : null;
+  }
 
   bindToken(actorId, characterId) {
-    const existing = this.token(characterId);
+    // Compatibility-only path. Modern Actor placement is captured before this
+    // method and creates the canonical Scene Token through api.tokens.create().
+    const existing = this.compatTokens.find(token => (
+      String(token.id) === String(characterId) || String(token.characterId) === String(characterId)
+    ));
     if (existing) {
       existing.actorId = actorId;
       existing.effects ||= [];
-    }
-    else this.state.tokens.push({
+    } else this.compatTokens.push({
       id: String(characterId),
       characterId: String(characterId),
       actorId: String(actorId),
@@ -138,11 +176,16 @@ export class EntityStore {
   }
 
   removeToken(characterId) {
-    this.state.tokens = this.state.tokens.filter(token => String(token.characterId) !== String(characterId));
+    // Compatibility-only bookkeeping until step ⑤-E moves deletion to
+    // api.tokens.remove(). It must never mutate the canonical list returned to
+    // Entity UI readers.
+    this.compatTokens = this.compatTokens.filter(token => (
+      String(token.characterId || token.id) !== String(characterId)
+    ));
   }
 
   removeActor(actorId) {
     this.state.actors = this.state.actors.filter(actor => String(actor.id) !== String(actorId));
-    this.state.tokens = this.state.tokens.filter(token => String(token.actorId) !== String(actorId));
+    this.compatTokens = this.compatTokens.filter(token => String(token.actorId) !== String(actorId));
   }
 }
