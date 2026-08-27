@@ -50,11 +50,13 @@ test('generic Feature UI model renders details and entrance without category rul
   assert.equal(featureEntranceText(feature), 'x 50.0 · y 80.0');
 });
 
-test('Feature UI model no longer exports Character location helpers', async () => {
+test('Feature UI model exposes Token placement helpers and no Character helpers', async () => {
   const uiModel = await import('../src/interaction/ui-model.js');
+  assert.equal(typeof uiModel.tokenFeatureId, 'function');
+  assert.equal(typeof uiModel.tokensInsideFeature, 'function');
+  assert.equal(typeof uiModel.featureLocationLabel, 'function');
   assert.equal(uiModel.characterFeatureId, undefined);
   assert.equal(uiModel.charactersInsideFeature, undefined);
-  assert.equal(uiModel.featureLocationLabel, undefined);
 });
 
 test('reference maps declare taxonomy instead of relying on Core category labels', () => {
