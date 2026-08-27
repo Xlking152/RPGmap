@@ -143,6 +143,7 @@ export function createActorFromImport(imported, { id = uid('actor'), formId, for
   };
 }
 
+/** Legacy SaveV2 migration helper only. */
 export function createLegacyActor(character, { actorId = uid('actor') } = {}) {
   const imported = {
     formName: '默认形态',
@@ -154,16 +155,15 @@ export function createLegacyActor(character, { actorId = uid('actor') } = {}) {
     badStatuses: emptyBadStatuses(),
     combat: { attacks: [], defenses: [] },
     tokenAppearance: { color: character.color || '#3d9b63', scale: 1 },
-    source: { type: 'legacy-character', characterId: character.id },
+    source: { type: 'legacy-character', legacyId: character.id },
   };
   return createActorFromImport(imported, { id: actorId, formName: '默认形态' });
 }
 
-export function createTokenForActor(actorId, characterId, overrides = {}) {
+export function createTokenForActor(actorId, tokenId, overrides = {}) {
   return {
-    id: String(characterId),
+    id: String(tokenId),
     actorId: String(actorId),
-    characterId: String(characterId),
     diameterMeters: normalizeTokenDiameterMeters(overrides.diameterMeters ?? overrides.size, 1),
     rotation: finite(overrides.rotation, 0),
     elevationFt: normalizeElevationFt(overrides.elevationFt, 0),
@@ -211,10 +211,13 @@ export function normalizeEntityState(raw) {
       .filter(token => token && actorIds.has(String(token.actorId)))
       .map(token => {
         const next = clone(token);
+        next.id = String(next.id ?? next.characterId ?? '');
+        delete next.characterId;
         const diameterMeters = normalizeTokenDiameterMeters(next.diameterMeters ?? next.size, 1);
         delete next.size;
         return { ...next, diameterMeters, elevationFt: normalizeElevationFt(next.elevationFt, 0) };
       })
+      .filter(token => token.id)
     : [];
   const normalizedStatuses = normalizeEntityStatusState({
     schemaVersion: raw.schemaVersion,
@@ -226,27 +229,35 @@ export function normalizeEntityState(raw) {
     schemaVersion: STATUS_SCHEMA_VERSION,
     statusDefinitions: normalizedStatuses.statusDefinitions,
     actors: normalizedStatuses.actors,
-    tokens: normalizedStatuses.tokens,
+    tokens: normalizedStatuses.tokens.map(token => {
+      const next = clone(token);
+      delete next.characterId;
+      return next;
+    }),
   };
 }
 
+/**
+ * Explicit import boundary for pre-World saves. Modern runtime code must never
+ * call this after WorldSystem has hydrated the canonical Actor/Token graph.
+ */
 export function migrateLegacyCharacters(entityState, characters = []) {
   const next = normalizeEntityState(entityState);
-  const linkedCharacterIds = new Set(next.tokens.map(token => String(token.characterId || token.id)));
+  const linkedIds = new Set(next.tokens.map(token => String(token.id)));
   let migrated = 0;
   for (const character of characters || []) {
-    if (!character?.id || linkedCharacterIds.has(String(character.id))) continue;
+    if (!character?.id || linkedIds.has(String(character.id))) continue;
     const actor = createLegacyActor(character);
     next.actors.push(actor);
     next.tokens.push(createTokenForActor(actor.id, character.id));
-    linkedCharacterIds.add(String(character.id));
+    linkedIds.add(String(character.id));
     migrated += 1;
   }
   return { state: next, migrated };
 }
 
 export function actorForToken(entityState, tokenId) {
-  const token = entityState.tokens.find(item => String(item.id) === String(tokenId) || String(item.characterId) === String(tokenId));
+  const token = entityState.tokens.find(item => String(item.id) === String(tokenId));
   if (!token) return null;
   return entityState.actors.find(actor => String(actor.id) === String(token.actorId)) || null;
 }
