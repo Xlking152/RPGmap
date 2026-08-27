@@ -130,6 +130,37 @@ function movedCharacterIds(before, next) {
   return moved;
 }
 
+function worldV2GlobalProjection(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const world = structuredClone(raw);
+  const activeSceneId = String(world.activeSceneId ?? '');
+
+  // These are authoritative mirrors of the legacy compatibility projection and
+  // are already checked through Actor/Token/status ownership rules below.
+  delete world.actors;
+  delete world.statusDefinitions;
+  delete world.updatedAt;
+
+  if (Array.isArray(world.scenes)) {
+    world.scenes = world.scenes.map(scene => {
+      if (!scene || typeof scene !== 'object' || Array.isArray(scene)) return scene;
+      if (String(scene.id ?? '') !== activeSceneId) return scene;
+      const projected = structuredClone(scene);
+      delete projected.tokens;
+      delete projected.markers;
+      delete projected.attackAreas;
+      delete projected.sceneEvents;
+      if (projected.settings && typeof projected.settings === 'object' && !Array.isArray(projected.settings)) {
+        projected.settings = { ...projected.settings };
+        delete projected.settings.gridVisible;
+        if (!Object.keys(projected.settings).length) delete projected.settings;
+      }
+      return projected;
+    });
+  }
+  return world;
+}
+
 function globalProjection(state) {
   if (!state || typeof state !== 'object') return state;
   const copy = structuredClone(state);
@@ -138,11 +169,11 @@ function globalProjection(state) {
     delete copy.preferences.entitySystem;
     delete copy.preferences.chatSystem;
     delete copy.preferences.combatSystem;
-    // World V2 mirrors the authoritative Actor/Token/active-Scene projection.
-    // assertWorldState() synchronizes it before permission checks, so treating
-    // the mirror as an independent global field would reject every legitimate
-    // owned-Actor/Token Player mutation as a world-scope change.
-    delete copy.preferences.worldV2;
+    if (copy.preferences.worldV2 !== undefined) {
+      // Keep World/Ruleset/Scene structure GM-only, while excluding only fields
+      // that assertWorldState() deterministically mirrors from the flat runtime.
+      copy.preferences.worldV2 = worldV2GlobalProjection(copy.preferences.worldV2);
+    }
   }
   return copy;
 }
