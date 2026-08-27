@@ -1,5 +1,3 @@
-import { refreshCanonicalEntityUiStore } from './store.js';
-
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
 }
@@ -87,7 +85,6 @@ export async function deleteCanonicalActor(api, actorId) {
 
   const removedIds = result.tokens.map(entry => entry.token.id);
   api.selection?.remove?.(removedIds);
-  refreshCanonicalEntityUiStore();
 
   for (const entry of result.tokens) {
     api.emit?.('token:delete', {
