@@ -1,5 +1,5 @@
 import { isLocalHost, multiplayerSocketUrl, normalizeRequestedRole, sanitizeMultiplayerName } from './protocol.js';
-import { actorIdForCharacter, canControlActor, validateLocalPlayerChange } from './permissions.js';
+import { canControlActor, validateLocalPlayerChange } from './permissions.js';
 
 const STYLE_ID = 'rpgmap-multiplayer-style';
 const STORAGE_PREFIX = 'rpgmap:multiplayer:';
@@ -921,11 +921,6 @@ export function createMultiplayerController() {
         clearChat: () => send({ type: 'chat.clear' }),
         getCapabilities,
         canControlActor: actorId => canControlActor({ actorId, state: api.getState(), permissions }),
-        canControlCharacter: characterId => {
-          if (session?.role === 'gm') return true;
-          const actorId = actorIdForCharacter(api.getState(), characterId);
-          return canControlActor({ actorId, state: api.getState(), permissions });
-        },
         canObserveActor: actorId => session?.role === 'gm' || (permissions.actorObserverIds || []).map(String).includes(String(actorId)),
         getStatus: () => ({
           connected,

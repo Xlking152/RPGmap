@@ -17,9 +17,6 @@ export function createMultiplayerSystem(options = {}) {
         if (status?.session?.role === 'gm') return true;
         return multiplayer.canControlActor?.(token.actorId) !== false;
       };
-      // Character control was a Token-id alias. Modern systems must use the
-      // canonical Token API so this compatibility entrypoint is retired here.
-      delete multiplayer.canControlCharacter;
     },
   };
 }
