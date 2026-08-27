@@ -210,7 +210,6 @@ export function normalizeEntityStatusState(raw) {
     for (const [index, effect] of (Array.isArray(target.effects) ? target.effects.filter(Boolean).slice(0, MAX_EFFECTS_PER_TARGET) : []).entries()) {
       let definitionId = cleanText(effect?.definitionId || effect?.statusId);
       let definition = definitionId ? definitionsById.get(definitionId) : null;
-      const inlineLegacy = !definitionId;
       if (!definition) {
         definition = legacyDefinition(effect, scope, definitionId);
         definitionId = definition.id;
@@ -241,16 +240,17 @@ export function normalizeEntityStatusState(raw) {
         byDefinition.set(definitionId, normalized);
         effects.push(normalized);
       }
-      if (inlineLegacy) migratedEffects += 1;
     }
     return [{ ...clone(target), id: targetId, effects }];
   });
+  const actors = normalizeTargets(source.actors, 'actor');
+  const tokens = normalizeTargets(source.tokens, 'token');
   return {
     ...clone(source),
     schemaVersion: STATUS_SCHEMA_VERSION,
     statusDefinitions: definitions.map(clone),
-    actors: normalizeTargets(source.actors, 'actor'),
-    tokens: normalizeTargets(source.tokens, 'token'),
+    actors,
+    tokens,
     migratedEffects,
   };
 }
@@ -398,7 +398,7 @@ function requiredId(value, label) { const result = cleanText(value); if (!result
 function strictDefinition(value) {
   if (!plainObject(value)) throw statusError('definition must be an object');
   const id = requiredId(value.id, 'definition.id');
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(id)) throw statusError('definition.id contains unsupported characters', 'invalid_status_id');
+  if (!/^[a-z0-9][a-z0-9._:-]{0,159}$/i.test(id)) throw statusError('definition.id contains unsupported characters', 'invalid_status_id');
   if (BUILTIN_IDS.has(id)) throw statusError('Built-in status definitions are read-only', 'status_builtin_readonly');
   if (!cleanText(value.name || value.label)) throw statusError('definition.name is required');
   if (value.icon !== undefined && !STATUS_ICON_NAMES.has(cleanText(value.icon).toLowerCase())) throw statusError('definition.icon is not an allowed Lucide icon', 'status_icon_invalid');
