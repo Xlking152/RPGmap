@@ -2,6 +2,7 @@ const RETIRED_CHARACTER_API = Object.freeze([
   'placeCharacter',
   'repositionCharacter',
   'selectCharacter',
+  'focusCharacter',
   'planCharacterMove',
   'commitCharacterMove',
   'cancelCharacterMove',
@@ -28,15 +29,19 @@ export function createCharacterRetirementSystem() {
         if (Object.prototype.hasOwnProperty.call(api, key)) delete api[key];
       }
 
+      // Multiplayer used to expose a Character-id convenience alias for Token
+      // ownership. Runtime movement now falls back to the canonical Actor gate
+      // once this alias is removed.
+      if (api.multiplayer && Object.prototype.hasOwnProperty.call(api.multiplayer, 'canControlCharacter')) {
+        delete api.multiplayer.canControlCharacter;
+      }
+
       const pane = api.map?.getPane?.('characterPane');
       if (pane) {
         pane.replaceChildren?.();
         pane.style.visibility = 'hidden';
         pane.style.pointerEvents = 'none';
         pane.setAttribute?.('aria-hidden', 'true');
-        // Detach the legacy DOM pane after all canonical render systems have
-        // registered. AppCore's Character layer remains empty because World V2
-        // projects an empty Character tombstone.
         pane.remove?.();
       }
 
