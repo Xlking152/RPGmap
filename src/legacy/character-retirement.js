@@ -11,6 +11,38 @@ const RETIRED_CHARACTER_API = Object.freeze([
   'exitBuilding',
 ]);
 
+function legacyEntityToken(state, characterId) {
+  const target = String(characterId ?? '').trim();
+  if (!target) return null;
+  return (state?.preferences?.entitySystem?.tokens || []).find(token => (
+    String(token?.id ?? token?.characterId ?? '') === target
+  )) || null;
+}
+
+/**
+ * Compile-time compatibility for the retired AppCore shell only.
+ *
+ * Modern movement/elevation code must never call this function. AppCore still
+ * participates in the bundle while it owns SaveV2 migration, so its historical
+ * import needs a small adapter until that shell is removed. The adapter reads
+ * only the compatibility Token projection and deliberately does not resolve
+ * Actor/status mechanics; authoritative movement is handled by Token Runtime.
+ */
+export function legacyAppCoreMoverContext(state, characterId) {
+  const id = characterId == null ? null : String(characterId);
+  const token = id ? legacyEntityToken(state, id) : null;
+  const elevation = Number(token?.elevationFt);
+  const diameter = Number(token?.diameterMeters ?? token?.size);
+  return Object.freeze({
+    characterId: id,
+    tokenId: token?.id == null ? null : String(token.id),
+    elevationFt: Number.isFinite(elevation) && elevation >= 0 ? elevation : 0,
+    diameterMeters: [1, 5, 10, 20].includes(diameter) ? diameter : 1,
+    statusVersion: 'retired-appcore',
+    collisionBypassGroups: Object.freeze([]),
+  });
+}
+
 /**
  * Final V1.5 retirement boundary.
  *
