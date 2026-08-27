@@ -21,13 +21,13 @@ export {
 } from './effects.js';
 
 export {
-  characterFeatureId,
-  charactersInsideFeature,
   featureCategoryLabel,
   featureDetailRows,
   featureEntranceText,
   featureLocationLabel,
   featureSubtypeLabel,
+  tokenFeatureId,
+  tokensInsideFeature,
 } from './ui-model.js';
 
 export {
