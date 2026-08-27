@@ -128,10 +128,8 @@ export function createEntityUiTool(options = {}) {
       let renderingPanel = false;
       let importBusy = false;
 
-      const characterTab = shell.querySelector('[data-tab="characters"]');
-      if (characterTab) characterTab.textContent = '指示物';
-      if (shell.querySelector('[data-tab="markers"].active')) characterTab?.click();
-      const panel = shell.querySelector('[data-panel="characters"]');
+      const panel = api.uiPanels?.actors;
+      if (!panel) throw new Error('Entity UI requires canonical Actor panel ownership');
       const toolbar = shell.querySelector('.toolbar-right');
       const importButton = documentNode.createElement('button');
       importButton.type = 'button';
@@ -201,7 +199,6 @@ export function createEntityUiTool(options = {}) {
         api,
         documentNode,
         mapElement,
-        shell,
         store,
         capabilities,
         setStatus,
@@ -418,7 +415,7 @@ export function createEntityUiTool(options = {}) {
         else if (action === 'migrate-markers') migrateLegacyMarkers();
       }
 
-      panel?.addEventListener('click', handlePanelClick);
+      panel.addEventListener('click', handlePanelClick);
       importButton.addEventListener('click', () => chooseImport());
       xlsxInput.addEventListener('change', () => parseImport(xlsxInput.files?.[0], pendingImportActorId));
 
@@ -546,7 +543,7 @@ export function createEntityUiTool(options = {}) {
       }, true);
 
       mapElement.addEventListener('dblclick', event => {
-        if (!event.target.closest?.('.rpg-token-v2, .rpg-character, .rpg-character-core')) return;
+        if (!event.target.closest?.('.rpg-token-v2')) return;
         event.preventDefault();
         event.stopImmediatePropagation();
         queueMicrotask(() => {
