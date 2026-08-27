@@ -1,18 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBoundUser, validatePlayerWorldPush } from '../deployment/local-server/access-control.mjs';
-import { resolveStatusCapabilitiesForCharacter } from '../deployment/local-server/status-operations.mjs';
+import { resolveStatusCapabilitiesForCharacter as resolveStatusCapabilitiesForToken } from '../deployment/local-server/status-operations.mjs';
 
 function state() {
   const actor = { id: 'actor-a', name: 'A', runtime: { hp: 10 }, effects: [] };
   const token = {
-    id: 'token-a', characterId: 'token-a', actorId: 'actor-a',
-    actorLink: false, actorDelta: null, effects: [], diameterMeters: 1,
+    id: 'token-a', actorId: 'actor-a', actorLink: false, actorDelta: null, effects: [],
+    diameterMeters: 1, rotation: 0, elevationFt: 0, hidden: false, locked: false, showName: true,
+    x: 1, y: 1,
   };
   return {
     version: 2,
     mapId: 'test',
-    characters: [{ id: 'token-a', location: { type: 'map', x: 1, y: 1 } }],
     markers: [], attackAreas: [], sceneEvents: [],
     preferences: {
       entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor], tokens: [token] },
@@ -71,13 +71,13 @@ test('server movement authority resolves rooted effect from unlinked Token Actor
   before.preferences.entitySystem.tokens[0].actorDelta = rootedDelta();
   before.preferences.worldV2.scenes[0].tokens[0].actorDelta = rootedDelta();
 
-  const capabilities = resolveStatusCapabilitiesForCharacter(before, 'token-a');
+  const capabilities = resolveStatusCapabilitiesForToken(before, 'token-a');
   assert.equal(capabilities.canMove, false);
   assert.ok(capabilities.reasons.some(reason => /定身/.test(reason)));
 
   const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
   const moved = structuredClone(before);
-  moved.characters[0].location.x = 9;
+  moved.preferences.worldV2.scenes[0].tokens[0].x = 9;
   const denied = validatePlayerWorldPush({ before, next: moved, user });
   assert.equal(denied.code, 'status_movement_forbidden');
 });
