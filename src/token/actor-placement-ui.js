@@ -1,7 +1,11 @@
 import { latLngToWorld } from '../engine/geometry.js';
-import { createActorTokenAtPoint } from './placement.js';
+import { createActorTokenAtPoint, relocateActorTokenAtPoint } from './placement.js';
 
 function actorId(value) {
+  return String(value || '').trim();
+}
+
+function tokenId(value) {
   return String(value || '').trim();
 }
 
@@ -15,20 +19,41 @@ function setMapStatus(shell, message) {
   if (node) node.textContent = message;
 }
 
+function buildRelocationHud(documentNode, api, id) {
+  documentNode.querySelector?.('.entity-placement-hud')?.remove();
+  const actor = api.tokens.resolveActor?.(id);
+  const hud = documentNode.createElement('div');
+  hud.className = 'entity-placement-hud';
+  hud.setAttribute('role', 'status');
+  hud.dataset.tokenRelocationV2 = id;
+  const label = documentNode.createElement('span');
+  label.textContent = `重新放置 Token：点击地图移动“${actor?.name || id}”`;
+  const cancel = documentNode.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'small-button';
+  cancel.dataset.entityPlacementCancel = '';
+  cancel.textContent = '取消';
+  hud.append(label, cancel);
+  documentNode.body.append(hud);
+}
+
 /**
  * Transitional bridge for the Character-era Entity UI.
  *
- * The existing panel/HUD still owns "which Actor is being placed", but the map
- * click is captured above Leaflet/AppCore so no legacy Character is created.
- * The write path is exclusively createActorTokenAtPoint() -> api.tokens.create().
+ * The existing panel still owns Actor selection and its visual shell, but both
+ * modern map-placement writes are canonical:
  *
- * Delete this bridge once the Actor/Token editor itself is rewritten around
- * canonical Token APIs.
+ *   place Actor Token  -> createActorTokenAtPoint()  -> api.tokens.create()
+ *   reposition Token   -> relocateActorTokenAtPoint() -> api.tokens.move()
+ *
+ * The capture handlers run before Entity/AppCore, so modern UI actions cannot
+ * fall through to legacy placeCharacter()/repositionCharacter() data writes.
+ * Delete this bridge once the Actor/Token editor itself is canonical.
  */
 export function createActorTokenPlacementUiSystem() {
   return Object.freeze({
     register(api) {
-      if (!api?.tokens?.create || !api?.world?.listActors) {
+      if (!api?.tokens?.create || !api?.tokens?.move || !api?.world?.listActors) {
         throw new Error('Actor placement V2 requires World V2 + Token Runtime V2');
       }
 
@@ -36,6 +61,7 @@ export function createActorTokenPlacementUiSystem() {
       const documentNode = mapElement.ownerDocument || document;
       const shell = mapElement.closest('.app-shell') || documentNode;
       let pendingActorId = null;
+      let pendingRelocationTokenId = null;
       let activeSheetActorId = null;
       let placementBusy = false;
       let destroyed = false;
@@ -70,14 +96,52 @@ export function createActorTokenPlacementUiSystem() {
         return matches.length === 1 ? actorId(matches[0]?.id) : null;
       }
 
-      function clearPending() {
+      function clearPending({ removeHud = false, restoreTool = false } = {}) {
         pendingActorId = null;
+        pendingRelocationTokenId = null;
         placementBusy = false;
+        if (removeHud) documentNode.querySelector?.('.entity-placement-hud')?.remove();
+        if (restoreTool) api.setTool?.('pan');
+      }
+
+      function canPlaceActor(id) {
+        const capabilities = api.multiplayer?.getCapabilities?.();
+        return !capabilities?.canPlaceActor || capabilities.canPlaceActor(id);
+      }
+
+      function beginRelocation(event, rawTokenId) {
+        const id = tokenId(rawTokenId);
+        const token = api.tokens.get?.(id);
+        if (!token) {
+          setMapStatus(shell, '待重新放置的 Token 已不存在');
+          return false;
+        }
+        if (!canPlaceActor(token.actorId)) {
+          setMapStatus(shell, '当前没有重新放置该 Token 的权限');
+          return false;
+        }
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        pendingActorId = null;
+        pendingRelocationTokenId = id;
+        activeSheetActorId = actorId(token.actorId);
+
+        // Ask the old editor to close its modal only; the current reposition
+        // click is already stopped and therefore never sets its Character-era
+        // pendingRelocationCharacterId flag.
+        documentNode.querySelector?.('.entity-sheet [data-sheet-action="close"]')?.click?.();
+        buildRelocationHud(documentNode, api, id);
+        setMapStatus(shell, '重新放置 Token：请选择可通行的 1m 格子');
+        return true;
       }
 
       function captureEntityIntent(event) {
         const cancel = event.target?.closest?.('[data-entity-placement-cancel]');
-        if (cancel) { clearPending(); return; }
+        if (cancel) {
+          clearPending({ removeHud: true, restoreTool: true });
+          return;
+        }
 
         const panelAction = event.target?.closest?.('[data-entity-action]');
         if (panelAction) {
@@ -86,6 +150,7 @@ export function createActorTokenPlacementUiSystem() {
           if (action === 'open' && id) activeSheetActorId = id;
           if (action === 'place' && id) {
             activeSheetActorId = id;
+            pendingRelocationTokenId = null;
             pendingActorId = id;
           }
           return;
@@ -94,13 +159,21 @@ export function createActorTokenPlacementUiSystem() {
         const sheetAction = event.target?.closest?.('[data-sheet-action]');
         if (sheetAction?.dataset.sheetAction === 'place-token') {
           const id = resolveSheetActorId();
-          if (id) pendingActorId = id;
-          else setMapStatus(shell, '无法确定当前角色；请从角色列表使用“放置 Token”');
+          if (id) {
+            pendingRelocationTokenId = null;
+            pendingActorId = id;
+          } else {
+            setMapStatus(shell, '无法确定当前角色；请从角色列表使用“放置 Token”');
+          }
+          return;
+        }
+        if (sheetAction?.dataset.sheetAction === 'reposition-token') {
+          beginRelocation(event, sheetAction.dataset.tokenId || sheetAction.dataset.characterId);
         }
       }
 
       async function captureMapPlacement(event) {
-        if (destroyed || !pendingActorId || placementBusy) return;
+        if (destroyed || (!pendingActorId && !pendingRelocationTokenId) || placementBusy) return;
         if (!mapElement.contains(event.target)) return;
         if (!documentNode.querySelector?.('.entity-placement-hud')) return;
         if (event.target?.closest?.('.leaflet-control, .rpg-character, .rpg-character-core, .rpg-token-v2, .leaflet-marker-icon')) return;
@@ -110,18 +183,68 @@ export function createActorTokenPlacementUiSystem() {
         event.preventDefault();
         event.stopImmediatePropagation();
 
-        const id = pendingActorId;
-        if (!actorExists(id)) {
-          clearPending();
-          setMapStatus(shell, '待放置 Actor 已不存在，已取消放置');
-          documentNode.querySelector?.('[data-entity-placement-cancel]')?.click?.();
+        if (pendingRelocationTokenId) {
+          const id = pendingRelocationTokenId;
+          const current = api.tokens.get?.(id);
+          if (!current) {
+            clearPending({ removeHud: true, restoreTool: true });
+            setMapStatus(shell, '待重新放置的 Token 已不存在，已取消');
+            return;
+          }
+          if (!canPlaceActor(current.actorId)) {
+            clearPending({ removeHud: true, restoreTool: true });
+            setMapStatus(shell, '当前没有重新放置该 Token 的权限');
+            return;
+          }
+
+          placementBusy = true;
+          setMapStatus(shell, '正在更新 Scene Token 位置…');
+          try {
+            const point = latLngToWorld(latlng, api.mapPackage.height);
+            const result = await relocateActorTokenAtPoint(api, id, point);
+            if (!result.ok || !result.token) {
+              setMapStatus(shell, '该位置不可放置 Token；请选择地图中的可通行位置，或点击取消');
+              return;
+            }
+
+            const token = result.token;
+            clearPending({ removeHud: true, restoreTool: true });
+            api.selection?.replace?.([token.id], token.id);
+            api.selectCharacter?.(token.id);
+            api.emit?.('token:move', {
+              id: token.id,
+              tokenId: token.id,
+              actorId: token.actorId,
+              token,
+              source: 'actor-relocation-v2',
+            });
+            // Compatibility notification only: World V2 already projected the
+            // moved Scene Token into state.characters[]. No legacy data write.
+            api.emit?.('character:move', {
+              id: token.id,
+              tokenId: token.id,
+              actorId: token.actorId,
+              source: 'token-v2:compat-projection',
+            });
+            setMapStatus(shell, `Token 已重新放置：${token.id}`);
+          } catch (error) {
+            console.error('[RPGmap Actor Placement V2] relocation failed', error);
+            setMapStatus(shell, `Token 重新放置失败：${error?.message || error}`);
+          } finally {
+            placementBusy = false;
+          }
           return;
         }
-        const capabilities = api.multiplayer?.getCapabilities?.();
-        if (capabilities?.canPlaceActor && !capabilities.canPlaceActor(id)) {
-          clearPending();
+
+        const id = pendingActorId;
+        if (!actorExists(id)) {
+          clearPending({ removeHud: true, restoreTool: true });
+          setMapStatus(shell, '待放置 Actor 已不存在，已取消放置');
+          return;
+        }
+        if (!canPlaceActor(id)) {
+          clearPending({ removeHud: true, restoreTool: true });
           setMapStatus(shell, '当前没有该 Actor 的 Token 放置权限');
-          documentNode.querySelector?.('[data-entity-placement-cancel]')?.click?.();
           return;
         }
 
@@ -170,12 +293,16 @@ export function createActorTokenPlacementUiSystem() {
       }
 
       function handleKeydown(event) {
-        if (event.key === 'Escape' && pendingActorId) clearPending();
+        if (event.key === 'Escape' && (pendingActorId || pendingRelocationTokenId)) {
+          clearPending({ removeHud: true, restoreTool: true });
+          setMapStatus(shell, '已取消 Token 放置');
+        }
       }
 
       documentNode.addEventListener('click', captureEntityIntent, true);
       // Document capture runs before Entity UI's mapElement capture listener and
-      // before Leaflet/AppCore, so one click can never also call placeCharacter().
+      // before Leaflet/AppCore, so one click cannot also invoke legacy Character
+      // placement or reposition writes.
       documentNode.addEventListener('click', captureMapPlacement, true);
       documentNode.addEventListener('keydown', handleKeydown, true);
 
@@ -185,11 +312,12 @@ export function createActorTokenPlacementUiSystem() {
       }));
       off.push(api.on('state:commit', () => refreshActorFingerprints()));
       off.push(api.on('state:import', () => {
-        clearPending();
+        clearPending({ removeHud: true });
         refreshActorFingerprints({ inferActive: false });
       }));
       off.push(api.on('app:destroy', () => {
         destroyed = true;
+        clearPending({ removeHud: true });
         documentNode.removeEventListener('click', captureEntityIntent, true);
         documentNode.removeEventListener('click', captureMapPlacement, true);
         documentNode.removeEventListener('keydown', handleKeydown, true);
@@ -199,10 +327,11 @@ export function createActorTokenPlacementUiSystem() {
       refreshActorFingerprints({ inferActive: false });
       api.actorPlacement = Object.freeze({
         canonicalTokenCreate: true,
+        canonicalTokenRelocation: true,
         getPendingActorId() { return pendingActorId; },
+        getPendingRelocationTokenId() { return pendingRelocationTokenId; },
         cancel() {
-          clearPending();
-          documentNode.querySelector?.('[data-entity-placement-cancel]')?.click?.();
+          clearPending({ removeHud: true, restoreTool: true });
         },
       });
     },
