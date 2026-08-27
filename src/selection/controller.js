@@ -35,14 +35,32 @@ function ensureSelectionPane(map) {
   }
 }
 
-function nearestMapCharacter(api, point) {
+function legacyProjectedTokens(api) {
+  return (api.getState().characters || []).map(character => ({
+    id: String(character.id),
+    placement: character.location?.type === 'building' ? 'feature' : 'map',
+    x: character.location?.type === 'map' ? Number(character.location.x) : null,
+    y: character.location?.type === 'map' ? Number(character.location.y) : null,
+    featureId: character.location?.type === 'building' ? character.location.featureId : null,
+    hidden: character.visible === false,
+  }));
+}
+
+function mapTokens(api) {
+  return api.tokens?.list?.() || legacyProjectedTokens(api);
+}
+
+function nearestMapToken(api, point) {
   let best = null;
   let bestDistance = Infinity;
-  for (const character of api.getState().characters || []) {
-    if (character?.visible === false || character?.location?.type !== 'map') continue;
-    const distance = Math.hypot(Number(character.location.x) - point.x, Number(character.location.y) - point.y);
+  for (const token of mapTokens(api)) {
+    if (token?.hidden === true || token?.placement !== 'map') continue;
+    const x = Number(token.x);
+    const y = Number(token.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const distance = Math.hypot(x - point.x, y - point.y);
     if (distance < bestDistance) {
-      best = character;
+      best = token;
       bestDistance = distance;
     }
   }
@@ -83,18 +101,21 @@ export function createSelectionController(state, notify) {
         if (node) node.textContent = message;
       };
 
-      function characters() {
-        return api.getState().characters || [];
+      function tokens() {
+        return mapTokens(api);
       }
 
       function renderSelection() {
         highlightLayer.clearLayers();
         const selected = new Set(state.snapshot().ids);
         const primaryId = state.primaryId;
-        for (const character of characters()) {
-          if (!selected.has(String(character.id)) || character?.location?.type !== 'map' || character.visible === false) continue;
-          const primary = String(character.id) === String(primaryId);
-          L.circleMarker(worldToLatLng(character.location, api.mapPackage.height), {
+        for (const token of tokens()) {
+          if (!selected.has(String(token.id)) || token?.placement !== 'map' || token.hidden === true) continue;
+          const x = Number(token.x);
+          const y = Number(token.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+          const primary = String(token.id) === String(primaryId);
+          L.circleMarker(worldToLatLng({ x, y }, api.mapPackage.height), {
             pane: 'selectionPane',
             radius: primary ? 18 : 16,
             color: primary ? '#176d76' : '#4e8f96',
@@ -161,12 +182,12 @@ export function createSelectionController(state, notify) {
         if (tokenElement) {
           if (!event.shiftKey && !event.altKey) return;
           const point = pointFromClient(event.clientX, event.clientY);
-          const character = nearestMapCharacter(api, point);
-          if (!character) return;
+          const token = nearestMapToken(api, point);
+          if (!token) return;
           event.preventDefault();
           event.stopImmediatePropagation();
-          if (event.altKey) apply([character.id], 'remove');
-          else apply([character.id], 'add', character.id);
+          if (event.altKey) apply([token.id], 'remove');
+          else apply([token.id], 'add', token.id);
           return;
         }
 
@@ -226,7 +247,7 @@ export function createSelectionController(state, notify) {
           return;
         }
 
-        const ids = tokenIdsInBounds(characters(), drag.startWorld, endWorld);
+        const ids = tokenIdsInBounds(tokens(), drag.startWorld, endWorld);
         apply(ids, drag.mode, ids.at(-1) || null);
       }, true);
 
@@ -258,9 +279,16 @@ export function createSelectionController(state, notify) {
         publish('delete');
       });
       api.on('state:import', () => {
-        const valid = new Set(characters().map(character => String(character.id)));
+        const valid = new Set(tokens().map(token => String(token.id)));
         state.replace(state.snapshot().ids.filter(id => valid.has(id)), state.primaryId);
         publish('import');
+      });
+      api.on('state:commit', event => {
+        const source = String(event.detail?.source || '');
+        if (!source.startsWith('token-v2:') && !source.startsWith('world-v2:')) return;
+        const valid = new Set(tokens().map(token => String(token.id)));
+        state.replace(state.snapshot().ids.filter(id => valid.has(id)), state.primaryId);
+        publish(source);
       });
 
       renderSelection();
