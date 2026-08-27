@@ -73,7 +73,3 @@ export function formatFt(value) {
   const normalized = normalizeElevationFt(value, 0);
   return Number.isInteger(normalized) ? String(normalized) : normalized.toFixed(1).replace(/\.0$/, '');
 }
-
-// Temporary compile-time facade for the retired AppCore shell. Live Elevation
-// V2 code is Token/Feature-only; this alias can disappear with AppCore itself.
-export { legacyAppCoreMoverContext as moverContextForCharacter } from '../legacy/character-retirement.js';
