@@ -4,19 +4,28 @@ function normalizeId(value) {
   return id || null;
 }
 
-export function tokenIdsInBounds(characters, start, end) {
+function mapPosition(item) {
+  if (item?.placement === 'map') {
+    return item.hidden === true ? null : { x: Number(item.x), y: Number(item.y) };
+  }
+  if (item?.location?.type === 'map') {
+    return item.visible === false ? null : { x: Number(item.location.x), y: Number(item.location.y) };
+  }
+  return null;
+}
+
+export function tokenIdsInBounds(tokens, start, end) {
   const minX = Math.min(Number(start?.x) || 0, Number(end?.x) || 0);
   const maxX = Math.max(Number(start?.x) || 0, Number(end?.x) || 0);
   const minY = Math.min(Number(start?.y) || 0, Number(end?.y) || 0);
   const maxY = Math.max(Number(start?.y) || 0, Number(end?.y) || 0);
-  return (characters || [])
-    .filter(character => character?.visible !== false && character?.location?.type === 'map')
-    .filter(character => {
-      const x = Number(character.location.x);
-      const y = Number(character.location.y);
-      return x >= minX && x <= maxX && y >= minY && y <= maxY;
+  return (tokens || [])
+    .filter(token => {
+      const position = mapPosition(token);
+      if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) return false;
+      return position.x >= minX && position.x <= maxX && position.y >= minY && position.y <= maxY;
     })
-    .map(character => String(character.id));
+    .map(token => String(token.id));
 }
 
 export class TokenSelectionState {
