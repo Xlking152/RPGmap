@@ -19,7 +19,7 @@ import { createMultiplayerSystem } from './multiplayer/index.js';
 import { createMultiplayerHostBootstrapSystem } from './multiplayer/host-bootstrap.js';
 import { createDefaultMapPackage } from './map-package/default-map.js';
 import { createStatusSystem, createStatusUiSystem } from './status/index.js';
-import { getActiveRuleset } from './ruleset/index.js';
+import { chooseRulesetBeforeMap } from './ruleset/setup.js';
 
 function setBootStatus(message, { error = false } = {}) {
   const node = document.querySelector('[data-rpgmap-boot-status]');
@@ -59,10 +59,17 @@ async function yieldForFirstPaint() {
 }
 
 export async function startRpgMap() {
-  // Ruleset is resolved before any MapPackage/Scene runtime is constructed.
-  // Today the built-in default is Infinite Horror; World V2 will later supply
-  // the ruleset id here instead of the bootstrap default.
-  const ruleset = getActiveRuleset();
+  const appContainer = document.getElementById('app');
+
+  // Ruleset selection is a bootstrap concern and happens before any MapPackage
+  // or Scene runtime exists. This lightweight browser setting is a bridge for
+  // V1.x; World V2 will move the canonical ruleset id into the World manifest.
+  const bootstrapStorage = createBrowserStorage();
+  const ruleset = await chooseRulesetBeforeMap({
+    container: appContainer,
+    storageAdapter: bootstrapStorage,
+  });
+
   setBootStatus(`规则包：${ruleset.title} · 正在检查 Windows RPGmap Server…`);
   const serverRuntime = await detectRpgMapServer();
 
@@ -79,7 +86,7 @@ export async function startRpgMap() {
   const selectionSystem = createSelectionSystem();
 
   return createRpgMapApp({
-    container: document.getElementById('app'),
+    container: appContainer,
     mapPackage,
     storageAdapter,
     tools: [
