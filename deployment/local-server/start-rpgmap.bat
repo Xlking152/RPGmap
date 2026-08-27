@@ -5,7 +5,7 @@ title RPGmap Launcher
 
 where node >nul 2>nul || (
   echo [ERROR] Node.js not found. Install Node 20.19+ or 22.12+ first.
-  pause
+  if not "%RPGMAP_NO_PAUSE%"=="1" pause
   exit /b 1
 )
 
@@ -15,7 +15,7 @@ set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
   echo.
   echo [ERROR] RPGmap launcher exited with code %EXIT_CODE%.
-  pause
+  if not "%RPGMAP_NO_PAUSE%"=="1" pause
 )
 
 exit /b %EXIT_CODE%
