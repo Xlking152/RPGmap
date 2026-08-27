@@ -1,4 +1,5 @@
 import { assertStatusState } from './status-operations.mjs';
+import { assertWorldV2, synchronizeWorldV2Mirror } from './world-v2.mjs';
 
 // The release server applies these hostile-input limits before any permission
 // projection or authoritative World mutation.
@@ -110,6 +111,13 @@ export function assertWorldState(value) {
     }
     assertStatusState(entityState);
   }
+
+  // New clients persist the canonical World V2 model beside the active-scene
+  // compatibility projection. Server-side Status operations mutate the flat
+  // projection directly, so synchronize that projection back into World V2
+  // before validating/persisting. Legacy states without World V2 remain valid.
+  const worldV2 = synchronizeWorldV2Mirror(state);
+  if (worldV2) assertWorldV2(worldV2);
 
   const chat = preferences.chatSystem;
   if (chat !== undefined) {
