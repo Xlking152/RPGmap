@@ -6,7 +6,7 @@ import { createAppLifecycleSystem } from './engine/lifecycle.js';
 import { createMovementSystem } from './movement/index.js';
 import { createMeasurementSystem } from './measurement/index.js';
 import { createEntitySystem } from './entities/index.js';
-import { createAppShellUi } from './ui/index.js';
+import { createAppShellUi, createCanonicalPanelOwnershipSystem } from './ui/index.js';
 import { createSelectionSystem } from './selection/index.js';
 import { createFeatureInteractionSystem } from './interaction/index.js';
 import { createElevationSystem } from './elevation/index.js';
@@ -99,14 +99,15 @@ export async function startRpgMap() {
       createAppLifecycleSystem(),
       // World V2 owns Ruleset + Actors + Scenes. It must wrap AppCore commit /
       // import boundaries before Entity, Status, Movement, Combat, or LAN tools
-      // begin mutating the active-scene compatibility projection.
+      // begin mutating the active-scene projection.
       createWorldSystem(),
       // Token Runtime V2 is the canonical Scene-token mutation surface.
       createTokenRuntimeSystem(),
       createMovementSystem({ defaultStep: 5, autoStep: true }),
-      // Entity editor now calls Token Runtime directly for Token CRUD and
-      // placement/property edits. No capture/MutationObserver Token editor
-      // bridge is registered around it anymore.
+      // The legacy AppCore panel nodes are detached once. Modern Entity and
+      // Feature UI owns the visible panels directly instead of observing and
+      // replacing legacy Character DOM after every render.
+      createCanonicalPanelOwnershipSystem(),
       createEntitySystem({ dropLegacyMarkers: false }),
       createStatusSystem(),
       // Status writes still use the existing server-authoritative protocol,
@@ -117,7 +118,6 @@ export async function startRpgMap() {
       createMeasurementSystem(),
       selectionSystem,
       // The visible Leaflet Token layer is canonical from this point onward.
-      // The old Character layer remains hidden solely as an AppCore facade.
       createTokenRendererSystem(),
       createFeatureInteractionSystem(),
       createElevationSystem(),
