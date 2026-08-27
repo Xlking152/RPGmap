@@ -1,6 +1,5 @@
 import { createEntityUiTool } from './ui.js';
 import { createCharacterSheetExtension } from './character-sheet-extension.js';
-import { createFeatureTokenUiSystem } from './feature-token-ui.js';
 
 export { createEmptyEntityState, createActorFromImport, createFormFromImport, createLegacyActor, createTokenForActor, normalizeEntityState, migrateLegacyCharacters, actorForToken, currentForm, addFormToActor, BAD_STATUS_DEFS } from './model.js';
 export { resolveActor, resolveAttribute, resolveResource, resolveBadStatus, setResourceCurrent, setResourceMaxOverride, setAttributeAdjustment, setBadStatusCurrent, addCustomResource, removeCustomResource, setActorForm, cycleActorForm, addEffect } from './resolver.js';
@@ -11,18 +10,15 @@ export { EntityStore } from './store.js';
 export { createCharacterSheetExtension } from './character-sheet-extension.js';
 export { createEntityTokenController } from './token-controller.js';
 export { deleteCanonicalActor, deleteCanonicalToken, listWorldActorTokens, removeActorAndTokensFromWorld } from './canonical-delete.js';
-export { createFeatureTokenUiSystem } from './feature-token-ui.js';
 export { listFeatureTokenViews } from './feature-token-view.js';
 
 export function createEntitySystem(options = {}) {
   const ui = createEntityUiTool(options);
   const extension = createCharacterSheetExtension();
-  const featureTokens = createFeatureTokenUiSystem();
   return {
     register(api) {
       ui.register(api);
       extension.register(api);
-      featureTokens.register(api);
     },
   };
 }
