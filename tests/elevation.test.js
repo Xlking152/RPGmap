@@ -7,7 +7,7 @@ import {
   featureBlocksMover,
   normalizeElevationFt,
   normalizeTokenDiameterMeters,
-  moverContextForCharacter,
+  tokenDiameterMeters,
   tokenElevationFt,
 } from '../src/elevation/model.js';
 import {
@@ -50,7 +50,7 @@ function simpleMap(feature = simpleFeature()) {
 }
 
 test('Token elevationFt defaults to zero and normalizes as a non-negative value', () => {
-  const token = createTokenForActor('actor-a', 'character-a');
+  const token = createTokenForActor('actor-a', 'token-a');
   assert.equal(token.elevationFt, 0);
   assert.equal(tokenElevationFt(token), 0);
   assert.equal(normalizeElevationFt(35), 35);
@@ -58,27 +58,26 @@ test('Token elevationFt defaults to zero and normalizes as a non-negative value'
 
   const normalized = normalizeEntityState({
     actors: [{ id: 'actor-a', forms: [], runtime: {} }],
-    tokens: [{ id: 'character-a', actorId: 'actor-a', characterId: 'character-a', elevationFt: 45 }],
+    tokens: [{ id: 'token-a', actorId: 'actor-a', elevationFt: 45 }],
   });
   assert.equal(normalized.tokens[0].elevationFt, 45);
 });
 
 test('Token diameter is constrained and legacy size only migrates at supported values', () => {
-  assert.equal(createTokenForActor('actor-a', 'character-a').diameterMeters, 1);
-  assert.equal(createTokenForActor('actor-a', 'character-a', { diameterMeters: 10 }).diameterMeters, 10);
+  assert.equal(createTokenForActor('actor-a', 'token-a').diameterMeters, 1);
+  assert.equal(createTokenForActor('actor-a', 'token-a', { diameterMeters: 10 }).diameterMeters, 10);
   assert.equal(normalizeTokenDiameterMeters(7), 1);
   const normalized = normalizeEntityState({
     actors: [{ id: 'actor-a', forms: [], runtime: {} }],
     tokens: [
-      { id: 'valid', actorId: 'actor-a', characterId: 'valid', size: 5 },
-      { id: 'invalid', actorId: 'actor-a', characterId: 'invalid', size: 9 },
+      { id: 'valid', actorId: 'actor-a', size: 5 },
+      { id: 'invalid', actorId: 'actor-a', size: 9 },
     ],
   });
   assert.equal(normalized.tokens[0].diameterMeters, 5);
   assert.equal(normalized.tokens[0].size, undefined);
   assert.equal(normalized.tokens[1].diameterMeters, 1);
-  const context = moverContextForCharacter({ preferences: { entitySystem: normalized } }, 'valid');
-  assert.equal(context.diameterMeters, 5);
+  assert.equal(tokenDiameterMeters(normalized.tokens[0]), 5);
 });
 
 test('Feature height blocking uses strict greater-than clearance and supports World override', () => {
@@ -128,16 +127,16 @@ test('MapPackage contract normalizes height and separate blocking/passage polygo
   assert.throws(() => prepareMapPackage(makePackage(-1)), /blockingHeightFt/);
 });
 
-test('Navigation grid ignores a height-aware Feature only when mover elevation is greater', () => {
+test('Navigation grid ignores a height-aware Feature only when Token elevation is greater', () => {
   const map = simpleMap();
   const appState = { sceneEvents: [], preferences: { featureStates: {} } };
   const atHeight = createNavigationGrid(map, {}, null, {
     appState,
-    moverContext: { characterId: 'character-a', elevationFt: 20 },
+    moverContext: { tokenId: 'token-a', elevationFt: 20 },
   });
   const aboveHeight = createNavigationGrid(map, {}, null, {
     appState,
-    moverContext: { characterId: 'character-a', elevationFt: 21 },
+    moverContext: { tokenId: 'token-a', elevationFt: 21 },
   });
   assert.equal(atHeight.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.blocked);
   assert.equal(aboveHeight.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.open);
@@ -149,12 +148,12 @@ test('Navigation uses blockingPolygon instead of visible Feature geometry when d
   feature.capabilities.navigation.blockingPolygon = [[10, 40], [90, 40], [90, 60], [10, 60]];
   const navigation = createNavigationGrid(simpleMap(feature), {}, null, {
     appState: { sceneEvents: [], preferences: { featureStates: {} } },
-    moverContext: { elevationFt: 0 },
+    moverContext: { tokenId: 'token-a', elevationFt: 0 },
   });
   assert.equal(navigation.tileAt({ x: 25, y: 45 }), NAVIGATION_TILES.blocked, 'declared blocker must extend beyond visible geometry');
 });
 
-test('Feature State blockingHeightFt override participates in mover-aware Navigation', () => {
+test('Feature State blockingHeightFt override participates in Token-aware Navigation', () => {
   const map = simpleMap();
   const appState = {
     sceneEvents: [],
@@ -166,27 +165,27 @@ test('Feature State blockingHeightFt override participates in mover-aware Naviga
   };
   const belowOverride = createNavigationGrid(map, {}, null, {
     appState,
-    moverContext: { elevationFt: 30 },
+    moverContext: { tokenId: 'token-a', elevationFt: 30 },
   });
   const aboveOverride = createNavigationGrid(map, {}, null, {
     appState,
-    moverContext: { elevationFt: 41 },
+    moverContext: { tokenId: 'token-a', elevationFt: 41 },
   });
   assert.equal(belowOverride.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.blocked);
   assert.equal(aboveOverride.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.open);
 });
 
-test('legacy callers may cache the Navigation facade while active mover and Feature height change', () => {
+test('cached Navigation facade refreshes when active Token elevation and Feature height change', () => {
   const map = simpleMap();
   const appState = { sceneEvents: [], preferences: { featureStates: {} } };
   configureElevationNavigationRuntime({ getState: () => appState });
   try {
-    setActiveMoverContext({ characterId: 'ground', elevationFt: 0 });
+    setActiveMoverContext({ tokenId: 'token-ground', elevationFt: 0 });
     const cachedNavigation = createNavigationGrid(map, {});
     assert.equal(cachedNavigation.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.blocked);
 
-    setActiveMoverContext({ characterId: 'flyer', elevationFt: 30 });
-    assert.equal(cachedNavigation.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.open, 'cached facade must refresh for another mover');
+    setActiveMoverContext({ tokenId: 'token-flyer', elevationFt: 30 });
+    assert.equal(cachedNavigation.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.open, 'cached facade must refresh for another Token');
 
     appState.preferences.featureStates['obstacle-a'] = { custom: { blockingHeightFt: 40 } };
     assert.equal(cachedNavigation.tileAt({ x: 25, y: 25 }), NAVIGATION_TILES.blocked, 'cached facade must refresh for Feature State override');
