@@ -74,14 +74,17 @@ export function renderRulesetSetup(container, { rulesets = listRulesets() } = {}
 
   const title = document.createElement('h1');
   title.className = 'rpgmap-boot-title';
+  title.dataset.rulesetSetupTitle = 'true';
   title.textContent = '选择规则系统';
 
   const lead = document.createElement('p');
   lead.className = 'rpgmap-boot-status';
+  lead.dataset.rpgmapBootStatus = '';
   lead.textContent = '规则包决定角色卡、生命值、状态点数和伤害规则；Token 与地图交互仍由 RPGmap Core 管理。';
   lead.style.marginBottom = '16px';
 
   const choices = document.createElement('div');
+  choices.dataset.rulesetChoices = 'true';
   choices.style.cssText = 'display:grid;gap:10px';
   for (const ruleset of rulesets) choices.append(setupCard(ruleset));
 
@@ -109,7 +112,17 @@ export async function chooseRulesetBeforeMap({
       if (!button) return;
       root.removeEventListener('click', onClick);
       try {
-        resolve(writeRulesetBootstrap(storageAdapter, button.dataset.rulesetId));
+        const ruleset = writeRulesetBootstrap(storageAdapter, button.dataset.rulesetId);
+        const title = root.querySelector('[data-ruleset-setup-title]');
+        const choices = root.querySelector('[data-ruleset-choices]');
+        const status = root.querySelector('[data-rpgmap-boot-status]');
+        if (title) title.textContent = `RPGmap · ${ruleset.title}`;
+        choices?.remove();
+        if (status) {
+          status.textContent = `已选择规则包 ${ruleset.title}，正在准备运行环境…`;
+          status.style.marginBottom = '0';
+        }
+        resolve(ruleset);
       } catch (error) {
         reject(error);
       }
