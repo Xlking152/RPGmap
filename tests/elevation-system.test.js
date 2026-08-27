@@ -2,32 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const elevationSource = await readFile(new URL('../src/elevation/system.js', import.meta.url), 'utf8');
-const entityUiSource = await readFile(new URL('../src/entities/ui.js', import.meta.url), 'utf8');
-const tokenControllerSource = await readFile(new URL('../src/entities/token-controller.js', import.meta.url), 'utf8');
+const elevationSource = await readFile(new URL('../src/elevation/token-system.js', import.meta.url), 'utf8');
+const elevationIndexSource = await readFile(new URL('../src/elevation/index.js', import.meta.url), 'utf8');
 const appShellSource = await readFile(new URL('../src/ui/app-shell.js', import.meta.url), 'utf8');
+const mainSource = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
 
-test('Token elevation observer does not repeatedly update an already-oriented tooltip', () => {
-  const orient = elevationSource.match(/function orientCharacterTooltip[\s\S]*?\n}\n\nexport function createElevationSystem/);
-  assert.ok(orient, 'orientation helper should remain isolated');
-  assert.match(orient[0], /const needsUpdate =/);
-  assert.match(orient[0], /if \(!needsUpdate\) return;/);
-  assert.match(orient[0], /tooltip\.update\?\.\(\);/);
+test('Elevation V2 writes only through canonical Token Runtime', () => {
+  assert.match(elevationSource, /api\.tokens\.update\(token\.id, \{ elevationFt \}/);
+  assert.match(elevationSource, /openTokenElevationEditor/);
+  assert.match(elevationSource, /canControlToken/);
+  assert.match(elevationSource, /canonicalSceneTokens: true/);
+  assert.doesNotMatch(elevationSource, /state\.characters|character:select|character:delete|MutationObserver|selectCharacter/);
 });
 
-test('Token elevation supports legacy HUD compatibility plus a direct canonical Entity-sheet entry point', () => {
-  assert.match(elevationSource, /function requestedTokenElevationFt\(value, fallback = 0\)/);
-  assert.match(elevationSource, /return Number\.isFinite\(number\) \? Math\.max\(0, number\)/);
-  assert.match(elevationSource, /api\.commitState\(next, \{ source: 'elevation:token' \}\)/);
-  assert.match(elevationSource, /openTokenElevationEditor,/);
-  assert.match(elevationSource, /canSetTokenElevation: characterId => canControlCharacter\(api, characterId\)/);
-
-  assert.match(tokenControllerSource, /data-sheet-action="edit-token-elevation"/);
-  assert.match(tokenControllerSource, /setTokenElevationFt\(api, target, value\)/);
-  assert.match(tokenControllerSource, /api\.elevation\?\.canSetTokenElevation\?\.\(target\)/);
-  assert.doesNotMatch(tokenControllerSource, /openTokenElevationEditor|api\.commitState|state\.characters/);
-  assert.doesNotMatch(entityUiSource, /api\.elevation\?\.openTokenElevationEditor/);
-
-  // AppShell right-click remains a Character-era compatibility entry until ⑤-F-2.
-  assert.match(appShellSource, /\['调整高度', \(\) => api\.elevation\?\.openTokenElevationEditor\?\.\(characterId, event\)\]/);
+test('runtime registers Token elevation and modern shell opens it by token id', () => {
+  assert.match(elevationIndexSource, /createTokenElevationSystem/);
+  assert.doesNotMatch(elevationIndexSource, /placement-context|createElevationSystem as/);
+  assert.match(appShellSource, /openTokenElevationEditor\?\.\(selection\.token\.id, event\)/);
+  assert.match(appShellSource, /openTokenElevationEditor\?\.\(token\.id, event\)/);
+  assert.match(mainSource, /createElevationSystem\(\)/);
 });
