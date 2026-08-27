@@ -16,7 +16,7 @@ function contextValue(context, tokenId) {
 }
 
 function tokenIdentity(context) {
-  return context?.tokenId ?? context?.characterId ?? context?.token?.id ?? context?.token?.characterId ?? null;
+  return context?.tokenId ?? context?.token?.id ?? null;
 }
 
 function mutationPayload(input, targetId, definitionId, options = {}) {
@@ -100,10 +100,6 @@ export function createTokenStatusBridgeSystem() {
                 source: { role: 'gm', authority: 'world-v2', scope: 'syntheticActor' },
               });
 
-          // commitWorld delegates to commitAuthoritativeState. In LAN mode this
-          // waits for the server revision check, schema validation, persistence,
-          // and canonical snapshot before resolving; no optimistic draft is
-          // installed locally.
           await api.world.commit(applied.world, {
             source: 'status:syntheticActor',
             reason: 'status.syntheticActor',
@@ -208,9 +204,6 @@ export function createTokenStatusBridgeSystem() {
           && String(status.definitionId || status.statusId || status.id) === id);
       };
 
-      // Existing callers can use the normal status API with
-      // scope:'syntheticActor'; explicit aliases make the intended operation
-      // easy to discover for Rulesets and future Token UI.
       api.status.apply = apply;
       api.status.remove = remove;
       api.status.setStacks = setStacks;
