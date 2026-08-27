@@ -28,7 +28,17 @@ await mkdir(path.join(root, 'docs'), { recursive: true });
 
 await copy('dist', 'app');
 await copy('reference');
-for (const file of ['server.mjs', 'access-control.mjs', 'portable-storage.mjs', 'world-schema.mjs', 'status-operations.mjs', 'launcher.mjs', 'start-rpgmap.bat', 'README.md']) {
+for (const file of [
+  'server.mjs',
+  'access-control.mjs',
+  'portable-storage.mjs',
+  'world-schema.mjs',
+  'world-v2.mjs',
+  'status-operations.mjs',
+  'launcher.mjs',
+  'start-rpgmap.bat',
+  'README.md',
+]) {
   await copy(path.join('deployment', 'local-server', file), file);
 }
 for (const [source, target] of [
