@@ -7,13 +7,13 @@ import {
   describeActor,
   describeActorSheet,
   listActorAttributePaths,
-  normalizeActorDocument,
   performActorOperation,
   resolveActorAttribute,
   validateActorDocument,
 } from '../src/actor/index.js';
-import { addEffect, resolveActor } from '../src/entities/resolver.js';
+import { resolveActor } from '../src/entities/resolver.js';
 import { normalizeEntityState } from '../src/entities/model.js';
+import { resolveActorEffects } from '../src/status/model.js';
 import { normalizeWorldV2 } from '../src/world/model.js';
 import { resolveTokenActor } from '../src/token/actor.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
@@ -64,13 +64,21 @@ function legacyActor() {
   };
 }
 
-test('Infinite Horror migrates legacy HP base/runtime into independent Health data', () => {
-  const state = normalizeEntityState({
+function normalizedLegacyState() {
+  return normalizeEntityState({
     schemaVersion: 3,
     statusDefinitions: [{ id: 'custom-status', name: '自定义状态', scopes: ['actor'], changes: [], builtIn: false }],
     actors: [legacyActor()],
     tokens: [{ id: 'token-legacy', actorId: 'actor-legacy', actorLink: true, effects: [] }],
   });
+}
+
+function actorContext(state, actor) {
+  return { effects: resolveActorEffects(actor, state.statusDefinitions) };
+}
+
+test('Infinite Horror migrates legacy HP base/runtime into independent Health data', () => {
+  const state = normalizedLegacyState();
   const actor = state.actors[0];
   assert.deepEqual(Object.keys(actor).sort(), [
     'createdAt', 'effects', 'id', 'name', 'notes', 'system', 'updatedAt',
@@ -84,10 +92,11 @@ test('Infinite Horror migrates legacy HP base/runtime into independent Health da
   assert.equal(actor.system.forms[0].resourceBases.hp, undefined);
   assert.equal(actor.system.forms[0].healthBase.baseMax, 12);
   assert.equal(actor.effects[0].id, 'effect-old');
+  assert.equal('changes' in actor.effects[0], false);
   assert.equal(state.statusDefinitions[0].id, 'custom-status');
   assert.equal(state.tokens[0].actorId, actor.id);
 
-  const derived = resolveActor(actor);
+  const derived = resolveActor(actor, actorContext(state, actor));
   assert.equal(derived.health.bashing, 2);
   assert.equal(derived.health.lethal, 2);
   assert.equal(derived.health.aggravated, 1);
@@ -99,10 +108,12 @@ test('Infinite Horror migrates legacy HP base/runtime into independent Health da
 });
 
 test('Actor presentation exposes canonical Health paths and Resource operations cannot mutate HP', () => {
-  const actor = normalizeActorDocument(legacyActor());
-  const presentation = describeActor(actor);
-  const sheet = describeActorSheet(actor);
-  const paths = listActorAttributePaths(actor).map(item => item.path);
+  const state = normalizedLegacyState();
+  const actor = state.actors[0];
+  const context = actorContext(state, actor);
+  const presentation = describeActor(actor, context);
+  const sheet = describeActorSheet(actor, context);
+  const paths = listActorAttributePaths(actor, context).map(item => item.path);
   const resourceSection = sheet.tabs.find(tab => tab.id === 'overview')?.sections.find(section => section.id === 'resources');
   assert.equal(presentation.variantLabel, '旧形态');
   assert.equal(presentation.color, '#123456');
@@ -110,28 +121,23 @@ test('Actor presentation exposes canonical Health paths and Resource operations 
   assert.ok(paths.includes('system.health.max'));
   assert.equal(paths.some(item => item.startsWith('system.resources.hp.')), false);
   assert.equal(resourceSection.items.some(item => item.id === 'hp'), false);
-  assert.equal(resolveActorAttribute(actor, 'system.attributes.strength'), 6);
+  assert.equal(resolveActorAttribute(actor, 'system.attributes.strength', context), 6);
+  assert.equal(resolveActorAttribute(actor, 'system.health.max', context), 14);
 
-  performActorOperation(actor, { type: 'health.set-mode', mode: 'simple' });
+  performActorOperation(actor, { type: 'health.set-mode', mode: 'simple' }, context);
   const operation = performActorOperation(actor, {
     type: 'health.runtime',
     operation: { type: 'set-current', value: 4 },
-  });
+  }, context);
   assert.equal(operation.changed, true);
-  assert.equal(resolveActorAttribute(actor, 'system.health.current'), 4);
+  assert.equal(resolveActorAttribute(actor, 'system.health.current', context), 4);
   assert.equal(actor.system.runtime.health.current, 4);
   assert.equal(actor.system.runtime.resources.hp, undefined);
 
-  const rejected = performActorOperation(actor, { type: 'resource.set-current', resourceId: 'hp', value: 2 });
+  const rejected = performActorOperation(actor, { type: 'resource.set-current', resourceId: 'hp', value: 2 }, context);
   assert.equal(rejected.changed, false);
   assert.equal(rejected.blocked, 'resource_not_found');
   assert.equal(actor.system.runtime.health.current, 4);
-
-  const effect = addEffect(actor, {
-    changes: [{ target: 'health.max', mode: 'add', value: 3 }],
-  });
-  assert.equal(effect.changes[0].target, 'system.health.max');
-  assert.equal(resolveActorAttribute(actor, 'system.health.max'), 17);
 });
 
 test('legacy wound Health wins over a stale resource-only Synthetic Actor HP mirror', () => {
