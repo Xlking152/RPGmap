@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createActorFromImport, normalizeEntityState } from '../src/entities/model.js';
 import { resolveActor } from '../src/entities/resolver.js';
-import { performActorOperation } from '../src/actor/index.js';
+import { resolveActorEffects } from '../src/status/model.js';
+import { describeActorSheet, performActorOperation } from '../src/actor/index.js';
 
 test('xlsx actors default to wound-track health while manual actors remain simple HP', () => {
   const base = {
@@ -67,4 +68,39 @@ test('simple HP mutations write only canonical Ruleset Health Runtime', () => {
   assert.equal(actor.system.runtime.health.current, 7);
   assert.equal(actor.system.runtime.resources.hp, undefined);
   assert.equal(resolveActor(actor).resources.some(resource => resource.id === 'hp'), false);
+});
+
+
+test('StatusDefinition context reaches Infinite Horror sheets and Health mutations', () => {
+  const actor = createActorFromImport({
+    formName: '默认形态', identity: { name: '状态强化角色' },
+    resources: { hp: { max: 20 }, stamina: { max: 0 }, willpower: { max: 0 } },
+    attributes: [{ id: 'strength', name: '力量', base: 2 }],
+    checks: { skills: [], saves: [] }, badStatuses: [], combat: { attacks: [], defenses: [] },
+    tokenAppearance: {}, source: { type: 'manual' },
+  });
+  const definition = {
+    id: 'status-context-buff', name: '状态强化', scopes: ['actor'], maxStacks: 1,
+    changes: [
+      { target: 'health.max', mode: 'add', value: 10 },
+      { target: 'attributes.strength', mode: 'add', value: 3 },
+    ],
+  };
+  actor.effects = [{ id: 'effect-context-buff', definitionId: definition.id, stacks: 1, enabled: true }];
+  const context = { effects: resolveActorEffects(actor, [definition]) };
+
+  const sheet = describeActorSheet(actor, context);
+  const attributes = sheet.tabs.find(tab => tab.id === 'attributes').sections[0].items;
+  assert.equal(attributes.find(item => item.id === 'strength').value, 5);
+  assert.equal(resolveActor(actor).health.max, 20);
+  assert.equal(resolveActor(actor, context).health.max, 30);
+
+  const result = performActorOperation(actor, {
+    type: 'health.runtime',
+    operation: { type: 'set-current', value: 30 },
+  }, context);
+  assert.equal(result.changed, true);
+  assert.equal(result.value.max, 30);
+  assert.equal(result.value.current, 30);
+  assert.equal(resolveActor(actor, context).health.current, 30);
 });

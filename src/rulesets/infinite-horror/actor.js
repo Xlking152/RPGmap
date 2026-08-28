@@ -507,8 +507,8 @@ export function resolveInfiniteHorrorAttribute(actor, path, context = {}) {
   return null;
 }
 
-function healthContext(actor) {
-  const derived = deriveInfiniteHorrorActor(actor);
+function healthContext(actor, context = {}) {
+  const derived = deriveInfiniteHorrorActor(actor, context);
   return {
     derived,
     max: derived?.health?.max ?? 0,
@@ -549,14 +549,14 @@ function setResourceMaximum(actor, resourceId, rawValue) {
   return true;
 }
 
-function healthResult(actor, operation) {
-  const beforeContext = healthContext(actor);
+function healthResult(actor, operation, context = {}) {
+  const beforeContext = healthContext(actor, context);
   const before = beforeContext.derived?.health;
   const runtime = INFINITE_HORROR_HEALTH.normalizeRuntime(actor.system.runtime.health, beforeContext.options);
   if (operation.type === 'health.set-mode') {
     const switched = INFINITE_HORROR_HEALTH.switchMode(runtime, operation.mode, { max: beforeContext.max });
     actor.system.runtime.health = switched.runtime;
-    return { changed: true, value: deriveInfiniteHorrorActor(actor).health, before };
+    return { changed: true, value: deriveInfiniteHorrorActor(actor, context).health, before };
   }
   if (operation.type === 'health.runtime') {
     const result = INFINITE_HORROR_HEALTH.applyRuntimeOperation(runtime, operation.operation, { max: beforeContext.max });
@@ -564,7 +564,7 @@ function healthResult(actor, operation) {
       return { changed: false, blocked: result?.blocked || 'unsupported', before, value: result?.state || before };
     }
     actor.system.runtime.health = result.runtime;
-    return { changed: true, before, value: deriveInfiniteHorrorActor(actor).health };
+    return { changed: true, before, value: deriveInfiniteHorrorActor(actor, context).health };
   }
   const method = operation.type === 'health.damage' ? 'applyDamage' : 'applyHealing';
   const result = INFINITE_HORROR_HEALTH[method]({
@@ -577,7 +577,7 @@ function healthResult(actor, operation) {
   return {
     changed: Boolean(result.applied),
     before,
-    value: deriveInfiniteHorrorActor(actor).health,
+    value: deriveInfiniteHorrorActor(actor, context).health,
     applied: result.applied || 0,
     overflow: result.overflow || 0,
     blocked: result.blocked || null,
@@ -589,7 +589,7 @@ export function applyInfiniteHorrorActorOperation(actor, operation = {}, context
   const type = String(operation?.type || '');
   if (type === 'health.resolve') return { changed: false, value: deriveInfiniteHorrorActor(actor).health };
   if (['health.set-mode', 'health.runtime', 'health.damage', 'health.healing'].includes(type)) {
-    return healthResult(actor, operation);
+    return healthResult(actor, operation, context);
   }
   if (type === 'variant.add') {
     const form = formFromImport(operation.imported, {
@@ -693,8 +693,8 @@ function statusLevel(status) {
   return '';
 }
 
-export function describeInfiniteHorrorActor(actor) {
-  const derived = deriveInfiniteHorrorActor(actor);
+export function describeInfiniteHorrorActor(actor, context = {}) {
+  const derived = deriveInfiniteHorrorActor(actor, context);
   const form = derived?.form;
   return {
     name: text(actor?.name, '未命名角色'),
@@ -704,8 +704,8 @@ export function describeInfiniteHorrorActor(actor) {
   };
 }
 
-export function describeInfiniteHorrorActorSheet(actor) {
-  const derived = deriveInfiniteHorrorActor(actor);
+export function describeInfiniteHorrorActorSheet(actor, context = {}) {
+  const derived = deriveInfiniteHorrorActor(actor, context);
   const form = derived?.form;
   const resources = (derived?.resources || []).map(resource => ({
     id: resource.id,
