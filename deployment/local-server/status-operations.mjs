@@ -269,17 +269,6 @@ function applyOne(state, message, context) {
         .filter(effect => String(effect.definitionId) === definition.id).map(effect => Number(effect.stacks) || 1)));
       if (definition.maxStacks < maxInUse) fail('maxStacks is lower than an applied stack count', 'status_definition_in_use');
       entities.statusDefinitions[index] = definition;
-      // Legacy Entity resolution still reads a projected `changes` array from
-      // Actor effects. Keep that projection synchronized with the canonical
-      // World definition so an edited definition takes effect immediately on
-      // every LAN client.
-      for (const actor of entities.actors) {
-        for (const effect of actor.effects || []) {
-          if (String(effect.definitionId) !== definition.id) continue;
-          if (definition.changes.length) effect.changes = structuredClone(definition.changes);
-          else delete effect.changes;
-        }
-      }
     }
     return { action: 'definition.upsert', definitionId: definition.id };
   }
@@ -323,7 +312,6 @@ function applyOne(state, message, context) {
         source: sourceFor(message, context),
         createdAt: context.now,
       };
-      if (scope === 'actor' && definition.changes?.length) effect.changes = structuredClone(definition.changes);
       effects.push(effect);
     }
     return { action: 'apply', scope, targetId, definitionId };

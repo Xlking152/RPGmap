@@ -24,7 +24,7 @@ function definition(changes) {
   };
 }
 
-test('server definition edits refresh Actor projections and status metadata atomically', () => {
+test('server definition edits keep Effect instances runtime-only and update canonical rules atomically', () => {
   let state = applyStatusMessage(world(), {
     type: 'status.definition.upsert', definition: definition([
       { target: 'resources.hp.max', mode: 'add', value: 1 },
@@ -33,7 +33,10 @@ test('server definition edits refresh Actor projections and status metadata atom
   state = applyStatusMessage(state, {
     type: 'status.apply', scope: 'actor', targetId: 'actor-a', statusId: 'status-ward', stacks: 2,
   }, { now: '2026-08-27T00:00:00.000Z' }).state;
-  assert.deepEqual(state.preferences.entitySystem.actors[0].effects[0].changes, [
+  const effectBeforeDefinitionEdit = structuredClone(state.preferences.entitySystem.actors[0].effects[0]);
+  assert.equal(Object.hasOwn(effectBeforeDefinitionEdit, 'changes'), false);
+  assert.deepEqual(state.preferences.entitySystem.statusDefinitions
+    .find(item => item.id === 'status-ward').changes, [
     { target: 'resources.hp.max', mode: 'add', value: 1 },
   ]);
 
@@ -42,7 +45,10 @@ test('server definition edits refresh Actor projections and status metadata atom
       { target: 'resources.hp.max', mode: 'add', value: 3 },
     ]),
   }).state;
-  assert.deepEqual(state.preferences.entitySystem.actors[0].effects[0].changes, [
+  assert.deepEqual(state.preferences.entitySystem.actors[0].effects[0], effectBeforeDefinitionEdit);
+  assert.equal(Object.hasOwn(state.preferences.entitySystem.actors[0].effects[0], 'changes'), false);
+  assert.deepEqual(state.preferences.entitySystem.statusDefinitions
+    .find(item => item.id === 'status-ward').changes, [
     { target: 'resources.hp.max', mode: 'add', value: 3 },
   ]);
 
@@ -54,6 +60,7 @@ test('server definition edits refresh Actor projections and status metadata atom
   assert.deepEqual({ stacks: effect.stacks, enabled: effect.enabled, note: effect.note }, {
     stacks: 4, enabled: false, note: '由场景压制',
   });
+  assert.equal(Object.hasOwn(effect, 'changes'), false);
   assert.doesNotThrow(() => assertStatusState(state.preferences.entitySystem));
 });
 
