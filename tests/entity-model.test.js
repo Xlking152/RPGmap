@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createActorFromImport, createTokenForActor, addFormToActor, normalizeEntityState } from '../src/entities/model.js';
 import { migrateLegacyCharacters } from '../src/legacy/save-v2.js';
-import { addCustomResource, addEffect, cycleActorForm, resolveActor, setAttributeAdjustment } from '../src/entities/resolver.js';
+import { addCustomResource, cycleActorForm, resolveActor, setAttributeAdjustment } from '../src/entities/resolver.js';
 import { performActorOperation } from '../src/actor/index.js';
+import { resolveActorEffects } from '../src/status/model.js';
 
 function imported(name, formName, hp, strength, statusLight = 4) {
   return {
@@ -35,12 +36,28 @@ test('actor keeps Health runtime, generic resources and bad-status points while 
   assert.equal(resolved.badStatuses[0].light, 22);
 });
 
-test('runtime adjustments, custom resources and effects resolve without changing form Health base', () => {
+test('runtime adjustments, custom resources and resolved StatusDefinition effects do not change form Health base', () => {
   const actor = createActorFromImport(imported('银', '变身前', 41, 2));
   setAttributeAdjustment(actor, 'strength', 3);
   addCustomResource(actor, { id: 'spiral', name: '螺旋力', current: 2, max: 3 });
-  addEffect(actor, { name: '生命强化', changes: [{ target: 'health.max', mode: 'add', value: 10 }] });
-  const resolved = resolveActor(actor);
+  actor.effects = [{
+    id: 'effect-health-boost',
+    definitionId: 'status-health-boost',
+    stacks: 1,
+    enabled: true,
+  }];
+  const definitions = [{
+    id: 'status-health-boost',
+    name: '生命强化',
+    scopes: ['actor'],
+    maxStacks: 1,
+    changes: [{ target: 'health.max', mode: 'add', value: 10 }],
+    capabilities: {},
+  }];
+  const effects = resolveActorEffects(actor, definitions);
+  const resolved = resolveActor(actor, { effects });
+  assert.equal('changes' in actor.effects[0], false);
+  assert.equal(effects[0].changes[0].value, 10);
   assert.equal(resolved.attributes[0].base, 2);
   assert.equal(resolved.attributes[0].value, 5);
   assert.equal(resolved.form.healthBase.baseMax, 41);
