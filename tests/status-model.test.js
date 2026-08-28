@@ -4,6 +4,7 @@ import {
   getStatusDefinitions,
   normalizeEntityStatusState,
   reduceStatusOperation,
+  resolveActorEffects,
   resolveStatuses,
 } from '../src/status/model.js';
 import { resolveActor } from '../src/entities/resolver.js';
@@ -54,7 +55,7 @@ test('built-in definitions use the server IDs and spirit bypasses only structure
   assert.equal(Object.isFrozen(spirit.capabilities), true);
 });
 
-test('legacy Actor effects migrate deterministically to custom definitions and normalized instances', () => {
+test('legacy Actor effects migrate deterministically to custom definitions and runtime-only instances', () => {
   const legacy = emptyState();
   legacy.schemaVersion = 2;
   legacy.actors[0].effects = [{
@@ -72,8 +73,9 @@ test('legacy Actor effects migrate deterministically to custom definitions and n
   assert.equal(first.actors[0].effects[0].id, 'old-bonus');
   const migratedDefinition = first.statusDefinitions.find(definition => definition.id.startsWith('status-legacy-'));
   assert.equal(first.actors[0].effects[0].definitionId, migratedDefinition.id);
-  assert.deepEqual(first.actors[0].effects[0].changes, migratedDefinition.changes);
+  assert.equal('changes' in first.actors[0].effects[0], false);
   assert.equal('name' in first.actors[0].effects[0], false);
+  assert.deepEqual(resolveActorEffects(first.actors[0], first.statusDefinitions)[0].changes, migratedDefinition.changes);
 
   const repeated = normalizeEntityStatusState(first);
   assert.deepEqual(repeated.statusDefinitions, first.statusDefinitions);
@@ -183,7 +185,7 @@ test('disabled effects remain editable but do not affect resolved capabilities',
   assert.equal(resolved.capabilities.canMove, true);
 });
 
-test('offline reducer applies server-shaped operations atomically', () => {
+test('offline reducer applies server-shaped operations atomically without copying definition changes', () => {
   const initial = emptyState();
   const definition = {
     id: 'status-warded', name: '守护', scopes: ['actor'], maxStacks: 3,
@@ -197,10 +199,13 @@ test('offline reducer applies server-shaped operations atomically', () => {
       { type: 'status.setStacks', scope: 'actor', targetId: 'actor-1', definitionId: 'status-warded', stacks: 3 },
     ],
   }, { now: '2026-08-26T00:00:00.000Z', idFactory: () => 'effect-fixed' });
-  assert.equal(applied.state.actors[0].effects[0].id, 'effect-fixed');
-  assert.equal(applied.state.actors[0].effects[0].stacks, 3);
-  assert.deepEqual(applied.state.actors[0].effects[0].changes, definition.changes);
-  assert.equal(resolveActor(applied.state.actors[0]).health.max, 11);
+  const instance = applied.state.actors[0].effects[0];
+  assert.equal(instance.id, 'effect-fixed');
+  assert.equal(instance.stacks, 3);
+  assert.equal('changes' in instance, false);
+  const resolvedEffects = resolveActorEffects(applied.state.actors[0], applied.state.statusDefinitions);
+  assert.deepEqual(resolvedEffects[0].changes, definition.changes);
+  assert.equal(resolveActor(applied.state.actors[0], { effects: resolvedEffects }).health.max, 11);
   assert.equal(initial.statusDefinitions.length, BUILTIN_STATUS_DEFINITIONS.length);
   assert.equal(initial.actors[0].effects.length, 0);
 
@@ -213,6 +218,34 @@ test('offline reducer applies server-shaped operations atomically', () => {
   }));
   assert.equal(applied.state.actors[0].effects.length, 1);
   assert.equal(getStatusDefinitions(applied.state).some(item => item.id === 'status-warded'), true);
+});
+
+test('definition edits change resolved numeric effects without rewriting Effect instances', () => {
+  const initial = emptyState();
+  const defined = reduceStatusOperation(initial, {
+    type: 'status.definition.upsert',
+    definition: {
+      id: 'status-warded', name: '守护', scopes: ['actor'], maxStacks: 1,
+      changes: [{ target: 'health.max', mode: 'add', value: 2 }], capabilities: {},
+    },
+  });
+  const applied = reduceStatusOperation(defined.state, {
+    type: 'status.apply', scope: 'actor', targetId: 'actor-1', definitionId: 'status-warded', stacks: 1,
+  }, { now: '2026-08-26T00:00:00.000Z', idFactory: () => 'effect-fixed' });
+  const beforeInstance = structuredClone(applied.state.actors[0].effects[0]);
+
+  const updated = reduceStatusOperation(applied.state, {
+    type: 'status.definition.upsert',
+    definition: {
+      id: 'status-warded', name: '守护', scopes: ['actor'], maxStacks: 1,
+      changes: [{ target: 'health.max', mode: 'add', value: 5 }], capabilities: {},
+    },
+  });
+
+  assert.deepEqual(updated.state.actors[0].effects[0], beforeInstance);
+  const resolvedEffects = resolveActorEffects(updated.state.actors[0], updated.state.statusDefinitions);
+  assert.equal(resolvedEffects[0].changes[0].value, 5);
+  assert.equal(resolveActor(updated.state.actors[0], { effects: resolvedEffects }).health.max, 10);
 });
 
 test('status normalization preserves custom definition and Effect extension metadata', () => {
