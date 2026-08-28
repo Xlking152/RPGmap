@@ -25,7 +25,6 @@ function requireActor(actor) {
 export async function upsertCanonicalActor(api, actor, {
   source = 'entities:actor.upsert',
   render = false,
-  immediate = true,
 } = {}) {
   const actorId = requireActor(actor);
   if (typeof api?.world?.performOperations !== 'function') {
@@ -43,7 +42,6 @@ export async function upsertCanonicalActor(api, actor, {
     kind: 'actor',
   });
 
-  if (immediate) api.persistNow?.();
   api.emit?.('actor:change', {
     actorId,
     source,

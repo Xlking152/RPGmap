@@ -5,7 +5,6 @@ import { upsertCanonicalActor } from '../src/entities/actor-operations.js';
 test('canonical Actor upsert writes only through World operations', async () => {
   const calls = [];
   const emitted = [];
-  let persists = 0;
   const api = {
     world: {
       async performOperations(operations, options) {
@@ -13,7 +12,7 @@ test('canonical Actor upsert writes only through World operations', async () => 
         return { offline: true };
       },
     },
-    persistNow() { persists += 1; },
+    persistNow() { throw new Error('Actor port must not persist outside World operations'); },
     emit(type, detail) { emitted.push({ type, detail }); },
   };
   const actor = { id: 'actor-1', name: 'A', system: { value: 3 }, effects: [] };
@@ -23,7 +22,6 @@ test('canonical Actor upsert writes only through World operations', async () => 
     operations: [{ type: 'actor.upsert', payload: { actor } }],
     options: { source: 'test:actor', render: false, kind: 'actor' },
   }]);
-  assert.equal(persists, 1);
   assert.deepEqual(emitted, [{
     type: 'actor:change',
     detail: { actorId: 'actor-1', source: 'test:actor', canonical: true },

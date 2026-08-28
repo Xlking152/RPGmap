@@ -7,6 +7,7 @@ import { describeActor, describeActorSheet as describeActorSheetDocument, perfor
 import { importActorXlsx } from './xlsx-importer.js';
 import { imageToAvatarDataUrl } from './avatar.js';
 import { EntityStore } from './store.js';
+import { upsertCanonicalActor } from './actor-operations.js';
 import { createEntityTokenController } from './token-controller.js';
 import {
   canManageStatuses,
@@ -216,7 +217,12 @@ export function createEntityUiTool(options = {}) {
         (mapElement.parentElement || mapElement).append(node);
         setTimeout(() => node.remove(), 1300);
       }
-      function persistAndRender(options = {}) { store.persist(options); renderPanel(); renderSheet(); }
+      async function persistActorAndRender(actor, { source = 'entities:actor.edit', render = false } = {}) {
+        await upsertCanonicalActor(api, actor, { source, render });
+        store.load({ migrateLegacy: false, dropMarkers: false });
+        renderPanel();
+        renderSheet();
+      }
       function capabilities() {
         return api.multiplayer?.getCapabilities?.() || {
           canManageStructure: true,
@@ -375,14 +381,13 @@ export function createEntityUiTool(options = {}) {
             const beforeSheet = describeActorSheet(actor, { ruleset: api.ruleset }) || { variants: [] };
             if (beforeSheet.variants.some(variant => variant.label === formName)) formName += ` ${beforeSheet.variants.length + 1}`;
             const form = addFormToActor(actor, imported, { name: formName, ruleset: api.ruleset });
-            store.persist();
+            await persistActorAndRender(actor, { source: 'entities:actor.form.import' });
             openSheet(actor.id);
             indicator(`${actor.name} · ${form?.name || formName}`);
             setStatus(`已导入 ${actor.name} 的新形态“${form?.name || formName}”`);
           } else {
             actor = createActorFromImport(imported, { ruleset: api.ruleset });
-            entityState().actors.push(actor);
-            store.persist();
+            await persistActorAndRender(actor, { source: 'entities:actor.create' });
             openSheet(actor.id);
             setStatus(`已创建角色“${actor.name}” · 可点击“放置棋子”放到地图`);
           }
@@ -422,7 +427,7 @@ export function createEntityUiTool(options = {}) {
         setStatus('旧标记已迁移；关联范围已转换为自由锚点');
       }
 
-      function handlePanelClick(event) {
+      async function handlePanelClick(event) {
         const button = event.target.closest('[data-entity-action]');
         if (!button) return;
         const action = button.dataset.entityAction;
@@ -431,9 +436,7 @@ export function createEntityUiTool(options = {}) {
         else if (action === 'new') {
           if (!requireStructure()) return;
           const actor = createActorFromImport({}, { ruleset: api.ruleset });
-          entityState().actors.push(actor);
-          store.persist();
-          renderPanel();
+          await persistActorAndRender(actor, { source: 'entities:actor.create' });
           openSheet(actor.id);
         } else if (action === 'open') openSheet(id);
         else if (action === 'place') tokenController.beginPlacement(id);
@@ -479,7 +482,7 @@ export function createEntityUiTool(options = {}) {
             Object.assign(operation, answers);
           }
           const result = performActorOperation(actor, operation, { ruleset: api.ruleset });
-          if (result.changed) persistAndRender({ source: 'entities:actor-operation', immediate: true });
+          if (result.changed) await persistActorAndRender(actor, { source: 'entities:actor.operation' });
           return;
         }
         const tab = event.target.closest('[data-sheet-tab]');
@@ -493,9 +496,7 @@ export function createEntityUiTool(options = {}) {
             if (!requireActorEdit(actor.id)) return;
             const form = cycleActorForm(actor, 1, { ruleset: api.ruleset });
             if (form) {
-              store.persist();
-              renderPanel();
-              renderSheet();
+              await persistActorAndRender(actor, { source: 'entities:actor.form.cycle' });
               indicator(`${actor.name} · ${form.name}`);
             }
           } else if (action === 'add-form') chooseImport(actor.id);
@@ -518,13 +519,11 @@ export function createEntityUiTool(options = {}) {
         if (!requireActorEdit(actor.id)) { renderSheet(); return; }
         if (event.target.matches('[data-actor-name]')) {
           actor.name = String(event.target.value || '未命名角色').trim().slice(0, 80) || '未命名角色';
-          persistAndRender();
+          await persistActorAndRender(actor, { source: 'entities:actor.rename' });
         } else if (event.target.matches('[data-form-select]')) {
           const form = setActorForm(actor, event.target.value, { ruleset: api.ruleset });
           if (form) {
-            store.persist();
-            renderPanel();
-            renderSheet();
+            await persistActorAndRender(actor, { source: 'entities:actor.form.select' });
             indicator(`${actor.name} · ${form.name}`);
           }
         } else if (event.target.matches('[data-actor-operation]')) {
@@ -532,7 +531,7 @@ export function createEntityUiTool(options = {}) {
           if (!operation) return;
           operation.value = event.target.value;
           const result = performActorOperation(actor, operation, { ruleset: api.ruleset });
-          if (result.changed) persistAndRender({ source: 'entities:actor-operation', immediate: true });
+          if (result.changed) await persistActorAndRender(actor, { source: 'entities:actor.operation' });
         }
       });
 
@@ -546,9 +545,7 @@ export function createEntityUiTool(options = {}) {
             avatarDataUrl: await imageToAvatarDataUrl(file),
           }, { ruleset: api.ruleset });
           if (result.changed) {
-            store.persist();
-            renderPanel();
-            renderSheet();
+            await persistActorAndRender(actor, { source: 'entities:actor.avatar' });
           }
         } catch (error) {
           alert('头像处理失败：' + error.message);
@@ -557,7 +554,7 @@ export function createEntityUiTool(options = {}) {
         }
       });
 
-      documentNode.addEventListener('keydown', event => {
+      documentNode.addEventListener('keydown', async event => {
         if (tokenController.handleKeydown(event)) return;
         if (event.defaultPrevented || editableTarget(event.target) || event.key.toLowerCase() !== 'v' || event.ctrlKey || event.metaKey || event.altKey) return;
         if (!selectedTokenId) return;
@@ -567,9 +564,7 @@ export function createEntityUiTool(options = {}) {
         event.preventDefault();
         event.stopImmediatePropagation();
         const form = cycleActorForm(actor, 1, { ruleset: api.ruleset });
-        store.persist();
-        renderPanel();
-        renderSheet();
+        await persistActorAndRender(actor, { source: 'entities:actor.form.shortcut' });
         indicator(`${actor.name} · ${form.name}`);
         setStatus(`形态切换：${actor.name} → ${form.name}`);
       }, true);
