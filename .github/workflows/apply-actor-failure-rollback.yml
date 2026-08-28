@@ -1,0 +1,133 @@
+name: Apply Actor Failure Rollback
+
+on:
+  push:
+    branches:
+      - refactor/actor-world-operation-authority
+    paths:
+      - .github/workflows/apply-actor-failure-rollback.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refactor/actor-world-operation-authority
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.12.0
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Patch Actor failure rollback
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          function replace(path, from, to, label = path) {
+            let source = fs.readFileSync(path, 'utf8');
+            if (!source.includes(from)) throw new Error(`Pattern not found (${label})`);
+            source = source.replace(from, to);
+            fs.writeFileSync(path, source);
+          }
+
+          const ui = 'src/entities/ui.js';
+          replace(ui,
+`      async function persistActorAndRender(actor, { source = 'entities:actor.edit', render = false } = {}) {
+        await upsertCanonicalActor(api, actor, { source, render });
+        store.load({ migrateLegacy: false, dropMarkers: false });
+        renderPanel();
+        renderSheet();
+      }`,
+`      async function persistActorAndRender(actor, { source = 'entities:actor.edit', render = false } = {}) {
+        try {
+          await upsertCanonicalActor(api, actor, { source, render });
+          return true;
+        } catch (error) {
+          console.error('[RPGmap Entity UI] canonical Actor update failed', error);
+          setStatus(\`角色更新失败：\${error?.message || error}\`);
+          return false;
+        } finally {
+          // Actor edits mutate an editor draft before submission. Always reload
+          // the canonical World projection so a rejected LAN/revision write
+          // cannot remain visible as an uncommitted local Actor value.
+          store.load({ migrateLegacy: false, dropMarkers: false });
+          renderPanel();
+          renderSheet();
+        }
+      }`, 'persistActorAndRender rollback');
+
+          replace(ui,
+`            await persistActorAndRender(actor, { source: 'entities:actor.form.import' });
+            openSheet(actor.id);
+            indicator(\`\${actor.name} · \${form?.name || formName}\`);
+            setStatus(\`已导入 \${actor.name} 的新形态“\${form?.name || formName}”\`);`,
+`            if (!await persistActorAndRender(actor, { source: 'entities:actor.form.import' })) return;
+            openSheet(actor.id);
+            indicator(\`\${actor.name} · \${form?.name || formName}\`);
+            setStatus(\`已导入 \${actor.name} 的新形态“\${form?.name || formName}”\`);`, 'form import success gate');
+
+          replace(ui,
+`            await persistActorAndRender(actor, { source: 'entities:actor.create' });
+            openSheet(actor.id);
+            setStatus(\`已创建角色“\${actor.name}” · 可点击“放置棋子”放到地图\`);`,
+`            if (!await persistActorAndRender(actor, { source: 'entities:actor.create' })) return;
+            openSheet(actor.id);
+            setStatus(\`已创建角色“\${actor.name}” · 可点击“放置棋子”放到地图\`);`, 'imported Actor create success gate');
+
+          replace(ui,
+`          await persistActorAndRender(actor, { source: 'entities:actor.create' });
+          openSheet(actor.id);`,
+`          if (!await persistActorAndRender(actor, { source: 'entities:actor.create' })) return;
+          openSheet(actor.id);`, 'blank Actor create success gate');
+
+          replace(ui,
+`              await persistActorAndRender(actor, { source: 'entities:actor.form.cycle' });
+              indicator(\`\${actor.name} · \${form.name}\`);`,
+`              if (await persistActorAndRender(actor, { source: 'entities:actor.form.cycle' })) {
+                indicator(\`\${actor.name} · \${form.name}\`);
+              }`, 'button form cycle success gate');
+
+          replace(ui,
+`            await persistActorAndRender(actor, { source: 'entities:actor.form.select' });
+            indicator(\`\${actor.name} · \${form.name}\`);`,
+`            if (await persistActorAndRender(actor, { source: 'entities:actor.form.select' })) {
+              indicator(\`\${actor.name} · \${form.name}\`);
+            }`, 'form select success gate');
+
+          replace(ui,
+`        await persistActorAndRender(actor, { source: 'entities:actor.form.shortcut' });
+        indicator(\`\${actor.name} · \${form.name}\`);
+        setStatus(\`形态切换：\${actor.name} → \${form.name}\`);`,
+`        if (await persistActorAndRender(actor, { source: 'entities:actor.form.shortcut' })) {
+          indicator(\`\${actor.name} · \${form.name}\`);
+          setStatus(\`形态切换：\${actor.name} → \${form.name}\`);
+        }`, 'shortcut form cycle success gate');
+
+          const testPath = 'tests/entity-actor-operation-authority.test.js';
+          let testSource = fs.readFileSync(testPath, 'utf8');
+          testSource += `\n\ntest('Actor editor reloads canonical projection after failed World writes', () => {\n  const source = readFileSync(path.join(ROOT, 'src/entities/ui.js'), 'utf8');\n  assert.match(source, /catch \\(error\\)[\\s\\S]*canonical Actor update failed/);\n  assert.match(source, /finally \\{[\\s\\S]*store\\.load\\(\\{ migrateLegacy: false, dropMarkers: false \\}\\)/);\n  assert.match(source, /if \\(!await persistActorAndRender\\(actor, \\{ source: 'entities:actor\\.create' \\}\\)\\) return/);\n  assert.match(source, /if \\(await persistActorAndRender\\(actor, \\{ source: 'entities:actor\\.form\\.shortcut' \\}\\)\\)/);\n});\n`;
+          fs.writeFileSync(testPath, testSource);
+
+          const portTest = 'tests/actor-world-operation-port.test.js';
+          let portSource = fs.readFileSync(portTest, 'utf8');
+          portSource += `\n\ntest('canonical Actor upsert does not emit success when World rejects the write', async () => {\n  const emitted = [];\n  const api = {\n    world: { async performOperations() { throw Object.assign(new Error('conflict'), { code: 'world_state_stale' }); } },\n    emit(type, detail) { emitted.push({ type, detail }); },\n  };\n  await assert.rejects(upsertCanonicalActor(api, { id: 'actor-1', system: {}, effects: [] }), error => error?.code === 'world_state_stale');\n  assert.deepEqual(emitted, []);\n});\n`;
+          fs.writeFileSync(portTest, portSource);
+          NODE
+      - run: npm test
+      - name: Check JavaScript syntax
+        run: find src deployment scripts tests -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check
+      - run: npm run build
+      - run: npm run package:local-server
+      - name: Commit tested patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/entities/ui.js tests/entity-actor-operation-authority.test.js tests/actor-world-operation-port.test.js
+          git commit -m "Rollback rejected Actor editor writes"
+          git push origin HEAD:refactor/actor-world-operation-authority
