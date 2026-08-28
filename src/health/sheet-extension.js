@@ -1,5 +1,6 @@
 import { deriveActorDocument, describeActorSheet } from '../actor/index.js';
 import { normalizeEntityState } from '../entities/model.js';
+import { resolveActorEffects } from '../status/model.js';
 import { describeHealth, healthModeOptions } from './model.js';
 
 const STYLE_ID = 'rpgmap-health-system-style';
@@ -8,15 +9,27 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 }
 
+function currentEntityState(api) {
+  return normalizeEntityState(api.getState().preferences?.entitySystem, { ruleset: api.ruleset });
+}
+
 function actorFromSheet(api, documentNode) {
   const actorId = documentNode.querySelector('.entity-sheet')?.dataset.actorId;
   if (!actorId) return null;
-  const state = normalizeEntityState(api.getState().preferences?.entitySystem, { ruleset: api.ruleset });
+  const state = currentEntityState(api);
   return state.actors.find(actor => String(actor.id) === String(actorId)) || null;
 }
 
-function resolveActorHealth(actor, ruleset) {
-  return deriveActorDocument(actor, { ruleset })?.health || null;
+function actorContext(api, actor) {
+  const state = currentEntityState(api);
+  return {
+    ruleset: api.ruleset,
+    effects: resolveActorEffects(actor, state.statusDefinitions),
+  };
+}
+
+function resolveActorHealth(actor, api) {
+  return deriveActorDocument(actor, actorContext(api, actor))?.health || null;
 }
 
 function selectedTokenId(api) {
@@ -77,7 +90,7 @@ function healthInput(field, actorId, disabled) {
 }
 
 export function renderActorHealthPanel(api, actor) {
-  const health = resolveActorHealth(actor, api.ruleset);
+  const health = resolveActorHealth(actor, api);
   if (!health) return '';
   const view = describeHealth(health, { ruleset: api.ruleset });
   const editable = canEditHealth(api, actor.id);
@@ -120,13 +133,13 @@ export function createHealthSheetExtension() {
         const actor = actorFromSheet(api, documentNode);
         const body = sheet.querySelector('.entity-sheet-body');
         if (!actor || !body) return;
-        const health = resolveActorHealth(actor, api.ruleset);
+        const health = resolveActorHealth(actor, api);
         if (!health) {
           body.querySelector('[data-health-panel]')?.remove();
           return;
         }
         const view = describeHealth(health, { ruleset: api.ruleset });
-        const variantId = describeActorSheet(actor, { ruleset: api.ruleset })?.currentVariantId || '';
+        const variantId = describeActorSheet(actor, actorContext(api, actor))?.currentVariantId || '';
         const signature = healthSignature(actor.id, health, view, variantId);
         const existing = body.querySelector('[data-health-panel]');
         if (existing?.dataset.healthSignature === signature) return;
@@ -177,7 +190,7 @@ export function createHealthSheetExtension() {
         const input = event.target.closest?.('[data-health-field-id]');
         if (!input) return;
         const actor = actorFromSheet(api, documentNode);
-        const health = actor ? resolveActorHealth(actor, api.ruleset) : null;
+        const health = actor ? resolveActorHealth(actor, api) : null;
         const field = health ? describeHealth(health, { ruleset: api.ruleset }).fields?.find(item => String(item.id) === String(input.dataset.healthFieldId)) : null;
         if (!field || typeof field.operation !== 'function') return;
         const numeric = Math.floor(Number(input.value));
