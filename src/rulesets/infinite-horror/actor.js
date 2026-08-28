@@ -339,7 +339,7 @@ function applyMode(current, mode, rawValue) {
   return current + value;
 }
 
-function canonicalPath(path) {
+export function canonicalizeInfiniteHorrorAttributePath(path) {
   let value = String(path || '');
   if (!value.startsWith('system.')
     && (value.startsWith('resources.') || value.startsWith('attributes.') || value.startsWith('health.'))) {
@@ -360,7 +360,7 @@ function effectsFor(actor, target, context = {}) {
         ? finite(change?.value) * Math.max(1, Math.floor(finite(effect?.stacks, 1)))
         : change?.value,
     })))
-    .filter(change => canonicalPath(change?.target) === canonicalPath(target));
+    .filter(change => canonicalizeInfiniteHorrorAttributePath(change?.target) === canonicalizeInfiniteHorrorAttributePath(target));
 }
 
 function resolveAttributeValue(actor, form, attributeId, context = {}) {
@@ -507,7 +507,7 @@ export function infiniteHorrorAttributePaths(actor) {
 }
 
 export function resolveInfiniteHorrorAttribute(actor, path, context = {}) {
-  const value = canonicalPath(path);
+  const value = canonicalizeInfiniteHorrorAttributePath(path);
   const derived = deriveInfiniteHorrorActor(actor, context);
   if (value === 'system.health.current') return derived?.health?.current ?? null;
   if (value === 'system.health.max') return derived?.health?.max ?? null;

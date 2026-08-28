@@ -1,5 +1,5 @@
 import { prepareRuleset } from '../../ruleset/contract.js';
-import { INFINITE_HORROR_ACTOR } from './actor.js';
+import { canonicalizeInfiniteHorrorAttributePath, INFINITE_HORROR_ACTOR } from './actor.js';
 import { INFINITE_HORROR_HEALTH } from './health.js';
 import { deriveInfiniteHorrorStatuses, INFINITE_HORROR_STATUS_DEFINITIONS } from './statuses.js';
 import {
@@ -18,6 +18,7 @@ export const infiniteHorrorRuleset = prepareRuleset({
   statuses: {
     definitions: INFINITE_HORROR_STATUS_DEFINITIONS,
     derive: deriveInfiniteHorrorStatuses,
+    canonicalizeChangeTarget: (_actor, path) => canonicalizeInfiniteHorrorAttributePath(path),
   },
   importers: {
     xlsx: {

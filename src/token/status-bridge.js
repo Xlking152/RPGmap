@@ -1,4 +1,5 @@
 import { resolveStatuses } from '../status/model.js';
+import { validateStatusDefinitionForActors } from '../status/target-validation.js';
 import { applySyntheticActorStatusBatch, applySyntheticActorStatusOperation } from './synthetic-status.js';
 
 function clone(value) {
@@ -82,7 +83,19 @@ export function createTokenStatusBridgeSystem() {
           String(status.definitionId) === String(definitionId)) || null;
       }
 
+      function validateSyntheticApply(operation) {
+        if (operation?.type !== 'status.apply') return;
+        let resolved = null;
+        try { resolved = api.tokens?.resolveActor?.(operation.targetId); } catch { resolved = null; }
+        const definition = api.status.getDefinitions?.().find(item =>
+          String(item?.id) === String(operation.definitionId ?? operation.statusId));
+        if (resolved?.synthetic && resolved.actor && definition) {
+          validateStatusDefinitionForActors(definition, [resolved.actor], api.ruleset);
+        }
+      }
+
       async function commitSyntheticOperations(operations) {
+        for (const operation of operations) validateSyntheticApply(operation);
         if (typeof api.world?.get !== 'function' || typeof api.world?.commit !== 'function') {
           throw new Error('Synthetic Actor status writes require World V2');
         }

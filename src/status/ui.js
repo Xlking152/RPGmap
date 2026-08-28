@@ -506,6 +506,7 @@ export function createStatusUiController({ api, documentNode, getContext, render
     event.preventDefault();
     if (!requireManager()) return true;
     try {
+      const context = getContext?.() || {};
       const values = new FormData(form);
       const id = String(values.get('id') || '').trim();
       const name = String(values.get('name') || '').trim();
@@ -526,7 +527,7 @@ export function createStatusUiController({ api, documentNode, getContext, render
       const definition = { id, name, label: name, description: String(values.get('description') || '').trim(), icon: String(values.get('icon') || '').trim(), color: safeColor(values.get('color')), category: String(values.get('category') || 'status'), scopes, maxStacks, changes, capabilities };
       const submit = form.querySelector('[type="submit"]');
       if (submit) { submit.disabled = true; submit.textContent = '正在等待服务器确认…'; }
-      void perform(`definition:${id}`, async () => { const result = await statusApiCall(api, 'upsertDefinition', definition); closeDefinitionEditor(); return result; }, '状态定义已获服务器确认').then(() => {
+      void perform(`definition:${id}`, async () => { const result = await statusApiCall(api, 'upsertDefinition', definition, { actorId: context.actor?.id }); closeDefinitionEditor(); return result; }, '状态定义已获服务器确认').then(() => {
         if (form.isConnected && submit) { submit.disabled = false; submit.textContent = '保存并等待服务器确认'; }
       });
     } catch (error) { reportError(error); }
