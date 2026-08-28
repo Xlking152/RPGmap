@@ -182,11 +182,18 @@ export function createHealthSheetExtension() {
         firstCard.querySelector('.ui-inspector-head')?.insertAdjacentElement('afterend', node);
       }
 
-      documentNode.addEventListener('change', event => {
+      documentNode.addEventListener('change', async event => {
         const select = event.target.closest?.('[data-health-mode]');
         if (select) {
-          api.health?.setMode?.(select.dataset.healthMode, select.value);
-          queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
+          try {
+            await api.health?.setMode?.(select.dataset.healthMode, select.value);
+          } catch (error) {
+            console.error('[RPGmap Health UI] mode update failed', error);
+          } finally {
+            // Re-render from the canonical projection after confirmation or
+            // rejection so the select never keeps an uncommitted draft value.
+            queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
+          }
           return;
         }
         const input = event.target.closest?.('[data-health-field-id]');
@@ -198,8 +205,15 @@ export function createHealthSheetExtension() {
         const numeric = Math.floor(Number(input.value));
         const floor = Number.isFinite(Number(field.min)) ? Number(field.min) : 0;
         const value = Math.max(floor, Number.isFinite(numeric) ? numeric : floor);
-        api.health?.performActorOperation?.(input.dataset.healthActorId, field.operation(value));
-        queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
+        try {
+          await api.health?.performActorOperation?.(input.dataset.healthActorId, field.operation(value));
+        } catch (error) {
+          console.error('[RPGmap Health UI] runtime update failed', error);
+        } finally {
+          // A failed World operation leaves canonical state unchanged; redraw
+          // from that state to roll the edited input back immediately.
+          queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
+        }
       });
 
       const observer = new MutationObserver(() => queueMicrotask(() => { enhanceSheet(); enhanceInspector(); }));

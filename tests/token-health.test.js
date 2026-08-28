@@ -131,3 +131,25 @@ test('mixed linked and Synthetic health changes commit as one atomic World batch
   assert.equal(api.health.resolveActor('actor-template').current, 8);
   assert.equal(api.health.resolveToken('npc-a').current, 8);
 });
+
+
+test('rejected Health World batch leaves canonical Actor and Token state untouched', async () => {
+  const { api } = fixture();
+  await api.tokens.create({ actorId: 'actor-template', id: 'pc-a', actorLink: true });
+  await api.tokens.create({ actorId: 'actor-template', id: 'npc-a', actorLink: false });
+
+  const emitted = [];
+  api.emit = (type, detail) => emitted.push({ type, detail });
+  api.world.performOperations = async () => {
+    throw Object.assign(new Error('conflict'), { code: 'world_state_stale' });
+  };
+
+  await assert.rejects(
+    api.health.applyDamageToTokenIds(['pc-a', 'npc-a'], { amount: 3 }),
+    error => error?.code === 'world_state_stale',
+  );
+  assert.equal(api.health.resolveActor('actor-template').current, 10);
+  assert.equal(api.health.resolveToken('pc-a').current, 10);
+  assert.equal(api.health.resolveToken('npc-a').current, 10);
+  assert.equal(emitted.some(event => event.type === 'health:change'), false);
+});
