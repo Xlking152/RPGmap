@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { deriveActorDocument } from '../src/actor/index.js';
 import { ChatStore } from '../src/chat/store.js';
 import { CombatStore } from '../src/combat/store.js';
 import { createCombat } from '../src/combat/model.js';
 import { createHealthController } from '../src/health/controller.js';
 import { createActorFromImport, createTokenForActor } from '../src/entities/model.js';
-import { resolveActorHealth } from '../src/health/actor.js';
+
+function resolveHealth(actor) {
+  return deriveActorDocument(actor)?.health || null;
+}
 
 function createApi(state = { preferences: {}, characters: [] }) {
   const committed = [];
@@ -56,7 +60,7 @@ test('health mutations commit and synchronously persist the updated Actor state'
   api.health.applyDamageToTokenIds(['token-a'], { amount: 4, type: 'L' });
   const healed = api.health.applyHealingToTokenIds(['token-a'], { amount: 2, type: 'L' });
   const savedActor = api.current.preferences.entitySystem.actors[0];
-  assert.equal(resolveActorHealth(savedActor).current, 8);
+  assert.equal(resolveHealth(savedActor).current, 8);
   assert.equal(healed[0].after.current, 8);
   assert.equal(api.persistNowCalls, 2);
   assert.ok(api.committed.every(entry => entry.options.source === 'health'));
@@ -81,7 +85,7 @@ test('health B/L/A editor commits the same World path as recovery', () => {
     wounds: { bashing: 2, lethal: 3, aggravated: 1 },
   });
   assert.equal(result.after.current, 4);
-  assert.equal(resolveActorHealth(api.current.preferences.entitySystem.actors[0]).current, 4);
+  assert.equal(resolveHealth(api.current.preferences.entitySystem.actors[0]).current, 4);
   assert.equal(api.committed.at(-1).options.source, 'health');
   assert.equal(api.persistNowCalls, 1);
 });
