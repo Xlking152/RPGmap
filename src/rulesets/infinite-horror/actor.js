@@ -334,8 +334,8 @@ function canonicalPath(path) {
     && (value.startsWith('resources.') || value.startsWith('attributes.') || value.startsWith('health.'))) {
     value = `system.${value}`;
   }
-  // Read legacy status/effect paths without exposing them as new Ruleset paths.
-  if (value === 'system.resources.hp.current') return 'system.health.current';
+  // Legacy Buffs may still target the retired HP Resource maximum. Keep this
+  // single read-only resolution alias until persisted definitions are migrated.
   if (value === 'system.resources.hp.max') return 'system.health.max';
   return value;
 }
