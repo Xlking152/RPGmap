@@ -1,5 +1,5 @@
 import { createEmptyEntityState, normalizeEntityState } from './model.js';
-import { STATUS_SCHEMA_VERSION } from '../status/model.js';
+import { STATUS_SCHEMA_VERSION, resolveActorEffects } from '../status/model.js';
 
 const PREFERENCE_KEY = 'entitySystem';
 
@@ -104,6 +104,19 @@ export class EntityStore {
   }
 
   actor(id) { return this.state.actors.find(actor => String(actor.id) === String(id)) || null; }
+
+  actorEffects(actorOrId) {
+    const actor = actorOrId && typeof actorOrId === 'object' ? actorOrId : this.actor(actorOrId);
+    return actor ? resolveActorEffects(actor, this.state.statusDefinitions) : [];
+  }
+
+  actorContext(actorOrId, extra = {}) {
+    return {
+      ruleset: this.api.ruleset,
+      effects: this.actorEffects(actorOrId),
+      ...extra,
+    };
+  }
 
   token(id) {
     if (this.canonicalTokenReadView) {
