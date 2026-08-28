@@ -64,7 +64,7 @@ function legacyActor() {
   };
 }
 
-test('Infinite Horror migrates the legacy Actor payload into a stable generic shell without data loss', () => {
+test('Infinite Horror migrates legacy HP runtime into the generic Actor shell without dual authority', () => {
   const state = normalizeEntityState({
     schemaVersion: 3,
     statusDefinitions: [{ id: 'custom-status', name: '自定义状态', scopes: ['actor'], changes: [], builtIn: false }],
@@ -80,6 +80,7 @@ test('Infinite Horror migrates the legacy Actor payload into a stable generic sh
   assert.equal(actor.system.currentFormId, 'form-legacy');
   assert.equal(actor.system.runtime.customResources[0].id, 'focus');
   assert.equal(actor.system.runtime.badStatuses['bad-status-32'], 3);
+  assert.equal(actor.system.runtime.resources.hp, undefined);
   assert.equal(actor.effects[0].id, 'effect-old');
   assert.equal(state.statusDefinitions[0].id, 'custom-status');
   assert.equal(state.tokens[0].actorId, actor.id);
@@ -94,7 +95,7 @@ test('Infinite Horror migrates the legacy Actor payload into a stable generic sh
   assert.deepEqual(validateActorDocument(actor), []);
 });
 
-test('Actor presentation, attribute paths, and generic runtime operations are ruleset-owned', () => {
+test('Actor presentation and legacy HP paths resolve through Ruleset Health Runtime', () => {
   const actor = normalizeActorDocument(legacyActor());
   const presentation = describeActor(actor);
   const sheet = describeActorSheet(actor);
@@ -104,6 +105,7 @@ test('Actor presentation, attribute paths, and generic runtime operations are ru
   assert.ok(listActorAttributePaths(actor).some(item => item.path === 'system.resources.hp.current'));
   assert.equal(resolveActorAttribute(actor, 'system.attributes.strength'), 6);
 
+  performActorOperation(actor, { type: 'health.set-mode', mode: 'simple' });
   const operation = performActorOperation(actor, {
     type: 'resource.set-current',
     resourceId: 'hp',
@@ -111,6 +113,8 @@ test('Actor presentation, attribute paths, and generic runtime operations are ru
   });
   assert.equal(operation.changed, true);
   assert.equal(resolveActorAttribute(actor, 'system.resources.hp.current'), 4);
+  assert.equal(actor.system.runtime.health.current, 4);
+  assert.equal(actor.system.runtime.resources.hp, undefined);
 
   const effect = addEffect(actor, {
     changes: [{ target: 'resources.hp.max', mode: 'add', value: 3 }],
@@ -119,7 +123,7 @@ test('Actor presentation, attribute paths, and generic runtime operations are ru
   assert.equal(resolveActorAttribute(actor, 'system.resources.hp.max'), 17);
 });
 
-test('legacy Synthetic Actor deltas migrate into system-relative deltas without changing the template', () => {
+test('legacy Synthetic Actor HP deltas migrate into token-local Health Runtime without changing the template', () => {
   const world = normalizeWorldV2({
     schemaVersion: 2,
     id: 'world-test',
@@ -146,7 +150,8 @@ test('legacy Synthetic Actor deltas migrate into system-relative deltas without 
   });
   const token = world.scenes[0].tokens[0];
   assert.equal(Object.hasOwn(token.actorDelta, 'runtime'), false);
-  assert.equal(token.actorDelta.system.runtime.resources.hp.current, 3);
+  assert.equal(token.actorDelta.system.runtime.resources?.hp, undefined);
+  assert.ok(token.actorDelta.system.runtime.health);
   const resolved = resolveTokenActor(world, token.id);
   assert.equal(resolveActor(resolved.actor).resources.find(item => item.id === 'hp').current, 3);
   assert.equal(resolveActor(resolved.baseActor).resources.find(item => item.id === 'hp').current, 7);
