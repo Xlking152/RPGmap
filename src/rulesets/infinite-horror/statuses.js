@@ -43,6 +43,9 @@ export const INFINITE_HORROR_STATUS_DEFINITIONS = Object.freeze([
   }),
 ]);
 
+import { deriveInfiniteHorrorActor } from './actor.js';
+import { HEALTH_MODE_WOUND_TRACK } from './health.js';
+
 function finite(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -50,40 +53,6 @@ function finite(value, fallback = 0) {
 
 function cleanText(value, fallback = '') {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
-}
-
-function applyChange(current, change, stacks) {
-  const amount = finite(change?.value);
-  if (change?.mode === 'set') return amount;
-  if (change?.mode === 'multiply') return current * amount;
-  if (change?.mode === 'min') return Math.min(current, amount);
-  if (change?.mode === 'max') return Math.max(current, amount);
-  return current + amount * stacks;
-}
-
-function resolveActorHealth(actor, statuses) {
-  if (!actor) return null;
-  const forms = Array.isArray(actor.forms) ? actor.forms : [];
-  const form = forms.find(item => String(item?.id) === String(actor.currentFormId)) || forms[0] || null;
-  const hpBase = form?.resourceBases?.hp;
-  const hpRuntime = actor.runtime?.resources?.hp;
-  const healthRuntime = actor.runtime?.health;
-  if (!hpBase && !hpRuntime && !healthRuntime) return null;
-  let max = Math.max(0, finite(hpRuntime?.maxOverride ?? hpBase?.baseMax));
-  let current = finite(hpRuntime?.current, max);
-  for (const status of statuses.filter(item => item?.enabled !== false)) {
-    for (const change of status.changes || []) {
-      if (change.target === 'resources.hp.max') max = applyChange(max, change, status.stacks);
-      if (change.target === 'resources.hp.current') current = applyChange(current, change, status.stacks);
-    }
-  }
-  max = Math.max(0, max);
-  const runtime = normalizeHealthRuntime(healthRuntime, {
-    defaultMode: defaultHealthMode(form?.source?.type),
-    max,
-    simpleCurrent: current,
-  });
-  return resolveHealth(runtime, { max, simpleCurrent: current });
 }
 
 function derivedStatus(definitionId, label, stacks, options = {}) {
@@ -110,13 +79,10 @@ function derivedStatus(definitionId, label, stacks, options = {}) {
   };
 }
 
-function deriveBadStatusThresholds(actor) {
-  const forms = Array.isArray(actor?.forms) ? actor.forms : [];
-  const form = forms.find(item => String(item?.id) === String(actor?.currentFormId)) || forms[0] || null;
-  const currentById = actor?.runtime?.badStatuses || {};
+function deriveBadStatusThresholds(actor, derivedActor) {
   const targetId = actor?.id;
-  return (Array.isArray(form?.badStatuses) ? form.badStatuses : []).flatMap(status => {
-    const current = Math.max(0, finite(currentById?.[status?.id]));
+  return (Array.isArray(derivedActor?.badStatuses) ? derivedActor.badStatuses : []).flatMap(status => {
+    const current = Math.max(0, finite(status?.current));
     const thresholds = [
       { key: 'destruction', label: '毁灭', icon: 'skull', color: '#8f3333' },
       { key: 'severe', label: '重度', icon: 'triangle-alert', color: '#b35e2e' },
@@ -136,8 +102,9 @@ function deriveBadStatusThresholds(actor) {
 }
 
 export function deriveInfiniteHorrorStatuses(actor, { statuses = [] } = {}) {
-  const health = resolveActorHealth(actor, statuses);
-  const badStatusThresholds = deriveBadStatusThresholds(actor);
+  const derivedActor = deriveInfiniteHorrorActor(actor, { effects: statuses });
+  const health = derivedActor?.health || null;
+  const badStatusThresholds = deriveBadStatusThresholds(actor, derivedActor);
   if (!health) return badStatusThresholds;
   const targetId = actor?.id;
   const disabled = { canMove: false, canInteract: false, canActInCombat: false };
@@ -158,9 +125,3 @@ export function deriveInfiniteHorrorStatuses(actor, { statuses = [] } = {}) {
   }
   return [...derived, ...badStatusThresholds];
 }
-import {
-  HEALTH_MODE_WOUND_TRACK,
-  defaultHealthMode,
-  normalizeHealthRuntime,
-  resolveHealth,
-} from './health.js';

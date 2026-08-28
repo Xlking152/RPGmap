@@ -55,7 +55,7 @@ test('damage to one unlinked Token writes actorDelta and leaves its Base Actor a
 
   const damagedToken = api.tokens.get('npc-a');
   assert.equal(damagedToken.actorLink, false);
-  assert.equal(damagedToken.actorDelta.runtime.resources.hp.current, 7);
+  assert.equal(damagedToken.actorDelta.system.runtime.resources.hp.current, 7);
 });
 
 test('two unlinked Tokens sharing one template take damage independently', async () => {

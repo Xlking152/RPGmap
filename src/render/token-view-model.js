@@ -1,5 +1,6 @@
 import { tokenDiameterMeters, tokenElevationFt } from '../elevation/model.js';
 import { normalizeTokenRotation } from '../token/properties.js';
+import { deriveActorDocument, describeActor } from '../actor/index.js';
 
 function finite(value) {
   const number = Number(value);
@@ -17,8 +18,7 @@ function safeColor(value, fallback = '#3d9b63') {
 }
 
 export function actorDisplayForm(actor) {
-  const forms = Array.isArray(actor?.forms) ? actor.forms : [];
-  return forms.find(form => String(form?.id ?? '') === String(actor?.currentFormId ?? '')) || forms[0] || null;
+  return deriveActorDocument(actor)?.form || null;
 }
 
 /**
@@ -32,14 +32,14 @@ export function createTokenViewModel({ token, actor, selected = false } = {}) {
   const y = finite(token.y);
   if (x === null || y === null) return null;
 
-  const form = actorDisplayForm(actor);
-  const name = text(actor.name, text(token.name, String(token.id || 'Token')));
+  const presentation = describeActor(actor) || {};
+  const name = text(presentation.name, text(actor.name, text(token.name, String(token.id || 'Token'))));
   const avatarDataUrl = text(
-    form?.avatarDataUrl ?? actor?.avatarDataUrl ?? actor?.img,
+    presentation.avatarDataUrl ?? actor?.avatarDataUrl ?? actor?.img,
     '',
   ) || null;
   const color = safeColor(
-    form?.tokenAppearance?.color ?? actor?.prototypeToken?.color ?? token?.color,
+    presentation.color ?? actor?.prototypeToken?.color ?? token?.color,
   );
 
   return Object.freeze({

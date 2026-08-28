@@ -10,6 +10,7 @@ import {
   resetElevationNavigationRuntime,
   setActiveMoverContext,
 } from './runtime-context.js';
+import { describeActor } from '../actor/index.js';
 
 const STYLE_ID = 'rpgmap-token-elevation-v2-style';
 const FEATURE_EDITOR_CLASS = 'feature-elevation-editor';
@@ -38,11 +39,6 @@ function installStyles(documentNode) {
 
 function featureById(mapPackage, featureId) {
   return (mapPackage?.features || []).find(feature => String(feature.id) === String(featureId)) || null;
-}
-
-function currentForm(actor) {
-  const forms = Array.isArray(actor?.forms) ? actor.forms : [];
-  return forms.find(form => String(form?.id) === String(actor?.currentFormId)) || forms[0] || null;
 }
 
 function tokenName(api, tokenId) {
@@ -149,8 +145,8 @@ export function createTokenElevationSystem() {
         hud.className = 'token-elevation-hud';
         hud.dataset.tokenId = String(token.id);
         const heading = documentNode.createElement('strong');
-        const form = currentForm(api.tokens.resolveActor?.(token.id)?.actor);
-        heading.textContent = `${tokenName(api, token.id)}${form?.name ? ` · ${form.name}` : ''} · Elevation`;
+        const presentation = describeActor(api.tokens.resolveActor?.(token.id)?.actor);
+        heading.textContent = `${tokenName(api, token.id)}${presentation?.variantLabel ? ` · ${presentation.variantLabel}` : ''} · Elevation`;
         const row = documentNode.createElement('div');
         row.className = 'token-elevation-hud-row';
         const down = documentNode.createElement('button'); down.type = 'button'; down.textContent = '−5';

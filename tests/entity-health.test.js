@@ -25,8 +25,8 @@ test('legacy xlsx actor without health runtime migrates missing simple HP to B w
     attributes: [], checks: { skills: [], saves: [] }, badStatuses: [], combat: { attacks: [], defenses: [] },
     tokenAppearance: {}, source: { type: 'xlsx' },
   });
-  delete actor.runtime.health;
-  actor.runtime.resources.hp.current = 15;
+  delete actor.system.runtime.health;
+  actor.system.runtime.resources.hp.current = 15;
   const state = normalizeEntityState({ actors: [actor], tokens: [] });
   const health = resolveActor(state.actors[0]).health;
   assert.equal(health.mode, 'wound-track');

@@ -1,18 +1,12 @@
-import { createActorFromImport, addFormToActor, currentForm } from './model.js';
+import { createActorFromImport, addFormToActor } from './model.js';
 import {
-  resolveActor,
-  setResourceCurrent,
-  setResourceMaxOverride,
-  setAttributeAdjustment,
-  addCustomResource,
-  removeCustomResource,
   setActorForm,
   cycleActorForm,
 } from './resolver.js';
+import { describeActor, describeActorSheet, performActorOperation } from '../actor/index.js';
 import { importCharacterXlsx } from './xlsx-importer.js';
 import { imageToAvatarDataUrl } from './avatar.js';
 import { EntityStore } from './store.js';
-import { normalizeCharacterCard } from './schema.js';
 import { createEntityTokenController } from './token-controller.js';
 import {
   canManageStatuses,
@@ -94,21 +88,72 @@ function installStyles(documentNode) {
 }
 
 function avatarHtml(actor) {
-  const form = currentForm(actor);
-  const avatar = form?.avatarDataUrl;
+  const presentation = describeActor(actor) || {};
+  const avatar = presentation.avatarDataUrl;
   if (avatar) return `<span class="entity-avatar"><img src="${escapeHtml(avatar)}" alt=""></span>`;
   return `<span class="entity-avatar">${escapeHtml((actor?.name?.trim()?.[0] || '?').toUpperCase())}</span>`;
 }
 
-function blankImport() {
-  return {
-    formName: '默认形态',
-    identity: { name: '新角色' },
-    description: {},
-    resources: { hp: { max: 0 }, stamina: { max: 0 }, willpower: { max: 0 } },
-    attributes: [], checks: { skills: [], saves: [] }, combat: { attacks: [], defenses: [] },
-    tokenAppearance: { color: '#3d9b63', scale: 1 }, source: { type: 'manual' }, avatarDataUrl: null,
-  };
+function encodeData(value) {
+  return escapeHtml(encodeURIComponent(JSON.stringify(value || {})));
+}
+
+function decodeData(value) {
+  try { return JSON.parse(decodeURIComponent(String(value || ''))); }
+  catch { return null; }
+}
+
+function operationData(operation, extra = '') {
+  return operation ? ` data-actor-operation="${encodeData(operation)}"${extra}` : '';
+}
+
+function renderTableCell(cell) {
+  if (!cell || typeof cell !== 'object' || Array.isArray(cell)) return `<td>${escapeHtml(cell ?? '')}</td>`;
+  if (!cell.input) return `<td>${escapeHtml(cell.value ?? '')}</td>`;
+  const levelClass = cell.level ? ` entity-value-${escapeHtml(cell.level)}` : '';
+  return `<td><input class="entity-table-input${levelClass}" type="number" step="1" min="${escapeHtml(cell.min ?? '')}" value="${escapeHtml(cell.value ?? 0)}"${operationData(cell.operation)}></td>`;
+}
+
+function renderSheetSection(section) {
+  if (!section || typeof section !== 'object') return '';
+  const title = section.title ? `<h3>${escapeHtml(section.title)}</h3>` : '';
+  const help = section.help ? `<p class="entity-help">${escapeHtml(section.help)}</p>` : '';
+  if (section.type === 'resources') {
+    const items = (section.items || []).map(item => {
+      const ratio = Number(item.max) > 0
+        ? Math.max(0, Math.min(100, Number(item.current) / Number(item.max) * 100))
+        : 0;
+      return `<div class="entity-resource" data-sheet-role="${escapeHtml(item.role || '')}">
+        <strong>${escapeHtml(item.label || item.id)}</strong>
+        <button type="button" class="small-button"${operationData(item.decrementOperation)}>−</button>
+        <label><input type="number" step="1" value="${escapeHtml(item.current)}"${operationData(item.currentOperation)}> / </label>
+        <label class="entity-resource-edit"><input type="number" step="1" min="0" value="${escapeHtml(item.max)}" title="当前最大值；修改会建立运行时覆盖"${operationData(item.maxOperation)}> 最大</label>
+        <div class="entity-resource-bar"><span style="width:${ratio}%"></span></div>
+        ${item.deleteOperation ? `<button type="button" class="small-button danger" data-operation-confirm="删除这个特殊能量槽？"${operationData(item.deleteOperation)}>删除 ${escapeHtml(item.label || item.id)}</button>` : ''}
+      </div>`;
+    }).join('');
+    const actions = (section.actions || []).map(action => `<button type="button" class="small-button" data-operation-prompts="${encodeData(action.prompts || [])}"${operationData(action.operation)}>${escapeHtml(action.label || '执行')}</button>`).join('');
+    return `<section class="entity-section" data-sheet-section-id="${escapeHtml(section.id || '')}">${title}${items}${actions}${help}</section>`;
+  }
+  if (section.type === 'stats') {
+    const items = (section.items || []).map(item => `<div class="entity-stat"><span>${escapeHtml(item.label || item.id)}</span><strong>${escapeHtml(item.value)}</strong><small>${escapeHtml(item.detail || '')}</small><label>临时 <input type="number" step="1" value="${escapeHtml(item.adjustment || 0)}"${operationData(item.operation)}></label></div>`).join('');
+    return `<section class="entity-section" data-sheet-section-id="${escapeHtml(section.id || '')}">${title}<div class="entity-grid">${items || '<div class="entity-empty">暂无数据。</div>'}</div>${help}</section>`;
+  }
+  if (section.type === 'table') {
+    const columns = (section.columns || []).map(column => `<th>${escapeHtml(column)}</th>`).join('');
+    const rows = (section.rows || []).map(row => `<tr>${(Array.isArray(row) ? row : []).map(renderTableCell).join('')}</tr>`).join('');
+    const body = rows || `<tr><td colspan="${Math.max(1, section.columns?.length || 1)}" class="entity-empty">${escapeHtml(section.emptyMessage || '暂无数据。')}</td></tr>`;
+    return `<section class="entity-section" data-sheet-section-id="${escapeHtml(section.id || '')}">${title}${help}<table class="entity-check-table"><thead><tr>${columns}</tr></thead><tbody>${body}</tbody></table></section>`;
+  }
+  if (section.type === 'text') {
+    const blocks = (section.blocks || []).map(block => `<p class="entity-description">${escapeHtml(block)}</p>`).join('');
+    return `<section class="entity-section" data-sheet-section-id="${escapeHtml(section.id || '')}">${title}${blocks || '<div class="entity-empty">暂无数据。</div>'}${help}</section>`;
+  }
+  return `<section class="entity-section" data-sheet-section-id="${escapeHtml(section.id || '')}">${title}<div class="entity-empty">${escapeHtml(section.message || '暂无数据。')}</div>${help}</section>`;
+}
+
+function renderSheetSections(sections) {
+  return (Array.isArray(sections) ? sections : []).map(renderSheetSection).join('');
 }
 
 export function createEntityUiTool(options = {}) {
@@ -223,13 +268,13 @@ export function createEntityUiTool(options = {}) {
             </div>
             <div class="entity-help">Actor 保存角色数据；Token 的位置、大小、显示、旋转、高度和删除均由当前 Scene 的 canonical Token Runtime 管理。${legacyMarkerCount ? `检测到 ${legacyMarkerCount} 个旧标记；它们会保留，只有 GM 确认迁移后才会删除。` : '双击 Token 或按列表中的“角色卡”打开属性。选中有多个形态的 Token 后按 <b>V</b> 切换形态。'}</div>
             <div data-entity-list>${actors.length ? actors.map(actor => {
-              const form = currentForm(actor);
+              const presentation = describeActor(actor) || {};
               const count = tokenCount(actor.id);
               const canEditActor = capabilities().canEditActor?.(actor.id);
               const canPlaceActor = capabilities().canPlaceActor?.(actor.id);
               const statusSnapshot = resolveStatusUiSnapshot(api, { actorId: actor.id });
               return `<article class="entity-card" data-actor-id="${escapeHtml(actor.id)}">
-                <div class="entity-card-top">${avatarHtml(actor)}<div class="entity-card-copy"><strong>${escapeHtml(actor.name)}</strong><small>${escapeHtml(form?.name || '无形态')} · ${count ? `${count} 个 Token` : '未放置'}</small></div></div>
+                <div class="entity-card-top">${avatarHtml(actor)}<div class="entity-card-copy"><strong>${escapeHtml(actor.name)}</strong><small>${escapeHtml(presentation.variantLabel || '无形态')} · ${count ? `${count} 个 Token` : '未放置'}</small></div></div>
                 <div class="entity-card-status">${renderStatusStrip([...statusSnapshot.actorStatuses, ...statusSnapshot.derivedStatuses], { limit: 4, emptyText: '无状态' })}</div>
                 <div class="entity-card-actions">
                   <button type="button" class="small-button" data-entity-action="open" data-id="${escapeHtml(actor.id)}">角色卡</button>
@@ -249,9 +294,6 @@ export function createEntityUiTool(options = {}) {
       panelObserver?.observe(panel, { childList: true, subtree: false });
 
       function actorSheetBody(actor, tab) {
-        const resolved = resolveActor(actor);
-        const form = resolved?.form;
-        if (!resolved || !form) return '<div class="entity-empty">角色没有可用形态。</div>';
         if (tab === 'status') {
           const allTokens = canonicalTokens();
           const tokens = allTokens.filter(token => String(token.actorId) === String(actor.id));
@@ -265,37 +307,10 @@ export function createEntityUiTool(options = {}) {
             pendingKeys: statusUi.pendingKeys,
           });
         }
-        if (tab === 'overview') {
-          const resources = resolved.resources.map(resource => {
-            const ratio = resource.max > 0 ? Math.max(0, Math.min(100, resource.current / resource.max * 100)) : 0;
-            return `<div class="entity-resource" data-resource-id="${escapeHtml(resource.id)}">
-              <strong>${escapeHtml(resource.name)}</strong>
-              <button type="button" class="small-button" data-resource-step="-1" data-resource-id="${escapeHtml(resource.id)}">−</button>
-              <label><input type="number" step="1" value="${resource.current}" data-resource-current="${escapeHtml(resource.id)}"> / </label>
-              <label class="entity-resource-edit"><input type="number" step="1" min="0" value="${resource.max}" data-resource-max="${escapeHtml(resource.id)}" title="当前最大值；核心资源改这里会建立运行时覆盖"> 最大</label>
-              <div class="entity-resource-bar"><span style="width:${ratio}%"></span></div>
-              ${resource.custom ? `<button type="button" class="small-button danger" data-resource-delete="${escapeHtml(resource.id)}">删除 ${escapeHtml(resource.name)}</button>` : ''}
-            </div>`;
-          }).join('');
-          return `
-            <section class="entity-section"><h3>核心资源</h3>${resources}<button type="button" class="small-button" data-sheet-action="add-resource">+ 添加特殊能量槽</button></section>
-            <section class="entity-section"><h3>角色信息</h3><div class="entity-description">${escapeHtml([form.identity?.race, form.identity?.gender, form.identity?.age].filter(Boolean).join(' · '))}</div>${form.description?.summary ? `<p class="entity-description">${escapeHtml(form.description.summary)}</p>` : ''}</section>
-            <section class="entity-section"><h3>当前形态描述</h3><div class="entity-description">${escapeHtml(form.description?.appearance || '暂无外貌描述')}</div>${form.description?.personality ? `<p class="entity-description">${escapeHtml(form.description.personality)}</p>` : ''}</section>`;
-        }
-        if (tab === 'attributes') {
-          const cells = resolved.attributes.map(attribute => `<div class="entity-stat"><span>${escapeHtml(attribute.name)}</span><strong>${attribute.value}</strong><small>基础 ${attribute.base}${attribute.legendaryBonus ? ` · 传奇 ${attribute.legendaryBonus}` : ''}</small><label>临时 <input type="number" step="1" value="${actor.runtime?.attributeAdjustments?.[attribute.id] || 0}" data-attribute-adjust="${escapeHtml(attribute.id)}"></label></div>`).join('');
-          return `<section class="entity-section"><h3>属性</h3><div class="entity-grid">${cells || '<div class="entity-empty">当前形态没有属性数据。</div>'}</div><p class="entity-help">Excel 值作为 Base 保留；“临时”只修改 Runtime，不会覆盖重新导入的基础值。</p></section>`;
-        }
-        if (tab === 'checks') {
-          const skills = form.checks?.skills || [];
-          const saves = form.checks?.saves || [];
-          return `<section class="entity-section"><h3>技能鉴定</h3><table class="entity-check-table"><thead><tr><th>分类</th><th>技能</th><th>鉴定</th><th>等级 + 附加</th><th>专业</th></tr></thead><tbody>${skills.map(skill => `<tr><td>${escapeHtml(skill.category)}</td><td>${escapeHtml(skill.name)}</td><td><b>${skill.checkValue}</b></td><td>${skill.level} + ${skill.bonus}</td><td>${escapeHtml(skill.specialties || '')}</td></tr>`).join('')}</tbody></table></section>
-            <section class="entity-section"><h3>豁免 / 抵抗鉴定</h3><table class="entity-check-table"><thead><tr><th>组合</th><th>轻度</th><th>严重</th><th>毁灭</th></tr></thead><tbody>${saves.map(save => `<tr><td>${escapeHtml(save.name)}</td><td><b>${save.light}</b></td><td>${save.severe}</td><td>${save.devastating}</td></tr>`).join('')}</tbody></table></section>`;
-        }
-        if (tab === 'combat') {
-          return `<section class="entity-section"><h3>攻击</h3><div class="entity-empty">攻击结构已预留，暂不从 Excel 导入。</div></section><section class="entity-section"><h3>防御</h3><div class="entity-empty">防御结构已预留，后续单独设计规则。</div></section>`;
-        }
-        return tokenController.renderActorTokenSection(actor);
+        if (tab === 'token') return tokenController.renderActorTokenSection(actor);
+        const description = describeActorSheet(actor) || {};
+        const tabDescription = (description.tabs || []).find(item => String(item.id) === String(tab));
+        return tabDescription ? renderSheetSections(tabDescription.sections) : '<div class="entity-empty">规则包没有提供这个角色卡页签。</div>';
       }
 
       function renderSheet() {
@@ -303,7 +318,9 @@ export function createEntityUiTool(options = {}) {
         if (!openActorId) { existing?.remove(); return; }
         const actor = store.actor(openActorId);
         if (!actor) { openActorId = null; existing?.remove(); return; }
-        const tabs = [['overview','概览'],['attributes','属性'],['checks','鉴定'],['combat','战斗'],['status','状态'],['token','Token']];
+        const sheetDescription = describeActorSheet(actor) || { variants: [], tabs: [] };
+        const tabs = [...(sheetDescription.tabs || []).map(item => [item.id, item.label]), ['status','状态'], ['token','Token']];
+        if (!tabs.some(([id]) => id === openTab)) openTab = tabs[0]?.[0] || 'status';
         const canEdit = capabilities().canEditActor?.(actor.id);
         const actorTokens = tokenController.actorTokens(actor.id);
         const selectedToken = actorTokens.find(token => String(token.id) === String(selectedTokenId));
@@ -311,8 +328,8 @@ export function createEntityUiTool(options = {}) {
           actorId: actor.id,
           ...(selectedToken ? { tokenId: selectedToken.id } : {}),
         });
-        const html = `<div class="entity-sheet-backdrop"><div class="entity-sheet ${canEdit ? '' : 'entity-sheet-readonly'}" role="dialog" aria-modal="true">
-          <header class="entity-sheet-header">${avatarHtml(actor)}<div class="entity-sheet-title"><input type="text" maxlength="80" value="${escapeHtml(actor.name)}" data-actor-name><div class="entity-formbar"><span>当前形态</span><select data-form-select>${actor.forms.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === actor.currentFormId ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select><button type="button" class="small-button primary" data-sheet-action="cycle-form">V · 切换</button><button type="button" class="small-button" data-sheet-action="add-form">+ 形态</button><button type="button" class="small-button" data-sheet-action="avatar">更换头像</button></div><div class="status-title-band">${renderStatusStrip(titleSnapshot.statuses, { limit: 8, emptyText: '无机械状态' })}</div></div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>
+        const html = `<div class="entity-sheet-backdrop"><div class="entity-sheet ${canEdit ? '' : 'entity-sheet-readonly'}" data-actor-id="${escapeHtml(actor.id)}" role="dialog" aria-modal="true">
+          <header class="entity-sheet-header">${avatarHtml(actor)}<div class="entity-sheet-title"><input type="text" maxlength="80" value="${escapeHtml(actor.name)}" data-actor-name><div class="entity-formbar"><span>当前形态</span><select data-form-select>${(sheetDescription.variants || []).map(item => `<option value="${escapeHtml(item.id)}" ${String(item.id) === String(sheetDescription.currentVariantId) ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select><button type="button" class="small-button primary" data-sheet-action="cycle-form">V · 切换</button><button type="button" class="small-button" data-sheet-action="add-form">+ 形态</button><button type="button" class="small-button" data-sheet-action="avatar">更换头像</button></div><div class="status-title-band">${renderStatusStrip(titleSnapshot.statuses, { limit: 8, emptyText: '无机械状态' })}</div></div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>
           <nav class="entity-sheet-tabs">${tabs.map(([id,label]) => `<button type="button" class="entity-sheet-tab ${openTab === id ? 'active' : ''}" data-sheet-tab="${id}">${label}</button>`).join('')}</nav>
           <main class="entity-sheet-body">${actorSheetBody(actor, openTab)}</main>
         </div></div>`;
@@ -329,7 +346,7 @@ export function createEntityUiTool(options = {}) {
         importBusy = true;
         setStatus('正在读取角色卡…');
         try {
-          const imported = normalizeCharacterCard(await importCharacterXlsx(file));
+          const imported = await importCharacterXlsx(file);
           if (imported.avatarImage) {
             try { imported.avatarDataUrl = await imageToAvatarDataUrl(imported.avatarImage); }
             catch (error) { console.warn('Excel 头像导入失败，保留空头像', error); }
@@ -341,16 +358,15 @@ export function createEntityUiTool(options = {}) {
           }
           if (actor) {
             let formName = imported.formName;
-            if (actor.forms.some(form => form.name === formName)) formName += ` ${actor.forms.length + 1}`;
-            addFormToActor(actor, imported, { name: formName });
-            if (imported.avatarDataUrl) currentForm(actor).avatarDataUrl = imported.avatarDataUrl;
+            const beforeSheet = describeActorSheet(actor) || { variants: [] };
+            if (beforeSheet.variants.some(variant => variant.label === formName)) formName += ` ${beforeSheet.variants.length + 1}`;
+            const form = addFormToActor(actor, imported, { name: formName });
             store.persist();
             openSheet(actor.id);
-            indicator(`${actor.name} · ${currentForm(actor).name}`);
-            setStatus(`已导入 ${actor.name} 的新形态“${currentForm(actor).name}”`);
+            indicator(`${actor.name} · ${form?.name || formName}`);
+            setStatus(`已导入 ${actor.name} 的新形态“${form?.name || formName}”`);
           } else {
             actor = createActorFromImport(imported);
-            if (imported.avatarDataUrl) currentForm(actor).avatarDataUrl = imported.avatarDataUrl;
             entityState().actors.push(actor);
             store.persist();
             openSheet(actor.id);
@@ -400,7 +416,7 @@ export function createEntityUiTool(options = {}) {
         if (action === 'import') chooseImport();
         else if (action === 'new') {
           if (!requireStructure()) return;
-          const actor = createActorFromImport(blankImport());
+          const actor = createActorFromImport();
           entityState().actors.push(actor);
           store.persist();
           renderPanel();
@@ -430,6 +446,28 @@ export function createEntityUiTool(options = {}) {
         if (!sheet) return;
         const actor = store.actor(openActorId);
         if (!actor) return;
+        const operationNode = event.target.closest('[data-actor-operation]');
+        if (operationNode && operationNode.tagName !== 'INPUT') {
+          if (!requireActorEdit(actor.id)) return;
+          const operation = decodeData(operationNode.dataset.actorOperation);
+          if (!operation) return;
+          const confirmation = operationNode.dataset.operationConfirm;
+          if (confirmation && !confirm(confirmation)) return;
+          const prompts = decodeData(operationNode.dataset.operationPrompts);
+          if (Array.isArray(prompts)) {
+            const answers = {};
+            for (const field of prompts) {
+              const fallback = field.defaultFrom ? answers[field.defaultFrom] : field.defaultValue;
+              const answer = prompt(field.label || `${field.key}：`, fallback ?? '');
+              if (answer === null) return;
+              answers[field.key] = field.number ? Number(answer || 0) : answer;
+            }
+            Object.assign(operation, answers);
+          }
+          const result = performActorOperation(actor, operation);
+          if (result.changed) persistAndRender({ source: 'entities:actor-operation', immediate: true });
+          return;
+        }
         const tab = event.target.closest('[data-sheet-tab]');
         if (tab) { openTab = tab.dataset.sheetTab; renderSheet(); return; }
         const actionNode = event.target.closest('[data-sheet-action]');
@@ -449,30 +487,8 @@ export function createEntityUiTool(options = {}) {
           } else if (action === 'add-form') chooseImport(actor.id);
           else if (action === 'avatar') {
             if (requireActorEdit(actor.id)) avatarInput.click();
-          } else if (action === 'add-resource') {
-            if (!requireActorEdit(actor.id)) return;
-            const name = prompt('特殊能量槽名称：', '特殊能量');
-            if (!name) return;
-            const max = Number(prompt('最大值：', '10') || 0);
-            const current = Number(prompt('当前值：', String(max)) || max);
-            addCustomResource(actor, { name, max, current });
-            persistAndRender();
           }
           return;
-        }
-        const step = event.target.closest('[data-resource-step]');
-        if (step) {
-          if (!requireActorEdit(actor.id)) return;
-          const id = step.dataset.resourceId;
-          const current = resolveActor(actor).resources.find(resource => resource.id === id)?.current || 0;
-          setResourceCurrent(actor, id, current + Number(step.dataset.resourceStep));
-          persistAndRender({ source: 'entities:resource', immediate: true });
-          return;
-        }
-        const del = event.target.closest('[data-resource-delete]');
-        if (del && requireActorEdit(actor.id) && confirm('删除这个特殊能量槽？')) {
-          removeCustomResource(actor, del.dataset.resourceDelete);
-          persistAndRender();
         }
       });
 
@@ -497,15 +513,12 @@ export function createEntityUiTool(options = {}) {
             renderSheet();
             indicator(`${actor.name} · ${form.name}`);
           }
-        } else if (event.target.matches('[data-resource-current]')) {
-          setResourceCurrent(actor, event.target.dataset.resourceCurrent, event.target.value);
-          persistAndRender({ source: 'entities:resource', immediate: true });
-        } else if (event.target.matches('[data-resource-max]')) {
-          setResourceMaxOverride(actor, event.target.dataset.resourceMax, event.target.value);
-          persistAndRender({ source: 'entities:resource', immediate: true });
-        } else if (event.target.matches('[data-attribute-adjust]')) {
-          setAttributeAdjustment(actor, event.target.dataset.attributeAdjust, event.target.value);
-          persistAndRender();
+        } else if (event.target.matches('[data-actor-operation]')) {
+          const operation = decodeData(event.target.dataset.actorOperation);
+          if (!operation) return;
+          operation.value = event.target.value;
+          const result = performActorOperation(actor, operation);
+          if (result.changed) persistAndRender({ source: 'entities:actor-operation', immediate: true });
         }
       });
 
@@ -514,10 +527,15 @@ export function createEntityUiTool(options = {}) {
         const file = avatarInput.files?.[0];
         if (!actor || !file) return;
         try {
-          currentForm(actor).avatarDataUrl = await imageToAvatarDataUrl(file);
-          store.persist();
-          renderPanel();
-          renderSheet();
+          const result = performActorOperation(actor, {
+            type: 'avatar.set',
+            avatarDataUrl: await imageToAvatarDataUrl(file),
+          });
+          if (result.changed) {
+            store.persist();
+            renderPanel();
+            renderSheet();
+          }
         } catch (error) {
           alert('头像处理失败：' + error.message);
         } finally {
@@ -531,7 +549,7 @@ export function createEntityUiTool(options = {}) {
         if (!selectedTokenId) return;
         const token = api.tokens.get?.(selectedTokenId);
         const actor = token ? store.actor(token.actorId) : null;
-        if (!actor || actor.forms.length < 2) return;
+        if (!actor || (describeActorSheet(actor)?.variants?.length || 0) < 2) return;
         event.preventDefault();
         event.stopImmediatePropagation();
         const form = cycleActorForm(actor);

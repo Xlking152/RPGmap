@@ -4,6 +4,14 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performActorHealthOperation, resolveActorHealth } from '../src/health/actor.js';
+import {
+  describeActorSheet,
+  listActorAttributePaths,
+  normalizeActorDocument,
+  performActorOperation,
+  resolveActorAttribute,
+  validateActorDocument,
+} from '../src/actor/index.js';
 import { getActiveRuleset, rulesetRegistry, setActiveRuleset } from '../src/ruleset/index.js';
 import { getStatusDefinitions, resolveStatuses } from '../src/status/model.js';
 
@@ -50,8 +58,40 @@ test('minimal ruleset controls runtime operations, presentation, and derived sta
       title: 'Contract Boundary Test',
       version: '1.0.0',
       actor: {
-        resourceDefinitions: [{ id: 'hp', name: 'Counter', kind: 'hp' }],
+        resourceDefinitions: [],
         badStatusDefinitions: [],
+        createDefault: () => ({ name: 'Counter Actor', system: { value: 0, limit: 10 } }),
+        createFromImport: imported => ({ name: imported?.name || 'Counter Actor', system: { value: Number(imported?.value) || 0, limit: 10 } }),
+        migrateLegacy: actor => ({ name: actor?.name || 'Counter Actor', system: actor?.system || { value: Number(actor?.legacyValue) || 0, limit: 10 } }),
+        normalizeSystem: system => ({ value: Number(system?.value) || 0, limit: Number(system?.limit) || 10 }),
+        validateSystem: system => Number.isFinite(system?.value) ? [] : ['system.value must be finite'],
+        derive: actor => ({
+          id: actor.id,
+          name: actor.name,
+          health: { mode: 'counter', max: actor.system.limit, current: actor.system.value },
+        }),
+        attributePaths: () => [{ path: 'system.value', label: 'Counter', kind: 'number' }],
+        resolveAttribute: (actor, path) => path === 'system.value' ? actor.system.value : null,
+        applyRuntimeOperation(actor, operation) {
+          if (operation?.type === 'counter.increment') {
+            actor.system.value += Number(operation.amount) || 0;
+            return { changed: true, value: actor.system.value };
+          }
+          if (operation?.type === 'health.runtime' && operation.operation?.type === 'increment') {
+            actor.system.value += Number(operation.operation.amount) || 0;
+            return { changed: true, value: { mode: 'counter', max: actor.system.limit, current: actor.system.value } };
+          }
+          return { changed: false, blocked: 'unsupported' };
+        },
+        presentation: {
+          describe: actor => ({ name: actor.name, avatarDataUrl: null, color: '#225588', variantLabel: 'Counter' }),
+          describeSheet: actor => ({
+            actorId: actor.id,
+            currentVariantId: null,
+            variants: [],
+            tabs: [{ id: 'counter', label: 'Counter', sections: [{ type: 'text', blocks: [String(actor.system.value)] }] }],
+          }),
+        },
       },
       health: {
         supportedModes: ['counter'],
@@ -91,15 +131,21 @@ test('minimal ruleset controls runtime operations, presentation, and derived sta
   try {
     const actor = {
       id: 'actor-test',
-      currentFormId: 'form-test',
-      forms: [{ id: 'form-test', source: { type: 'test' }, resourceBases: { hp: { id: 'hp', baseMax: 10 } } }],
-      runtime: { resources: { hp: { current: 4, maxOverride: null } }, health: { value: 4 } },
+      name: 'Counter Actor',
+      system: { value: 4, limit: 10 },
       effects: [],
     };
     const result = performActorHealthOperation(actor, { type: 'increment', amount: 3 });
     assert.equal(result.changed, true);
     assert.equal(resolveActorHealth(actor).current, 7);
-    assert.equal(actor.runtime.resources.hp.current, 7);
+    assert.equal(actor.system.value, 7);
+    assert.deepEqual(listActorAttributePaths(actor).map(item => item.path), ['system.value']);
+    assert.equal(resolveActorAttribute(actor, 'system.value'), 7);
+    assert.equal(performActorOperation(actor, { type: 'counter.increment', amount: 2 }).value, 9);
+    assert.deepEqual(validateActorDocument(normalizeActorDocument({ id: 'legacy', name: 'Legacy', legacyValue: 5 })), []);
+    assert.deepEqual(describeActorSheet(actor).tabs.map(tab => tab.id), ['counter']);
+    assert.equal(Object.hasOwn(actor.system, 'health'), false);
+    assert.equal(Object.hasOwn(actor.system, 'forms'), false);
 
     assert.deepEqual(getStatusDefinitions({ statusDefinitions: [] }), []);
     const resolved = resolveStatuses({ schemaVersion: 3, statusDefinitions: [], actors: [actor], tokens: [] }, { actorId: actor.id });

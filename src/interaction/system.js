@@ -8,6 +8,7 @@ import {
   featureSubtypeLabel,
   tokensInsideFeature,
 } from './ui-model.js';
+import { describeActor } from '../actor/index.js';
 
 const CORE_BUTTON_CLASS = 'core-interaction-action';
 const STYLE_ID = 'rpgmap-core-interaction-style';
@@ -51,12 +52,11 @@ function tokenDisplay(api, token) {
   try {
     const resolved = api.tokens.resolveActor(token.id);
     const actor = resolved.actor;
-    const forms = Array.isArray(actor?.forms) ? actor.forms : [];
-    const form = forms.find(item => String(item?.id) === String(actor?.currentFormId)) || forms[0] || null;
+    const presentation = describeActor(actor) || {};
     return {
-      name: String(actor?.name || token.id),
-      avatarDataUrl: form?.avatarDataUrl || null,
-      color: form?.tokenAppearance?.color || '#3d9b63',
+      name: String(presentation.name || actor?.name || token.id),
+      avatarDataUrl: presentation.avatarDataUrl || null,
+      color: presentation.color || '#3d9b63',
       synthetic: resolved.synthetic === true,
     };
   } catch {

@@ -279,8 +279,7 @@ export function resolveStatuses(rawEntityState, context = {}) {
   const statusVersion = stableHash({
     definitions: definitions.map(definition => ({ id: definition.id, capabilities: definition.capabilities, changes: definition.changes, maxStacks: definition.maxStacks })),
     actorId: actor?.id || null, actorEffects: actor?.effects || [], tokenId: token?.id || null, tokenEffects: token?.effects || [],
-    health: actor?.runtime?.health || null, hp: actor?.runtime?.resources?.hp || null,
-    badStatuses: actor?.runtime?.badStatuses || null, currentFormId: actor?.currentFormId || null,
+    system: actor?.system || null,
   });
   return { statuses, actorStatuses, tokenStatuses, derivedStatuses, capabilities: resolveStatusCapabilities(statuses), statusVersion };
 }
@@ -413,7 +412,7 @@ export function statusStateFingerprint(rawEntityState) {
   const state = normalizeEntityStatusState(rawEntityState);
   return stableHash({
     definitions: state.statusDefinitions,
-    actors: state.actors.map(actor => ({ id: actor.id, effects: actor.effects, currentFormId: actor.currentFormId, health: actor.runtime?.health || null, hp: actor.runtime?.resources?.hp || null })),
+    actors: state.actors.map(actor => ({ id: actor.id, effects: actor.effects, system: actor.system || null })),
     tokens: state.tokens.map(token => ({ id: token.id, actorId: token.actorId, actorLink: token.actorLink !== false, actorDelta: token.actorDelta || null, effects: token.effects })),
   });
 }

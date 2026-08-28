@@ -21,7 +21,7 @@ export function findSelectedEntity(appState, tokenId) {
   if (!token) return null;
   const actor = (entity.actors || []).find(item => String(item?.id) === String(token.actorId));
   if (!actor) return null;
-  const form = (actor.forms || []).find(item => item.id === actor.currentFormId) || actor.forms?.[0] || null;
+  const form = deriveActorDocument(actor)?.form || null;
   return { token, actor, form };
 }
 
@@ -35,3 +35,4 @@ export function selectionStatus(selection) {
   const formName = selection.form?.name || '默认形态';
   return `${selection.actor.name} · ${formName}${selection.token.locked ? ' · 已锁定' : ''}`;
 }
+import { deriveActorDocument } from '../actor/index.js';

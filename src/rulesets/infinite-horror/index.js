@@ -1,5 +1,5 @@
 import { prepareRuleset } from '../../ruleset/contract.js';
-import { INFINITE_HORROR_RESOURCE_DEFS, INFINITE_HORROR_BAD_STATUS_DEFS } from './definitions.js';
+import { INFINITE_HORROR_ACTOR } from './actor.js';
 import { INFINITE_HORROR_HEALTH } from './health.js';
 import { deriveInfiniteHorrorStatuses, INFINITE_HORROR_STATUS_DEFINITIONS } from './statuses.js';
 import {
@@ -13,10 +13,7 @@ export const infiniteHorrorRuleset = prepareRuleset({
   id: 'infinite-horror',
   title: '无限跑团',
   version: '1.0.0',
-  actor: {
-    resourceDefinitions: INFINITE_HORROR_RESOURCE_DEFS,
-    badStatusDefinitions: INFINITE_HORROR_BAD_STATUS_DEFS,
-  },
+  actor: INFINITE_HORROR_ACTOR,
   health: INFINITE_HORROR_HEALTH,
   statuses: {
     definitions: INFINITE_HORROR_STATUS_DEFINITIONS,

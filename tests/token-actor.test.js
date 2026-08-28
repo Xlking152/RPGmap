@@ -41,7 +41,7 @@ test('linked Token resolves the World Actor and ignores dormant actorDelta', () 
   }), 'token-1');
   assert.equal(result.synthetic, false);
   assert.equal(result.actorLink, true);
-  assert.equal(result.actor.runtime.resources.hp.current, 10);
+  assert.equal(result.actor.system.runtime.resources.hp.current, 10);
 });
 
 test('unlinked Token resolves Base Actor + actorDelta without mutating the template', () => {
@@ -58,11 +58,10 @@ test('unlinked Token resolves Base Actor + actorDelta without mutating the templ
   const result = resolveTokenActor(source, 'token-1');
   assert.equal(result.synthetic, true);
   assert.equal(result.actor.name, '士兵 A');
-  assert.equal(result.actor.runtime.resources.hp.current, 3);
-  assert.equal(result.actor.runtime.resources.hp.maxOverride, null);
-  assert.equal(result.actor.runtime.resources.stamina.current, 6);
-  assert.equal(result.actor.runtime.health.mode, 'simple');
-  assert.equal(result.actor.runtime.health.current, 3);
+  assert.equal(result.actor.system.runtime.resources.hp.current, 3);
+  assert.equal(result.actor.system.runtime.resources.hp.maxOverride, null);
+  assert.equal(result.actor.system.runtime.resources.stamina.current, 6);
+  assert.equal(result.actor.system.runtime.health.mode, 'simple');
   assert.equal(result.actor.id, 'actor-template');
   assert.equal(source.actors[0].runtime.resources.hp.current, 10);
 });

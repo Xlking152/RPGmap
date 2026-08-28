@@ -88,7 +88,8 @@ test('TokenSystem preserves actorLink/actorDelta and deletes canonical state onl
   await fixture.api.tokens.update('npc-one', { hidden: true, elevationFt: 15 });
   const token = fixture.api.tokens.get('npc-one');
   assert.equal(token.actorLink, false);
-  assert.equal(token.actorDelta.runtime.resources.hp.current, 5);
+  assert.equal(token.actorDelta.system.runtime.resources.hp.current, 5);
+  assert.equal(Object.hasOwn(token.actorDelta, 'runtime'), false);
   assert.equal(token.hidden, true);
   assert.equal(token.elevationFt, 15);
 

@@ -17,6 +17,12 @@ test('infinite horror is registered as the default built-in ruleset', () => {
   assert.equal(ruleset.title, '无限跑团');
   assert.deepEqual(ruleset.actor.resourceDefinitions.map(item => item.id), ['hp', 'stamina', 'willpower']);
   assert.equal(ruleset.actor.badStatusDefinitions.length, 21);
+  for (const method of [
+    'createDefault', 'createFromImport', 'migrateLegacy', 'normalizeSystem', 'validateSystem',
+    'derive', 'attributePaths', 'resolveAttribute', 'applyRuntimeOperation',
+  ]) assert.equal(typeof ruleset.actor[method], 'function');
+  assert.equal(typeof ruleset.actor.presentation.describe, 'function');
+  assert.equal(typeof ruleset.actor.presentation.describeSheet, 'function');
   assert.equal(ruleset.health.defaultModeForSource('xlsx'), 'wound-track');
   assert.equal(ruleset.health.defaultModeForSource('legacy-character'), 'simple');
   assert.equal(typeof ruleset.health.normalizeRuntime, 'function');

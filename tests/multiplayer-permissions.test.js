@@ -4,8 +4,8 @@ import { actorIdForToken, canControlActor, validateLocalPlayerChange } from '../
 
 function state({ combat = null } = {}) {
   const actors = [
-    { id: 'actor-a', runtime: { hp: 10 }, effects: [] },
-    { id: 'actor-b', runtime: { hp: 10 }, effects: [] },
+    { id: 'actor-a', name: 'A', system: { counter: 10 }, effects: [] },
+    { id: 'actor-b', name: 'B', system: { counter: 10 }, effects: [] },
   ];
   const tokens = [
     { id: 'token-a', actorId: 'actor-a', actorLink: true, actorDelta: null, diameterMeters: 1, effects: [] },
@@ -91,14 +91,14 @@ test('client resolves a combatant without actorId through canonical Token bindin
   const before = state({ combat });
   assert.equal(canControlActor({ actorId: 'actor-a', state: before, permissions: playerPermissions }), true);
   const next = structuredClone(before);
-  next.preferences.entitySystem.actors[0].runtime.health = { mode: 'wound-track', wounds: { bashing: 1, lethal: 0, aggravated: 0 } };
+  next.preferences.entitySystem.actors[0].system.counter = 9;
   assert.equal(validateLocalPlayerChange({ before, next, permissions: playerPermissions }).ok, true);
 });
 
 test('GM wildcard bypasses local ownership preflight', () => {
   const before = state();
   const next = structuredClone(before);
-  next.preferences.entitySystem.actors[1].runtime.hp = 1;
+  next.preferences.entitySystem.actors[1].system.counter = 1;
   next.preferences.combatSystem.combat = { id: 'c', state: 'setup', round: 0, turnIndex: 0, combatants: [] };
   assert.equal(validateLocalPlayerChange({ before, next, permissions: { actorOwnerIds: ['*'] } }).ok, true);
 });

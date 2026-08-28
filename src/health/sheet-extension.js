@@ -1,6 +1,7 @@
 import { normalizeEntityState } from '../entities/model.js';
 import { resolveActorHealth } from './actor.js';
 import { describeHealth, healthModeOptions } from './model.js';
+import { describeActorSheet } from '../actor/index.js';
 
 const STYLE_ID = 'rpgmap-health-system-style';
 
@@ -9,10 +10,10 @@ function escapeHtml(value) {
 }
 
 function actorFromSheet(api, documentNode) {
-  const formId = documentNode.querySelector('.entity-sheet [data-form-select]')?.value;
-  if (!formId) return null;
+  const actorId = documentNode.querySelector('.entity-sheet')?.dataset.actorId;
+  if (!actorId) return null;
   const state = normalizeEntityState(api.getState().preferences?.entitySystem);
-  return state.actors.find(actor => actor.forms?.some(form => String(form.id) === String(formId))) || null;
+  return state.actors.find(actor => String(actor.id) === String(actorId)) || null;
 }
 
 function selectedActor(api) {
@@ -59,7 +60,7 @@ function modeOptionsHtml(mode) {
 function healthSignature(actor, state, view) {
   return [
     actor.id,
-    actor.currentFormId,
+    describeActorSheet(actor)?.currentVariantId,
     state?.mode,
     state?.max,
     view.summary,
@@ -114,7 +115,7 @@ export function createHealthSheetExtension() {
         const view = describeHealth(health);
         const signature = healthSignature(actor, health, view);
         const existing = body.querySelector('[data-health-panel]');
-        const hpRow = body.querySelector('[data-resource-id="hp"]');
+        const hpRow = body.querySelector('[data-sheet-role="health-base"]');
         if (hpRow) hpRow.style.display = view.hideBaseResource ? 'none' : '';
         if (existing?.dataset.healthSignature === signature) return;
         enhancing = true;

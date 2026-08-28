@@ -1,4 +1,5 @@
 import { installStatusUiStyles, renderStatusStrip, resolveStatusUiSnapshot } from '../status/ui.js';
+import { describeActor } from '../actor/index.js';
 
 const STYLE_ID = 'rpgmap-app-shell-v2-style';
 
@@ -47,22 +48,17 @@ function button(documentNode, label, action, className = 'ui-primary-tool') {
   return node;
 }
 
-function currentForm(actor) {
-  const forms = Array.isArray(actor?.forms) ? actor.forms : [];
-  return forms.find(form => String(form?.id) === String(actor?.currentFormId)) || forms[0] || null;
-}
-
 function actorView(api, token) {
   try {
     const resolved = api.tokens.resolveActor(token.id);
     const actor = resolved.actor;
-    const form = currentForm(actor);
+    const presentation = describeActor(actor) || {};
     return {
       actor,
       synthetic: resolved.synthetic === true,
-      name: String(actor?.name || token.id),
-      avatar: form?.avatarDataUrl || null,
-      color: form?.tokenAppearance?.color || '#176d76',
+      name: String(presentation.name || actor?.name || token.id),
+      avatar: presentation.avatarDataUrl || null,
+      color: presentation.color || '#176d76',
     };
   } catch {
     return { actor: null, synthetic: false, name: String(token.id), avatar: null, color: '#176d76' };

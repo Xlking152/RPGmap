@@ -2,11 +2,6 @@ function id(value) {
   return String(value ?? '').trim();
 }
 
-function currentForm(actor) {
-  const forms = Array.isArray(actor?.forms) ? actor.forms : [];
-  return forms.find(form => String(form?.id ?? '') === String(actor?.currentFormId ?? '')) || forms[0] || null;
-}
-
 export function listFeatureTokenViews(api, featureId) {
   if (!api?.tokens?.list || !api?.tokens?.resolveActor) {
     throw new Error('Feature Token views require api.tokens.list()/resolveActor()');
@@ -20,15 +15,16 @@ export function listFeatureTokenViews(api, featureId) {
       catch { return []; }
       const actor = resolved?.actor;
       if (!actor) return [];
-      const form = currentForm(actor);
+      const presentation = describeActor(actor) || {};
       return [{
         token,
         actor,
         baseActor: resolved.baseActor,
         synthetic: resolved.synthetic === true,
-        name: String(actor.name || `Token ${token.id}`),
-        avatarDataUrl: form?.avatarDataUrl || actor.img || null,
-        color: form?.tokenAppearance?.color || '#3d9b63',
+        name: String(presentation.name || actor.name || `Token ${token.id}`),
+        avatarDataUrl: presentation.avatarDataUrl || actor.img || null,
+        color: presentation.color || '#3d9b63',
       }];
     });
 }
+import { describeActor } from '../actor/index.js';

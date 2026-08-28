@@ -10,9 +10,10 @@ import {
   synchronizeWorldV2FromRuntimeState,
 } from '../src/world/model.js';
 import { migrateLegacySaveV2 } from '../src/legacy/save-v2.js';
+import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 
 const mapPackage = { id: 'test-map', version: '2.3.0', title: '测试地图' };
-const ruleset = { id: 'infinite-horror', version: '1.0.0', title: '无限跑团' };
+const ruleset = infiniteHorrorRuleset;
 function actor(id = 'actor-1', name = '测试角色') { return { id, name, currentFormId: 'form-1', forms: [{ id: 'form-1', avatarDataUrl: null, tokenAppearance: { color: '#3d9b63', scale: 1 } }], runtime: {}, effects: [] }; }
 function legacyState() {
   return {

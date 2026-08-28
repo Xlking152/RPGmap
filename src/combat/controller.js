@@ -12,6 +12,7 @@ import {
 } from './model.js';
 import { CombatStore } from './store.js';
 import { installCombatStyles, renderCombatTopbar, renderCombatTracker } from './tracker.js';
+import { describeActor } from '../actor/index.js';
 
 function legacyTokenRefs(appState, ids) {
   const entity = appState.preferences?.entitySystem || {};
@@ -34,11 +35,6 @@ function tokenRefs(api, ids) {
   });
 }
 
-function currentActorForm(actor) {
-  if (!actor?.forms?.length) return null;
-  return actor.forms.find(form => String(form?.id) === String(actor.currentFormId)) || actor.forms[0] || null;
-}
-
 function runtimeTokenView(api, tokenId) {
   if (api.tokens?.get) {
     const token = api.tokens.get(tokenId);
@@ -46,15 +42,15 @@ function runtimeTokenView(api, tokenId) {
       let resolved = null;
       try { resolved = api.tokens.resolveActor?.(token.id) || null; } catch {}
       const actor = resolved?.actor || null;
-      const form = currentActorForm(actor);
+      const presentation = describeActor(actor) || {};
       const character = api.getState().characters?.find(item => String(item.id) === String(token.id)) || null;
       return {
         token,
         actor,
         synthetic: resolved?.synthetic === true,
         character,
-        name: actor?.name || character?.name || `Token ${token.id}`,
-        avatar: form?.avatarDataUrl || actor?.img || character?.avatarDataUrl || null,
+        name: presentation.name || actor?.name || character?.name || `Token ${token.id}`,
+        avatar: presentation.avatarDataUrl || actor?.img || character?.avatarDataUrl || null,
       };
     }
   }

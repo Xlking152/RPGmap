@@ -1,3 +1,5 @@
+import { normalizeActorDocument } from '../actor/index.js';
+
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
 }
@@ -64,14 +66,18 @@ export function resolveTokenActor(world, tokenId) {
   if (!scene) throw new Error(`World has no active Scene: ${world?.activeSceneId || '(missing)'}`);
   const token = (scene.tokens || []).find(item => String(item?.id ?? '') === String(tokenId));
   if (!token) throw new Error(`Unknown Token: ${tokenId}`);
-  const baseActor = (world?.actors || []).find(actor => String(actor?.id ?? '') === String(token.actorId));
-  if (!baseActor) throw new Error(`Token ${tokenId} references missing Actor: ${token.actorId}`);
+  const rawBaseActor = (world?.actors || []).find(actor => String(actor?.id ?? '') === String(token.actorId));
+  if (!rawBaseActor) throw new Error(`Token ${tokenId} references missing Actor: ${token.actorId}`);
 
   const synthetic = token.actorLink === false;
+  const baseActor = normalizeActorDocument(rawBaseActor);
+  const actor = synthetic
+    ? normalizeActorDocument(mergeActorDelta(rawBaseActor, token.actorDelta))
+    : baseActor;
   return {
     token: clone(token),
     baseActor: clone(baseActor),
-    actor: synthetic ? mergeActorDelta(baseActor, token.actorDelta) : clone(baseActor),
+    actor: clone(actor),
     synthetic,
     actorLink: !synthetic,
   };

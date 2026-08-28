@@ -32,8 +32,8 @@ function sceneToken(id, actorId, x, y) {
 
 function world({ activeActorId = null } = {}) {
   const actors = [
-    { id: 'actor-a', name: 'A', runtime: { hp: 10 }, effects: [] },
-    { id: 'actor-b', name: 'B', runtime: { hp: 10 }, effects: [] },
+    { id: 'actor-a', name: 'A', system: { counter: 10 }, effects: [] },
+    { id: 'actor-b', name: 'B', system: { counter: 10 }, effects: [] },
   ];
   const tokens = [canonicalToken('token-a', 'actor-a', 1, 1), canonicalToken('token-b', 'actor-b', 2, 2)];
   const combatants = [
@@ -115,10 +115,10 @@ test('Player may change owned Actor but not unowned Actor or Combat state in Wor
   const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
   const before = world();
   const owned = structuredClone(before);
-  owned.preferences.entitySystem.actors[0].runtime.hp = 9;
+  owned.preferences.entitySystem.actors[0].system.counter = 9;
   assert.equal(validatePlayerWorldPush({ before, next: owned, user }).ok, true);
   const unowned = structuredClone(before);
-  unowned.preferences.entitySystem.actors[1].runtime.hp = 9;
+  unowned.preferences.entitySystem.actors[1].system.counter = 9;
   assert.equal(validatePlayerWorldPush({ before, next: unowned, user }).code, 'actor_not_owned');
   const combat = structuredClone(before);
   combat.preferences.combatSystem.combat = { id: 'c', state: 'active', round: 1, turnIndex: 0, combatants: [] };
@@ -129,11 +129,11 @@ test('active Combat only permits the current owned Actor to change', () => {
   const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
   const ownTurn = world({ activeActorId: 'actor-a' });
   const allowed = structuredClone(ownTurn);
-  allowed.preferences.entitySystem.actors[0].runtime.hp = 8;
+  allowed.preferences.entitySystem.actors[0].system.counter = 8;
   assert.equal(validatePlayerWorldPush({ before: ownTurn, next: allowed, user }).ok, true);
   const otherTurn = world({ activeActorId: 'actor-b' });
   const denied = structuredClone(otherTurn);
-  denied.preferences.entitySystem.actors[0].runtime.hp = 8;
+  denied.preferences.entitySystem.actors[0].system.counter = 8;
   assert.equal(validatePlayerWorldPush({ before: otherTurn, next: denied, user }).code, 'combat_turn_locked');
 });
 
@@ -142,7 +142,7 @@ test('Combat resolves a missing combatant actorId through canonical Token bindin
   const before = world({ activeActorId: 'actor-a' });
   before.preferences.combatSystem.combat.combatants[0].actorId = null;
   const next = structuredClone(before);
-  next.preferences.entitySystem.actors[0].runtime.health = { mode: 'wound-track', wounds: { bashing: 1, lethal: 0, aggravated: 0 } };
+  next.preferences.entitySystem.actors[0].system.counter = 9;
   assert.equal(validatePlayerWorldPush({ before, next, user }).ok, true);
 });
 

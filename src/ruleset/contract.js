@@ -14,6 +14,27 @@ function optionalFunction(value) {
   return typeof value === 'function' ? value : null;
 }
 
+function actorFunction(value, fallback) {
+  return typeof value === 'function' ? value : fallback;
+}
+
+function prepareActorPresentation(raw = {}) {
+  return Object.freeze({
+    describe: actorFunction(raw.describe, actor => ({
+      name: String(actor?.name || ''),
+      avatarDataUrl: null,
+      color: '#64748b',
+      variantLabel: '',
+    })),
+    describeSheet: actorFunction(raw.describeSheet, actor => ({
+      actorId: String(actor?.id || ''),
+      variants: [],
+      currentVariantId: null,
+      tabs: [],
+    })),
+  });
+}
+
 function presentationOptions(value) {
   return Object.freeze((Array.isArray(value) ? value : []).map(option => Object.freeze({ ...option })));
 }
@@ -52,6 +73,29 @@ export function prepareRuleset(raw = {}) {
     actor: Object.freeze({
       resourceDefinitions: frozenArray(actor.resourceDefinitions),
       badStatusDefinitions: frozenArray(actor.badStatusDefinitions),
+      createDefault: actorFunction(actor.createDefault, () => ({ name: '', system: {} })),
+      createFromImport: actorFunction(actor.createFromImport, (_imported, context = {}) => (
+        actorFunction(actor.createDefault, () => ({ name: '', system: {} }))(context)
+      )),
+      migrateLegacy: actorFunction(actor.migrateLegacy, rawActor => ({
+        name: String(rawActor?.name || ''),
+        system: rawActor?.system && typeof rawActor.system === 'object' ? structuredClone(rawActor.system) : {},
+      })),
+      normalizeSystem: actorFunction(actor.normalizeSystem, system => (
+        system && typeof system === 'object' && !Array.isArray(system) ? structuredClone(system) : {}
+      )),
+      validateSystem: actorFunction(actor.validateSystem, () => []),
+      derive: actorFunction(actor.derive, actorDocument => ({
+        id: String(actorDocument?.id || ''),
+        name: String(actorDocument?.name || ''),
+      })),
+      attributePaths: actorFunction(actor.attributePaths, () => []),
+      resolveAttribute: actorFunction(actor.resolveAttribute, () => null),
+      applyRuntimeOperation: actorFunction(actor.applyRuntimeOperation, () => ({
+        changed: false,
+        blocked: 'unsupported',
+      })),
+      presentation: prepareActorPresentation(actor.presentation),
     }),
     health: Object.freeze({
       supportedModes: frozenArray(health.supportedModes),

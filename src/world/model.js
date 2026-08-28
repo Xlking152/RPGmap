@@ -1,4 +1,6 @@
 import { canonicalAttackAreas } from './attack-anchors.js';
+import { normalizeActorDocument } from '../actor/index.js';
+import { createActorDelta, mergeActorDelta } from '../token/actor.js';
 
 export const WORLD_SCHEMA_VERSION = 2;
 export const WORLD_STATE_KEY = 'worldV2';
@@ -56,19 +58,29 @@ function sceneIdForMap(mapId) {
   return `scene-${slug || 'default'}`;
 }
 
-function normalizeWorldToken(raw, actorIds) {
+function normalizeWorldToken(raw, actorIds, { rawActorsById = new Map(), actorsById = new Map(), ruleset = null } = {}) {
   const token = object(raw);
   const tokenId = id(token.id);
   const actorId = id(token.actorId);
   if (!tokenId || !actorId || !actorIds.has(actorId)) return null;
   const placement = token.placement === 'feature' || token.featureId != null ? 'feature' : 'map';
+  let actorDelta = null;
+  if (token.actorDelta && typeof token.actorDelta === 'object' && !Array.isArray(token.actorDelta)) {
+    const rawBaseActor = rawActorsById.get(actorId) || actorsById.get(actorId);
+    const baseActor = actorsById.get(actorId);
+    if (rawBaseActor && baseActor) {
+      const resolved = normalizeActorDocument(
+        mergeActorDelta(rawBaseActor, token.actorDelta),
+        ruleset ? { ruleset } : {},
+      );
+      actorDelta = createActorDelta(baseActor, resolved);
+    } else actorDelta = clone(token.actorDelta);
+  }
   return {
     id: tokenId,
     actorId,
     actorLink: token.actorLink !== false,
-    actorDelta: token.actorDelta && typeof token.actorDelta === 'object' && !Array.isArray(token.actorDelta)
-      ? clone(token.actorDelta)
-      : null,
+    actorDelta,
     placement,
     x: placement === 'map' ? finite(token.x, 0) : null,
     y: placement === 'map' ? finite(token.y, 0) : null,
@@ -83,7 +95,13 @@ function normalizeWorldToken(raw, actorIds) {
   };
 }
 
-function normalizeScene(raw, { mapPackage = null, actorIds = new Set() } = {}) {
+function normalizeScene(raw, {
+  mapPackage = null,
+  actorIds = new Set(),
+  rawActorsById = new Map(),
+  actorsById = new Map(),
+  ruleset = null,
+} = {}) {
   const source = object(raw);
   const fallbackMap = mapMetadata(mapPackage || {});
   const mapRef = object(source.mapPackage);
@@ -92,7 +110,7 @@ function normalizeScene(raw, { mapPackage = null, actorIds = new Set() } = {}) {
   const seen = new Set();
   const tokens = [];
   for (const candidate of array(source.tokens)) {
-    const token = normalizeWorldToken(candidate, actorIds);
+    const token = normalizeWorldToken(candidate, actorIds, { rawActorsById, actorsById, ruleset });
     if (!token || seen.has(token.id)) continue;
     seen.add(token.id);
     tokens.push(token);
@@ -111,15 +129,21 @@ function normalizeScene(raw, { mapPackage = null, actorIds = new Set() } = {}) {
 
 export function normalizeWorldV2(raw, { mapPackage = null, ruleset = null } = {}) {
   const source = object(raw);
-  const actors = clone(array(source.actors));
+  const rawActors = array(source.actors).filter(Boolean);
+  const actors = rawActors
+    .map(actor => normalizeActorDocument(actor, ruleset ? { ruleset } : {}));
   const actorIds = new Set(actors.map(actor => id(actor?.id)).filter(Boolean));
-  const scenes = array(source.scenes).map(scene => normalizeScene(scene, { mapPackage, actorIds }));
+  const rawActorsById = new Map(rawActors.map(actor => [id(actor?.id), actor]));
+  const actorsById = new Map(actors.map(actor => [id(actor?.id), actor]));
+  const scenes = array(source.scenes).map(scene => normalizeScene(scene, {
+    mapPackage, actorIds, rawActorsById, actorsById, ruleset,
+  }));
   const fallbackMap = mapMetadata(mapPackage || {});
   if (!scenes.length) {
     scenes.push(normalizeScene({
       id: sceneIdForMap(fallbackMap.id),
       mapPackage: fallbackMap,
-    }, { mapPackage, actorIds }));
+    }, { mapPackage, actorIds, rawActorsById, actorsById, ruleset }));
   }
   const sceneIds = new Set(scenes.map(scene => scene.id));
   const activeSceneId = sceneIds.has(id(source.activeSceneId)) ? id(source.activeSceneId) : scenes[0].id;
@@ -155,10 +179,15 @@ export function activeWorldScene(world) {
  */
 export function createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worldId = 'world-default', worldName = '' } = {}) {
   const entity = runtimeEntityState(state);
-  const actors = clone(array(entity.actors));
+  const actors = array(entity.actors).filter(Boolean)
+    .map(actor => normalizeActorDocument(actor, ruleset ? { ruleset } : {}));
   const actorIds = new Set(actors.map(actor => id(actor?.id)).filter(Boolean));
   const tokens = array(entity.tokens)
-    .map(token => normalizeWorldToken(token, actorIds))
+    .map(token => normalizeWorldToken(token, actorIds, {
+      rawActorsById: new Map(actors.map(actor => [id(actor?.id), actor])),
+      actorsById: new Map(actors.map(actor => [id(actor?.id), actor])),
+      ruleset,
+    }))
     .filter(Boolean);
   const mapRef = mapMetadata(mapPackage || {});
   const sceneId = sceneIdForMap(mapRef.id);
@@ -209,7 +238,9 @@ export function synchronizeWorldV2FromRuntimeState(state, { mapPackage, ruleset,
   if (!base) return createWorldV2FromRuntimeState(state, { mapPackage, ruleset });
   const world = normalizeWorldV2(base, { mapPackage, ruleset });
   const entity = runtimeEntityState(state);
-  const actors = clone(array(entity.actors).length ? entity.actors : world.actors);
+  const actors = (array(entity.actors).length ? entity.actors : world.actors)
+    .filter(Boolean)
+    .map(actor => normalizeActorDocument(actor, ruleset ? { ruleset } : {}));
   const actorIds = new Set(actors.map(actor => id(actor?.id)).filter(Boolean));
   const runtimeTokens = new Map(array(entity.tokens).map(token => [String(token?.id ?? ''), token]));
   const scene = activeWorldScene(world);
