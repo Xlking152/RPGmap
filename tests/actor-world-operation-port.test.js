@@ -38,3 +38,14 @@ test('canonical Actor upsert refuses projection-only runtimes', async () => {
     error => error?.code === 'actor_id_required',
   );
 });
+
+
+test('canonical Actor upsert does not emit success when World rejects the write', async () => {
+  const emitted = [];
+  const api = {
+    world: { async performOperations() { throw Object.assign(new Error('conflict'), { code: 'world_state_stale' }); } },
+    emit(type, detail) { emitted.push({ type, detail }); },
+  };
+  await assert.rejects(upsertCanonicalActor(api, { id: 'actor-1', system: {}, effects: [] }), error => error?.code === 'world_state_stale');
+  assert.deepEqual(emitted, []);
+});
