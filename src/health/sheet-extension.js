@@ -1,7 +1,6 @@
+import { deriveActorDocument, describeActorSheet } from '../actor/index.js';
 import { normalizeEntityState } from '../entities/model.js';
-import { resolveActorHealth } from './actor.js';
 import { describeHealth, healthModeOptions } from './model.js';
-import { describeActorSheet } from '../actor/index.js';
 
 const STYLE_ID = 'rpgmap-health-system-style';
 
@@ -16,12 +15,13 @@ function actorFromSheet(api, documentNode) {
   return state.actors.find(actor => String(actor.id) === String(actorId)) || null;
 }
 
-function selectedActor(api) {
+function resolveActorHealth(actor, ruleset) {
+  return deriveActorDocument(actor, { ruleset })?.health || null;
+}
+
+function selectedTokenId(api) {
   const tokenId = api.selection?.getPrimaryTokenId?.();
-  if (!tokenId) return null;
-  const state = normalizeEntityState(api.getState().preferences?.entitySystem, { ruleset: api.ruleset });
-  const token = state.tokens.find(item => String(item.id) === String(tokenId));
-  return token ? state.actors.find(actor => String(actor.id) === String(token.actorId)) || null : null;
+  return tokenId == null ? null : String(tokenId);
 }
 
 function installStyles(documentNode) {
@@ -57,10 +57,10 @@ function modeOptionsHtml(mode, ruleset) {
   return healthModeOptions({ ruleset }).map(option => `<option value="${escapeHtml(option.id)}" ${String(mode) === String(option.id) ? 'selected' : ''}>${escapeHtml(option.label || option.id)}</option>`).join('');
 }
 
-function healthSignature(actor, state, view, ruleset) {
+function healthSignature(subjectId, state, view, variantId = '') {
   return [
-    actor.id,
-    describeActorSheet(actor, { ruleset })?.currentVariantId,
+    subjectId,
+    variantId,
     state?.mode,
     state?.max,
     view.summary,
@@ -70,28 +70,36 @@ function healthSignature(actor, state, view, ruleset) {
   ].join('|');
 }
 
+function healthInput(field, actorId, disabled) {
+  const min = Number.isFinite(Number(field.min)) ? ` min="${escapeHtml(field.min)}"` : '';
+  const max = Number.isFinite(Number(field.max)) ? ` max="${escapeHtml(field.max)}"` : '';
+  return `<input type="number"${min}${max} step="1" value="${escapeHtml(field.value)}" data-health-field-id="${escapeHtml(field.id)}" data-health-actor-id="${escapeHtml(actorId)}" aria-label="${escapeHtml(field.label || field.id)}"${disabled}>`;
+}
+
 export function renderActorHealthPanel(api, actor) {
-  const health = resolveActorHealth(actor, { ruleset: api.ruleset });
+  const health = resolveActorHealth(actor, api.ruleset);
   if (!health) return '';
   const view = describeHealth(health, { ruleset: api.ruleset });
   const editable = canEditHealth(api, actor.id);
   const disabled = editable ? '' : ' disabled title="需要 OWNER 权限且必须轮到该角色行动"';
   const width = value => health.max > 0 ? Math.max(0, Number(value) / health.max * 100) : 0;
   const fields = new Map((view.fields || []).map(field => [String(field.id), field]));
-  const values = (view.segments || []).map(segment => {
+  const segmentIds = new Set((view.segments || []).map(segment => String(segment.id)));
+  const segmentValues = (view.segments || []).map(segment => {
     const field = fields.get(String(segment.id));
-    const input = field
-      ? `<input type="number" min="${escapeHtml(field.min ?? 0)}" max="${escapeHtml(field.max ?? health.max)}" step="1" value="${escapeHtml(field.value)}" data-health-field-id="${escapeHtml(field.id)}" data-health-actor-id="${escapeHtml(actor.id)}" aria-label="${escapeHtml(field.label || segment.label)}"${disabled}>`
-      : '';
-    return `<label class="entity-health-value">${escapeHtml(segment.label || segment.id)}<b>${escapeHtml(segment.value)}</b>${input}</label>`;
-  }).join('');
+    return `<label class="entity-health-value">${escapeHtml(segment.label || segment.id)}<b>${escapeHtml(segment.value)}</b>${field ? healthInput(field, actor.id, disabled) : ''}</label>`;
+  });
+  const extraValues = (view.fields || [])
+    .filter(field => !segmentIds.has(String(field.id)))
+    .map(field => `<label class="entity-health-value">${escapeHtml(field.label || field.id)}<b>${escapeHtml(field.value)}</b>${healthInput(field, actor.id, disabled)}</label>`);
+  const values = [...segmentValues, ...extraValues].join('');
   const bar = (view.segments || []).length
     ? `<div class="entity-health-bar" title="${escapeHtml(view.summary)}">${view.segments.map(segment => `<span style="width:${width(segment.value)}%;background:${escapeHtml(segment.color || '#4b9f69')}" title="${escapeHtml(segment.label || segment.id)}"></span>`).join('')}</div>`
     : '';
   return `<section class="entity-section entity-health-panel" data-health-panel>
     <div class="entity-health-head"><h3>${escapeHtml(view.title || '生命系统')}</h3><label>模式 <select data-health-mode="${escapeHtml(actor.id)}"${disabled}>${modeOptionsHtml(health.mode, api.ruleset)}</select></label></div>
-    ${view.hideBaseResource ? bar : ''}
-    ${view.hideBaseResource && values ? `<div class="entity-health-values">${values}</div>` : ''}
+    ${bar}
+    ${values ? `<div class="entity-health-values">${values}</div>` : ''}
     ${view.status ? `<div class="entity-health-status ${view.danger ? 'is-danger' : ''}">${escapeHtml(view.status)}</div>` : ''}
     ${view.help ? `<div class="entity-help">${escapeHtml(view.help)}</div>` : ''}
   </section>`;
@@ -112,18 +120,15 @@ export function createHealthSheetExtension() {
         const actor = actorFromSheet(api, documentNode);
         const body = sheet.querySelector('.entity-sheet-body');
         if (!actor || !body) return;
-        const health = resolveActorHealth(actor, { ruleset: api.ruleset });
+        const health = resolveActorHealth(actor, api.ruleset);
         if (!health) {
           body.querySelector('[data-health-panel]')?.remove();
-          const hpRow = body.querySelector('[data-sheet-role="health-base"]');
-          if (hpRow) hpRow.style.display = '';
           return;
         }
         const view = describeHealth(health, { ruleset: api.ruleset });
-        const signature = healthSignature(actor, health, view, api.ruleset);
+        const variantId = describeActorSheet(actor, { ruleset: api.ruleset })?.currentVariantId || '';
+        const signature = healthSignature(actor.id, health, view, variantId);
         const existing = body.querySelector('[data-health-panel]');
-        const hpRow = body.querySelector('[data-sheet-role="health-base"]');
-        if (hpRow) hpRow.style.display = view.hideBaseResource ? 'none' : '';
         if (existing?.dataset.healthSignature === signature) return;
         enhancing = true;
         try {
@@ -138,20 +143,20 @@ export function createHealthSheetExtension() {
 
       function enhanceInspector() {
         const inspector = documentNode.querySelector('.ui-current-inspector');
-        const actor = selectedActor(api);
+        const tokenId = selectedTokenId(api);
         const firstCard = inspector?.querySelector('.ui-inspector-card');
-        if (!inspector || !actor || !firstCard) return;
-        const health = resolveActorHealth(actor, { ruleset: api.ruleset });
+        if (!inspector || !tokenId || !firstCard) {
+          inspector?.querySelector('[data-health-mini]')?.remove();
+          return;
+        }
+        const health = api.health?.resolveToken?.(tokenId);
         if (!health) {
           inspector.querySelector('[data-health-mini]')?.remove();
           return;
         }
         const view = describeHealth(health, { ruleset: api.ruleset });
-        const hpMini = [...firstCard.querySelectorAll('.ui-resource-mini')].find(node => node.querySelector('span')?.textContent?.trim() === '生命');
-        if (hpMini) hpMini.style.display = view.hideBaseResource ? 'none' : '';
-        const signature = healthSignature(actor, health, view, api.ruleset);
+        const signature = healthSignature(tokenId, health, view);
         const existing = inspector.querySelector('[data-health-mini]');
-        if (!view.hideBaseResource) { existing?.remove(); return; }
         if (existing?.dataset.healthSignature === signature) return;
         existing?.remove();
         const node = documentNode.createElement('div');
@@ -172,10 +177,12 @@ export function createHealthSheetExtension() {
         const input = event.target.closest?.('[data-health-field-id]');
         if (!input) return;
         const actor = actorFromSheet(api, documentNode);
-        const health = actor ? resolveActorHealth(actor, { ruleset: api.ruleset }) : null;
+        const health = actor ? resolveActorHealth(actor, api.ruleset) : null;
         const field = health ? describeHealth(health, { ruleset: api.ruleset }).fields?.find(item => String(item.id) === String(input.dataset.healthFieldId)) : null;
         if (!field || typeof field.operation !== 'function') return;
-        const value = Math.max(Number(field.min) || 0, Math.floor(Number(input.value) || 0));
+        const numeric = Math.floor(Number(input.value));
+        const floor = Number.isFinite(Number(field.min)) ? Number(field.min) : 0;
+        const value = Math.max(floor, Number.isFinite(numeric) ? numeric : floor);
         api.health?.performActorOperation?.(input.dataset.healthActorId, field.operation(value));
         queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
       });
@@ -184,10 +191,7 @@ export function createHealthSheetExtension() {
       observer.observe(documentNode.body, { childList: true, subtree: true });
       api.selection?.subscribe?.(() => queueMicrotask(enhanceInspector));
       api.on('state:import', () => queueMicrotask(() => { enhanceSheet(); enhanceInspector(); }));
-      api.on('state:commit', event => {
-        const source = String(event.detail?.source || '');
-        if (source === 'health' || source.startsWith('entities:resource')) queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
-      });
+      api.on('state:commit', () => queueMicrotask(() => { enhanceSheet(); enhanceInspector(); }));
       api.on('health:change', () => queueMicrotask(() => { enhanceSheet(); enhanceInspector(); }));
       queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
     },
