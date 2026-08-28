@@ -5,6 +5,7 @@ import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
 import { createWorldSystem } from '../src/world/system.js';
 import { activeWorldScene } from '../src/world/model.js';
 import { pruneProjectedWorldReferences } from '../src/world/references.js';
+import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 
 const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图' };
 
@@ -79,6 +80,7 @@ test('api.world.commit prunes missing Token combatants before authoritative adap
   let authoritativePayload = null;
   const api = {
     mapPackage,
+    ruleset: infiniteHorrorRuleset,
     getState() { return structuredClone(current); },
     commitState(next) { current = structuredClone(next); return true; },
     async commitAuthoritativeState(next) {

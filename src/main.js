@@ -2,6 +2,7 @@ import 'leaflet/dist/leaflet.css';
 import './styles.css';
 import { createRpgMapRuntime } from './engine/runtime.js';
 import { createBrowserStorage, createMemoryStorage } from './app/storage.js';
+import { prepareStoredWorldState, readStoredWorldState } from './app/world-storage.js';
 import { createAppLifecycleSystem } from './engine/lifecycle.js';
 import { createMovementSystem } from './movement/index.js';
 import { createMeasurementSystem } from './measurement/index.js';
@@ -19,45 +20,24 @@ import { createMultiplayerSystem } from './multiplayer/index.js';
 import { createMultiplayerHostBootstrapSystem } from './multiplayer/host-bootstrap.js';
 import { createDefaultMapPackage } from './map-package/default-map.js';
 import { createStatusSystem, createStatusUiSystem } from './status/index.js';
-import { chooseRulesetBeforeMap } from './ruleset/setup.js';
+import { resolveRulesetReference, rulesetRegistry, setActiveRuleset } from './ruleset/index.js';
 import { createWorldSystem } from './world/index.js';
+import { readServerWorldBootstrap, readWorldBootstrap } from './world/bootstrap.js';
 import {
   createTokenRuntimeSystem,
   createTokenStatusBridgeSystem,
 } from './token/index.js';
 import { createTokenRendererSystem } from './render/token-layer.js';
 import { createSceneAreaSystem } from './scene/areas.js';
+import { detectRpgMapServer, readRpgMapServerBootstrap } from './multiplayer/server-bootstrap.js';
+
+export { detectRpgMapServer, readRpgMapServerBootstrap } from './multiplayer/server-bootstrap.js';
 
 function setBootStatus(message, { error = false } = {}) {
   const node = document.querySelector('[data-rpgmap-boot-status]');
   if (!node) return;
   node.textContent = message;
   node.dataset.error = error ? 'true' : 'false';
-}
-
-export async function detectRpgMapServer({
-  fetchImpl = globalThis.fetch,
-  timeoutMs = 1500,
-} = {}) {
-  if (typeof fetchImpl !== 'function') return false;
-  const protocol = globalThis.location?.protocol;
-  if (protocol !== 'http:' && protocol !== 'https:') return false;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetchImpl('/api/health', {
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-    if (!response.ok) return false;
-    const health = await response.json();
-    return health?.status === 'ok' && health?.app === 'RPGmap' && health?.multiplayer?.enabled === true;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 async function yieldForFirstPaint() {
@@ -67,25 +47,34 @@ async function yieldForFirstPaint() {
 
 export async function startRpgMap() {
   const appContainer = document.getElementById('app');
+  const mapPackage = createDefaultMapPackage();
   const bootstrapStorage = createBrowserStorage();
-  const ruleset = await chooseRulesetBeforeMap({
-    container: appContainer,
-    storageAdapter: bootstrapStorage,
+  const defaultRuleset = rulesetRegistry.require('infinite-horror');
+  setBootStatus('正在检查 Windows RPGmap Server 与 World…');
+  const serverBootstrap = await readRpgMapServerBootstrap();
+  const { serverRuntime } = serverBootstrap;
+  const stored = serverRuntime ? null : readStoredWorldState({ mapPackage, storageAdapter: bootstrapStorage });
+  const worldBootstrap = serverRuntime
+    ? readServerWorldBootstrap(serverBootstrap.world, { defaultRuleset })
+    : readWorldBootstrap(stored.raw, { defaultRuleset });
+  const ruleset = resolveRulesetReference(worldBootstrap.ruleset);
+  const storageAdapter = serverRuntime ? createMemoryStorage() : bootstrapStorage;
+  const initialLoad = prepareStoredWorldState({
+    mapPackage,
+    ruleset,
+    storageAdapter,
+    raw: serverRuntime ? null : stored.raw,
   });
-
-  setBootStatus(`规则包：${ruleset.title} · 正在检查 Windows RPGmap Server…`);
-  const serverRuntime = await detectRpgMapServer();
+  setActiveRuleset(ruleset.id);
 
   // The packaged multiplayer server owns the canonical World under map/.
   // Do not synchronously install a stale browser snapshot before LAN sync.
-  const storageAdapter = serverRuntime ? createMemoryStorage() : createBrowserStorage();
   setBootStatus(serverRuntime
     ? `规则包：${ruleset.title} · 服务器已连接，正在载入 World…`
     : `规则包：${ruleset.title} · 正在载入本地 World…`);
 
   await yieldForFirstPaint();
 
-  const mapPackage = createDefaultMapPackage();
   const selectionSystem = createSelectionSystem();
 
   return createRpgMapRuntime({
@@ -93,6 +82,7 @@ export async function startRpgMap() {
     mapPackage,
     ruleset,
     storageAdapter,
+    initialLoad,
     tools: [
       createAppLifecycleSystem(),
       createWorldSystem(),

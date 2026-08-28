@@ -9,7 +9,7 @@ import {
   synchronizeWorldV2FromRuntimeState,
 } from './model.js';
 import { pruneProjectedWorldReferences } from './references.js';
-import { getActiveRuleset, rulesetRegistry, setActiveRuleset } from '../ruleset/index.js';
+import { assertWorldRuleset } from './validation.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -19,11 +19,9 @@ function currentWorldFromState(state) {
   return state?.preferences?.[WORLD_STATE_KEY] || null;
 }
 
-function requireInstalledRuleset(world) {
-  const rulesetId = String(world?.ruleset?.id || '').trim();
-  const installed = rulesetRegistry.require(rulesetId);
-  setActiveRuleset(installed.id);
-  return installed;
+function requireRuntimeRuleset(world, ruleset) {
+  assertWorldRuleset(world, ruleset);
+  return ruleset;
 }
 
 function sameMap(scene, mapPackage) {
@@ -36,17 +34,19 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
     register(api) {
       if (!api || api.world) return;
       const mapPackage = api.mapPackage;
+      const runtimeRuleset = api.ruleset;
       const coreCommitState = api.commitState?.bind(api);
       const coreCommitAuthoritativeState = api.commitAuthoritativeState?.bind(api);
       if (typeof coreCommitState !== 'function') throw new Error('World V2 requires api.commitState()');
+      if (!runtimeRuleset?.id) throw new Error('World V2 requires api.ruleset');
 
       function normalizeForRuntime(state, { preferCanonical = false } = {}) {
         const rawWorld = currentWorldFromState(state);
-        let ruleset = getActiveRuleset();
+        let ruleset = runtimeRuleset;
         let world;
         if (rawWorld) {
+          ruleset = requireRuntimeRuleset(rawWorld, runtimeRuleset);
           world = normalizeWorldV2(rawWorld, { mapPackage, ruleset });
-          ruleset = requireInstalledRuleset(world);
           world = normalizeWorldV2(world, { mapPackage, ruleset });
           if (preferCanonical) return projectWorldV2ToRuntimeState(state, world, { mapPackage, ruleset });
           world = synchronizeWorldV2FromRuntimeState(state, { mapPackage, ruleset, existingWorld: world });
@@ -86,7 +86,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       function snapshot() {
         const state = api.getState?.() || {};
         const raw = currentWorldFromState(state);
-        const ruleset = raw ? requireInstalledRuleset(raw) : getActiveRuleset();
+        const ruleset = raw ? requireRuntimeRuleset(raw, runtimeRuleset) : runtimeRuleset;
         return normalizeWorldV2(raw || createWorldV2FromRuntimeState(state, {
           mapPackage,
           ruleset,
@@ -96,7 +96,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       }
 
       async function commitWorld(world, { source = 'world-v2', reason = source, render = true } = {}) {
-        const ruleset = requireInstalledRuleset(world);
+        const ruleset = requireRuntimeRuleset(world, runtimeRuleset);
         const normalized = normalizeWorldV2(world, { mapPackage, ruleset });
         const scene = activeWorldScene(normalized);
         if (!sameMap(scene, mapPackage)) {

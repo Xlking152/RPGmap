@@ -523,6 +523,23 @@ function multiplayerInfo() {
     playerWriteEnabled: true,
   };
 }
+
+function worldBootstrapInfo() {
+  const rawWorld = world.state?.preferences?.worldV2;
+  if (!world.state) return { initialized: false, kind: 'empty', schemaVersion: null, ruleset: null };
+  if (!rawWorld || typeof rawWorld !== 'object' || Array.isArray(rawWorld)) {
+    return { initialized: true, kind: 'legacy', schemaVersion: null, ruleset: null };
+  }
+  return {
+    initialized: true,
+    kind: 'world-v2',
+    schemaVersion: Number(rawWorld.schemaVersion) || null,
+    ruleset: {
+      id: String(rawWorld.ruleset?.id || ''),
+      version: String(rawWorld.ruleset?.version || ''),
+    },
+  };
+}
 function sendWelcome(socket, session, { includeWorld = true, pendingApproval = false } = {}) {
   sendSocket(socket, {
     type: 'welcome',
@@ -551,7 +568,7 @@ function refreshOnlineUser(userId) {
 const server = http.createServer(async (req, res) => {
   try {
     if (!['GET', 'HEAD'].includes(req.method || 'GET')) return json(res, 405, { error: 'method_not_allowed' });
-    if (req.url === '/api/health') return json(res, 200, { status: 'ok', app: version.app || 'RPGmap', version: packageVersion, mode: version.serverMode || 'multiplayer', multiplayer: multiplayerInfo() });
+    if (req.url === '/api/health') return json(res, 200, { status: 'ok', app: version.app || 'RPGmap', version: packageVersion, mode: version.serverMode || 'multiplayer', multiplayer: multiplayerInfo(), world: worldBootstrapInfo() });
     if (req.url === '/api/version') return json(res, 200, version);
     if (req.url === '/api/multiplayer') return json(res, 200, multiplayerInfo());
 

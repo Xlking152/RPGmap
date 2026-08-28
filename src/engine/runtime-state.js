@@ -81,19 +81,19 @@ function cleanSceneEvents(events) {
   return next;
 }
 
-function cleanPreferences(raw) {
+function cleanPreferences(raw, ruleset) {
   const preferences = raw && typeof raw === 'object' && !Array.isArray(raw) ? clone(raw) : {};
-  preferences.entitySystem = normalizeEntityState(preferences.entitySystem);
+  preferences.entitySystem = normalizeEntityState(preferences.entitySystem, ruleset ? { ruleset } : {});
   for (const token of preferences.entitySystem.tokens) {
     if ('characterId' in token) delete token.characterId;
   }
   return preferences;
 }
 
-export function createInitialRuntimeState(mapPackage) {
+export function createInitialRuntimeState(mapPackage, { ruleset } = {}) {
   const metadata = mapMetadata(mapPackage);
   const defaults = mapPackage.defaultPreferences ?? mapPackage.preferences ?? {};
-  const preferences = cleanPreferences(defaults);
+  const preferences = cleanPreferences(defaults, ruleset);
   return {
     saveVersion: RUNTIME_SAVE_VERSION,
     mapId: metadata.id,
@@ -121,7 +121,7 @@ export function validateRuntimeState(raw, { mapPackage, ruleset } = {}) {
     markers: cleanMarkers(source.markers ?? []),
     attackAreas: cleanAttackAreas(source.attackAreas ?? []),
     sceneEvents: cleanSceneEvents(source.sceneEvents ?? []),
-    preferences: cleanPreferences(source.preferences),
+    preferences: cleanPreferences(source.preferences, ruleset),
   };
   delete next.characters;
 

@@ -34,10 +34,13 @@ function uniqueIds(items, label) {
 
 export function worldRulesetReference(rawWorld) {
   const world = object(rawWorld, 'worldV2');
-  const reference = object(world.ruleset, 'worldV2.ruleset');
-  const id = identifier(reference.id, 'worldV2.ruleset.id');
+  if (!world.ruleset || typeof world.ruleset !== 'object' || Array.isArray(world.ruleset)) {
+    fail('worldV2.ruleset is required', 'world_ruleset_missing');
+  }
+  const reference = world.ruleset;
+  const id = reference.id == null ? '' : String(reference.id).trim();
   const version = typeof reference.version === 'string' ? reference.version.trim() : '';
-  if (!version) fail('worldV2.ruleset.version is required', 'world_ruleset_missing');
+  if (!id || !version) fail('worldV2.ruleset id and version are required', 'world_ruleset_missing');
   return Object.freeze({ id, version });
 }
 

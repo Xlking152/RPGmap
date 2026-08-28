@@ -42,14 +42,14 @@ export function createFormFromImport(imported, { id, name } = {}) {
 }
 
 /** Legacy SaveV2 migration helper only. */
-export function createLegacyActor(character, { actorId = uid('actor') } = {}) {
+export function createLegacyActor(character, { actorId = uid('actor'), ruleset } = {}) {
   return createActorFromRulesetImport({
     formName: '默认形态',
     identity: { name: character?.name || '未命名角色' },
     avatarDataUrl: character?.avatarDataUrl || null,
     tokenAppearance: { color: character?.color || '#3d9b63', scale: 1 },
     source: { type: 'legacy-character', legacyId: character?.id },
-  }, { id: actorId, variantName: '默认形态' });
+  }, { id: actorId, variantName: '默认形态', ...(ruleset ? { ruleset } : {}) });
 }
 
 export function createTokenForActor(actorId, tokenId, overrides = {}) {
@@ -66,10 +66,10 @@ export function createTokenForActor(actorId, tokenId, overrides = {}) {
   };
 }
 
-export function normalizeEntityState(raw) {
+export function normalizeEntityState(raw, { ruleset } = {}) {
   if (!raw || typeof raw !== 'object') return createEmptyEntityState();
   const actors = Array.isArray(raw.actors)
-    ? raw.actors.filter(Boolean).map(actor => normalizeActorDocument(actor))
+    ? raw.actors.filter(Boolean).map(actor => normalizeActorDocument(actor, ruleset ? { ruleset } : {}))
     : [];
   const actorIds = new Set(actors.map(actor => String(actor.id)));
   const tokens = Array.isArray(raw.tokens)
@@ -94,7 +94,7 @@ export function normalizeEntityState(raw) {
   return {
     schemaVersion: STATUS_SCHEMA_VERSION,
     statusDefinitions: normalizedStatuses.statusDefinitions,
-    actors: normalizedStatuses.actors.map(actor => normalizeActorDocument(actor)),
+    actors: normalizedStatuses.actors.map(actor => normalizeActorDocument(actor, ruleset ? { ruleset } : {})),
     tokens: normalizedStatuses.tokens.map(token => {
       const next = clone(token);
       delete next.characterId;
@@ -107,13 +107,13 @@ export function normalizeEntityState(raw) {
  * Explicit import boundary for pre-World saves. Modern runtime code must never
  * call this after WorldSystem has hydrated the canonical Actor/Token graph.
  */
-export function migrateLegacyCharacters(entityState, characters = []) {
-  const next = normalizeEntityState(entityState);
+export function migrateLegacyCharacters(entityState, characters = [], { ruleset } = {}) {
+  const next = normalizeEntityState(entityState, ruleset ? { ruleset } : {});
   const linkedIds = new Set(next.tokens.map(token => String(token.id)));
   let migrated = 0;
   for (const character of characters || []) {
     if (!character?.id || linkedIds.has(String(character.id))) continue;
-    const actor = createLegacyActor(character);
+    const actor = createLegacyActor(character, { ruleset });
     next.actors.push(actor);
     next.tokens.push(createTokenForActor(actor.id, character.id));
     linkedIds.add(String(character.id));

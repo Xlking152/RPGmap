@@ -117,6 +117,7 @@ export function migrateLegacySaveV2(raw, {
   const entityMigration = migrateLegacyCharacters(
     legacyEntityState(legacy.preferences?.entitySystem),
     legacy.characters || [],
+    { ruleset },
   );
   const entity = entityMigration.state;
   const characterById = new Map((legacy.characters || []).map(character => [String(character.id), character]));

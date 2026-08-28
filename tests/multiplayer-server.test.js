@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -92,7 +92,7 @@ async function startServer(extraEnv = {}, existingMapDir = null) {
       reject(new Error(`server exited ${code}\n${stderr}`));
     });
   });
-  return { child, mapDir, url: `ws://127.0.0.1:${port}/ws` };
+  return { child, mapDir, url: `ws://127.0.0.1:${port}/ws`, httpUrl: `http://127.0.0.1:${port}` };
 }
 
 async function stopServer(runtime, { removeMap = true } = {}) {
@@ -191,6 +191,52 @@ function initialWorldV2() {
 }
 
 function clone(value) { return structuredClone(value); }
+
+test('health exposes only World bootstrap metadata for empty and initialized LAN state', async () => {
+  const runtime = await startServer();
+  try {
+    const empty = await (await fetch(`${runtime.httpUrl}/api/health`)).json();
+    assert.deepEqual(empty.world, {
+      initialized: false, kind: 'empty', schemaVersion: null, ruleset: null,
+    });
+
+    const gm = await openAndHello(runtime.url, { name: 'Bootstrap GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'bootstrap-init' }));
+    await initialized;
+    const health = await (await fetch(`${runtime.httpUrl}/api/health`)).json();
+    assert.deepEqual(health.world, {
+      initialized: true,
+      kind: 'world-v2',
+      schemaVersion: 2,
+      ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    });
+    assert.equal(Object.hasOwn(health.world, 'state'), false);
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('health identifies a persisted pre-World SaveV2 as an explicit LAN legacy bootstrap', async () => {
+  const mapDir = await mkdtemp(path.join(tmpdir(), 'rpgmap-legacy-bootstrap-'));
+  await writeFile(path.join(mapDir, 'world.json'), JSON.stringify({
+    schemaVersion: 1,
+    worldId: 'default',
+    revision: 1,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    state: initialWorld(),
+  }), 'utf8');
+  const runtime = await startServer({}, mapDir);
+  try {
+    const health = await (await fetch(`${runtime.httpUrl}/api/health`)).json();
+    assert.deepEqual(health.world, {
+      initialized: true, kind: 'legacy', schemaVersion: null, ruleset: null,
+    });
+  } finally {
+    await stopServer(runtime);
+  }
+});
 
 async function sendStatusAndWait(ws, message) {
   const operationId = message.operationId;

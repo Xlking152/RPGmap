@@ -4,6 +4,7 @@ import { createActorFromImport } from '../src/entities/model.js';
 import { createHealthController } from '../src/health/controller.js';
 import { createTokenRuntimeSystem } from '../src/token/system.js';
 import { createWorldSystem } from '../src/world/system.js';
+import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 
 const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图', width: 100, height: 100 };
 
@@ -29,6 +30,7 @@ function fixture() {
   };
   const api = {
     mapPackage,
+    ruleset: infiniteHorrorRuleset,
     getState() { return structuredClone(current); },
     commitState(next) { current = structuredClone(next); return true; },
     importState(next) { current = structuredClone(next); return true; },

@@ -3,6 +3,24 @@ import {
   exportRuntimeState,
   prepareRuntimeState,
 } from '../engine/runtime-state.js';
+import { createWorldV2FromRuntimeState, projectWorldV2ToRuntimeState } from '../world/model.js';
+
+export function worldStateStorageKey(mapPackage) {
+  if (!mapPackage?.id) throw new Error('World persistence requires MapPackage id');
+  return `rpg-map:${mapPackage.id}:v1`;
+}
+
+export function readStoredWorldState({ mapPackage, storageAdapter } = {}) {
+  if (!storageAdapter?.get) throw new Error('World persistence requires storage adapter');
+  const storageKey = worldStateStorageKey(mapPackage);
+  return Object.freeze({ storageKey, raw: storageAdapter.get(storageKey) });
+}
+
+function initialWorldState(mapPackage, ruleset) {
+  const seed = createInitialRuntimeState(mapPackage, { ruleset });
+  const world = createWorldV2FromRuntimeState(seed, { mapPackage, ruleset });
+  return projectWorldV2ToRuntimeState(seed, world, { mapPackage, ruleset });
+}
 
 export function createWorldStatePersistence({
   mapPackage,
@@ -12,15 +30,17 @@ export function createWorldStatePersistence({
   saveDelayMs = 180,
   onSaved = () => {},
   onError = () => {},
+  initialLoad = null,
 } = {}) {
   if (!mapPackage?.id) throw new Error('World persistence requires MapPackage id');
   if (!ruleset?.id) throw new Error('World persistence requires Ruleset');
   if (!storageAdapter?.get || !storageAdapter?.set) throw new Error('World persistence requires storage adapter');
   if (typeof getState !== 'function') throw new Error('World persistence requires getState()');
 
-  const storageKey = `rpg-map:${mapPackage.id}:v1`;
+  const storageKey = worldStateStorageKey(mapPackage);
   let saveTimer = null;
-  let blocked = false;
+  let blocked = initialLoad?.blocked === true;
+  let pendingInitialLoad = initialLoad;
 
   function preserveRaw(raw, suffix) {
     const backupKey = `${storageKey}:backup:${suffix}`;
@@ -28,11 +48,16 @@ export function createWorldStatePersistence({
     return backupKey;
   }
 
-  function load() {
+  function load(options = {}) {
+    if (pendingInitialLoad && !Object.prototype.hasOwnProperty.call(options, 'raw')) {
+      const loaded = pendingInitialLoad;
+      pendingInitialLoad = null;
+      return { state: loaded.state, notice: loaded.notice || null };
+    }
     let raw = null;
     try {
-      raw = storageAdapter.get(storageKey);
-      if (!raw) return { state: createInitialRuntimeState(mapPackage), notice: null };
+      raw = Object.prototype.hasOwnProperty.call(options, 'raw') ? options.raw : storageAdapter.get(storageKey);
+      if (!raw) return { state: initialWorldState(mapPackage, ruleset), notice: null };
       const prepared = prepareRuntimeState(raw, { mapPackage, ruleset });
       if (!prepared.migrated) return { state: prepared.state, notice: null };
       try {
@@ -67,7 +92,7 @@ export function createWorldStatePersistence({
           notice = { message: '原存档无法读取且无法备份；自动保存已暂停', type: 'error' };
         }
       }
-      return { state: createInitialRuntimeState(mapPackage), notice };
+      return { state: initialWorldState(mapPackage, ruleset), notice };
     }
   }
 
@@ -127,4 +152,15 @@ export function createWorldStatePersistence({
     cancel,
     get blocked() { return blocked; },
   };
+}
+
+export function prepareStoredWorldState({ mapPackage, ruleset, storageAdapter, raw } = {}) {
+  const persistence = createWorldStatePersistence({
+    mapPackage,
+    ruleset,
+    storageAdapter,
+    getState: () => null,
+  });
+  const loaded = persistence.load({ raw });
+  return Object.freeze({ ...loaded, blocked: persistence.blocked });
 }

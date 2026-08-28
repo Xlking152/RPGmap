@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createWorldSystem } from '../src/world/system.js';
 import { createTokenRuntimeSystem } from '../src/token/system.js';
 import { WORLD_STATE_KEY, activeWorldScene } from '../src/world/model.js';
+import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 
 const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图' };
 
@@ -30,6 +31,7 @@ function apiFixture() {
   const events = [];
   const api = {
     mapPackage,
+    ruleset: infiniteHorrorRuleset,
     getState() { return structuredClone(current); },
     commitState(next, options = {}) { current = structuredClone(next); events.push(['commit', options.source, options.reason]); return true; },
     importState(next, ...args) { current = structuredClone(next); events.push(['import', ...args]); return true; },

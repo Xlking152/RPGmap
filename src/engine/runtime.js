@@ -78,6 +78,7 @@ export function createRpgMapRuntime({
   mapPackage,
   ruleset,
   storageAdapter,
+  initialLoad = null,
   tools = [],
 } = {}) {
   if (!container) throw new Error('缺少应用容器');
@@ -111,6 +112,7 @@ export function createRpgMapRuntime({
     getState: () => state,
     onSaved: () => bus.dispatchEvent(new CustomEvent('state:saved')),
     onError: error => showToast(`自动保存失败，已暂停后续写入：${error.message}`, 'error'),
+    initialLoad,
   });
   const loaded = persistence.load();
   state = loaded.state;

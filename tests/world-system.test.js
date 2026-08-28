@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorldSystem } from '../src/world/system.js';
 import { WORLD_STATE_KEY, activeWorldScene } from '../src/world/model.js';
+import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 
 const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图' };
 function actor() { return { id: 'actor-1', name: '角色', currentFormId: 'form-1', forms: [{ id: 'form-1', tokenAppearance: { color: '#3d9b63' }, avatarDataUrl: null }], runtime: {}, effects: [] }; }
@@ -15,6 +16,7 @@ function apiFixture() {
   let current = state(); const events = [];
   const api = {
     mapPackage,
+    ruleset: infiniteHorrorRuleset,
     getState() { return structuredClone(current); },
     commitState(next, options = {}) { current = structuredClone(next); events.push(['commit', options.source]); return true; },
     importState(next) { current = structuredClone(next); events.push(['import']); return true; },
