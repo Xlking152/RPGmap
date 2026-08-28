@@ -336,6 +336,18 @@ test('generic World operations commit atomically, broadcast patches, and recover
     assert.equal(invalid.code, 'unknown_world_operation');
     assert.equal(invalid.revision, 3);
 
+    const malformedPromise = waitForMessage(gm.ws, message =>
+      message.type === 'world.operation.denied' && message.operationId === 'generic-malformed-1');
+    gm.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'generic-malformed-1', baseRevision: 3,
+      operations: [{
+        type: 'token.move', payload: { sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', y: 4 },
+      }],
+    }));
+    const malformed = await malformedPromise;
+    assert.equal(malformed.code, 'invalid_world_operation');
+    assert.equal(malformed.revision, 3);
+
     const worldData = await waitForJsonFile(path.join(runtime.mapDir, 'world.json'), value => value?.revision === 3);
     assert.equal(worldData.state.preferences.worldV2.actors[0].effects[0].definitionId, 'status-rooted');
     gm.ws.close();
@@ -371,22 +383,50 @@ test('generic World operations reuse Player ownership and status permission chec
     assert.equal(moved.committed.revision, 2);
     assert.equal(moved.committed.patch.world.scenes.tokens[0].upsert[0].x, 16);
 
+    const combat = await sendWorldOperationsAndWait(gm.ws, {
+      type: 'world.operation', operationId: 'generic-combat-start-1', baseRevision: 2,
+      operations: [{ type: 'combat.replace', payload: { combatSystem: {
+        schemaVersion: 1,
+        combat: {
+          id: 'combat-generic', state: 'active', round: 1, turnIndex: 0,
+          combatants: [
+            { id: 'cb-b', tokenId: 'token-b', actorId: 'actor-b', initiative: 20, order: 0 },
+            { id: 'cb-a', tokenId: 'token-a', actorId: 'actor-a', initiative: 10, order: 1 },
+          ],
+        },
+      } } }],
+    });
+    assert.equal(combat.committed.revision, 3);
+
+    const turnDeniedPromise = waitForMessage(player.ws, message =>
+      message.type === 'world.operation.denied' && message.operationId === 'player-wrong-turn-1');
+    player.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'player-wrong-turn-1', baseRevision: 3,
+      operations: [{
+        type: 'token.move',
+        payload: { sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 20, y: 22 },
+      }],
+    }));
+    const turnDenied = await turnDeniedPromise;
+    assert.equal(turnDenied.code, 'combat_turn_locked');
+    assert.equal(turnDenied.revision, 3);
+
     const actorB = clone(initialWorldV2().preferences.worldV2.actors[1]);
     actorB.runtime.hp = 1;
     const unownedPromise = waitForMessage(player.ws, message =>
       message.type === 'world.operation.denied' && message.operationId === 'player-unowned-1');
     player.ws.send(JSON.stringify({
-      type: 'world.operation', operationId: 'player-unowned-1', baseRevision: 2,
+      type: 'world.operation', operationId: 'player-unowned-1', baseRevision: 3,
       operations: [{ type: 'actor.upsert', payload: { actor: actorB } }],
     }));
     const unowned = await unownedPromise;
     assert.equal(unowned.code, 'actor_not_owned');
-    assert.equal(unowned.revision, 2);
+    assert.equal(unowned.revision, 3);
 
     const statusPromise = waitForMessage(player.ws, message =>
       message.type === 'world.operation.denied' && message.operationId === 'player-status-generic-1');
     player.ws.send(JSON.stringify({
-      type: 'world.operation', operationId: 'player-status-generic-1', baseRevision: 2,
+      type: 'world.operation', operationId: 'player-status-generic-1', baseRevision: 3,
       operations: [{
         type: 'status.apply',
         payload: { scope: 'actor', targetId: 'actor-a', statusId: 'status-rooted' },
@@ -394,12 +434,51 @@ test('generic World operations reuse Player ownership and status permission chec
     }));
     const deniedStatus = await statusPromise;
     assert.equal(deniedStatus.code, 'status_gm_only');
-    assert.equal(deniedStatus.revision, 2);
+    assert.equal(deniedStatus.revision, 3);
 
     player.ws.close();
     gm.ws.close();
   } finally {
     await stopServer(runtime);
+  }
+});
+
+test('generic World operation idempotency survives a LAN server restart', async () => {
+  let runtime = await startServer();
+  const mapDir = runtime.mapDir;
+  const operation = {
+    type: 'world.operation', operationId: 'generic-restart-idempotency-1', baseRevision: 1,
+    operations: [{ type: 'world.rename', payload: { name: 'Restart-safe World' } }],
+  };
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Restart Operation GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    await initialized;
+    const committed = await sendWorldOperationsAndWait(gm.ws, operation);
+    assert.equal(committed.committed.revision, 2);
+    assert.equal(committed.committed.patch.world.name, 'Restart-safe World');
+    gm.ws.close();
+
+    await stopServer(runtime, { removeMap: false });
+    runtime = await startServer({}, mapDir);
+    const reconnected = await openAndHello(runtime.url, { name: 'Restart Operation GM', requestedRole: 'gm' });
+    assert.equal(reconnected.welcome.world.revision, 2);
+    assert.equal(reconnected.welcome.world.state.preferences.worldV2.name, 'Restart-safe World');
+
+    const snapshotPromise = waitForMessage(reconnected.ws, message =>
+      message.type === 'world.snapshot' && message.operationId === operation.operationId);
+    const ackPromise = waitForMessage(reconnected.ws, message =>
+      message.type === 'world.operation.ack' && message.operationId === operation.operationId);
+    reconnected.ws.send(JSON.stringify({ ...operation, baseRevision: 2 }));
+    const [snapshot, ack] = await Promise.all([snapshotPromise, ackPromise]);
+    assert.equal(snapshot.revision, 2);
+    assert.equal(snapshot.state.preferences.worldV2.name, 'Restart-safe World');
+    assert.equal(ack.duplicate, true);
+    assert.equal(ack.committedRevision, 2);
+    reconnected.ws.close();
+  } finally {
+    await stopServer(runtime, { removeMap: true });
   }
 });
 
