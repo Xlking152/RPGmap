@@ -1,0 +1,160 @@
+name: Apply Actor UI World Operations
+
+on:
+  push:
+    branches:
+      - refactor/actor-world-operation-authority
+    paths:
+      - .github/workflows/apply-actor-ui-world-ops.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refactor/actor-world-operation-authority
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.12.0
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Patch Actor editor writes
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          function replace(path, from, to, label = path) {
+            let source = fs.readFileSync(path, 'utf8');
+            if (!source.includes(from)) throw new Error(`Pattern not found (${label})`);
+            source = source.replace(from, to);
+            fs.writeFileSync(path, source);
+          }
+
+          // The World operation owns durability. The Actor port must not add a
+          // second persistence call after performOperations().
+          {
+            const path = 'src/entities/actor-operations.js';
+            let source = fs.readFileSync(path, 'utf8');
+            source = source.replace(
+              `  source = 'entities:actor.upsert',\n  render = false,\n  immediate = true,\n} = {}) {`,
+              `  source = 'entities:actor.upsert',\n  render = false,\n} = {}) {`,
+            );
+            source = source.replace(`\n  if (immediate) api.persistNow?.();`, '');
+            fs.writeFileSync(path, source);
+          }
+
+          replace(
+            'src/entities/ui.js',
+            `import { EntityStore } from './store.js';`,
+            `import { EntityStore } from './store.js';\nimport { upsertCanonicalActor } from './actor-operations.js';`,
+            'Actor operation port import',
+          );
+          replace(
+            'src/entities/ui.js',
+            `      function persistAndRender(options = {}) { store.persist(options); renderPanel(); renderSheet(); }`,
+            `      async function persistActorAndRender(actor, { source = 'entities:actor.edit', render = false } = {}) {\n        await upsertCanonicalActor(api, actor, { source, render });\n        store.load({ migrateLegacy: false, dropMarkers: false });\n        renderPanel();\n        renderSheet();\n      }`,
+            'Actor UI canonical persistence helper',
+          );
+
+          replace(
+            'src/entities/ui.js',
+            `            const form = addFormToActor(actor, imported, { name: formName, ruleset: api.ruleset });\n            store.persist();\n            openSheet(actor.id);`,
+            `            const form = addFormToActor(actor, imported, { name: formName, ruleset: api.ruleset });\n            await persistActorAndRender(actor, { source: 'entities:actor.form.import' });\n            openSheet(actor.id);`,
+            'Imported Actor form write',
+          );
+          replace(
+            'src/entities/ui.js',
+            `            actor = createActorFromImport(imported, { ruleset: api.ruleset });\n            entityState().actors.push(actor);\n            store.persist();\n            openSheet(actor.id);`,
+            `            actor = createActorFromImport(imported, { ruleset: api.ruleset });\n            await persistActorAndRender(actor, { source: 'entities:actor.create' });\n            openSheet(actor.id);`,
+            'Imported Actor create write',
+          );
+
+          replace('src/entities/ui.js', '      function handlePanelClick(event) {', '      async function handlePanelClick(event) {', 'Actor panel async handler');
+          replace(
+            'src/entities/ui.js',
+            `          const actor = createActorFromImport({}, { ruleset: api.ruleset });\n          entityState().actors.push(actor);\n          store.persist();\n          renderPanel();\n          openSheet(actor.id);`,
+            `          const actor = createActorFromImport({}, { ruleset: api.ruleset });\n          await persistActorAndRender(actor, { source: 'entities:actor.create' });\n          openSheet(actor.id);`,
+            'Blank Actor create write',
+          );
+
+          replace(
+            'src/entities/ui.js',
+            `          const result = performActorOperation(actor, operation, { ruleset: api.ruleset });\n          if (result.changed) persistAndRender({ source: 'entities:actor-operation', immediate: true });`,
+            `          const result = performActorOperation(actor, operation, { ruleset: api.ruleset });\n          if (result.changed) await persistActorAndRender(actor, { source: 'entities:actor.operation' });`,
+            'Actor click operation write',
+          );
+          replace(
+            'src/entities/ui.js',
+            `            if (form) {\n              store.persist();\n              renderPanel();\n              renderSheet();\n              indicator(\`${'${actor.name}'} · ${'${form.name}'}\`);\n            }`,
+            `            if (form) {\n              await persistActorAndRender(actor, { source: 'entities:actor.form.cycle' });\n              indicator(\`${'${actor.name}'} · ${'${form.name}'}\`);\n            }`,
+            'Actor sheet cycle write',
+          );
+
+          replace(
+            'src/entities/ui.js',
+            `          actor.name = String(event.target.value || '未命名角色').trim().slice(0, 80) || '未命名角色';\n          persistAndRender();`,
+            `          actor.name = String(event.target.value || '未命名角色').trim().slice(0, 80) || '未命名角色';\n          await persistActorAndRender(actor, { source: 'entities:actor.rename' });`,
+            'Actor rename write',
+          );
+          replace(
+            'src/entities/ui.js',
+            `          if (form) {\n            store.persist();\n            renderPanel();\n            renderSheet();\n            indicator(\`${'${actor.name}'} · ${'${form.name}'}\`);\n          }`,
+            `          if (form) {\n            await persistActorAndRender(actor, { source: 'entities:actor.form.select' });\n            indicator(\`${'${actor.name}'} · ${'${form.name}'}\`);\n          }`,
+            'Actor form select write',
+          );
+          replace(
+            'src/entities/ui.js',
+            `          const result = performActorOperation(actor, operation, { ruleset: api.ruleset });\n          if (result.changed) persistAndRender({ source: 'entities:actor-operation', immediate: true });`,
+            `          const result = performActorOperation(actor, operation, { ruleset: api.ruleset });\n          if (result.changed) await persistActorAndRender(actor, { source: 'entities:actor.operation' });`,
+            'Actor input operation write',
+          );
+          replace(
+            'src/entities/ui.js',
+            `          if (result.changed) {\n            store.persist();\n            renderPanel();\n            renderSheet();\n          }`,
+            `          if (result.changed) {\n            await persistActorAndRender(actor, { source: 'entities:actor.avatar' });\n          }`,
+            'Actor avatar write',
+          );
+
+          replace(
+            'src/entities/ui.js',
+            `      documentNode.addEventListener('keydown', event => {`,
+            `      documentNode.addEventListener('keydown', async event => {`,
+            'Actor shortcut async handler',
+          );
+          replace(
+            'src/entities/ui.js',
+            `        const form = cycleActorForm(actor, 1, { ruleset: api.ruleset });\n        store.persist();\n        renderPanel();\n        renderSheet();\n        indicator(\`${'${actor.name}'} · ${'${form.name}'}\`);`,
+            `        const form = cycleActorForm(actor, 1, { ruleset: api.ruleset });\n        await persistActorAndRender(actor, { source: 'entities:actor.form.shortcut' });\n        indicator(\`${'${actor.name}'} · ${'${form.name}'}\`);`,
+            'Actor shortcut form write',
+          );
+
+          // Update the port test: durability belongs to World.performOperations.
+          {
+            const path = 'tests/actor-world-operation-port.test.js';
+            let source = fs.readFileSync(path, 'utf8');
+            source = source.replace(`  let persists = 0;\n`, '');
+            source = source.replace(`    persistNow() { persists += 1; },\n`, `    persistNow() { throw new Error('Actor port must not persist outside World operations'); },\n`);
+            source = source.replace(`  assert.equal(persists, 1);\n`, '');
+            fs.writeFileSync(path, source);
+          }
+
+          fs.writeFileSync('tests/entity-actor-operation-authority.test.js', `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\nimport path from 'node:path';\nimport { fileURLToPath } from 'node:url';\n\nconst ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');\n\ntest('ordinary Actor editor writes use the canonical World operation port', () => {\n  const source = readFileSync(path.join(ROOT, 'src/entities/ui.js'), 'utf8');\n  assert.match(source, /upsertCanonicalActor/);\n  assert.doesNotMatch(source, /entityState\\(\\)\\.actors\\.push/);\n  assert.doesNotMatch(source, /persistAndRender/);\n  assert.doesNotMatch(source, /store\\.persist\\(\\)/);\n  // The only remaining EntityStore write in this UI is the explicit legacy\n  // marker migration boundary, which supplies a whole migration appState.\n  const writes = source.match(/store\\.persist\\(/g) || [];\n  assert.equal(writes.length, 1);\n  assert.match(source, /store\\.persist\\(\\{ appState: next \\}\\)/);\n});\n`);
+          NODE
+      - run: npm test
+      - name: Check JavaScript syntax
+        run: find src deployment scripts tests -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check
+      - run: npm run build
+      - run: npm run package:local-server
+      - name: Commit tested patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/entities/actor-operations.js src/entities/ui.js tests/actor-world-operation-port.test.js tests/entity-actor-operation-authority.test.js
+          git commit -m "Route Actor editor through World operations"
+          git push origin HEAD:refactor/actor-world-operation-authority
