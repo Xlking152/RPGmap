@@ -3,7 +3,7 @@ import {
   setActorForm,
   cycleActorForm,
 } from './resolver.js';
-import { describeActor, describeActorSheet, performActorOperation } from '../actor/index.js';
+import { describeActor, describeActorSheet as describeActorSheetDocument, performActorOperation as performActorDocumentOperation } from '../actor/index.js';
 import { importActorXlsx } from './xlsx-importer.js';
 import { imageToAvatarDataUrl } from './avatar.js';
 import { EntityStore } from './store.js';
@@ -175,6 +175,8 @@ export function createEntityUiTool(options = {}) {
       installStatusUiStyles(documentNode);
       const store = new EntityStore(api, { canonicalTokenReads: true });
       const migration = store.load({ migrateLegacy: true, dropMarkers: options.dropLegacyMarkers !== false });
+      const describeActorSheet = actor => describeActorSheetDocument(actor, store.actorContext(actor));
+      const performActorOperation = (actor, operation) => performActorDocumentOperation(actor, operation, store.actorContext(actor));
       let selectedTokenId = null;
       let pendingImportActorId = null;
       let openActorId = null;
