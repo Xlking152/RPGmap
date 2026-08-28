@@ -52,7 +52,7 @@ function actorView(api, token) {
   try {
     const resolved = api.tokens.resolveActor(token.id);
     const actor = resolved.actor;
-    const presentation = describeActor(actor) || {};
+    const presentation = describeActor(actor, { ruleset: api.ruleset }) || {};
     return {
       actor,
       synthetic: resolved.synthetic === true,

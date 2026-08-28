@@ -34,7 +34,7 @@ export function createTokenRuntimeSystem() {
         schemaVersion: 2,
         list() { return listActiveSceneTokens(api.world.get()); },
         get(tokenId) { return getActiveSceneToken(api.world.get(), tokenId); },
-        resolveActor(tokenId) { return resolveTokenActor(api.world.get(), tokenId); },
+        resolveActor(tokenId) { return resolveTokenActor(api.world.get(), tokenId, { ruleset: api.ruleset }); },
         async create(options = {}) {
           return commit(createSceneToken(api.world.get(), options), {
             source: 'token-v2:create', reason: 'token.create', render: true,

@@ -15,7 +15,7 @@ export function listFeatureTokenViews(api, featureId) {
       catch { return []; }
       const actor = resolved?.actor;
       if (!actor) return [];
-      const presentation = describeActor(actor) || {};
+      const presentation = describeActor(actor, { ruleset: api.ruleset }) || {};
       return [{
         token,
         actor,

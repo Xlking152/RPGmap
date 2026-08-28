@@ -12,14 +12,14 @@ function escapeHtml(value) {
 function actorFromSheet(api, documentNode) {
   const actorId = documentNode.querySelector('.entity-sheet')?.dataset.actorId;
   if (!actorId) return null;
-  const state = normalizeEntityState(api.getState().preferences?.entitySystem);
+  const state = normalizeEntityState(api.getState().preferences?.entitySystem, { ruleset: api.ruleset });
   return state.actors.find(actor => String(actor.id) === String(actorId)) || null;
 }
 
 function selectedActor(api) {
   const tokenId = api.selection?.getPrimaryTokenId?.();
   if (!tokenId) return null;
-  const state = normalizeEntityState(api.getState().preferences?.entitySystem);
+  const state = normalizeEntityState(api.getState().preferences?.entitySystem, { ruleset: api.ruleset });
   const token = state.tokens.find(item => String(item.characterId || item.id) === String(tokenId));
   return token ? state.actors.find(actor => String(actor.id) === String(token.actorId)) || null : null;
 }
@@ -53,14 +53,14 @@ function canEditHealth(api, actorId) {
   return !capabilities || capabilities.canEditActor?.(actorId) !== false;
 }
 
-function modeOptionsHtml(mode) {
-  return healthModeOptions().map(option => `<option value="${escapeHtml(option.id)}" ${String(mode) === String(option.id) ? 'selected' : ''}>${escapeHtml(option.label || option.id)}</option>`).join('');
+function modeOptionsHtml(mode, ruleset) {
+  return healthModeOptions({ ruleset }).map(option => `<option value="${escapeHtml(option.id)}" ${String(mode) === String(option.id) ? 'selected' : ''}>${escapeHtml(option.label || option.id)}</option>`).join('');
 }
 
-function healthSignature(actor, state, view) {
+function healthSignature(actor, state, view, ruleset) {
   return [
     actor.id,
-    describeActorSheet(actor)?.currentVariantId,
+    describeActorSheet(actor, { ruleset })?.currentVariantId,
     state?.mode,
     state?.max,
     view.summary,
@@ -71,9 +71,9 @@ function healthSignature(actor, state, view) {
 }
 
 export function renderActorHealthPanel(api, actor) {
-  const health = resolveActorHealth(actor);
+  const health = resolveActorHealth(actor, { ruleset: api.ruleset });
   if (!health) return '';
-  const view = describeHealth(health);
+  const view = describeHealth(health, { ruleset: api.ruleset });
   const editable = canEditHealth(api, actor.id);
   const disabled = editable ? '' : ' disabled title="需要 OWNER 权限且必须轮到该角色行动"';
   const width = value => health.max > 0 ? Math.max(0, Number(value) / health.max * 100) : 0;
@@ -89,7 +89,7 @@ export function renderActorHealthPanel(api, actor) {
     ? `<div class="entity-health-bar" title="${escapeHtml(view.summary)}">${view.segments.map(segment => `<span style="width:${width(segment.value)}%;background:${escapeHtml(segment.color || '#4b9f69')}" title="${escapeHtml(segment.label || segment.id)}"></span>`).join('')}</div>`
     : '';
   return `<section class="entity-section entity-health-panel" data-health-panel>
-    <div class="entity-health-head"><h3>${escapeHtml(view.title || '生命系统')}</h3><label>模式 <select data-health-mode="${escapeHtml(actor.id)}"${disabled}>${modeOptionsHtml(health.mode)}</select></label></div>
+    <div class="entity-health-head"><h3>${escapeHtml(view.title || '生命系统')}</h3><label>模式 <select data-health-mode="${escapeHtml(actor.id)}"${disabled}>${modeOptionsHtml(health.mode, api.ruleset)}</select></label></div>
     ${view.hideBaseResource ? bar : ''}
     ${view.hideBaseResource && values ? `<div class="entity-health-values">${values}</div>` : ''}
     ${view.status ? `<div class="entity-health-status ${view.danger ? 'is-danger' : ''}">${escapeHtml(view.status)}</div>` : ''}
@@ -112,15 +112,15 @@ export function createHealthSheetExtension() {
         const actor = actorFromSheet(api, documentNode);
         const body = sheet.querySelector('.entity-sheet-body');
         if (!actor || !body) return;
-        const health = resolveActorHealth(actor);
+        const health = resolveActorHealth(actor, { ruleset: api.ruleset });
         if (!health) {
           body.querySelector('[data-health-panel]')?.remove();
           const hpRow = body.querySelector('[data-sheet-role="health-base"]');
           if (hpRow) hpRow.style.display = '';
           return;
         }
-        const view = describeHealth(health);
-        const signature = healthSignature(actor, health, view);
+        const view = describeHealth(health, { ruleset: api.ruleset });
+        const signature = healthSignature(actor, health, view, api.ruleset);
         const existing = body.querySelector('[data-health-panel]');
         const hpRow = body.querySelector('[data-sheet-role="health-base"]');
         if (hpRow) hpRow.style.display = view.hideBaseResource ? 'none' : '';
@@ -141,15 +141,15 @@ export function createHealthSheetExtension() {
         const actor = selectedActor(api);
         const firstCard = inspector?.querySelector('.ui-inspector-card');
         if (!inspector || !actor || !firstCard) return;
-        const health = resolveActorHealth(actor);
+        const health = resolveActorHealth(actor, { ruleset: api.ruleset });
         if (!health) {
           inspector.querySelector('[data-health-mini]')?.remove();
           return;
         }
-        const view = describeHealth(health);
+        const view = describeHealth(health, { ruleset: api.ruleset });
         const hpMini = [...firstCard.querySelectorAll('.ui-resource-mini')].find(node => node.querySelector('span')?.textContent?.trim() === '生命');
         if (hpMini) hpMini.style.display = view.hideBaseResource ? 'none' : '';
-        const signature = healthSignature(actor, health, view);
+        const signature = healthSignature(actor, health, view, api.ruleset);
         const existing = inspector.querySelector('[data-health-mini]');
         if (!view.hideBaseResource) { existing?.remove(); return; }
         if (existing?.dataset.healthSignature === signature) return;
@@ -172,8 +172,8 @@ export function createHealthSheetExtension() {
         const input = event.target.closest?.('[data-health-field-id]');
         if (!input) return;
         const actor = actorFromSheet(api, documentNode);
-        const health = actor ? resolveActorHealth(actor) : null;
-        const field = health ? describeHealth(health).fields?.find(item => String(item.id) === String(input.dataset.healthFieldId)) : null;
+        const health = actor ? resolveActorHealth(actor, { ruleset: api.ruleset }) : null;
+        const field = health ? describeHealth(health, { ruleset: api.ruleset }).fields?.find(item => String(item.id) === String(input.dataset.healthFieldId)) : null;
         if (!field || typeof field.operation !== 'function') return;
         const value = Math.max(Number(field.min) || 0, Math.floor(Number(input.value) || 0));
         api.health?.performActorOperation?.(input.dataset.healthActorId, field.operation(value));

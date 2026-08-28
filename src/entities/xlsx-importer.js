@@ -1,24 +1,36 @@
-import { getActiveRuleset } from '../ruleset/index.js';
+import { getCompatibilityRuleset } from '../ruleset/active-compat.js';
 
-function xlsxImporter() {
-  const importer = getActiveRuleset().importers?.xlsx;
-  if (!importer || typeof importer !== 'object') throw new Error('Active ruleset does not provide an XLSX importer');
+function xlsxImporter(ruleset = getCompatibilityRuleset()) {
+  const importer = ruleset?.importers?.xlsx;
+  if (!importer || typeof importer !== 'object') {
+    const error = new Error('Ruleset does not provide an XLSX importer');
+    error.code = 'ruleset_capability_missing';
+    throw error;
+  }
   return importer;
 }
 
-export function guessFormName(fileName = '') {
-  const guess = xlsxImporter().guessFormName;
+export function guessFormName(fileName = '', { ruleset = getCompatibilityRuleset() } = {}) {
+  const guess = xlsxImporter(ruleset).guessFormName;
   return typeof guess === 'function' ? guess(fileName) : String(fileName || '').trim() || '默认形态';
 }
 
-export function parseCharacterSheets(input = {}) {
-  const parse = xlsxImporter().parse;
-  if (typeof parse !== 'function') throw new Error('Active ruleset XLSX importer does not implement parse()');
+export function parseCharacterSheets(input = {}, { ruleset = getCompatibilityRuleset() } = {}) {
+  const parse = xlsxImporter(ruleset).parse;
+  if (typeof parse !== 'function') {
+    const error = new Error('Ruleset XLSX importer does not implement parse()');
+    error.code = 'ruleset_capability_missing';
+    throw error;
+  }
   return parse(input);
 }
 
-export async function importCharacterXlsx(file) {
-  const importFile = xlsxImporter().importFile;
-  if (typeof importFile !== 'function') throw new Error('Active ruleset XLSX importer does not implement importFile()');
+export async function importCharacterXlsx(file, { ruleset = getCompatibilityRuleset() } = {}) {
+  const importFile = xlsxImporter(ruleset).importFile;
+  if (typeof importFile !== 'function') {
+    const error = new Error('Ruleset XLSX importer does not implement importFile()');
+    error.code = 'ruleset_capability_missing';
+    throw error;
+  }
   return importFile(file);
 }

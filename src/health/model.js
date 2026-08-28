@@ -1,19 +1,19 @@
-import { getActiveRuleset } from '../ruleset/index.js';
+import { getCompatibilityRuleset } from '../ruleset/active-compat.js';
 
-function presentation() {
-  return getActiveRuleset().health?.presentation || {};
+function presentation(ruleset = getCompatibilityRuleset()) {
+  return ruleset?.health?.presentation || {};
 }
 
-export function healthModeOptions() {
-  return presentation().modes || [];
+export function healthModeOptions({ ruleset = getCompatibilityRuleset() } = {}) {
+  return presentation(ruleset).modes || [];
 }
 
-export function healthOperationPresentation(operation) {
-  return presentation().operations?.[operation] || { defaultType: '', types: [] };
+export function healthOperationPresentation(operation, { ruleset = getCompatibilityRuleset() } = {}) {
+  return presentation(ruleset).operations?.[operation] || { defaultType: '', types: [] };
 }
 
-export function describeHealth(state) {
-  const describe = presentation().describe;
+export function describeHealth(state, { ruleset = getCompatibilityRuleset() } = {}) {
+  const describe = presentation(ruleset).describe;
   if (typeof describe === 'function') return describe(state);
   const current = Number(state?.current) || 0;
   const max = Math.max(0, Number(state?.max) || 0);
@@ -29,7 +29,7 @@ export function describeHealth(state) {
   };
 }
 
-export function healthTypeLabel(operation, type) {
-  const options = healthOperationPresentation(operation).types || [];
+export function healthTypeLabel(operation, type, { ruleset = getCompatibilityRuleset() } = {}) {
+  const options = healthOperationPresentation(operation, { ruleset }).types || [];
   return options.find(option => String(option.id) === String(type))?.label || String(type || '');
 }

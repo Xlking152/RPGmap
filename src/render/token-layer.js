@@ -119,7 +119,12 @@ export function createTokenRendererSystem() {
       function resolveModel(token) {
         try {
           const resolved = api.tokens.resolveActor(token.id);
-          return createTokenViewModel({ token, actor: resolved.actor, selected: selectedIds.has(String(token.id)) });
+          return createTokenViewModel({
+            token,
+            actor: resolved.actor,
+            selected: selectedIds.has(String(token.id)),
+            ruleset: api.ruleset,
+          });
         } catch (error) {
           console.warn('[RPGmap Token Renderer] cannot resolve Token Actor', token?.id, error);
           return null;

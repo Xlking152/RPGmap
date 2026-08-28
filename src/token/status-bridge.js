@@ -72,7 +72,9 @@ export function createTokenStatusBridgeSystem() {
       function resolve(context = {}, tokenId = null) {
         const target = contextValue(context, tokenId);
         const synthetic = syntheticStatusState(api, target);
-        return synthetic ? resolveStatuses(synthetic, target) : baseResolve(context, tokenId);
+        return synthetic
+          ? resolveStatuses(synthetic, { ...target, ruleset: api.ruleset })
+          : baseResolve(context, tokenId);
       }
 
       function currentSyntheticStatus(tokenId, definitionId) {
@@ -95,9 +97,11 @@ export function createTokenStatusBridgeSystem() {
           const applied = values.length === 1
             ? applySyntheticActorStatusOperation(api.world.get(), values[0], {
                 source: { role: 'gm', authority: 'world-v2', scope: 'syntheticActor' },
+                ruleset: api.ruleset,
               })
             : applySyntheticActorStatusBatch(api.world.get(), values, {
                 source: { role: 'gm', authority: 'world-v2', scope: 'syntheticActor' },
+                ruleset: api.ruleset,
               });
 
           await api.world.commit(applied.world, {

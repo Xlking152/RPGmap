@@ -45,7 +45,7 @@ function normalizeOperation(operation = {}) {
  */
 export function applySyntheticActorStatusOperation(rawWorld, rawOperation, context = {}) {
   const operation = normalizeOperation(rawOperation);
-  const resolved = resolveTokenActor(rawWorld, operation.targetId);
+  const resolved = resolveTokenActor(rawWorld, operation.targetId, { ruleset: context.ruleset });
   if (!resolved.synthetic || resolved.token.actorLink !== false) {
     const error = new Error(`Token ${operation.targetId} is linked; apply Actor status to ${resolved.baseActor.id} instead`);
     error.code = 'synthetic_actor_required';

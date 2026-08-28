@@ -26,19 +26,21 @@ export function createEmptyEntityState() {
   return { schemaVersion: STATUS_SCHEMA_VERSION, statusDefinitions: [], actors: [], tokens: [] };
 }
 
-export function createActorFromImport(imported, { id = uid('actor'), formId, formName } = {}) {
+export function createActorFromImport(imported, { id = uid('actor'), formId, formName, ruleset } = {}) {
   return createActorFromRulesetImport(imported, {
     id,
     variantId: formId,
     variantName: formName,
+    ...(ruleset ? { ruleset } : {}),
   });
 }
 
-export function createFormFromImport(imported, { id, name } = {}) {
+export function createFormFromImport(imported, { id, name, ruleset } = {}) {
   return deriveActorDocument(createActorFromRulesetImport(imported, {
     variantId: id,
     variantName: name,
-  }))?.form || null;
+    ...(ruleset ? { ruleset } : {}),
+  }), ruleset ? { ruleset } : {})?.form || null;
 }
 
 /** Legacy SaveV2 migration helper only. */
@@ -128,8 +130,8 @@ export function actorForToken(entityState, tokenId) {
   return entityState.actors.find(actor => String(actor.id) === String(token.actorId)) || null;
 }
 
-export function currentForm(actor) {
-  return deriveActorDocument(actor)?.form || null;
+export function currentForm(actor, { ruleset } = {}) {
+  return deriveActorDocument(actor, ruleset ? { ruleset } : {})?.form || null;
 }
 
 export function addFormToActor(actor, imported, options = {}) {
@@ -138,5 +140,5 @@ export function addFormToActor(actor, imported, options = {}) {
     imported,
     variantId: options.id,
     variantName: options.name,
-  }).value || null;
+  }, options.ruleset ? { ruleset: options.ruleset } : {}).value || null;
 }

@@ -66,26 +66,26 @@ export function createHealthController() {
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });
           const actor = store.actor(actorId);
-          return actor ? resolveActorHealth(actor) : null;
+          return actor ? resolveActorHealth(actor, { ruleset: api.ruleset }) : null;
         },
         resolveToken(tokenId) {
           if (api.tokens?.resolveActor) {
             try {
               const resolved = api.tokens.resolveActor(tokenId);
-              if (resolved?.actor) return resolveActorHealth(resolved.actor);
+              if (resolved?.actor) return resolveActorHealth(resolved.actor, { ruleset: api.ruleset });
             } catch {}
           }
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });
           const actor = store.actorForToken(tokenId);
-          return actor ? resolveActorHealth(actor) : null;
+          return actor ? resolveActorHealth(actor, { ruleset: api.ruleset }) : null;
         },
         setMode(actorId, mode) {
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });
           const actor = store.actor(actorId);
           if (!actor || !canEditActor(actor.id)) return null;
-          const state = setActorHealthMode(actor, mode);
+          const state = setActorHealthMode(actor, mode, { ruleset: api.ruleset });
           persistHealth(store, [actor.id]);
           return state;
         },
@@ -94,7 +94,7 @@ export function createHealthController() {
           store.load({ migrateLegacy: false, dropMarkers: false });
           const actor = store.actor(actorId);
           if (!actor || !canEditActor(actor.id)) return null;
-          const result = performActorHealthOperation(actor, operation);
+          const result = performActorHealthOperation(actor, operation, { ruleset: api.ruleset });
           if (!result.changed) return result;
           persistHealth(store, [actor.id]);
           return result;
@@ -109,7 +109,7 @@ export function createHealthController() {
               actorId: target.actor.id,
               actorName: target.actor.name,
               synthetic: target.synthetic,
-              ...applyDamageToActor(target.actor, damage),
+              ...applyDamageToActor(target.actor, damage, { ruleset: api.ruleset }),
             };
             persistSyntheticActor(target);
             return result;
@@ -131,7 +131,7 @@ export function createHealthController() {
               actorId: target.actor.id,
               actorName: target.actor.name,
               synthetic: target.synthetic,
-              ...applyHealingToActor(target.actor, healing),
+              ...applyHealingToActor(target.actor, healing, { ruleset: api.ruleset }),
             };
             persistSyntheticActor(target);
             return result;

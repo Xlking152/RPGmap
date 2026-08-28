@@ -60,7 +60,7 @@ export function createActorDelta(baseActor, resolvedActor) {
   return delta;
 }
 
-export function resolveTokenActor(world, tokenId) {
+export function resolveTokenActor(world, tokenId, { ruleset } = {}) {
   const scenes = Array.isArray(world?.scenes) ? world.scenes : [];
   const scene = scenes.find(item => String(item?.id ?? '') === String(world?.activeSceneId ?? ''));
   if (!scene) throw new Error(`World has no active Scene: ${world?.activeSceneId || '(missing)'}`);
@@ -70,9 +70,10 @@ export function resolveTokenActor(world, tokenId) {
   if (!rawBaseActor) throw new Error(`Token ${tokenId} references missing Actor: ${token.actorId}`);
 
   const synthetic = token.actorLink === false;
-  const baseActor = normalizeActorDocument(rawBaseActor);
+  const actorOptions = ruleset ? { ruleset } : {};
+  const baseActor = normalizeActorDocument(rawBaseActor, actorOptions);
   const actor = synthetic
-    ? normalizeActorDocument(mergeActorDelta(rawBaseActor, token.actorDelta))
+    ? normalizeActorDocument(mergeActorDelta(rawBaseActor, token.actorDelta), actorOptions)
     : baseActor;
   return {
     token: clone(token),

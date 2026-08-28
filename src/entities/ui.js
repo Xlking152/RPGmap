@@ -87,8 +87,8 @@ function installStyles(documentNode) {
   documentNode.head.append(style);
 }
 
-function avatarHtml(actor) {
-  const presentation = describeActor(actor) || {};
+function avatarHtml(actor, ruleset) {
+  const presentation = describeActor(actor, { ruleset }) || {};
   const avatar = presentation.avatarDataUrl;
   if (avatar) return `<span class="entity-avatar"><img src="${escapeHtml(avatar)}" alt=""></span>`;
   return `<span class="entity-avatar">${escapeHtml((actor?.name?.trim()?.[0] || '?').toUpperCase())}</span>`;
@@ -278,14 +278,14 @@ export function createEntityUiTool(options = {}) {
             </div>
             <div class="entity-help">Actor 保存角色数据；Token 的位置、大小、显示、旋转、高度和删除均由当前 Scene 的 canonical Token Runtime 管理。${legacyMarkerCount ? `检测到 ${legacyMarkerCount} 个旧标记；它们会保留，只有 GM 确认迁移后才会删除。` : '双击 Token 或按列表中的“角色卡”打开属性。选中有多个形态的 Token 后按 <b>V</b> 切换形态。'}</div>
             <div data-entity-list>${actors.length ? actors.map(actor => {
-              const presentation = describeActor(actor) || {};
-              const sheetCapabilities = actorUiCapabilities(api.ruleset, describeActorSheet(actor));
+              const presentation = describeActor(actor, { ruleset: api.ruleset }) || {};
+              const sheetCapabilities = actorUiCapabilities(api.ruleset, describeActorSheet(actor, { ruleset: api.ruleset }));
               const count = tokenCount(actor.id);
               const canEditActor = capabilities().canEditActor?.(actor.id);
               const canPlaceActor = capabilities().canPlaceActor?.(actor.id);
               const statusSnapshot = resolveStatusUiSnapshot(api, { actorId: actor.id });
               return `<article class="entity-card" data-actor-id="${escapeHtml(actor.id)}">
-                <div class="entity-card-top">${avatarHtml(actor)}<div class="entity-card-copy"><strong>${escapeHtml(actor.name)}</strong><small>${escapeHtml(presentation.variantLabel || '无形态')} · ${count ? `${count} 个 Token` : '未放置'}</small></div></div>
+                <div class="entity-card-top">${avatarHtml(actor, api.ruleset)}<div class="entity-card-copy"><strong>${escapeHtml(actor.name)}</strong><small>${escapeHtml(presentation.variantLabel || '无形态')} · ${count ? `${count} 个 Token` : '未放置'}</small></div></div>
                 <div class="entity-card-status">${renderStatusStrip([...statusSnapshot.actorStatuses, ...statusSnapshot.derivedStatuses], { limit: 4, emptyText: '无状态' })}</div>
                 <div class="entity-card-actions">
                   <button type="button" class="small-button" data-entity-action="open" data-id="${escapeHtml(actor.id)}">角色卡</button>
@@ -319,7 +319,7 @@ export function createEntityUiTool(options = {}) {
           });
         }
         if (tab === 'token') return tokenController.renderActorTokenSection(actor);
-        const description = describeActorSheet(actor) || {};
+        const description = describeActorSheet(actor, { ruleset: api.ruleset }) || {};
         const tabDescription = (description.tabs || []).find(item => String(item.id) === String(tab));
         return tabDescription ? renderSheetSections(tabDescription.sections) : '<div class="entity-empty">规则包没有提供这个角色卡页签。</div>';
       }
@@ -329,7 +329,7 @@ export function createEntityUiTool(options = {}) {
         if (!openActorId) { existing?.remove(); return; }
         const actor = store.actor(openActorId);
         if (!actor) { openActorId = null; existing?.remove(); return; }
-        const sheetDescription = describeActorSheet(actor) || { variants: [], tabs: [] };
+        const sheetDescription = describeActorSheet(actor, { ruleset: api.ruleset }) || { variants: [], tabs: [] };
         const sheetCapabilities = actorUiCapabilities(api.ruleset, sheetDescription);
         const tabs = [...(sheetDescription.tabs || []).map(item => [item.id, item.label]), ['status','状态'], ['token','Token']];
         if (!tabs.some(([id]) => id === openTab)) openTab = tabs[0]?.[0] || 'status';
@@ -341,7 +341,7 @@ export function createEntityUiTool(options = {}) {
           ...(selectedToken ? { tokenId: selectedToken.id } : {}),
         });
         const html = `<div class="entity-sheet-backdrop"><div class="entity-sheet ${canEdit ? '' : 'entity-sheet-readonly'}" data-actor-id="${escapeHtml(actor.id)}" role="dialog" aria-modal="true">
-          <header class="entity-sheet-header">${avatarHtml(actor)}<div class="entity-sheet-title"><input type="text" maxlength="80" value="${escapeHtml(actor.name)}" data-actor-name><div class="entity-formbar">${sheetCapabilities.hasVariants ? `<span>当前形态</span><select data-form-select>${(sheetDescription.variants || []).map(item => `<option value="${escapeHtml(item.id)}" ${String(item.id) === String(sheetDescription.currentVariantId) ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select>${sheetCapabilities.canCycleVariants ? '<button type="button" class="small-button primary" data-sheet-action="cycle-form">V · 切换</button>' : ''}${sheetCapabilities.canImportXlsx ? '<button type="button" class="small-button" data-sheet-action="add-form">+ 形态</button>' : ''}` : ''}<button type="button" class="small-button" data-sheet-action="avatar">更换头像</button></div><div class="status-title-band">${renderStatusStrip(titleSnapshot.statuses, { limit: 8, emptyText: '无机械状态' })}</div></div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>
+          <header class="entity-sheet-header">${avatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><input type="text" maxlength="80" value="${escapeHtml(actor.name)}" data-actor-name><div class="entity-formbar">${sheetCapabilities.hasVariants ? `<span>当前形态</span><select data-form-select>${(sheetDescription.variants || []).map(item => `<option value="${escapeHtml(item.id)}" ${String(item.id) === String(sheetDescription.currentVariantId) ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select>${sheetCapabilities.canCycleVariants ? '<button type="button" class="small-button primary" data-sheet-action="cycle-form">V · 切换</button>' : ''}${sheetCapabilities.canImportXlsx ? '<button type="button" class="small-button" data-sheet-action="add-form">+ 形态</button>' : ''}` : ''}<button type="button" class="small-button" data-sheet-action="avatar">更换头像</button></div><div class="status-title-band">${renderStatusStrip(titleSnapshot.statuses, { limit: 8, emptyText: '无机械状态' })}</div></div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>
           <nav class="entity-sheet-tabs">${tabs.map(([id,label]) => `<button type="button" class="entity-sheet-tab ${openTab === id ? 'active' : ''}" data-sheet-tab="${id}">${label}</button>`).join('')}</nav>
           <main class="entity-sheet-body">${actorSheetBody(actor, openTab)}</main>
         </div></div>`;
@@ -358,7 +358,7 @@ export function createEntityUiTool(options = {}) {
         importBusy = true;
         setStatus('正在读取角色卡…');
         try {
-          const imported = await importCharacterXlsx(file);
+          const imported = await importCharacterXlsx(file, { ruleset: api.ruleset });
           if (imported.avatarImage) {
             try { imported.avatarDataUrl = await imageToAvatarDataUrl(imported.avatarImage); }
             catch (error) { console.warn('Excel 头像导入失败，保留空头像', error); }
@@ -370,15 +370,15 @@ export function createEntityUiTool(options = {}) {
           }
           if (actor) {
             let formName = imported.formName;
-            const beforeSheet = describeActorSheet(actor) || { variants: [] };
+            const beforeSheet = describeActorSheet(actor, { ruleset: api.ruleset }) || { variants: [] };
             if (beforeSheet.variants.some(variant => variant.label === formName)) formName += ` ${beforeSheet.variants.length + 1}`;
-            const form = addFormToActor(actor, imported, { name: formName });
+            const form = addFormToActor(actor, imported, { name: formName, ruleset: api.ruleset });
             store.persist();
             openSheet(actor.id);
             indicator(`${actor.name} · ${form?.name || formName}`);
             setStatus(`已导入 ${actor.name} 的新形态“${form?.name || formName}”`);
           } else {
-            actor = createActorFromImport(imported);
+            actor = createActorFromImport(imported, { ruleset: api.ruleset });
             entityState().actors.push(actor);
             store.persist();
             openSheet(actor.id);
@@ -428,7 +428,7 @@ export function createEntityUiTool(options = {}) {
         if (action === 'import') chooseImport();
         else if (action === 'new') {
           if (!requireStructure()) return;
-          const actor = createActorFromImport();
+          const actor = createActorFromImport({}, { ruleset: api.ruleset });
           entityState().actors.push(actor);
           store.persist();
           renderPanel();
@@ -476,7 +476,7 @@ export function createEntityUiTool(options = {}) {
             }
             Object.assign(operation, answers);
           }
-          const result = performActorOperation(actor, operation);
+          const result = performActorOperation(actor, operation, { ruleset: api.ruleset });
           if (result.changed) persistAndRender({ source: 'entities:actor-operation', immediate: true });
           return;
         }
@@ -489,7 +489,7 @@ export function createEntityUiTool(options = {}) {
           if (action === 'close') closeSheet();
           else if (action === 'cycle-form') {
             if (!requireActorEdit(actor.id)) return;
-            const form = cycleActorForm(actor);
+            const form = cycleActorForm(actor, 1, { ruleset: api.ruleset });
             if (form) {
               store.persist();
               renderPanel();
@@ -518,7 +518,7 @@ export function createEntityUiTool(options = {}) {
           actor.name = String(event.target.value || '未命名角色').trim().slice(0, 80) || '未命名角色';
           persistAndRender();
         } else if (event.target.matches('[data-form-select]')) {
-          const form = setActorForm(actor, event.target.value);
+          const form = setActorForm(actor, event.target.value, { ruleset: api.ruleset });
           if (form) {
             store.persist();
             renderPanel();
@@ -529,7 +529,7 @@ export function createEntityUiTool(options = {}) {
           const operation = decodeData(event.target.dataset.actorOperation);
           if (!operation) return;
           operation.value = event.target.value;
-          const result = performActorOperation(actor, operation);
+          const result = performActorOperation(actor, operation, { ruleset: api.ruleset });
           if (result.changed) persistAndRender({ source: 'entities:actor-operation', immediate: true });
         }
       });
@@ -542,7 +542,7 @@ export function createEntityUiTool(options = {}) {
           const result = performActorOperation(actor, {
             type: 'avatar.set',
             avatarDataUrl: await imageToAvatarDataUrl(file),
-          });
+          }, { ruleset: api.ruleset });
           if (result.changed) {
             store.persist();
             renderPanel();
@@ -561,10 +561,10 @@ export function createEntityUiTool(options = {}) {
         if (!selectedTokenId) return;
         const token = api.tokens.get?.(selectedTokenId);
         const actor = token ? store.actor(token.actorId) : null;
-        if (!actor || (describeActorSheet(actor)?.variants?.length || 0) < 2) return;
+        if (!actor || (describeActorSheet(actor, { ruleset: api.ruleset })?.variants?.length || 0) < 2) return;
         event.preventDefault();
         event.stopImmediatePropagation();
-        const form = cycleActorForm(actor);
+        const form = cycleActorForm(actor, 1, { ruleset: api.ruleset });
         store.persist();
         renderPanel();
         renderSheet();

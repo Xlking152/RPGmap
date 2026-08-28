@@ -145,7 +145,7 @@ export function createTokenElevationSystem() {
         hud.className = 'token-elevation-hud';
         hud.dataset.tokenId = String(token.id);
         const heading = documentNode.createElement('strong');
-        const presentation = describeActor(api.tokens.resolveActor?.(token.id)?.actor);
+        const presentation = describeActor(api.tokens.resolveActor?.(token.id)?.actor, { ruleset: api.ruleset });
         heading.textContent = `${tokenName(api, token.id)}${presentation?.variantLabel ? ` · ${presentation.variantLabel}` : ''} · Elevation`;
         const row = documentNode.createElement('div');
         row.className = 'token-elevation-hud-row';

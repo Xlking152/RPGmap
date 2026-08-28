@@ -52,7 +52,7 @@ function tokenDisplay(api, token) {
   try {
     const resolved = api.tokens.resolveActor(token.id);
     const actor = resolved.actor;
-    const presentation = describeActor(actor) || {};
+    const presentation = describeActor(actor, { ruleset: api.ruleset }) || {};
     return {
       name: String(presentation.name || actor?.name || token.id),
       avatarDataUrl: presentation.avatarDataUrl || null,

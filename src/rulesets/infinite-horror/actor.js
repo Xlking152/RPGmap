@@ -625,7 +625,7 @@ export function applyInfiniteHorrorActorOperation(actor, operation = {}, context
     form.avatarDataUrl = typeof operation.avatarDataUrl === 'string' ? operation.avatarDataUrl : null;
     return { changed: true, value: form.avatarDataUrl };
   }
-  return { changed: false, blocked: 'unsupported' };
+  return { changed: false, blocked: 'unknown_actor_operation' };
 }
 
 function healthRole(resource) {
@@ -760,7 +760,6 @@ export function describeInfiniteHorrorActorSheet(actor) {
 
 export const INFINITE_HORROR_ACTOR = Object.freeze({
   resourceDefinitions: INFINITE_HORROR_RESOURCE_DEFS,
-  badStatusDefinitions: INFINITE_HORROR_BAD_STATUS_DEFS,
   createDefault: createDefaultInfiniteHorrorActor,
   createFromImport: createInfiniteHorrorActorFromImport,
   migrateLegacy: migrateInfiniteHorrorActor,

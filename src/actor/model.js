@@ -1,4 +1,4 @@
-import { getActiveRuleset } from '../ruleset/index.js';
+import { getCompatibilityRuleset } from '../ruleset/active-compat.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -19,7 +19,7 @@ function uid(prefix) {
   return `${prefix}-${value}`;
 }
 
-function actorRules(ruleset = getActiveRuleset()) {
+function actorRules(ruleset = getCompatibilityRuleset()) {
   const actor = ruleset?.actor;
   const required = [
     'createDefault', 'createFromImport', 'migrateLegacy', 'normalizeSystem',
@@ -31,7 +31,7 @@ function actorRules(ruleset = getActiveRuleset()) {
   return actor;
 }
 
-function compatibleActor(actor, ruleset = getActiveRuleset()) {
+function compatibleActor(actor, ruleset = getCompatibilityRuleset()) {
   if (actor?.system && typeof actor.system === 'object' && !Array.isArray(actor.system)) return actor;
   return createActorDocument(actor, { ruleset });
 }
@@ -50,14 +50,14 @@ function shell(raw = {}, { name = '', system = {} } = {}) {
   };
 }
 
-export function createActorDocument(raw = {}, { ruleset = getActiveRuleset() } = {}) {
+export function createActorDocument(raw = {}, { ruleset = getCompatibilityRuleset() } = {}) {
   const rules = actorRules(ruleset);
   const migrated = object(rules.migrateLegacy(clone(object(raw)), { ruleset }));
   const normalized = rules.normalizeSystem(migrated.system, { actor: raw, ruleset });
   return shell(raw, { name: migrated.name, system: normalized });
 }
 
-export function createDefaultActor({ id, name, ruleset = getActiveRuleset() } = {}) {
+export function createDefaultActor({ id, name, ruleset = getCompatibilityRuleset() } = {}) {
   const rules = actorRules(ruleset);
   const created = object(rules.createDefault({ id, name, ruleset }));
   const raw = { id, name: name || created.name };
@@ -72,7 +72,7 @@ export function createActorFromRulesetImport(imported, {
   name,
   variantId,
   variantName,
-  ruleset = getActiveRuleset(),
+  ruleset = getCompatibilityRuleset(),
 } = {}) {
   const rules = actorRules(ruleset);
   const created = object(rules.createFromImport(clone(imported), {
@@ -90,11 +90,11 @@ export function createActorFromRulesetImport(imported, {
   });
 }
 
-export function normalizeActorDocument(actor, { ruleset = getActiveRuleset() } = {}) {
+export function normalizeActorDocument(actor, { ruleset = getCompatibilityRuleset() } = {}) {
   return createActorDocument(actor, { ruleset });
 }
 
-export function validateActorDocument(actor, { ruleset = getActiveRuleset() } = {}) {
+export function validateActorDocument(actor, { ruleset = getCompatibilityRuleset() } = {}) {
   const documentErrors = [];
   if (!text(actor?.id == null ? '' : String(actor.id))) documentErrors.push('actor.id is required');
   if (!text(actor?.name)) documentErrors.push('actor.name is required');
@@ -107,38 +107,38 @@ export function validateActorDocument(actor, { ruleset = getActiveRuleset() } = 
 
 export function deriveActorDocument(actor, context = {}) {
   if (!actor) return null;
-  const ruleset = context.ruleset || getActiveRuleset();
+  const ruleset = getCompatibilityRuleset(context.ruleset);
   return actorRules(ruleset).derive(compatibleActor(actor, ruleset), context);
 }
 
 export function describeActor(actor, context = {}) {
   if (!actor) return null;
-  const ruleset = context.ruleset || getActiveRuleset();
+  const ruleset = getCompatibilityRuleset(context.ruleset);
   return actorRules(ruleset).presentation.describe(compatibleActor(actor, ruleset), context);
 }
 
 export function describeActorSheet(actor, context = {}) {
   if (!actor) return null;
-  const ruleset = context.ruleset || getActiveRuleset();
+  const ruleset = getCompatibilityRuleset(context.ruleset);
   return actorRules(ruleset).presentation.describeSheet(compatibleActor(actor, ruleset), context);
 }
 
 export function listActorAttributePaths(actor, context = {}) {
   if (!actor) return [];
-  const ruleset = context.ruleset || getActiveRuleset();
+  const ruleset = getCompatibilityRuleset(context.ruleset);
   const value = actorRules(ruleset).attributePaths(compatibleActor(actor, ruleset), context);
   return Array.isArray(value) ? value : [];
 }
 
 export function resolveActorAttribute(actor, path, context = {}) {
   if (!actor) return null;
-  const ruleset = context.ruleset || getActiveRuleset();
+  const ruleset = getCompatibilityRuleset(context.ruleset);
   return actorRules(ruleset).resolveAttribute(compatibleActor(actor, ruleset), String(path || ''), context);
 }
 
 export function performActorOperation(actor, operation = {}, context = {}) {
   if (!actor) return { changed: false, blocked: 'missing_actor' };
-  const ruleset = context.ruleset || getActiveRuleset();
+  const ruleset = getCompatibilityRuleset(context.ruleset);
   if (!actor.system || typeof actor.system !== 'object' || Array.isArray(actor.system)) {
     const normalized = createActorDocument(actor, { ruleset });
     for (const key of Object.keys(actor)) delete actor[key];

@@ -63,7 +63,7 @@ export class EntityStore {
   load({ migrateLegacy = true, dropMarkers = true } = {}) {
     const appState = this.api.getState();
     const raw = appState.preferences?.[PREFERENCE_KEY];
-    const normalized = normalizeEntityState(raw);
+    const normalized = normalizeEntityState(raw, { ruleset: this.api.ruleset });
     let changed = entityContentChanged(raw, normalized)
       || (migrateLegacy && Number(raw?.schemaVersion) !== STATUS_SCHEMA_VERSION);
 

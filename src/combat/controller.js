@@ -42,7 +42,7 @@ function runtimeTokenView(api, tokenId) {
       let resolved = null;
       try { resolved = api.tokens.resolveActor?.(token.id) || null; } catch {}
       const actor = resolved?.actor || null;
-      const presentation = describeActor(actor) || {};
+      const presentation = describeActor(actor, { ruleset: api.ruleset }) || {};
       const character = api.getState().characters?.find(item => String(item.id) === String(token.id)) || null;
       return {
         token,

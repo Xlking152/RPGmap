@@ -14,14 +14,14 @@ export function entityStateFromApp(appState) {
     : { schemaVersion: 3, actors: [], tokens: [] };
 }
 
-export function findSelectedEntity(appState, tokenId) {
+export function findSelectedEntity(appState, tokenId, { ruleset } = {}) {
   if (!tokenId) return null;
   const entity = entityStateFromApp(appState);
   const token = (entity.tokens || []).find(item => String(item?.id) === String(tokenId));
   if (!token) return null;
   const actor = (entity.actors || []).find(item => String(item?.id) === String(token.actorId));
   if (!actor) return null;
-  const form = deriveActorDocument(actor)?.form || null;
+  const form = deriveActorDocument(actor, ruleset ? { ruleset } : {})?.form || null;
   return { token, actor, form };
 }
 

@@ -17,8 +17,8 @@ function safeColor(value, fallback = '#3d9b63') {
   return /^#[0-9a-f]{6}$/i.test(color) ? color : fallback;
 }
 
-export function actorDisplayForm(actor) {
-  return deriveActorDocument(actor)?.form || null;
+export function actorDisplayForm(actor, { ruleset } = {}) {
+  return deriveActorDocument(actor, ruleset ? { ruleset } : {})?.form || null;
 }
 
 /**
@@ -26,13 +26,13 @@ export function actorDisplayForm(actor) {
  * resolved Actor (Base Actor for linked Tokens; Synthetic Actor for unlinked
  * Tokens). Character compatibility projection is intentionally not accepted.
  */
-export function createTokenViewModel({ token, actor, selected = false } = {}) {
+export function createTokenViewModel({ token, actor, selected = false, ruleset } = {}) {
   if (!token || !actor || token.hidden === true || token.placement !== 'map') return null;
   const x = finite(token.x);
   const y = finite(token.y);
   if (x === null || y === null) return null;
 
-  const presentation = describeActor(actor) || {};
+  const presentation = describeActor(actor, ruleset ? { ruleset } : {}) || {};
   const name = text(presentation.name, text(actor.name, text(token.name, String(token.id || 'Token'))));
   const avatarDataUrl = text(
     presentation.avatarDataUrl ?? actor?.avatarDataUrl ?? actor?.img,

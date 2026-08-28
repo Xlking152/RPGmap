@@ -1,4 +1,4 @@
-import { getActiveRuleset } from '../ruleset/index.js';
+import { getCompatibilityRuleset } from '../ruleset/active-compat.js';
 
 export const STATUS_SCHEMA_VERSION = 3;
 export const MAX_STACKS = 99;
@@ -243,8 +243,8 @@ function resolveTargetEffects(target, scope, definitionsById) {
   });
 }
 
-export function deriveActorStatuses(actor, actorStatuses = []) {
-  const derive = getActiveRuleset().statuses?.derive;
+export function deriveActorStatuses(actor, actorStatuses = [], { ruleset = getCompatibilityRuleset() } = {}) {
+  const derive = ruleset?.statuses?.derive;
   return typeof derive === 'function' ? derive(actor, { statuses: actorStatuses }) : [];
 }
 
@@ -274,7 +274,7 @@ export function resolveStatuses(rawEntityState, context = {}) {
   const { actor, token } = targetContext(entityState, context);
   const actorStatuses = resolveTargetEffects(actor, 'actor', definitionsById);
   const tokenStatuses = resolveTargetEffects(token, 'token', definitionsById);
-  const derivedStatuses = deriveActorStatuses(actor, actorStatuses);
+  const derivedStatuses = deriveActorStatuses(actor, actorStatuses, { ruleset: context.ruleset });
   const statuses = [...actorStatuses, ...tokenStatuses, ...derivedStatuses].filter(status => status?.enabled !== false);
   const statusVersion = stableHash({
     definitions: definitions.map(definition => ({ id: definition.id, capabilities: definition.capabilities, changes: definition.changes, maxStacks: definition.maxStacks })),

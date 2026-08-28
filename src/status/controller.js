@@ -88,7 +88,10 @@ export function createStatusController() {
       }
 
       function resolve(context = {}, tokenId = null) {
-        return resolveStatuses(currentEntityState(), contextValue(context, tokenId));
+        return resolveStatuses(currentEntityState(), {
+          ...contextValue(context, tokenId),
+          ruleset: api.ruleset,
+        });
       }
 
       function emitChange(detail) {

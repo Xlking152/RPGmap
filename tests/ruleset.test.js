@@ -16,7 +16,7 @@ test('infinite horror is registered as the default built-in ruleset', () => {
   assert.equal(ruleset.id, 'infinite-horror');
   assert.equal(ruleset.title, '无限跑团');
   assert.deepEqual(ruleset.actor.resourceDefinitions.map(item => item.id), ['hp', 'stamina', 'willpower']);
-  assert.equal(ruleset.actor.badStatusDefinitions.length, 21);
+  assert.equal(Object.hasOwn(ruleset.actor, 'badStatusDefinitions'), false);
   for (const method of [
     'createDefault', 'createFromImport', 'migrateLegacy', 'normalizeSystem', 'validateSystem',
     'derive', 'attributePaths', 'resolveAttribute', 'applyRuntimeOperation',

@@ -59,7 +59,6 @@ test('minimal ruleset controls runtime operations, presentation, and derived sta
       version: '1.0.0',
       actor: {
         resourceDefinitions: [],
-        badStatusDefinitions: [],
         createDefault: () => ({ name: 'Counter Actor', system: { value: 0, limit: 10 } }),
         createFromImport: imported => ({ name: imported?.name || 'Counter Actor', system: { value: Number(imported?.value) || 0, limit: 10 } }),
         migrateLegacy: actor => ({ name: actor?.name || 'Counter Actor', system: actor?.system || { value: Number(actor?.legacyValue) || 0, limit: 10 } }),
@@ -81,7 +80,7 @@ test('minimal ruleset controls runtime operations, presentation, and derived sta
             actor.system.value += Number(operation.operation.amount) || 0;
             return { changed: true, value: { mode: 'counter', max: actor.system.limit, current: actor.system.value } };
           }
-          return { changed: false, blocked: 'unsupported' };
+          return { changed: false, blocked: 'unknown_actor_operation' };
         },
         presentation: {
           describe: actor => ({ name: actor.name, avatarDataUrl: null, color: '#225588', variantLabel: 'Counter' }),

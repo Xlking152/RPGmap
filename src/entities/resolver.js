@@ -22,56 +22,59 @@ export function resolveResource(actor, resourceId, context = {}) {
   return deriveActorDocument(actor, context)?.resources?.find(item => String(item.id) === String(resourceId)) || null;
 }
 
-export function setResourceCurrent(actor, resourceId, value) {
-  return performActorOperation(actor, { type: 'resource.set-current', resourceId, value }).value;
+export function setResourceCurrent(actor, resourceId, value, context = {}) {
+  return performActorOperation(actor, { type: 'resource.set-current', resourceId, value }, context).value;
 }
 
-export function setResourceMaxOverride(actor, resourceId, value) {
-  return performActorOperation(actor, { type: 'resource.set-max', resourceId, value }).value;
+export function setResourceMaxOverride(actor, resourceId, value, context = {}) {
+  return performActorOperation(actor, { type: 'resource.set-max', resourceId, value }, context).value;
 }
 
-export function setAttributeAdjustment(actor, attributeId, value) {
-  return performActorOperation(actor, { type: 'attribute.set-adjustment', attributeId, value }).value;
+export function setAttributeAdjustment(actor, attributeId, value, context = {}) {
+  return performActorOperation(actor, { type: 'attribute.set-adjustment', attributeId, value }, context).value;
 }
 
-export function addCustomResource(actor, { id, name, current = 0, max = 0 } = {}) {
+export function addCustomResource(actor, { id, name, current = 0, max = 0 } = {}, context = {}) {
   return performActorOperation(actor, {
     type: 'resource.add-custom',
     resourceId: id,
     name,
     current,
     max,
-  }).value;
+  }, context).value;
 }
 
-export function removeCustomResource(actor, resourceId) {
-  return performActorOperation(actor, { type: 'resource.remove-custom', resourceId }).changed;
+export function removeCustomResource(actor, resourceId, context = {}) {
+  return performActorOperation(actor, { type: 'resource.remove-custom', resourceId }, context).changed;
 }
 
-export function setActorForm(actor, formId) {
-  return performActorOperation(actor, { type: 'variant.set', variantId: formId }).value || null;
+export function setActorForm(actor, formId, context = {}) {
+  return performActorOperation(actor, { type: 'variant.set', variantId: formId }, context).value || null;
 }
 
-export function cycleActorForm(actor, direction = 1) {
-  return performActorOperation(actor, { type: 'variant.cycle', direction }).value || null;
+export function cycleActorForm(actor, direction = 1, context = {}) {
+  return performActorOperation(actor, { type: 'variant.cycle', direction }, context).value || null;
 }
 
-function canonicalEffectPath(actor, target) {
+function canonicalEffectPath(actor, target, context) {
   const raw = String(target || '');
-  const paths = new Set(listActorAttributePaths(actor).map(item => String(item?.path || '')).filter(Boolean));
+  const paths = new Set(listActorAttributePaths(actor, context).map(item => String(item?.path || '')).filter(Boolean));
   if (paths.has(raw)) return raw;
   const systemPath = raw.startsWith('system.') ? raw : `system.${raw}`;
-  return paths.has(systemPath) ? systemPath : raw;
+  if (paths.has(systemPath)) return systemPath;
+  const error = new Error(`Unknown Actor attribute path: ${raw || '(empty)'}`);
+  error.code = 'unknown_actor_attribute_path';
+  throw error;
 }
 
-export function addEffect(actor, { name = '临时效果', enabled = true, changes = [] } = {}) {
+export function addEffect(actor, { name = '临时效果', enabled = true, changes = [] } = {}, context = {}) {
   actor.effects ||= [];
   const effect = {
     id: `effect-${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`,
     name: String(name || '临时效果'),
     enabled,
     changes: changes.map(change => ({
-      target: canonicalEffectPath(actor, change.target),
+      target: canonicalEffectPath(actor, change.target, context),
       mode: change.mode || 'add',
       value: finite(change.value),
     })).filter(change => change.target),

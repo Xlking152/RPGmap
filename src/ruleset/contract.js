@@ -72,7 +72,6 @@ export function prepareRuleset(raw = {}) {
     version: nonEmptyString(raw.version, 'version'),
     actor: Object.freeze({
       resourceDefinitions: frozenArray(actor.resourceDefinitions),
-      badStatusDefinitions: frozenArray(actor.badStatusDefinitions),
       createDefault: actorFunction(actor.createDefault, () => ({ name: '', system: {} })),
       createFromImport: actorFunction(actor.createFromImport, (_imported, context = {}) => (
         actorFunction(actor.createDefault, () => ({ name: '', system: {} }))(context)
@@ -93,7 +92,7 @@ export function prepareRuleset(raw = {}) {
       resolveAttribute: actorFunction(actor.resolveAttribute, () => null),
       applyRuntimeOperation: actorFunction(actor.applyRuntimeOperation, () => ({
         changed: false,
-        blocked: 'unsupported',
+        blocked: 'unknown_actor_operation',
       })),
       presentation: prepareActorPresentation(actor.presentation),
     }),

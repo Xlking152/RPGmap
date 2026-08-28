@@ -37,10 +37,10 @@ function segment(width, color, label) {
     : '';
 }
 
-function barHtml(health) {
+function barHtml(health, ruleset) {
   const max = Math.max(0, Number(health?.max) || 0);
   if (!max) return '';
-  const view = describeHealth(health);
+  const view = describeHealth(health, { ruleset });
   const pct = value => Math.max(0, Math.min(100, (Number(value) || 0) / max * 100));
   const segments = (view.segments || []).map(item => segment(pct(item.value), item.color, item.label)).join('');
   return segments ? `<div class="rpgmap-token-healthbar" title="${escapeHtml(view.summary)}">${segments}</div>` : '';
@@ -66,7 +66,7 @@ export function createHealthTokenBars() {
           const y = Number(token.y);
           if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
           const health = api.health?.resolveToken?.(token.id);
-          const html = barHtml(health);
+          const html = barHtml(health, api.ruleset);
           if (!html) continue;
           const origin = api.map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, api.mapPackage.height));
           const unit = api.map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 0 }, api.mapPackage.height));
