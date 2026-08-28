@@ -1,0 +1,350 @@
+  ...
+# Subtest: Token Runtime creates independent Token ids and allows one Actor to have many Tokens
+ok 344 - Token Runtime creates independent Token ids and allows one Actor to have many Tokens
+  ---
+  duration_ms: 5.250085
+  ...
+# Subtest: Token movement writes Scene token placement without touching another Scene
+ok 345 - Token movement writes Scene token placement without touching another Scene
+  ---
+  duration_ms: 0.57009
+  ...
+# Subtest: Token can move between map placement and feature placement
+ok 346 - Token can move between map placement and feature placement
+  ---
+  duration_ms: 0.715166
+  ...
+# Subtest: unlinked Token actorDelta survives movement and ordinary Token updates
+ok 347 - unlinked Token actorDelta survives movement and ordinary Token updates
+  ---
+  duration_ms: 0.717389
+  ...
+# Subtest: Token Runtime rejects broken Actor/Token references and can remove a Token
+ok 348 - Token Runtime rejects broken Actor/Token references and can remove a Token
+  ---
+  duration_ms: 0.870377
+  ...
+# Subtest: selection bounds use canonical Scene Token x/y and ignore hidden or feature Tokens
+ok 349 - selection bounds use canonical Scene Token x/y and ignore hidden or feature Tokens
+  ---
+  duration_ms: 1.459755
+  ...
+# Subtest: Character-shaped inputs are not accepted by the runtime selection contract
+ok 350 - Character-shaped inputs are not accepted by the runtime selection contract
+  ---
+  duration_ms: 0.179528
+  ...
+# Subtest: unlinked Token resolves Actor-level effects from its Synthetic Actor only
+ok 351 - unlinked Token resolves Actor-level effects from its Synthetic Actor only
+  ---
+  duration_ms: 9.68815
+  ...
+# Subtest: linked Token keeps the existing Base Actor status resolution path
+ok 352 - linked Token keeps the existing Base Actor status resolution path
+  ---
+  duration_ms: 1.191161
+  ...
+# Subtest: TokenSystem creates only a canonical Scene Token
+ok 353 - TokenSystem creates only a canonical Scene Token
+  ---
+  duration_ms: 22.445095
+  ...
+# Subtest: TokenSystem supports multiple Token instances for the same Actor without Character documents
+ok 354 - TokenSystem supports multiple Token instances for the same Actor without Character documents
+  ---
+  duration_ms: 18.147763
+  ...
+# Subtest: TokenSystem move and feature placement update canonical World placement
+ok 355 - TokenSystem move and feature placement update canonical World placement
+  ---
+  duration_ms: 17.563302
+  ...
+# Subtest: TokenSystem preserves actorLink/actorDelta and deletes canonical state only
+ok 356 - TokenSystem preserves actorLink/actorDelta and deletes canonical state only
+  ---
+  duration_ms: 24.354765
+  ...
+# Subtest: WorldSystem import wrapper preserves extra import arguments
+ok 357 - WorldSystem import wrapper preserves extra import arguments
+  ---
+  duration_ms: 4.033662
+  ...
+# Subtest: Elevation V2 owns Token elevation editing but not a second HP bar or Character DOM
+ok 358 - Elevation V2 owns Token elevation editing but not a second HP bar or Character DOM
+  ---
+  duration_ms: 0.888084
+  ...
+# Subtest: HealthSystem keeps the single canonical Token health bar below the scaled Token
+ok 359 - HealthSystem keeps the single canonical Token health bar below the scaled Token
+  ---
+  duration_ms: 0.21418
+  ...
+# Subtest: Token Renderer V2 owns the visible name and elevation labels
+ok 360 - Token Renderer V2 owns the visible name and elevation labels
+  ---
+  duration_ms: 0.17457
+  ...
+# Subtest: entityStateFromApp falls back to the current Entity schema
+ok 361 - entityStateFromApp falls back to the current Entity schema
+  ---
+  duration_ms: 1.325716
+  ...
+# Subtest: findSelectedEntity resolves canonical Token, Actor and Form without Character backing
+ok 362 - findSelectedEntity resolves canonical Token, Actor and Form without Character backing
+  ---
+  duration_ms: 4.694998
+  ...
+# Subtest: movement status detection only activates the contextual HUD during Token movement
+ok 363 - movement status detection only activates the contextual HUD during Token movement
+  ---
+  duration_ms: 0.28864
+  ...
+# Subtest: application entry boots the Character-free World/Scene Token runtime
+ok 364 - application entry boots the Character-free World/Scene Token runtime
+  ---
+  duration_ms: 0.747344
+  ...
+# Subtest: application chrome keeps the restrained neutral, river and brick palette
+ok 365 - application chrome keeps the restrained neutral, river and brick palette
+  ---
+  duration_ms: 0.245967
+  ...
+# Subtest: production entry splits the map and large vendors without suppressing chunk warnings
+ok 366 - production entry splits the map and large vendors without suppressing chunk warnings
+  ---
+  duration_ms: 0.117005
+  ...
+# Subtest: modern shell owns Actor/current panels and Token-first tools without legacy proxies
+ok 367 - modern shell owns Actor/current panels and Token-first tools without legacy proxies
+  ---
+  duration_ms: 0.162782
+  ...
+# Subtest: Token placement owns the map click directly through the canonical Entity controller
+ok 368 - Token placement owns the map click directly through the canonical Entity controller
+  ---
+  duration_ms: 0.286197
+  ...
+# Subtest: destruction rendering separates buildings, pontoon bridges and wall breaches
+ok 369 - destruction rendering separates buildings, pontoon bridges and wall breaches
+  ---
+  duration_ms: 0.150384
+  ...
+# Subtest: World bootstrap classifies empty, legacy, and World V2 state without normalization
+ok 370 - World bootstrap classifies empty, legacy, and World V2 state without normalization
+  ---
+  duration_ms: 2.800994
+  ...
+# Subtest: new offline state owns World V2 before Runtime systems register
+ok 371 - new offline state owns World V2 before Runtime systems register
+  ---
+  duration_ms: 0.373487
+  ...
+# Subtest: legacy SaveV2 migration remains explicit, backed up, and World-first
+ok 372 - legacy SaveV2 migration remains explicit, backed up, and World-first
+  ---
+  duration_ms: 10.422995
+  ...
+# Subtest: legacy migration uses the resolved Ruleset argument instead of the global active Ruleset
+ok 373 - legacy migration uses the resolved Ruleset argument instead of the global active Ruleset
+  ---
+  duration_ms: 1.673404
+  ...
+# Subtest: prepared modern World preserves Actor system, Synthetic Delta, Effects, definitions, and Scene map reference
+ok 374 - prepared modern World preserves Actor system, Synthetic Delta, Effects, definitions, and Scene map reference
+  ---
+  duration_ms: 3.749668
+  ...
+# Subtest: server bootstrap metadata resolves before the authenticated World snapshot
+ok 375 - server bootstrap metadata resolves before the authenticated World snapshot
+  ---
+  duration_ms: 0.673895
+  ...
+# Subtest: Combat and local chat commit World state without re-importing it
+ok 376 - Combat and local chat commit World state without re-importing it
+  ---
+  duration_ms: 2.771421
+  ...
+# Subtest: health mutations commit and synchronously persist the updated Actor state
+not ok 377 - health mutations commit and synchronously persist the updated Actor state
+  ---
+  duration_ms: 9.912264
+  location: '/home/runner/work/RPGmap/RPGmap/tests/world-commit-stores.test.js:47:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    10 !== 8
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 8
+  actual: 10
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/world-commit-stores.test.js:63:10)
+    Test.runInAsyncScope (node:async_hooks:211:14)
+    Test.run (node:internal/test_runner/test:934:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:633:18)
+    Test.postRun (node:internal/test_runner/test:1045:19)
+    Test.run (node:internal/test_runner/test:973:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: health B/L/A editor commits the same World path as recovery
+not ok 378 - health B/L/A editor commits the same World path as recovery
+  ---
+  duration_ms: 3.038008
+  location: '/home/runner/work/RPGmap/RPGmap/tests/world-commit-stores.test.js:70:1'
+  failureType: 'testCodeFailure'
+  error: "Cannot read properties of undefined (reading 'current')"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/world-commit-stores.test.js:87:29)
+    Test.runInAsyncScope (node:async_hooks:211:14)
+    Test.run (node:internal/test_runner/test:934:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:633:18)
+    Test.postRun (node:internal/test_runner/test:1045:19)
+    Test.run (node:internal/test_runner/test:973:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:633:7)
+  ...
+# Error: Test "health mutations commit and synchronously persist the updated Actor state" at tests/world-commit-stores.test.js:47:1 generated asynchronous activity after the test ended. This activity created the error "Error: Health writes require World V2 operations" and would have caused the test to fail, but instead triggered an unhandledRejection event.
+# Error: Test "health B/L/A editor commits the same World path as recovery" at tests/world-commit-stores.test.js:70:1 generated asynchronous activity after the test ended. This activity created the error "Error: Health writes require World V2 operations" and would have caused the test to fail, but instead triggered an unhandledRejection event.
+# Subtest: World operation envelope rejects unknown operations and invalid revisions
+ok 379 - World operation envelope rejects unknown operations and invalid revisions
+  ---
+  duration_ms: 1.210605
+  ...
+# Subtest: atomic operations update Actor, Token, Scene and Combat through one reducer
+ok 380 - atomic operations update Actor, Token, Scene and Combat through one reducer
+  ---
+  duration_ms: 2.751561
+  ...
+# Subtest: Synthetic Actor Delta replacement affects only one unlinked Token
+ok 381 - Synthetic Actor Delta replacement affects only one unlinked Token
+  ---
+  duration_ms: 0.693183
+  ...
+# Subtest: Actor deletion removes its Tokens and prunes Combat atomically
+ok 382 - Actor deletion removes its Tokens and prunes Combat atomically
+  ---
+  duration_ms: 0.497081
+  ...
+# Subtest: authoritative operation patches reproduce committed canonical state without a full snapshot
+ok 383 - authoritative operation patches reproduce committed canonical state without a full snapshot
+  ---
+  duration_ms: 1.261059
+  ...
+# Subtest: state differences derive generic operations and preserve unsupported boundaries
+ok 384 - state differences derive generic operations and preserve unsupported boundaries
+  ---
+  duration_ms: 1.834434
+  ...
+# Subtest: derivation activates the replacement Scene before deleting the old active Scene
+ok 385 - derivation activates the replacement Scene before deleting the old active Scene
+  ---
+  duration_ms: 0.659553
+  ...
+# Subtest: Status and Effect operations use the injected reducer in offline and server contexts
+ok 386 - Status and Effect operations use the injected reducer in offline and server contexts
+  ---
+  duration_ms: 0.448689
+  ...
+# Subtest: projected World reference cleanup removes only dangling Combat participants
+ok 387 - projected World reference cleanup removes only dangling Combat participants
+  ---
+  duration_ms: 1.993932
+  ...
+# Subtest: projected World reference cleanup clears Combat when no participants remain
+ok 388 - projected World reference cleanup clears Combat when no participants remain
+  ---
+  duration_ms: 0.249171
+  ...
+# Subtest: api.world.commit prunes missing Token combatants before authoritative adapter sees payload
+ok 389 - api.world.commit prunes missing Token combatants before authoritative adapter sees payload
+  ---
+  duration_ms: 28.097949
+  ...
+# Subtest: WorldSystem source prunes projected references before authoritative commit
+ok 390 - WorldSystem source prunes projected references before authoritative commit
+  ---
+  duration_ms: 3.568929
+  ...
+# Subtest: WorldSystem hydrates modern Token placement once and later flat commits cannot move Scene Tokens
+ok 391 - WorldSystem hydrates modern Token placement once and later flat commits cannot move Scene Tokens
+  ---
+  duration_ms: 11.702507
+  ...
+# Subtest: WorldSystem canonical World V2 takes precedence and Character projection stays absent
+ok 392 - WorldSystem canonical World V2 takes precedence and Character projection stays absent
+  ---
+  duration_ms: 5.862899
+  ...
+# Subtest: WorldSystem can create and activate another Scene using the loaded MapPackage
+ok 393 - WorldSystem can create and activate another Scene using the loaded MapPackage
+  ---
+  duration_ms: 9.395104
+  ...
+# Subtest: WorldSystem applies offline Actor and Token writes through the shared operation reducer
+ok 394 - WorldSystem applies offline Actor and Token writes through the shared operation reducer
+  ---
+  duration_ms: 7.652966
+  ...
+# Subtest: a stale reducer projection cannot overwrite a newer canonical World
+ok 395 - a stale reducer projection cannot overwrite a newer canonical World
+  ---
+  duration_ms: 4.901726
+  ...
+# Subtest: server projection regenerates reducer mirrors from authoritative World V2
+ok 396 - server projection regenerates reducer mirrors from authoritative World V2
+  ---
+  duration_ms: 1.621687
+  ...
+# Subtest: legacy server states without World V2 remain valid and are not rewritten
+ok 397 - legacy server states without World V2 remain valid and are not rewritten
+  ---
+  duration_ms: 0.564131
+  ...
+# Subtest: World V2 rejects an active Scene reference that does not exist
+ok 398 - World V2 rejects an active Scene reference that does not exist
+  ---
+  duration_ms: 0.566705
+  ...
+# Subtest: World V2 rejects migration-only attack-area anchors
+ok 399 - World V2 rejects migration-only attack-area anchors
+  ---
+  duration_ms: 0.961353
+  ...
+# Subtest: legacy SaveV2 migration boundary converts Character placement once into World Actors and Scene Tokens
+ok 400 - legacy SaveV2 migration boundary converts Character placement once into World Actors and Scene Tokens
+  ---
+  duration_ms: 8.44025
+  ...
+# Subtest: World V2 projects canonical Scene Tokens into Entity reducer state without Character documents
+ok 401 - World V2 projects canonical Scene Tokens into Entity reducer state without Character documents
+  ---
+  duration_ms: 2.24043
+  ...
+# Subtest: runtime projection synchronization is read-only and preserves canonical World data
+ok 402 - runtime projection synchronization is read-only and preserves canonical World data
+  ---
+  duration_ms: 3.0398
+  ...
+# Subtest: feature placement is canonical in Scene Token and Character projection stays absent
+ok 403 - feature placement is canonical in Scene Token and Character projection stays absent
+  ---
+  duration_ms: 1.379736
+  ...
+# Subtest: World normalization and projection preserve unknown extension fields
+ok 404 - World normalization and projection preserve unknown extension fields
+  ---
+  duration_ms: 2.92563
+  ...
+1..404
+# tests 404
+# suites 0
+# pass 402
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 8251.560529
