@@ -275,6 +275,17 @@ export function normalizeInfiniteHorrorSystem(rawSystem = {}) {
   const hpMaxOverride = rawHealthMaxOverride ?? legacyHpMaxOverride;
   const hpMax = hpMaxOverride ?? hpBaseMax;
   const hpCurrent = finite(legacyHp.current, hpMax);
+  // StatusDefinition effects live outside Actor.system, so persistence normalization
+  // must not truncate runtime Health using only the unmodified form maximum.
+  // Preserve enough storage capacity for the existing runtime; resolution below
+  // will clamp the visible/mechanical state against the current effect-aware max.
+  const storedWounds = object(rawHealth?.wounds);
+  const healthStorageMax = Math.max(
+    hpMax,
+    hpCurrent,
+    finite(rawHealth?.current),
+    finite(storedWounds.bashing) + finite(storedWounds.lethal) + finite(storedWounds.aggravated),
+  );
 
   return {
     ...source,
@@ -289,7 +300,7 @@ export function normalizeInfiniteHorrorSystem(rawSystem = {}) {
       badStatuses,
       health: INFINITE_HORROR_HEALTH.normalizeRuntime(rawHealth, {
         defaultMode: INFINITE_HORROR_HEALTH.defaultModeForSource(current?.source?.type),
-        max: hpMax,
+        max: healthStorageMax,
         simpleCurrent: hpCurrent,
         legacyMaxOverride: legacyHpMaxOverride,
       }),
@@ -587,7 +598,7 @@ function healthResult(actor, operation, context = {}) {
 export function applyInfiniteHorrorActorOperation(actor, operation = {}, context = {}) {
   actor.system = normalizeInfiniteHorrorSystem(actor.system);
   const type = String(operation?.type || '');
-  if (type === 'health.resolve') return { changed: false, value: deriveInfiniteHorrorActor(actor).health };
+  if (type === 'health.resolve') return { changed: false, value: deriveInfiniteHorrorActor(actor, context).health };
   if (['health.set-mode', 'health.runtime', 'health.damage', 'health.healing'].includes(type)) {
     return healthResult(actor, operation, context);
   }
