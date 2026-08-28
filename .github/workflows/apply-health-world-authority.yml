@@ -27,6 +27,7 @@ jobs:
       - name: Run tests with diagnostic capture
         shell: bash
         run: |
+          # Keep a branch-readable tail only while this refactor is red.
           set +e
           npm test > /tmp/health-test.log 2>&1
           CODE=$?
@@ -35,7 +36,7 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add .github/health-test-failure.txt
-            git commit -m "Capture Health authority test failure"
+            git commit -m "Capture Health authority test failure" || true
             git push origin HEAD:refactor/health-world-operation-authority
             exit "$CODE"
           fi
