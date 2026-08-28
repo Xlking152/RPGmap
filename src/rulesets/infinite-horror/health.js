@@ -240,33 +240,52 @@ function formatHealthSummary(state) {
   return `${state.healthy}完好 · ${state.bashing}B · ${state.lethal}L · ${state.aggravated}A`;
 }
 
+function healthField(id, label, value, operation, options = {}) {
+  return {
+    id,
+    label,
+    value,
+    min: options.min ?? 0,
+    ...(options.max === undefined ? {} : { max: options.max }),
+    operation,
+  };
+}
+
 function describeHealth(state) {
   const summary = formatHealthSummary(state);
   const status = healthStatusLabel(state);
   if (!state || state.mode === HEALTH_MODE_SIMPLE) {
     return {
-      summary, status, danger: Boolean(state?.dead || state?.unconscious), hideBaseResource: false,
-      title: '生命系统', help: '普通 HP 模式的当前生命值由 Ruleset Health Runtime 独立保存；资源栏只是派生显示。',
-      segments: state ? [{ id: 'current', label: '当前', value: state.current, color: '#4b9f69' }] : [], fields: [],
+      summary,
+      status,
+      danger: Boolean(state?.dead || state?.unconscious),
+      title: '生命值',
+      help: '当前生命与生命上限均由 Ruleset Health Runtime 管理，不再经过 Resource 系统。',
+      segments: state ? [{ id: 'current', label: '当前生命', value: state.current, color: '#4b9f69' }] : [],
+      fields: state ? [
+        healthField('current', '当前生命', state.current, value => ({ type: 'set-current', value }), { max: state.max }),
+        healthField('max', '生命上限', state.max, value => ({ type: 'set-max', value })),
+      ] : [],
     };
   }
-  const field = (id, label, value) => ({
-    id, label, value, min: 0, max: state.max,
-    operation: nextValue => ({ type: 'set-wounds', wounds: { [id]: nextValue } }),
-  });
   return {
     summary,
     status: `${status}${state.deteriorating ? ' · 每轮伤势恶化规则请由操作者确认后处理' : ''}`,
-    danger: Boolean(state.dead || state.unconscious), hideBaseResource: true,
-    title: `生命值 · 上限 ${state.max}`,
-    help: '伤害由右侧“聊天 → 伤害”应用。生命槽由 Ruleset Health Runtime 保存；盔甲、硬度、DR、临时生命等前置步骤由具体效果处理。',
+    danger: Boolean(state.dead || state.unconscious),
+    title: '生命值 · B/L/A 伤势槽',
+    help: '伤害由右侧“聊天 → 伤害”应用。生命上限与 B/L/A 伤势均由 Ruleset Health Runtime 保存；盔甲、硬度、DR、临时生命等前置步骤由具体效果处理。',
     segments: [
       { id: 'healthy', label: '完好', value: state.healthy, color: '#4b9f69' },
       { id: 'bashing', label: '冲击 B', value: state.bashing, color: '#d9b84a' },
       { id: 'lethal', label: '严重 L', value: state.lethal, color: '#d77c42' },
       { id: 'aggravated', label: '恶性 A', value: state.aggravated, color: '#a94442' },
     ],
-    fields: [field('bashing', '冲击 B', state.bashing), field('lethal', '严重 L', state.lethal), field('aggravated', '恶性 A', state.aggravated)],
+    fields: [
+      healthField('bashing', '冲击 B', state.bashing, value => ({ type: 'set-wounds', wounds: { bashing: value } }), { max: state.max }),
+      healthField('lethal', '严重 L', state.lethal, value => ({ type: 'set-wounds', wounds: { lethal: value } }), { max: state.max }),
+      healthField('aggravated', '恶性 A', state.aggravated, value => ({ type: 'set-wounds', wounds: { aggravated: value } }), { max: state.max }),
+      healthField('max', '生命上限', state.max, value => ({ type: 'set-max', value })),
+    ],
   };
 }
 
