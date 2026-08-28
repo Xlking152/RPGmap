@@ -1,5 +1,4 @@
 export const INFINITE_HORROR_RESOURCE_DEFS = Object.freeze([
-  { id: 'hp', name: '生命', kind: 'hp' },
   { id: 'stamina', name: '精力', kind: 'stamina' },
   { id: 'willpower', name: '意志', kind: 'willpower' },
 ]);
