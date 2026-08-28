@@ -7,7 +7,15 @@ function baseActor() {
     id: 'actor-template',
     name: '普通士兵',
     currentFormId: 'form-1',
-    forms: [{ id: 'form-1', attributes: [{ id: 'str', base: 5 }] }],
+    forms: [{
+      id: 'form-1',
+      resourceBases: {
+        hp: { id: 'hp', name: '生命', kind: 'hp', baseMax: 10 },
+        stamina: { id: 'stamina', name: '精力', kind: 'stamina', baseMax: 6 },
+      },
+      attributes: [{ id: 'str', base: 5 }],
+      source: { type: 'manual' },
+    }],
     runtime: {
       resources: {
         hp: { current: 10, maxOverride: null },
