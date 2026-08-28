@@ -10,7 +10,7 @@ import { commitRestoreEvent } from '../engine/state.js';
 import { featureStatusMutations } from './status-rules.js';
 
 function featureById(mapPackage, featureId) {
-  return (mapPackage?.features || []).find((feature) => String(feature.id) === String(featureId)) || null;
+  return (mapPackage?.features || []).find(feature => String(feature.id) === String(featureId)) || null;
 }
 
 function result(action, featureId, ok, reason = '', detail = {}) {
@@ -60,7 +60,7 @@ export function createFeatureOperations({
     mapPackage,
     state: getState(),
     featureId,
-    characterId: context.characterId ?? null,
+    tokenId: context.tokenId ?? null,
     resolveStatus,
   });
 
@@ -68,20 +68,20 @@ export function createFeatureOperations({
     mapPackage,
     state: getState(),
     featureId,
-    characterId: context.characterId ?? null,
+    tokenId: context.tokenId ?? null,
     resolveStatus,
   });
 
-  const statusMutationsFor = (feature, action, state, characterId) => featureStatusMutations({
+  const statusMutationsFor = (feature, action, state, tokenId) => featureStatusMutations({
     feature,
     action,
     state,
-    characterId,
+    tokenId,
     definitions: typeof getStatusDefinitions === 'function' ? getStatusDefinitions() : [],
   });
 
-  const applyStatusEffects = (draft, feature, action, characterId) => {
-    const mutations = statusMutationsFor(feature, action, draft, characterId);
+  const applyStatusEffects = (draft, feature, action, tokenId) => {
+    const mutations = statusMutationsFor(feature, action, draft, tokenId);
     if (!mutations.length) return { state: draft, mutations };
     if (typeof applyStatusMutations !== 'function') throw new Error('Runtime 未提供原子状态副作用 port');
     const next = applyStatusMutations(draft, mutations, {
@@ -92,7 +92,7 @@ export function createFeatureOperations({
     return { state: next, mutations };
   };
 
-  const stateForFeature = (featureId) => {
+  const stateForFeature = featureId => {
     const feature = featureById(mapPackage, featureId);
     return feature ? getFeatureRuntimeState(getState(), feature) : null;
   };
@@ -114,14 +114,14 @@ export function createFeatureOperations({
     const feature = featureById(mapPackage, featureId);
     if (!feature) return result(action, featureId, false, 'Feature 不存在');
 
-    const characterId = options.characterId ?? null;
+    const tokenId = options.tokenId ?? null;
     const descriptor = listFeatureInteractions({
       mapPackage,
       state,
       featureId: feature.id,
-      characterId,
+      tokenId,
       resolveStatus,
-    }).find((entry) => entry.id === action);
+    }).find(entry => entry.id === action);
     if (!descriptor) return result(action, feature.id, false, 'Feature 未声明该 Interaction Capability');
     if (!descriptor.enabled) return result(action, feature.id, false, descriptor.reason);
 
@@ -129,63 +129,63 @@ export function createFeatureOperations({
       if (action === 'inspect') {
         if (typeof selectFeature !== 'function') return result(action, feature.id, false, 'Runtime 未提供 selectFeature port');
         const ok = selectFeature(feature.id, options) !== false;
-        if (!ok) return result(action, feature.id, false, 'Feature 无法被选择', { characterId });
-        const draft = applyStatusEffects(state, feature, action, characterId);
+        if (!ok) return result(action, feature.id, false, 'Feature 无法被选择', { tokenId });
+        const draft = applyStatusEffects(state, feature, action, tokenId);
         if (draft.state !== state) await Promise.resolve(replaceState(draft.state, { source: 'feature:inspect', featureId: feature.id }));
-        return result(action, feature.id, true, '', { characterId, statusMutations: draft.mutations, message: actionMessage(action, feature) });
+        return result(action, feature.id, true, '', { tokenId, statusMutations: draft.mutations, message: actionMessage(action, feature) });
       }
 
       if (action === 'enter') {
         if (typeof planFeatureEntry !== 'function') return result(action, feature.id, false, 'Runtime 未提供 planFeatureEntry port');
-        const statusMutations = statusMutationsFor(feature, action, state, characterId);
-        const ok = (await Promise.resolve(planFeatureEntry({ feature, characterId, entrance: feature.entrance, options, statusMutations }))) !== false;
-        return result(action, feature.id, ok, ok ? '' : '无法规划进入 Feature', { characterId, statusMutations, message: ok ? actionMessage(action, feature) : '' });
+        const statusMutations = statusMutationsFor(feature, action, state, tokenId);
+        const ok = (await Promise.resolve(planFeatureEntry({ feature, tokenId, entrance: feature.entrance, options, statusMutations }))) !== false;
+        return result(action, feature.id, ok, ok ? '' : '无法规划进入 Feature', { tokenId, statusMutations, message: ok ? actionMessage(action, feature) : '' });
       }
 
       if (action === 'exit') {
         if (typeof exitFeature !== 'function') return result(action, feature.id, false, 'Runtime 未提供 exitFeature port');
-        const statusMutations = statusMutationsFor(feature, action, state, characterId);
-        const ok = (await Promise.resolve(exitFeature({ feature, characterId, options, statusMutations }))) !== false;
-        return result(action, feature.id, ok, ok ? '' : '无法离开 Feature', { characterId, statusMutations, message: ok ? actionMessage(action, feature) : '' });
+        const statusMutations = statusMutationsFor(feature, action, state, tokenId);
+        const ok = (await Promise.resolve(exitFeature({ feature, tokenId, options, statusMutations }))) !== false;
+        return result(action, feature.id, ok, ok ? '' : '无法离开 Feature', { tokenId, statusMutations, message: ok ? actionMessage(action, feature) : '' });
       }
 
       if (action === 'damage') {
         const damaged = damageFeatureState(state, mapPackage, feature.id);
         if (damaged === state) return result(action, feature.id, false, '对象当前无法继续破坏');
-        const draft = applyStatusEffects(damaged, feature, action, characterId);
+        const draft = applyStatusEffects(damaged, feature, action, tokenId);
         await Promise.resolve(replaceState(draft.state, { source: 'feature:damage', featureId: feature.id }));
         const committed = getState();
         const event = committed.sceneEvents?.at?.(-1) || null;
         getFeatureRuntimeState(committed, feature);
         send('scene:damage', event ? structuredClone(event) : null);
-        return result(action, feature.id, true, '', { characterId, event, statusMutations: draft.mutations, message: actionMessage(action, feature) });
+        return result(action, feature.id, true, '', { tokenId, event, statusMutations: draft.mutations, message: actionMessage(action, feature) });
       }
 
       if (action === 'restore') {
         const restored = commitRestoreEvent(state, [feature.id]);
         if (restored === state) return result(action, feature.id, false, '对象当前完整');
-        const draft = applyStatusEffects(restored, feature, action, characterId);
+        const draft = applyStatusEffects(restored, feature, action, tokenId);
         await Promise.resolve(replaceState(draft.state, { source: 'feature:restore', featureId: feature.id }));
         const event = getState().sceneEvents?.at?.(-1) || null;
         send('scene:restore', event ? structuredClone(event) : null);
         return result(action, feature.id, true, '', {
-          characterId, event, statusMutations: draft.mutations, message: actionMessage(action, feature),
+          tokenId, event, statusMutations: draft.mutations, message: actionMessage(action, feature),
         });
       }
 
       if (action === 'open' || action === 'close') {
         const open = action === 'open';
         const changed = setFeatureOpenState(state, feature.id, open);
-        const draft = applyStatusEffects(changed, feature, action, characterId);
+        const draft = applyStatusEffects(changed, feature, action, tokenId);
         await Promise.resolve(replaceState(draft.state, { source: `feature:${action}`, featureId: feature.id }));
         const featureState = getFeatureRuntimeState(getState(), feature);
-        send('interaction:state-change', { featureId: feature.id, open, state: featureState, characterId });
-        return result(action, feature.id, true, '', { characterId, open, state: featureState, statusMutations: draft.mutations, message: actionMessage(action, feature) });
+        send('interaction:state-change', { featureId: feature.id, open, state: featureState, tokenId });
+        return result(action, feature.id, true, '', { tokenId, open, state: featureState, statusMutations: draft.mutations, message: actionMessage(action, feature) });
       }
 
       return result(action, feature.id, false, '未知 Interaction Action');
     } catch (error) {
-      return result(action, feature.id, false, error?.message || String(error), { characterId });
+      return result(action, feature.id, false, error?.message || String(error), { tokenId });
     }
   };
 
@@ -196,8 +196,8 @@ export function createFeatureOperations({
     stateForFeature,
     patchState,
     inspect(featureId, options = {}) { return execute('inspect', { ...options, featureId }); },
-    enter(featureId, characterId = null, options = {}) { return execute('enter', { ...options, featureId, characterId }); },
-    exit(featureId, characterId = null, options = {}) { return execute('exit', { ...options, featureId, characterId }); },
+    enter(featureId, tokenId = null, options = {}) { return execute('enter', { ...options, featureId, tokenId }); },
+    exit(featureId, tokenId = null, options = {}) { return execute('exit', { ...options, featureId, tokenId }); },
     damage(featureId, options = {}) { return execute('damage', { ...options, featureId }); },
     restore(featureId, options = {}) { return execute('restore', { ...options, featureId }); },
     open(featureId, options = {}) { return execute('open', { ...options, featureId }); },

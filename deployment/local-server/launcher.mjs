@@ -9,6 +9,15 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PORT = 30000;
 const SEPARATOR = '============================================================';
+const REQUIRED_RUNTIME_FILES = Object.freeze([
+  'server.mjs',
+  'access-control.mjs',
+  'portable-storage.mjs',
+  'world-schema.mjs',
+  'world-v2.mjs',
+  'status-operations.mjs',
+  path.join('app', 'index.html'),
+]);
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -125,7 +134,6 @@ export function describePortConflict(result, port) {
   if (!result.rpgmap) {
     return `Port ${targetPort} is already in use by another program. Close that program or choose another PORT before starting RPGmap.`;
   }
-  const multiplayer = result.health?.multiplayer || {};
   const version = result.health?.version ? ` v${result.health.version}` : '';
   return `RPGmap${version} Local/LAN Server is already running on port ${targetPort}. Close that RPGmap window before starting another mode.`;
 }
@@ -140,7 +148,7 @@ async function validateRuntime() {
   if (process.platform !== 'win32') {
     throw new Error('This RPGmap package is Windows-only. Use start-rpgmap.bat on Windows.');
   }
-  for (const relative of ['server.mjs', path.join('app', 'index.html')]) {
+  for (const relative of REQUIRED_RUNTIME_FILES) {
     try {
       await access(path.join(ROOT, relative));
     } catch {
@@ -164,8 +172,6 @@ export function browserLaunchCandidates(url, platform = process.platform) {
     },
   ];
 
-  // Do not select a browser family here. Both launch methods below delegate to
-  // the user's Windows default HTTP/HTTPS association (for example Chrome).
   candidates.push({
     command: 'rundll32.exe',
     args: ['url.dll,FileProtocolHandler', target],
@@ -263,13 +269,6 @@ async function waitForServer(port, server, { timeoutMs = 20000 } = {}) {
     await delay(250);
   }
   throw new Error(`RPGmap Server did not become ready at http://127.0.0.1:${port}/api/health.`);
-}
-
-async function waitForChild(child) {
-  return new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', (code, signal) => resolve({ code, signal }));
-  });
 }
 
 async function ensurePortFree(port) {

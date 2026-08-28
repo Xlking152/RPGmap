@@ -14,7 +14,7 @@ export class TokenDragPlan {
   reset() {
     this.phase = MovementPhase.IDLE;
     this.pointerId = null;
-    this.characterId = null;
+    this.tokenId = null;
     this.session = null;
     this.current = null;
     this.route = null;
@@ -22,11 +22,11 @@ export class TokenDragPlan {
     this.nextClickCreatesWaypoint = false;
     return this;
   }
-  begin({ characterId, start, pointerId = null, client = null, snapStep = 5 }) {
+  begin({ tokenId = null, start, pointerId = null, client = null, snapStep = 5 }) {
     this.phase = MovementPhase.DRAGGING;
     this.pointerId = pointerId;
-    this.characterId = characterId;
-    this.session = new MovementSession({ characterId, start, snapStep });
+    this.tokenId = tokenId;
+    this.session = new MovementSession({ tokenId, start, snapStep });
     this.current = copyPoint(start);
     this.route = null;
     this.startClient = client ? { x: Number(client.x), y: Number(client.y) } : null;

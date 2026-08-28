@@ -4,5 +4,19 @@ export { multiplayerSocketUrl, isLocalHost, sanitizeMultiplayerName, normalizeRe
 export { createMultiplayerController } from './controller.js';
 
 export function createMultiplayerSystem(options = {}) {
-  return createMultiplayerController(options);
+  const controller = createMultiplayerController(options);
+  return {
+    register(api) {
+      controller.register(api);
+      const multiplayer = api.multiplayer;
+      if (!multiplayer || typeof multiplayer !== 'object') return;
+      multiplayer.canControlToken = tokenId => {
+        const token = api.tokens?.get?.(tokenId);
+        if (!token) return false;
+        const status = multiplayer.getStatus?.();
+        if (status?.session?.role === 'gm') return true;
+        return multiplayer.canControlActor?.(token.actorId) !== false;
+      };
+    },
+  };
 }

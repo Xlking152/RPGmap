@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyStatusOperationsToState, createStatusController } from '../src/status/controller.js';
+import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 
 function world() {
   return {
     preferences: {
       entitySystem: {
         schemaVersion: 3,
-        statusDefinitions: [],
+        statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
         actors: [{ id: 'actor-1', forms: [], runtime: {}, effects: [] }],
         tokens: [{ id: 'token-1', characterId: 'token-1', actorId: 'actor-1', effects: [] }],
       },

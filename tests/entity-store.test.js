@@ -2,11 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EntityStore } from '../src/entities/store.js';
 
-test('EntityStore commits Token changes without routing them through save import', () => {
-  const appState = {
-    preferences: {},
-    characters: [{ id: 'character-1', name: 'old', color: '#111111', visible: true }],
-  };
+test('EntityStore persists Actor reducer state without synchronizing Character documents', () => {
+  const appState = { preferences: {}, characters: [] };
   let committed = null;
   let imported = 0;
   const api = {
@@ -15,46 +12,34 @@ test('EntityStore commits Token changes without routing them through save import
     importState: () => { imported += 1; },
   };
   const store = new EntityStore(api);
-  store.state.actors = [{
-    id: 'actor-1',
-    name: 'new',
-    currentFormId: 'form-1',
-    forms: [{ id: 'form-1', avatarDataUrl: null, tokenAppearance: { color: '#33aa55' } }],
-  }];
-  store.bindToken('actor-1', 'character-1');
+  store.state.actors = [{ id: 'actor-1', name: 'Actor', currentFormId: null, forms: [], runtime: {}, effects: [] }];
+  store.state.tokens = [{ id: 'token-1', actorId: 'actor-1', diameterMeters: 1, elevationFt: 0, effects: [] }];
 
   store.persist();
 
   assert.equal(imported, 0);
   assert.equal(committed.options.source, 'entities');
   assert.equal(committed.options.render, false);
-  assert.equal(committed.state.preferences.entitySystem.tokens.length, 1);
-  assert.equal(committed.state.characters[0].name, 'new');
-  assert.equal(committed.state.characters[0].color, '#33aa55');
+  assert.equal(committed.state.preferences.entitySystem.tokens[0].id, 'token-1');
+  assert.equal(committed.state.preferences.entitySystem.tokens[0].characterId, undefined);
+  assert.deepEqual(committed.state.characters, []);
 });
 
-test('legacy Token migration keeps a coordinate whose 1m destination is blocked', () => {
-  const appState = {
-    preferences: {
-      entitySystem: {
-        schemaVersion: 1,
-        actors: [{ id: 'actor-1', name: 'Actor', forms: [], runtime: {} }],
-        tokens: [{ id: 'character-1', actorId: 'actor-1', characterId: 'character-1', size: 5 }],
-      },
-    },
-    characters: [{ id: 'character-1', location: { type: 'map', x: 12.2, y: 6.8 } }],
-  };
-  let committed = null;
+test('canonical EntityStore Token read view delegates to Token Runtime and never creates Character aliases', () => {
+  const canonicalTokens = [{ id: 'token-live', actorId: 'actor-1', diameterMeters: 5, elevationFt: 20, effects: [] }];
   const api = {
-    mapPackage: { width: 100, height: 100 },
-    getState: () => structuredClone(appState),
-    inspectTokenPlacement: () => ({ valid: false }),
-    commitState: state => { committed = state; },
+    getState: () => ({ preferences: { entitySystem: { schemaVersion: 3, actors: [{ id: 'actor-1', forms: [], runtime: {}, effects: [] }], tokens: [] } }, characters: [] }),
+    tokens: {
+      list: () => structuredClone(canonicalTokens),
+      get: id => canonicalTokens.find(token => token.id === id) || null,
+    },
+    commitState() {},
   };
-  const result = new EntityStore(api).load({ migrateLegacy: false, dropMarkers: false });
-  assert.equal(result.migratedTokenLocations, 0);
-  assert.equal(result.blockedTokenLocations, 1);
-  assert.deepEqual(committed.characters[0].location, { type: 'map', x: 12.2, y: 6.8 });
-  assert.equal(committed.preferences.entitySystem.tokens[0].diameterMeters, 5);
-  assert.equal(committed.preferences.entitySystem.tokens[0].size, undefined);
+  const store = new EntityStore(api, { canonicalTokenReads: true });
+  store.load({ migrateLegacy: false, dropMarkers: false });
+  assert.equal(store.token('token-live').id, 'token-live');
+  assert.deepEqual(store.snapshot().tokens, canonicalTokens);
+  assert.equal(store.snapshot().tokens[0].characterId, undefined);
+  assert.equal(typeof store.bindToken, 'undefined');
+  assert.equal(typeof store.syncCharacters, 'undefined');
 });

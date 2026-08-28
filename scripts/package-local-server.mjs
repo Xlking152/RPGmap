@@ -28,9 +28,21 @@ await mkdir(path.join(root, 'docs'), { recursive: true });
 
 await copy('dist', 'app');
 await copy('reference');
-for (const file of ['server.mjs', 'access-control.mjs', 'portable-storage.mjs', 'world-schema.mjs', 'status-operations.mjs', 'launcher.mjs', 'start-rpgmap.bat', 'README.md']) {
+for (const file of [
+  'server.mjs',
+  'access-control.mjs',
+  'status-capabilities-v2.mjs',
+  'portable-storage.mjs',
+  'world-schema.mjs',
+  'world-v2.mjs',
+  'status-operations.mjs',
+  'launcher.mjs',
+  'start-rpgmap.bat',
+  'README.md',
+]) {
   await copy(path.join('deployment', 'local-server', file), file);
 }
+await copy('src/world/operations.js', 'world-operations.mjs');
 for (const [source, target] of [
   ['文档/操作指南.md', 'docs/OPERATION-GUIDE.md'],
   ['CHANGELOG.md', 'docs/CHANGELOG.md'],
@@ -41,7 +53,7 @@ await writeFile(path.join(root, 'VERSION.json'), `${JSON.stringify({
   app: 'RPGmap', version, releaseTag: `v${version}`,
   commit: process.env.RPGMAP_SOURCE_COMMIT || process.env.GITHUB_SHA || 'local-build',
   serverMode: 'multiplayer', platform: 'windows', storageMode: 'portable-map-root-server-authoritative',
-  launcherMode: 'local-lan-only-v1', defaultPort: 30000,
+  launcherMode: 'local-lan-v2', defaultPort: 30000,
 }, null, 2)}\n`);
 
 try {

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { MovementSession, calculateWaypointRoute } from '../src/engine/movement-path.js';
 
 test('MovementSession manages FVTT-style waypoints', () => {
-  const session = new MovementSession({ characterId: 'hero', start: { x: 0, y: 0 } });
+  const session = new MovementSession({ tokenId: 'hero', start: { x: 0, y: 0 } });
   session.addWaypoint({ x: 10, y: 0 });
   session.addWaypoint({ x: 10, y: 20 });
   assert.deepEqual(session.getControlPoints({ x: 30, y: 20 }), [
@@ -15,7 +15,7 @@ test('MovementSession manages FVTT-style waypoints', () => {
 });
 
 test('calculateWaypointRoute sums routed segments and reports the blocked leg', async () => {
-  const session = new MovementSession({ characterId: 'hero', start: { x: 0, y: 0 } });
+  const session = new MovementSession({ tokenId: 'hero', start: { x: 0, y: 0 } });
   session.addWaypoint({ x: 3, y: 4 });
   const findPath = async (from, to) => ({ points: [from, to], distance: Math.hypot(to.x - from.x, to.y - from.y), destination: to });
   const route = await calculateWaypointRoute({ session, destination: { x: 3, y: 8 }, findPath });
@@ -33,7 +33,7 @@ test('calculateWaypointRoute sums routed segments and reports the blocked leg', 
 });
 
 test('manual waypoints and the final destination use the same strict direct planner', async () => {
-  const session = new MovementSession({ characterId: 'hero', start: { x: 0, y: 0 } });
+  const session = new MovementSession({ tokenId: 'hero', start: { x: 0, y: 0 } });
   session.addWaypoint({ x: 10, y: 0 });
   const calls = [];
   const route = await calculateWaypointRoute({

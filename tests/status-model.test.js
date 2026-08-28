@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BUILTIN_STATUS_DEFINITIONS,
   getStatusDefinitions,
   normalizeEntityStatusState,
   reduceStatusOperation,
   resolveStatuses,
 } from '../src/status/model.js';
-import { moverContextForCharacter } from '../src/elevation/model.js';
 import { resolveResource } from '../src/entities/resolver.js';
+import { getActiveRuleset } from '../src/ruleset/index.js';
+
+const BUILTIN_STATUS_DEFINITIONS = getActiveRuleset().statuses.definitions;
 
 function actor(id = 'actor-1') {
   return {
@@ -31,9 +32,9 @@ function actor(id = 'actor-1') {
 function emptyState() {
   return {
     schemaVersion: 3,
-    statusDefinitions: [],
+    statusDefinitions: structuredClone(BUILTIN_STATUS_DEFINITIONS),
     actors: [actor()],
-    tokens: [{ id: 'token-1', characterId: 'token-1', actorId: 'actor-1', effects: [] }],
+    tokens: [{ id: 'token-1', actorId: 'actor-1', effects: [] }],
   };
 }
 
@@ -59,11 +60,12 @@ test('legacy Actor effects migrate deterministically to custom definitions and n
   const first = normalizeEntityStatusState(legacy);
   const second = normalizeEntityStatusState(legacy);
   assert.equal(first.schemaVersion, 3);
-  assert.equal(first.statusDefinitions.length, 1);
+  assert.equal(first.statusDefinitions.length, BUILTIN_STATUS_DEFINITIONS.length + 1);
   assert.deepEqual(first.statusDefinitions, second.statusDefinitions);
   assert.equal(first.actors[0].effects[0].id, 'old-bonus');
-  assert.equal(first.actors[0].effects[0].definitionId, first.statusDefinitions[0].id);
-  assert.deepEqual(first.actors[0].effects[0].changes, first.statusDefinitions[0].changes);
+  const migratedDefinition = first.statusDefinitions.find(definition => definition.id.startsWith('status-legacy-'));
+  assert.equal(first.actors[0].effects[0].definitionId, migratedDefinition.id);
+  assert.deepEqual(first.actors[0].effects[0].changes, migratedDefinition.changes);
   assert.equal('name' in first.actors[0].effects[0], false);
 
   const repeated = normalizeEntityStatusState(first);
@@ -90,7 +92,7 @@ test('Actor and Token effects normalize, merge duplicate definitions, and clamp 
 
 test('resolveStatuses combines Actor and Token statuses with disabling capabilities taking precedence', () => {
   const raw = emptyState();
-  raw.statusDefinitions = [{
+  raw.statusDefinitions = [...structuredClone(BUILTIN_STATUS_DEFINITIONS), {
     id: 'status-encouraged', name: '鼓舞', scopes: ['actor'], maxStacks: 1,
     changes: [], capabilities: { canMove: true, canInteract: true, canActInCombat: true },
   }];
@@ -146,20 +148,21 @@ test('bad-status points derive the highest reached light, severe, or destruction
   assert.equal(destruction.derivedStatuses.find(status => status.definitionId.includes('bad-status-fear')).label, '恐惧点数 · 毁灭');
 });
 
-test('mover context carries authoritative status version and structure bypass', () => {
+test('Token status resolution carries authoritative version and structure bypass metadata', () => {
   const entities = emptyState();
   entities.tokens[0].effects = [{
     id: 'spirit', definitionId: 'status-spirit', stacks: 1, enabled: true,
   }];
-  const context = moverContextForCharacter({ preferences: { entitySystem: entities } }, 'token-1');
-  assert.deepEqual(context.collisionBypassGroups, ['structure']);
-  assert.match(context.statusVersion, /^[0-9a-f]{8}$/);
+  const resolved = resolveStatuses(entities, { tokenId: 'token-1' });
+  assert.deepEqual(resolved.capabilities.collisionBypassGroups, ['structure']);
+  assert.match(resolved.statusVersion, /^[0-9a-f]{8}$/);
 
   entities.tokens[0].effects.push({
     id: 'rooted', definitionId: 'status-rooted', stacks: 1, enabled: true,
   });
-  const changed = moverContextForCharacter({ preferences: { entitySystem: entities } }, 'token-1');
-  assert.notEqual(changed.statusVersion, context.statusVersion);
+  const changed = resolveStatuses(entities, { tokenId: 'token-1' });
+  assert.notEqual(changed.statusVersion, resolved.statusVersion);
+  assert.equal(changed.capabilities.canMove, false);
 });
 
 test('disabled effects remain editable but do not affect resolved capabilities', () => {
@@ -193,7 +196,7 @@ test('offline reducer applies server-shaped operations atomically', () => {
   assert.equal(applied.state.actors[0].effects[0].stacks, 3);
   assert.deepEqual(applied.state.actors[0].effects[0].changes, definition.changes);
   assert.equal(resolveResource(applied.state.actors[0], 'hp').max, 11);
-  assert.equal(initial.statusDefinitions.length, 0);
+  assert.equal(initial.statusDefinitions.length, BUILTIN_STATUS_DEFINITIONS.length);
   assert.equal(initial.actors[0].effects.length, 0);
 
   assert.throws(() => reduceStatusOperation(applied.state, {
@@ -205,4 +208,24 @@ test('offline reducer applies server-shaped operations atomically', () => {
   }));
   assert.equal(applied.state.actors[0].effects.length, 1);
   assert.equal(getStatusDefinitions(applied.state).some(item => item.id === 'status-warded'), true);
+});
+
+test('status normalization preserves custom definition and Effect extension metadata', () => {
+  const state = emptyState();
+  state.statusDefinitions = [{
+    id: 'status-extension',
+    name: 'Extension',
+    scopes: ['actor'],
+    extension: { provider: 'test-module' },
+  }];
+  state.actors[0].effects = [{
+    id: 'effect-extension',
+    definitionId: 'status-extension',
+    stacks: 1,
+    enabled: true,
+    extension: { expiresAtRound: 4 },
+  }];
+  const normalized = normalizeEntityStatusState(state);
+  assert.deepEqual(normalized.statusDefinitions[0].extension, { provider: 'test-module' });
+  assert.deepEqual(normalized.actors[0].effects[0].extension, { expiresAtRound: 4 });
 });

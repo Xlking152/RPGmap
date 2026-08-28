@@ -88,7 +88,10 @@ export function createStatusController() {
       }
 
       function resolve(context = {}, tokenId = null) {
-        return resolveStatuses(currentEntityState(), contextValue(context, tokenId));
+        return resolveStatuses(currentEntityState(), {
+          ...contextValue(context, tokenId),
+          ruleset: api.ruleset,
+        });
       }
 
       function emitChange(detail) {
@@ -125,21 +128,33 @@ export function createStatusController() {
             }
             result = await api.multiplayer.performStatusOperation(type, clone(payload));
           } else {
-            const appState = clone(api.getState?.() || {});
-            appState.preferences ||= {};
-            const reduced = reduceStatusOperation(appState.preferences[ENTITY_PREFERENCE_KEY], { type, ...clone(payload) }, {
-              source: { role: 'offline' },
-            });
-            appState.preferences[ENTITY_PREFERENCE_KEY] = reduced.state;
-            if (typeof api.commitState === 'function') {
-              api.commitState(appState, { source: `status:${type}`, render: false });
-            } else if (typeof api.importState === 'function') {
-              api.importState(appState);
+            if (typeof api.world?.performOperations === 'function') {
+              const operationPayload = clone(payload);
+              const requestedOperationId = operationPayload.operationId || null;
+              delete operationPayload.operationId;
+              result = await api.world.performOperations([{ type, payload: operationPayload }], {
+                source: `status:${type}`,
+                render: false,
+                kind: 'status',
+                requestedOperationId,
+              });
             } else {
-              throw new Error('当前运行环境无法保存状态变更');
+              const appState = clone(api.getState?.() || {});
+              appState.preferences ||= {};
+              const reduced = reduceStatusOperation(appState.preferences[ENTITY_PREFERENCE_KEY], { type, ...clone(payload) }, {
+                source: { role: 'offline' },
+              });
+              appState.preferences[ENTITY_PREFERENCE_KEY] = reduced.state;
+              if (typeof api.commitState === 'function') {
+                api.commitState(appState, { source: `status:${type}`, render: false });
+              } else if (typeof api.importState === 'function') {
+                api.importState(appState);
+              } else {
+                throw new Error('当前运行环境无法保存状态变更');
+              }
+              api.persistNow?.();
+              result = { offline: true, results: reduced.results };
             }
-            api.persistNow?.();
-            result = { offline: true, results: reduced.results };
           }
           const snapshot = resolve(resolutionContext(payload));
           emitChange(mutationDetail(type, payload, result, online, snapshot));

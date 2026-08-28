@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyStatusMessage, assertStatusState } from '../deployment/local-server/status-operations.mjs';
+import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 
 function world() {
   return {
     preferences: {
       entitySystem: {
         schemaVersion: 3,
-        statusDefinitions: [],
+        statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
         actors: [{ id: 'actor-a', forms: [], runtime: {}, effects: [] }],
         tokens: [{ id: 'token-a', characterId: 'character-a', actorId: 'actor-a', effects: [] }],
       },
@@ -61,5 +62,23 @@ test('server rejects unknown Lucide icons without modifying the original World',
   assert.throws(() => applyStatusMessage(initial, {
     type: 'status.definition.upsert', definition: { ...definition([]), icon: '<script>' },
   }), error => error?.code === 'status_icon_invalid');
-  assert.deepEqual(initial.preferences.entitySystem.statusDefinitions, []);
+  assert.deepEqual(initial.preferences.entitySystem.statusDefinitions, structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS));
+});
+
+test('server reads built-ins from World and strips forged builtIn flags from custom definitions', () => {
+  let state = applyStatusMessage(world(), {
+    type: 'status.apply', scope: 'actor', targetId: 'actor-a', statusId: 'status-rooted', stacks: 1,
+  }).state;
+  assert.equal(state.preferences.entitySystem.actors[0].effects[0].definitionId, 'status-rooted');
+
+  assert.throws(() => applyStatusMessage(state, {
+    type: 'status.definition.upsert',
+    definition: { ...structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS[1]), builtIn: false },
+  }), error => error?.code === 'status_builtin_readonly');
+
+  state = applyStatusMessage(state, {
+    type: 'status.definition.upsert',
+    definition: { ...definition([]), id: 'status-forged', builtIn: true },
+  }).state;
+  assert.equal(state.preferences.entitySystem.statusDefinitions.find(item => item.id === 'status-forged').builtIn, false);
 });

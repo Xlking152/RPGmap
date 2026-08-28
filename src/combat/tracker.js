@@ -41,62 +41,54 @@ export function installCombatStyles(documentNode) {
     .combatant-remove { border:0; background:transparent; color:#9a5450; cursor:pointer; font-size:17px; line-height:1; }
     .combat-tracker-empty { padding:18px 12px; text-align:center; color:#778385; font-size:12px; line-height:1.55; }
     .combatant-row.drag-over { outline:2px dashed rgba(23,109,118,.55); outline-offset:-2px; }
-    @media (max-width:900px) {
-      .rpgmap-combat-tracker { width:220px; }
-      .combat-top-status { display:none; }
-    }
+    @media (max-width:900px) { .rpgmap-combat-tracker { width:220px; } .combat-top-status { display:none; } }
   `;
   documentNode.head.append(style);
 }
 
-export function combatantView(combatant, appState) {
-  const character = (appState.characters || []).find(item => String(item.id) === String(combatant.tokenId));
-  const name = character?.name || `Token ${combatant.tokenId}`;
-  const avatar = character?.avatarDataUrl || null;
-  return { character, name, avatar };
+export function combatantView(combatant, _appState, resolveTokenView = null) {
+  if (typeof resolveTokenView !== 'function') {
+    return { token: null, actor: null, synthetic: false, name: `Token ${combatant.tokenId}`, avatar: null };
+  }
+  const runtime = resolveTokenView(combatant.tokenId, combatant);
+  if (!runtime) {
+    return { token: null, actor: null, synthetic: false, name: `Token ${combatant.tokenId}`, avatar: null };
+  }
+  return {
+    token: runtime.token || null,
+    actor: runtime.actor || null,
+    synthetic: runtime.synthetic === true,
+    name: runtime.name || `Token ${combatant.tokenId}`,
+    avatar: runtime.avatar || null,
+  };
 }
 
-export function renderCombatTracker(root, combat, appState) {
-  if (!combat) {
-    root.hidden = true;
-    root.innerHTML = '';
-    return;
-  }
+export function renderCombatTracker(root, combat, appState, resolveTokenView = null) {
+  if (!combat) { root.hidden = true; root.innerHTML = ''; return; }
   root.hidden = false;
   const currentId = combat.state === 'active' ? combat.combatants[combat.turnIndex]?.id : null;
   const rows = combat.combatants.map(combatant => {
-    const view = combatantView(combatant, appState);
+    const view = combatantView(combatant, appState, resolveTokenView);
     const avatar = view.avatar
       ? `<span class="combatant-avatar"><img src="${escapeHtml(view.avatar)}" alt=""></span>`
       : `<span class="combatant-avatar">${escapeHtml(view.name.trim()[0] || '?')}</span>`;
     return `<div class="combatant-row ${combatant.id === currentId ? 'current' : ''}" data-combatant-id="${escapeHtml(combatant.id)}" data-token-id="${escapeHtml(combatant.tokenId)}">
-      <span class="combatant-drag" draggable="true" title="拖动调整顺序">⋮⋮</span>
-      ${avatar}
-      <span class="combatant-name" title="点击选择并定位 Token"><strong>${escapeHtml(view.name)}</strong><small>${combat.state === 'active' && combatant.id === currentId ? '当前回合' : 'Token'}</small></span>
+      <span class="combatant-drag" draggable="true" title="拖动调整顺序">⋮⋮</span>${avatar}
+      <span class="combatant-name" title="点击选择并定位 Token"><strong>${escapeHtml(view.name)}</strong><small>${combat.state === 'active' && combatant.id === currentId ? '当前回合' : (view.synthetic ? 'Token · 独立实例' : 'Token')}</small></span>
       <input class="combatant-initiative" type="number" step="1" placeholder="—" value="${combatant.initiative ?? ''}" data-combat-initiative="${escapeHtml(combatant.id)}" aria-label="${escapeHtml(view.name)} 先攻">
       <button type="button" class="combatant-remove" data-combat-remove="${escapeHtml(combatant.id)}" title="移出战斗">×</button>
     </div>`;
   }).join('');
-  root.innerHTML = `<header class="combat-tracker-head"><strong>先攻表</strong><small>${combat.state === 'active' ? `第 ${combat.round} 轮` : '准备阶段'} · ${combat.combatants.length} 人</small></header>
-    <div class="combat-tracker-list">${rows || '<div class="combat-tracker-empty">尚无参战 Token。框选或选择 Token 后点击顶部“加入所选”。</div>'}</div>`;
+  root.innerHTML = `<header class="combat-tracker-head"><strong>先攻表</strong><small>${combat.state === 'active' ? `第 ${combat.round} 轮` : '准备阶段'} · ${combat.combatants.length} 人</small></header><div class="combat-tracker-list">${rows || '<div class="combat-tracker-empty">尚无参战 Token。框选或选择 Token 后点击顶部“加入所选”。</div>'}</div>`;
 }
 
-export function renderCombatTopbar(root, combat, appState, selectedCount = 0, addableCount = selectedCount) {
-  if (!combat) {
-    root.innerHTML = `<button type="button" class="ui-primary-tool" data-combat-action="enter">进入战斗${selectedCount ? ` · ${selectedCount}` : ''}</button>`;
-    return;
-  }
+export function renderCombatTopbar(root, combat, appState, selectedCount = 0, addableCount = selectedCount, resolveTokenView = null) {
+  if (!combat) { root.innerHTML = `<button type="button" class="ui-primary-tool" data-combat-action="enter">进入战斗${selectedCount ? ` · ${selectedCount}` : ''}</button>`; return; }
   if (combat.state === 'setup') {
-    root.innerHTML = `<span class="combat-top-status">战斗准备 · ${combat.combatants.length} 人</span>
-      <button type="button" class="ui-primary-tool" data-combat-action="add">加入所选${addableCount ? ` · ${addableCount}` : ''}</button>
-      <button type="button" class="ui-primary-tool active" data-combat-action="start">开始战斗</button>
-      <button type="button" class="ui-primary-tool danger" data-combat-action="end">结束</button>`;
+    root.innerHTML = `<span class="combat-top-status">战斗准备 · ${combat.combatants.length} 人</span><button type="button" class="ui-primary-tool" data-combat-action="add">加入所选${addableCount ? ` · ${addableCount}` : ''}</button><button type="button" class="ui-primary-tool active" data-combat-action="start">开始战斗</button><button type="button" class="ui-primary-tool danger" data-combat-action="end">结束</button>`;
     return;
   }
   const current = combat.combatants[combat.turnIndex];
-  const currentName = current ? combatantView(current, appState).name : '—';
-  root.innerHTML = `<span class="combat-top-status">第 ${combat.round} 轮 · ${escapeHtml(currentName)}</span>
-    <button type="button" class="ui-primary-tool" data-combat-action="add">加入所选${addableCount ? ` · ${addableCount}` : ''}</button>
-    <button type="button" class="ui-primary-tool active" data-combat-action="next">下一回合</button>
-    <button type="button" class="ui-primary-tool danger" data-combat-action="end">结束战斗</button>`;
+  const currentName = current ? combatantView(current, appState, resolveTokenView).name : '—';
+  root.innerHTML = `<span class="combat-top-status">第 ${combat.round} 轮 · ${escapeHtml(currentName)}</span><button type="button" class="ui-primary-tool" data-combat-action="add">加入所选${addableCount ? ` · ${addableCount}` : ''}</button><button type="button" class="ui-primary-tool active" data-combat-action="next">下一回合</button><button type="button" class="ui-primary-tool danger" data-combat-action="end">结束战斗</button>`;
 }

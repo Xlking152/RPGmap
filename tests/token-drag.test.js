@@ -4,7 +4,7 @@ import { TokenDragPhase, TokenDragPlan } from '../src/engine/token-drag.js';
 
 test('TokenDragPlan follows drag, planning, ready and moving phases', () => {
   const drag = new TokenDragPlan();
-  drag.begin({ characterId: 'hero', start: { x: 10, y: 20 }, pointerId: 7, client: { x: 100, y: 100 } });
+  drag.begin({ tokenId: 'hero', start: { x: 10, y: 20 }, pointerId: 7, client: { x: 100, y: 100 } });
   assert.equal(drag.phase, TokenDragPhase.DRAGGING);
   assert.equal(Math.round(drag.draggedPixels({ x: 103, y: 104 })), 5);
 
@@ -25,7 +25,7 @@ test('TokenDragPlan follows drag, planning, ready and moving phases', () => {
 
 test('Ctrl drag release does not become a waypoint and arms the next left click', () => {
   const drag = new TokenDragPlan();
-  drag.begin({ characterId: 'hero', start: { x: 0, y: 0 }, pointerId: 9 });
+  drag.begin({ tokenId: 'hero', start: { x: 0, y: 0 }, pointerId: 9 });
   drag.update({ x: 40, y: 0 });
   drag.setRoute({ valid: true, destination: { x: 40, y: 0 }, distance: 40 });
 
@@ -43,7 +43,7 @@ test('Ctrl drag release does not become a waypoint and arms the next left click'
 
 test('Adding a waypoint while still dragging is guarded and never stores the drag endpoint', () => {
   const drag = new TokenDragPlan();
-  drag.begin({ characterId: 'hero', start: { x: 0, y: 0 } });
+  drag.begin({ tokenId: 'hero', start: { x: 0, y: 0 } });
   drag.update({ x: 25, y: 0 });
   drag.setRoute({ valid: true, destination: { x: 25, y: 0 }, distance: 25 });
 
@@ -55,7 +55,7 @@ test('Adding a waypoint while still dragging is guarded and never stores the dra
 
 test('TokenDragPlan can undo the last waypoint and reset cleanly', () => {
   const drag = new TokenDragPlan();
-  drag.begin({ characterId: 'hero', start: { x: 0, y: 0 } });
+  drag.begin({ tokenId: 'hero', start: { x: 0, y: 0 } });
   drag.continuePlanning();
   drag.update({ x: 10, y: 0 });
   drag.setRoute({ valid: true, destination: { x: 10, y: 0 }, distance: 10 });

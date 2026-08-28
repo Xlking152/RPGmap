@@ -1,5 +1,3 @@
-import { resolveStatuses } from '../status/model.js';
-
 function finiteNonNegative(value, fallback = 0) {
   const number = Number(value);
   if (Number.isFinite(number) && number >= 0) return number;
@@ -32,57 +30,15 @@ export function normalizeBlockingHeightFt(value, fallback = null) {
   return optionalFiniteNonNegative(fallback);
 }
 
-export function entityStateFromAppState(state) {
-  const entityState = state?.preferences?.entitySystem;
-  return entityState && typeof entityState === 'object'
-    ? entityState
-    : { actors: [], tokens: [] };
-}
-
-export function tokenForCharacter(state, characterId) {
-  const id = String(characterId ?? '');
-  if (!id) return null;
-  return (entityStateFromAppState(state).tokens || []).find((token) => (
-    String(token?.characterId ?? token?.id ?? '') === id
-  )) || null;
-}
-
-export function actorForCharacter(state, characterId) {
-  const token = tokenForCharacter(state, characterId);
-  if (!token?.actorId) return null;
-  return (entityStateFromAppState(state).actors || []).find((actor) => (
-    String(actor?.id ?? '') === String(token.actorId)
-  )) || null;
-}
-
-export function tokenElevationFt(tokenOrState, characterId = null) {
-  const token = characterId === null
-    ? tokenOrState
-    : tokenForCharacter(tokenOrState, characterId);
+export function tokenElevationFt(token) {
   return normalizeElevationFt(token?.elevationFt, 0);
 }
 
-export function tokenDiameterMeters(tokenOrState, characterId = null) {
-  const token = characterId === null
-    ? tokenOrState
-    : tokenForCharacter(tokenOrState, characterId);
+export function tokenDiameterMeters(token) {
   // `size` was an unused V1.5 field. Only exact supported legacy values are
-  // accepted, so an old visual scale never turns a Token into a giant.
+  // accepted during one-way normalization, so an old visual scale never turns
+  // a Token into a giant.
   return normalizeTokenDiameterMeters(token?.diameterMeters ?? token?.size, 1);
-}
-
-export function moverContextForCharacter(state, characterId) {
-  const id = characterId == null ? null : String(characterId);
-  const resolved = id
-    ? resolveStatuses(entityStateFromAppState(state), { characterId: id })
-    : { capabilities: { collisionBypassGroups: [] }, statusVersion: 'none' };
-  return Object.freeze({
-    characterId: id,
-    elevationFt: id ? tokenElevationFt(state, id) : 0,
-    diameterMeters: id ? tokenDiameterMeters(state, id) : 1,
-    statusVersion: resolved.statusVersion,
-    collisionBypassGroups: Object.freeze([...(resolved.capabilities?.collisionBypassGroups || [])]),
-  });
 }
 
 export function featureBlockingHeightFt(feature, featureState = null) {

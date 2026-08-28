@@ -1,6 +1,7 @@
 import { normalizeEntityState } from '../entities/model.js';
 import { resolveActorHealth } from './actor.js';
-import { HEALTH_MODE_SIMPLE, HEALTH_MODE_WOUND_TRACK, formatHealthSummary, healthStatusLabel } from './model.js';
+import { describeHealth, healthModeOptions } from './model.js';
+import { describeActorSheet } from '../actor/index.js';
 
 const STYLE_ID = 'rpgmap-health-system-style';
 
@@ -9,17 +10,17 @@ function escapeHtml(value) {
 }
 
 function actorFromSheet(api, documentNode) {
-  const formId = documentNode.querySelector('.entity-sheet [data-form-select]')?.value;
-  if (!formId) return null;
-  const state = normalizeEntityState(api.getState().preferences?.entitySystem);
-  return state.actors.find(actor => actor.forms?.some(form => String(form.id) === String(formId))) || null;
+  const actorId = documentNode.querySelector('.entity-sheet')?.dataset.actorId;
+  if (!actorId) return null;
+  const state = normalizeEntityState(api.getState().preferences?.entitySystem, { ruleset: api.ruleset });
+  return state.actors.find(actor => String(actor.id) === String(actorId)) || null;
 }
 
 function selectedActor(api) {
   const tokenId = api.selection?.getPrimaryTokenId?.();
   if (!tokenId) return null;
-  const state = normalizeEntityState(api.getState().preferences?.entitySystem);
-  const token = state.tokens.find(item => String(item.characterId || item.id) === String(tokenId));
+  const state = normalizeEntityState(api.getState().preferences?.entitySystem, { ruleset: api.ruleset });
+  const token = state.tokens.find(item => String(item.id) === String(tokenId));
   return token ? state.actors.find(actor => String(actor.id) === String(token.actorId)) || null : null;
 }
 
@@ -31,22 +32,18 @@ function installStyles(documentNode) {
     .entity-health-panel { display:grid; gap:10px; }
     .entity-health-head { display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
     .entity-health-head label { display:flex; gap:6px; align-items:center; font-size:12px; color:#617073; }
-    .entity-wound-values { display:grid; grid-template-columns:repeat(4,minmax(90px,1fr)); gap:7px; }
-    .entity-wound-value { border:1px solid #dce3df; border-radius:8px; padding:8px; background:#f8faf8; }
-    .entity-wound-value b { display:block; font-size:18px; margin-top:2px; }
-    .entity-wound-value input { display:block; width:100%; box-sizing:border-box; margin-top:5px; padding:5px 6px; border:1px solid #cdd6d2; border-radius:6px; font:inherit; font-weight:800; }
-    .entity-wound-bar { display:flex; height:9px; border-radius:8px; overflow:hidden; background:#e7ebe8; }
-    .entity-wound-bar span { min-width:0; }
-    .entity-wound-bar .healthy { background:#4b9f69; }
-    .entity-wound-bar .bashing { background:#d9b84a; }
-    .entity-wound-bar .lethal { background:#d77c42; }
-    .entity-wound-bar .aggravated { background:#a94442; }
+    .entity-health-values { display:grid; grid-template-columns:repeat(4,minmax(90px,1fr)); gap:7px; }
+    .entity-health-value { border:1px solid #dce3df; border-radius:8px; padding:8px; background:#f8faf8; }
+    .entity-health-value b { display:block; font-size:18px; margin-top:2px; }
+    .entity-health-value input { display:block; width:100%; box-sizing:border-box; margin-top:5px; padding:5px 6px; border:1px solid #cdd6d2; border-radius:6px; font:inherit; font-weight:800; }
+    .entity-health-bar { display:flex; height:9px; border-radius:8px; overflow:hidden; background:#e7ebe8; }
+    .entity-health-bar span { min-width:0; }
     .entity-health-status { font-size:12px; font-weight:800; color:#59676a; }
     .entity-health-status.is-danger { color:#a33c37; }
     .ui-health-mini { display:grid; gap:5px; padding:7px 8px; border-radius:7px; background:#f1f4f2; font-size:12px; }
     .ui-health-mini strong { color:#344548; }
     .ui-health-mini small { color:#697679; }
-    @media (max-width:760px) { .entity-wound-values{grid-template-columns:1fr 1fr;} }
+    @media (max-width:760px) { .entity-health-values{grid-template-columns:1fr 1fr;} }
   `;
   documentNode.head.append(style);
 }
@@ -56,21 +53,47 @@ function canEditHealth(api, actorId) {
   return !capabilities || capabilities.canEditActor?.(actorId) !== false;
 }
 
-function healthPanelHtml(api, actor) {
-  const health = resolveActorHealth(actor);
+function modeOptionsHtml(mode, ruleset) {
+  return healthModeOptions({ ruleset }).map(option => `<option value="${escapeHtml(option.id)}" ${String(mode) === String(option.id) ? 'selected' : ''}>${escapeHtml(option.label || option.id)}</option>`).join('');
+}
+
+function healthSignature(actor, state, view, ruleset) {
+  return [
+    actor.id,
+    describeActorSheet(actor, { ruleset })?.currentVariantId,
+    state?.mode,
+    state?.max,
+    view.summary,
+    view.status,
+    ...(view.segments || []).flatMap(segment => [segment.id, segment.value]),
+    ...(view.fields || []).flatMap(field => [field.id, field.value]),
+  ].join('|');
+}
+
+export function renderActorHealthPanel(api, actor) {
+  const health = resolveActorHealth(actor, { ruleset: api.ruleset });
+  if (!health) return '';
+  const view = describeHealth(health, { ruleset: api.ruleset });
   const editable = canEditHealth(api, actor.id);
   const disabled = editable ? '' : ' disabled title="需要 OWNER 权限且必须轮到该角色行动"';
-  const options = `<option value="${HEALTH_MODE_WOUND_TRACK}" ${health.mode === HEALTH_MODE_WOUND_TRACK ? 'selected' : ''}>伤势生命槽 B/L/A</option><option value="${HEALTH_MODE_SIMPLE}" ${health.mode === HEALTH_MODE_SIMPLE ? 'selected' : ''}>普通 HP</option>`;
-  if (health.mode === HEALTH_MODE_SIMPLE) {
-    return `<section class="entity-section entity-health-panel" data-health-panel><div class="entity-health-head"><h3>生命系统</h3><label>模式 <select data-health-mode="${escapeHtml(actor.id)}"${disabled}>${options}</select></label></div><div class="entity-help">普通 HP 模式沿用原有“当前 / 最大”生命值。适合其他规则游戏。</div></section>`;
-  }
-  const width = value => health.max > 0 ? Math.max(0, value / health.max * 100) : 0;
+  const width = value => health.max > 0 ? Math.max(0, Number(value) / health.max * 100) : 0;
+  const fields = new Map((view.fields || []).map(field => [String(field.id), field]));
+  const values = (view.segments || []).map(segment => {
+    const field = fields.get(String(segment.id));
+    const input = field
+      ? `<input type="number" min="${escapeHtml(field.min ?? 0)}" max="${escapeHtml(field.max ?? health.max)}" step="1" value="${escapeHtml(field.value)}" data-health-field-id="${escapeHtml(field.id)}" data-health-actor-id="${escapeHtml(actor.id)}" aria-label="${escapeHtml(field.label || segment.label)}"${disabled}>`
+      : '';
+    return `<label class="entity-health-value">${escapeHtml(segment.label || segment.id)}<b>${escapeHtml(segment.value)}</b>${input}</label>`;
+  }).join('');
+  const bar = (view.segments || []).length
+    ? `<div class="entity-health-bar" title="${escapeHtml(view.summary)}">${view.segments.map(segment => `<span style="width:${width(segment.value)}%;background:${escapeHtml(segment.color || '#4b9f69')}" title="${escapeHtml(segment.label || segment.id)}"></span>`).join('')}</div>`
+    : '';
   return `<section class="entity-section entity-health-panel" data-health-panel>
-    <div class="entity-health-head"><h3>生命值 · 上限 ${health.max}</h3><label>模式 <select data-health-mode="${escapeHtml(actor.id)}"${disabled}>${options}</select></label></div>
-    <div class="entity-wound-bar" title="${escapeHtml(formatHealthSummary(health))}"><span class="healthy" style="width:${width(health.healthy)}%"></span><span class="bashing" style="width:${width(health.bashing)}%"></span><span class="lethal" style="width:${width(health.lethal)}%"></span><span class="aggravated" style="width:${width(health.aggravated)}%"></span></div>
-    <div class="entity-wound-values"><div class="entity-wound-value">完好<b>${health.healthy}</b></div><label class="entity-wound-value">冲击 B<b>${health.bashing}</b><input type="number" min="0" max="${health.max}" step="1" value="${health.bashing}" data-health-wound="bashing" data-health-actor-id="${escapeHtml(actor.id)}" aria-label="冲击 B 伤势"${disabled}></label><label class="entity-wound-value">严重 L<b>${health.lethal}</b><input type="number" min="0" max="${health.max}" step="1" value="${health.lethal}" data-health-wound="lethal" data-health-actor-id="${escapeHtml(actor.id)}" aria-label="严重 L 伤势"${disabled}></label><label class="entity-wound-value">恶性 A<b>${health.aggravated}</b><input type="number" min="0" max="${health.max}" step="1" value="${health.aggravated}" data-health-wound="aggravated" data-health-actor-id="${escapeHtml(actor.id)}" aria-label="恶性 A 伤势"${disabled}></label></div>
-    <div class="entity-health-status ${health.dead || health.unconscious ? 'is-danger' : ''}">${escapeHtml(healthStatusLabel(health))}${health.deteriorating ? ' · 每轮伤势恶化规则请由操作者确认后处理' : ''}</div>
-    <div class="entity-help">伤害由右侧“聊天 → 伤害”应用。这里显示的是生命槽结果；不会自动处理盔甲、硬度、DR、临时生命等伤害前置步骤。</div>
+    <div class="entity-health-head"><h3>${escapeHtml(view.title || '生命系统')}</h3><label>模式 <select data-health-mode="${escapeHtml(actor.id)}"${disabled}>${modeOptionsHtml(health.mode, api.ruleset)}</select></label></div>
+    ${view.hideBaseResource ? bar : ''}
+    ${view.hideBaseResource && values ? `<div class="entity-health-values">${values}</div>` : ''}
+    ${view.status ? `<div class="entity-health-status ${view.danger ? 'is-danger' : ''}">${escapeHtml(view.status)}</div>` : ''}
+    ${view.help ? `<div class="entity-help">${escapeHtml(view.help)}</div>` : ''}
   </section>`;
 }
 
@@ -85,23 +108,27 @@ export function createHealthSheetExtension() {
       function enhanceSheet() {
         if (enhancing) return;
         const sheet = documentNode.querySelector('.entity-sheet');
-        if (!sheet) return;
-        const activeTab = sheet.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab;
-        if (activeTab !== 'overview') return;
+        if (!sheet || sheet.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab !== 'overview') return;
         const actor = actorFromSheet(api, documentNode);
-        if (!actor) return;
         const body = sheet.querySelector('.entity-sheet-body');
-        if (!body) return;
-        const health = resolveActorHealth(actor);
-        const signature = [actor.id, actor.currentFormId, health.mode, health.max, health.healthy, health.bashing, health.lethal, health.aggravated].join('|');
+        if (!actor || !body) return;
+        const health = resolveActorHealth(actor, { ruleset: api.ruleset });
+        if (!health) {
+          body.querySelector('[data-health-panel]')?.remove();
+          const hpRow = body.querySelector('[data-sheet-role="health-base"]');
+          if (hpRow) hpRow.style.display = '';
+          return;
+        }
+        const view = describeHealth(health, { ruleset: api.ruleset });
+        const signature = healthSignature(actor, health, view, api.ruleset);
         const existing = body.querySelector('[data-health-panel]');
-        const hpRow = body.querySelector('[data-resource-id="hp"]');
-        if (hpRow) hpRow.style.display = health.mode === HEALTH_MODE_WOUND_TRACK ? 'none' : '';
+        const hpRow = body.querySelector('[data-sheet-role="health-base"]');
+        if (hpRow) hpRow.style.display = view.hideBaseResource ? 'none' : '';
         if (existing?.dataset.healthSignature === signature) return;
         enhancing = true;
         try {
           existing?.remove();
-          body.insertAdjacentHTML('afterbegin', healthPanelHtml(api, actor));
+          body.insertAdjacentHTML('afterbegin', renderActorHealthPanel(api, actor));
           const panel = body.querySelector('[data-health-panel]');
           if (panel) panel.dataset.healthSignature = signature;
         } finally {
@@ -111,21 +138,27 @@ export function createHealthSheetExtension() {
 
       function enhanceInspector() {
         const inspector = documentNode.querySelector('.ui-current-inspector');
-        if (!inspector) return;
         const actor = selectedActor(api);
-        const firstCard = inspector.querySelector('.ui-inspector-card');
-        if (!actor || !firstCard) return;
-        const health = resolveActorHealth(actor);
+        const firstCard = inspector?.querySelector('.ui-inspector-card');
+        if (!inspector || !actor || !firstCard) return;
+        const health = resolveActorHealth(actor, { ruleset: api.ruleset });
+        if (!health) {
+          inspector.querySelector('[data-health-mini]')?.remove();
+          return;
+        }
+        const view = describeHealth(health, { ruleset: api.ruleset });
         const hpMini = [...firstCard.querySelectorAll('.ui-resource-mini')].find(node => node.querySelector('span')?.textContent?.trim() === '生命');
-        if (hpMini) hpMini.style.display = health.mode === HEALTH_MODE_WOUND_TRACK ? 'none' : '';
-        const signature = [actor.id, actor.currentFormId, health.mode, health.max, health.healthy, health.bashing, health.lethal, health.aggravated].join('|');
+        if (hpMini) hpMini.style.display = view.hideBaseResource ? 'none' : '';
+        const signature = healthSignature(actor, health, view, api.ruleset);
         const existing = inspector.querySelector('[data-health-mini]');
-        if (health.mode !== HEALTH_MODE_WOUND_TRACK) { existing?.remove(); return; }
+        if (!view.hideBaseResource) { existing?.remove(); return; }
         if (existing?.dataset.healthSignature === signature) return;
         existing?.remove();
         const node = documentNode.createElement('div');
-        node.className = 'ui-health-mini'; node.dataset.healthMini = '1'; node.dataset.healthSignature = signature;
-        node.innerHTML = `<strong>生命 · ${escapeHtml(formatHealthSummary(health))}</strong><small>${escapeHtml(healthStatusLabel(health))}</small>`;
+        node.className = 'ui-health-mini';
+        node.dataset.healthMini = '1';
+        node.dataset.healthSignature = signature;
+        node.innerHTML = `<strong>生命 · ${escapeHtml(view.summary)}</strong><small>${escapeHtml(view.status)}</small>`;
         firstCard.querySelector('.ui-inspector-head')?.insertAdjacentElement('afterend', node);
       }
 
@@ -136,10 +169,14 @@ export function createHealthSheetExtension() {
           queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
           return;
         }
-        const input = event.target.closest?.('[data-health-wound]');
+        const input = event.target.closest?.('[data-health-field-id]');
         if (!input) return;
-        const value = Math.max(0, Math.floor(Number(input.value) || 0));
-        api.health?.setWounds?.(input.dataset.healthActorId, { [input.dataset.healthWound]: value });
+        const actor = actorFromSheet(api, documentNode);
+        const health = actor ? resolveActorHealth(actor, { ruleset: api.ruleset }) : null;
+        const field = health ? describeHealth(health, { ruleset: api.ruleset }).fields?.find(item => String(item.id) === String(input.dataset.healthFieldId)) : null;
+        if (!field || typeof field.operation !== 'function') return;
+        const value = Math.max(Number(field.min) || 0, Math.floor(Number(input.value) || 0));
+        api.health?.performActorOperation?.(input.dataset.healthActorId, field.operation(value));
         queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
       });
 

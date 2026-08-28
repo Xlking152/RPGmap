@@ -1,9 +1,7 @@
 import L from 'leaflet';
 import { worldToLatLng } from '../engine/geometry.js';
-import { EntityStore } from '../entities/store.js';
 import { tokenDiameterMeters } from '../elevation/model.js';
-import { resolveActorHealth } from './actor.js';
-import { HEALTH_MODE_WOUND_TRACK, formatHealthSummary } from './model.js';
+import { describeHealth } from './model.js';
 
 const PANE = 'healthBarPane';
 const STYLE_ID = 'rpgmap-token-healthbar-style';
@@ -29,54 +27,52 @@ function installStyles(documentNode) {
     .rpgmap-healthbar-marker { background:transparent !important; border:0 !important; pointer-events:none !important; }
     .rpgmap-token-healthbar { width:46px; height:7px; display:flex; overflow:hidden; border:1px solid rgba(20,28,28,.72); border-radius:4px; background:rgba(25,30,30,.5); box-shadow:0 1px 3px rgba(0,0,0,.45); }
     .rpgmap-token-healthbar > span { height:100%; min-width:0; }
-    .rpgmap-token-healthbar .healthy,.rpgmap-token-healthbar .simple { background:#4b9f69; }
-    .rpgmap-token-healthbar .bashing { background:#d9b84a; }
-    .rpgmap-token-healthbar .lethal { background:#d77c42; }
-    .rpgmap-token-healthbar .aggravated { background:#a94442; }
   `;
   documentNode.head.append(style);
 }
 
-function segment(width, className) {
-  return width > 0 ? `<span class="${className}" style="width:${Math.max(0, width)}%"></span>` : '';
+function segment(width, color, label) {
+  return width > 0
+    ? `<span style="width:${Math.max(0, width)}%;background:${escapeHtml(color || '#4b9f69')}" title="${escapeHtml(label || '')}"></span>`
+    : '';
 }
 
-function barHtml(health) {
+function barHtml(health, ruleset) {
   const max = Math.max(0, Number(health?.max) || 0);
   if (!max) return '';
-  if (health.mode !== HEALTH_MODE_WOUND_TRACK) {
-    const pct = Math.max(0, Math.min(100, (Number(health.current) || 0) / max * 100));
-    return `<div class="rpgmap-token-healthbar" title="${escapeHtml(formatHealthSummary(health))}">${segment(pct, 'simple')}</div>`;
-  }
+  const view = describeHealth(health, { ruleset });
   const pct = value => Math.max(0, Math.min(100, (Number(value) || 0) / max * 100));
-  return `<div class="rpgmap-token-healthbar" title="${escapeHtml(formatHealthSummary(health))}">${segment(pct(health.healthy), 'healthy')}${segment(pct(health.bashing), 'bashing')}${segment(pct(health.lethal), 'lethal')}${segment(pct(health.aggravated), 'aggravated')}</div>`;
+  const segments = (view.segments || []).map(item => segment(pct(item.value), item.color, item.label)).join('');
+  return segments ? `<div class="rpgmap-token-healthbar" title="${escapeHtml(view.summary)}">${segments}</div>` : '';
 }
 
 export function createHealthTokenBars() {
   return {
     register(api) {
+      if (!api.tokens?.list) throw new Error('Token health bars require canonical Token Runtime V2');
       const documentNode = api.map.getContainer().ownerDocument || document;
       ensurePane(api.map);
       installStyles(documentNode);
       const layer = L.layerGroup([], { pane: PANE }).addTo(api.map);
+      let destroyed = false;
+      const off = [];
 
       function render() {
+        if (destroyed) return;
         layer.clearLayers();
-        const store = new EntityStore(api);
-        store.load({ migrateLegacy: false, dropMarkers: false });
-        for (const character of api.getState().characters || []) {
-          if (character?.visible === false || character?.location?.type !== 'map') continue;
-          const actor = store.actorForToken(character.id);
-          if (!actor) continue;
-          const health = resolveActorHealth(actor);
-          const html = barHtml(health);
+        for (const token of api.tokens.list()) {
+          if (token?.hidden === true || token?.placement !== 'map') continue;
+          const x = Number(token.x);
+          const y = Number(token.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+          const health = api.health?.resolveToken?.(token.id);
+          const html = barHtml(health, api.ruleset);
           if (!html) continue;
-          const token = store.token(character.id);
           const origin = api.map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, api.mapPackage.height));
           const unit = api.map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 0 }, api.mapPackage.height));
           const tokenPixels = Math.max(18, Math.min(144, tokenDiameterMeters(token) * (Math.hypot(unit.x - origin.x, unit.y - origin.y) || 1)));
           const barWidth = Math.max(28, Math.min(160, tokenPixels * 1.1));
-          L.marker(worldToLatLng(character.location, api.mapPackage.height), {
+          L.marker(worldToLatLng({ x, y }, api.mapPackage.height), {
             pane: PANE,
             interactive: false,
             keyboard: false,
@@ -90,16 +86,20 @@ export function createHealthTokenBars() {
         }
       }
 
-      api.on('character:move', render);
-      api.on('character:delete', render);
-      api.on('state:import', render);
-      api.on('state:saved', render);
-      api.on('state:commit', event => {
-        const source = String(event.detail?.source || '');
-        if (source === 'health' || source.startsWith('entities:resource')) render();
-      });
-      api.on('health:change', render);
-      api.on('token:size-change', render);
+      for (const eventName of ['token:create', 'token:move', 'token:delete', 'state:import', 'state:saved', 'health:change', 'token:size-change']) {
+        off.push(api.on(eventName, render));
+      }
+      off.push(api.on('state:commit', render));
+      api.map.on('zoomend', render);
+      api.map.on('resize', render);
+      off.push(api.on('app:destroy', () => {
+        destroyed = true;
+        api.map.off('zoomend', render);
+        api.map.off('resize', render);
+        layer.clearLayers();
+        api.map.removeLayer?.(layer);
+        off.splice(0).forEach(dispose => dispose?.());
+      }));
       render();
     },
   };

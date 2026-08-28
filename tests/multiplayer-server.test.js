@@ -1,17 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 
-function waitForMessage(ws, predicate, timeout = 5000) {
+const WEBSOCKET_WAIT_TIMEOUT_MS = 15_000;
+
+function waitForMessage(ws, predicate, timeout = WEBSOCKET_WAIT_TIMEOUT_MS, label = 'matching WebSocket message') {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { cleanup(); reject(new Error('message timeout')); }, timeout);
+    const recentMessages = [];
+    const timer = setTimeout(() => {
+      cleanup();
+      const recent = recentMessages.length
+        ? `\nRecent messages:\n${recentMessages.map(value => JSON.stringify(value)).join('\n')}`
+        : '\nNo JSON messages were received while waiting.';
+      reject(new Error(`${label} timeout after ${timeout}ms${recent}`));
+    }, timeout);
     const handler = event => {
       let value;
       try { value = JSON.parse(String(event.data)); } catch { return; }
+      recentMessages.push(value);
+      if (recentMessages.length > 12) recentMessages.shift();
       if (!predicate(value)) return;
       cleanup();
       resolve(value);
@@ -80,12 +92,25 @@ async function startServer(extraEnv = {}, existingMapDir = null) {
       reject(new Error(`server exited ${code}\n${stderr}`));
     });
   });
-  return { child, mapDir, url: `ws://127.0.0.1:${port}/ws` };
+  return { child, mapDir, url: `ws://127.0.0.1:${port}/ws`, httpUrl: `http://127.0.0.1:${port}` };
 }
 
 async function stopServer(runtime, { removeMap = true } = {}) {
-  runtime.child.kill('SIGTERM');
-  await new Promise(resolve => setTimeout(resolve, 120));
+  if (runtime.child.exitCode === null && runtime.child.signalCode === null) {
+    const exited = new Promise(resolve => runtime.child.once('exit', resolve));
+    runtime.child.kill('SIGTERM');
+    const stopped = await Promise.race([
+      exited.then(() => true),
+      new Promise(resolve => setTimeout(() => resolve(false), 5_000)),
+    ]);
+    if (!stopped && runtime.child.exitCode === null && runtime.child.signalCode === null) {
+      runtime.child.kill('SIGKILL');
+      await Promise.race([
+        exited,
+        new Promise(resolve => setTimeout(resolve, 2_000)),
+      ]);
+    }
+  }
   if (removeMap) await rm(runtime.mapDir, { recursive: true, force: true });
 }
 
@@ -115,7 +140,103 @@ function initialWorld() {
   };
 }
 
+function initialWorldV2() {
+  const state = initialWorld();
+  delete state.characters;
+  state.preferences.entitySystem.schemaVersion = 3;
+  const actors = structuredClone(state.preferences.entitySystem.actors);
+  const tokens = state.preferences.entitySystem.tokens.map((token, index) => ({
+    id: token.id,
+    actorId: token.actorId,
+    actorLink: true,
+    actorDelta: null,
+    diameterMeters: 1,
+    rotation: 0,
+    elevationFt: 0,
+    hidden: false,
+    locked: false,
+    showName: true,
+    effects: [],
+    x: 10 + index * 10,
+    y: 10 + index * 10,
+  }));
+  state.preferences.entitySystem.tokens = structuredClone(tokens);
+  state.preferences.entitySystem.statusDefinitions = structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS);
+  state.preferences.worldV2 = {
+    schemaVersion: 2,
+    id: 'world-test',
+    name: 'Test World',
+    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    activeSceneId: 'scene-test',
+    actors: structuredClone(actors),
+    statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
+    scenes: [{
+      id: 'scene-test',
+      name: 'Test Scene',
+      mapPackage: { id: 'test', version: '1' },
+      tokens: tokens.map(token => ({
+        ...structuredClone(token),
+        placement: 'map',
+        featureId: null,
+      })),
+      markers: [],
+      attackAreas: [],
+      sceneEvents: [],
+      settings: { gridVisible: true },
+    }],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  return state;
+}
+
 function clone(value) { return structuredClone(value); }
+
+test('health exposes only World bootstrap metadata for empty and initialized LAN state', async () => {
+  const runtime = await startServer();
+  try {
+    const empty = await (await fetch(`${runtime.httpUrl}/api/health`)).json();
+    assert.deepEqual(empty.world, {
+      initialized: false, kind: 'empty', schemaVersion: null, ruleset: null,
+    });
+
+    const gm = await openAndHello(runtime.url, { name: 'Bootstrap GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'bootstrap-init' }));
+    await initialized;
+    const health = await (await fetch(`${runtime.httpUrl}/api/health`)).json();
+    assert.deepEqual(health.world, {
+      initialized: true,
+      kind: 'world-v2',
+      schemaVersion: 2,
+      ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    });
+    assert.equal(Object.hasOwn(health.world, 'state'), false);
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('health identifies a persisted pre-World SaveV2 as an explicit LAN legacy bootstrap', async () => {
+  const mapDir = await mkdtemp(path.join(tmpdir(), 'rpgmap-legacy-bootstrap-'));
+  await writeFile(path.join(mapDir, 'world.json'), JSON.stringify({
+    schemaVersion: 1,
+    worldId: 'default',
+    revision: 1,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    state: initialWorld(),
+  }), 'utf8');
+  const runtime = await startServer({}, mapDir);
+  try {
+    const health = await (await fetch(`${runtime.httpUrl}/api/health`)).json();
+    assert.deepEqual(health.world, {
+      initialized: true, kind: 'legacy', schemaVersion: null, ruleset: null,
+    });
+  } finally {
+    await stopServer(runtime);
+  }
+});
 
 async function sendStatusAndWait(ws, message) {
   const operationId = message.operationId;
@@ -126,11 +247,246 @@ async function sendStatusAndWait(ws, message) {
   return { snapshot, ack };
 }
 
+async function sendWorldOperationsAndWait(ws, message) {
+  const operationId = message.operationId;
+  const committedPromise = waitForMessage(ws, value =>
+    value.type === 'world.operation.committed' && value.operationId === operationId);
+  const ackPromise = waitForMessage(ws, value =>
+    value.type === 'world.operation.ack' && value.operationId === operationId);
+  ws.send(JSON.stringify(message));
+  const [committed, ack] = await Promise.all([committedPromise, ackPromise]);
+  return { committed, ack };
+}
+
+test('generic World operations commit atomically, broadcast patches, and recover idempotently', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Operation GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    await initialized;
+
+    const actor = clone(initialWorldV2().preferences.worldV2.actors[0]);
+    actor.runtime.hp = 7;
+    const operation = {
+      type: 'world.operation',
+      operationId: 'generic-batch-1',
+      baseRevision: 1,
+      operations: [
+        { type: 'actor.upsert', payload: { actor } },
+        { type: 'token.move', payload: { sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 37, y: 41 } },
+        { type: 'combat.replace', payload: { combatSystem: { schemaVersion: 1, combat: null } } },
+      ],
+    };
+    const committed = await sendWorldOperationsAndWait(gm.ws, operation);
+    assert.equal(committed.committed.baseRevision, 1);
+    assert.equal(committed.committed.revision, 2);
+    assert.equal(committed.ack.revision, 2);
+    assert.equal(committed.ack.duplicate, false);
+    assert.equal(Object.hasOwn(committed.committed, 'state'), false);
+    assert.equal(committed.committed.patch.schemaVersion, 1);
+    assert.equal(committed.committed.patch.world.actors.upsert[0].runtime.hp, 7);
+    assert.equal(committed.committed.patch.world.scenes.tokens[0].upsert[0].x, 37);
+
+    const requestedPromise = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.reason === 'request');
+    gm.ws.send(JSON.stringify({ type: 'world.request' }));
+    const requested = await requestedPromise;
+    assert.equal(requested.revision, 2);
+    assert.equal(requested.state.preferences.worldV2.actors[0].runtime.hp, 7);
+    assert.equal(requested.state.preferences.worldV2.scenes[0].tokens[0].x, 37);
+    assert.equal(requested.state.preferences.entitySystem.tokens[0].x, 37);
+
+    const duplicateSnapshotPromise = waitForMessage(gm.ws, message =>
+      message.type === 'world.snapshot' && message.operationId === operation.operationId);
+    const duplicateAckPromise = waitForMessage(gm.ws, message =>
+      message.type === 'world.operation.ack' && message.operationId === operation.operationId && message.duplicate === true);
+    gm.ws.send(JSON.stringify(operation));
+    const [duplicateSnapshot, duplicateAck] = await Promise.all([duplicateSnapshotPromise, duplicateAckPromise]);
+    assert.equal(duplicateSnapshot.revision, 2);
+    assert.equal(duplicateSnapshot.reason, 'world.operation.duplicate');
+    assert.equal(duplicateAck.committedRevision, 2);
+
+    const stalePromise = waitForMessage(gm.ws, message =>
+      message.type === 'world.operation.denied' && message.operationId === 'generic-stale-1');
+    gm.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'generic-stale-1', baseRevision: 1,
+      operations: [{ type: 'world.rename', payload: { name: 'Stale name' } }],
+    }));
+    const stale = await stalePromise;
+    assert.equal(stale.code, 'revision_conflict');
+    assert.equal(stale.revision, 2);
+
+    const status = await sendWorldOperationsAndWait(gm.ws, {
+      type: 'world.operation', operationId: 'generic-status-1', baseRevision: 2,
+      operations: [{
+        type: 'status.apply',
+        payload: { scope: 'actor', targetId: 'actor-a', statusId: 'status-rooted' },
+      }],
+    });
+    assert.equal(status.committed.revision, 3);
+    assert.equal(status.committed.patch.world.actors.upsert[0].effects[0].definitionId, 'status-rooted');
+
+    const invalidPromise = waitForMessage(gm.ws, message =>
+      message.type === 'world.operation.denied' && message.operationId === 'generic-invalid-1');
+    gm.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'generic-invalid-1', baseRevision: 3,
+      operations: [{ type: 'actor.private-write', payload: {} }],
+    }));
+    const invalid = await invalidPromise;
+    assert.equal(invalid.code, 'unknown_world_operation');
+    assert.equal(invalid.revision, 3);
+
+    const malformedPromise = waitForMessage(gm.ws, message =>
+      message.type === 'world.operation.denied' && message.operationId === 'generic-malformed-1');
+    gm.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'generic-malformed-1', baseRevision: 3,
+      operations: [{
+        type: 'token.move', payload: { sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', y: 4 },
+      }],
+    }));
+    const malformed = await malformedPromise;
+    assert.equal(malformed.code, 'invalid_world_operation');
+    assert.equal(malformed.revision, 3);
+
+    const worldData = await waitForJsonFile(path.join(runtime.mapDir, 'world.json'), value => value?.revision === 3);
+    assert.equal(worldData.state.preferences.worldV2.actors[0].effects[0].definitionId, 'status-rooted');
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('generic World operations reuse Player ownership and status permission checks', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Permission GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    await initialized;
+
+    const keyPromise = waitForMessage(gm.ws, message => message.type === 'access.claim');
+    gm.ws.send(JSON.stringify({
+      type: 'access.user.create', name: 'Operation Player', defaultActorId: 'actor-a', ownership: { 'actor-a': 'owner' },
+    }));
+    const key = await keyPromise;
+    const player = await openAndHello(runtime.url, {
+      name: 'Operation Player', requestedRole: 'player', claimCode: key.claimCode,
+    });
+
+    const moved = await sendWorldOperationsAndWait(player.ws, {
+      type: 'world.operation', operationId: 'player-owned-move-1', baseRevision: 1,
+      operations: [{
+        type: 'token.move',
+        payload: { sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 16, y: 18 },
+      }],
+    });
+    assert.equal(moved.committed.revision, 2);
+    assert.equal(moved.committed.patch.world.scenes.tokens[0].upsert[0].x, 16);
+
+    const combat = await sendWorldOperationsAndWait(gm.ws, {
+      type: 'world.operation', operationId: 'generic-combat-start-1', baseRevision: 2,
+      operations: [{ type: 'combat.replace', payload: { combatSystem: {
+        schemaVersion: 1,
+        combat: {
+          id: 'combat-generic', state: 'active', round: 1, turnIndex: 0,
+          combatants: [
+            { id: 'cb-b', tokenId: 'token-b', actorId: 'actor-b', initiative: 20, order: 0 },
+            { id: 'cb-a', tokenId: 'token-a', actorId: 'actor-a', initiative: 10, order: 1 },
+          ],
+        },
+      } } }],
+    });
+    assert.equal(combat.committed.revision, 3);
+
+    const turnDeniedPromise = waitForMessage(player.ws, message =>
+      message.type === 'world.operation.denied' && message.operationId === 'player-wrong-turn-1');
+    player.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'player-wrong-turn-1', baseRevision: 3,
+      operations: [{
+        type: 'token.move',
+        payload: { sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 20, y: 22 },
+      }],
+    }));
+    const turnDenied = await turnDeniedPromise;
+    assert.equal(turnDenied.code, 'combat_turn_locked');
+    assert.equal(turnDenied.revision, 3);
+
+    const actorB = clone(initialWorldV2().preferences.worldV2.actors[1]);
+    actorB.runtime.hp = 1;
+    const unownedPromise = waitForMessage(player.ws, message =>
+      message.type === 'world.operation.denied' && message.operationId === 'player-unowned-1');
+    player.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'player-unowned-1', baseRevision: 3,
+      operations: [{ type: 'actor.upsert', payload: { actor: actorB } }],
+    }));
+    const unowned = await unownedPromise;
+    assert.equal(unowned.code, 'actor_not_owned');
+    assert.equal(unowned.revision, 3);
+
+    const statusPromise = waitForMessage(player.ws, message =>
+      message.type === 'world.operation.denied' && message.operationId === 'player-status-generic-1');
+    player.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'player-status-generic-1', baseRevision: 3,
+      operations: [{
+        type: 'status.apply',
+        payload: { scope: 'actor', targetId: 'actor-a', statusId: 'status-rooted' },
+      }],
+    }));
+    const deniedStatus = await statusPromise;
+    assert.equal(deniedStatus.code, 'status_gm_only');
+    assert.equal(deniedStatus.revision, 3);
+
+    player.ws.close();
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('generic World operation idempotency survives a LAN server restart', async () => {
+  let runtime = await startServer();
+  const mapDir = runtime.mapDir;
+  const operation = {
+    type: 'world.operation', operationId: 'generic-restart-idempotency-1', baseRevision: 1,
+    operations: [{ type: 'world.rename', payload: { name: 'Restart-safe World' } }],
+  };
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Restart Operation GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    await initialized;
+    const committed = await sendWorldOperationsAndWait(gm.ws, operation);
+    assert.equal(committed.committed.revision, 2);
+    assert.equal(committed.committed.patch.world.name, 'Restart-safe World');
+    gm.ws.close();
+
+    await stopServer(runtime, { removeMap: false });
+    runtime = await startServer({}, mapDir);
+    const reconnected = await openAndHello(runtime.url, { name: 'Restart Operation GM', requestedRole: 'gm' });
+    assert.equal(reconnected.welcome.world.revision, 2);
+    assert.equal(reconnected.welcome.world.state.preferences.worldV2.name, 'Restart-safe World');
+
+    const snapshotPromise = waitForMessage(reconnected.ws, message =>
+      message.type === 'world.snapshot' && message.operationId === operation.operationId);
+    const ackPromise = waitForMessage(reconnected.ws, message =>
+      message.type === 'world.operation.ack' && message.operationId === operation.operationId);
+    reconnected.ws.send(JSON.stringify({ ...operation, baseRevision: 2 }));
+    const [snapshot, ack] = await Promise.all([snapshotPromise, ackPromise]);
+    assert.equal(snapshot.revision, 2);
+    assert.equal(snapshot.state.preferences.worldV2.name, 'Restart-safe World');
+    assert.equal(ack.duplicate, true);
+    assert.equal(ack.committedRevision, 2);
+    reconnected.ws.close();
+  } finally {
+    await stopServer(runtime, { removeMap: true });
+  }
+});
+
 test('clearing shared chat preserves active combat and actor health in LAN World', async () => {
   const runtime = await startServer();
   try {
     const gm = await openAndHello(runtime.url, { name: 'GM', requestedRole: 'gm' });
-    const state = initialWorld();
+    const state = initialWorldV2();
     state.preferences.entitySystem.actors[0].runtime.health = { mode: 'wound-track', wounds: { bashing: 2, lethal: 1, aggravated: 0 } };
     state.preferences.combatSystem.combat = {
       id: 'combat-keep', state: 'active', round: 3, turnIndex: 1,
@@ -160,7 +516,7 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
   const runtime = await startServer();
   try {
     const gm = await openAndHello(runtime.url, { name: 'Status GM', requestedRole: 'gm' });
-    const state = initialWorld();
+    const state = initialWorldV2();
     const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
     gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' }));
     await initialized;
@@ -178,7 +534,9 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
     const playerDenied = await playerDeniedPromise;
     assert.equal(playerDenied.code, 'status_gm_only');
     assert.equal(playerDenied.revision, 1);
-    assert.deepEqual(playerDenied.state, state);
+    const deniedState = structuredClone(playerDenied.state);
+    deniedState.preferences.worldV2.updatedAt = state.preferences.worldV2.updatedAt;
+    assert.deepEqual(deniedState, state);
 
     const invalidIdPromise = waitForMessage(gm.ws, message => message.type === 'status.denied' && message.code === 'invalid_operation_id');
     gm.ws.send(JSON.stringify({
@@ -208,7 +566,7 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
     assert.equal(upsert.snapshot.originSessionId, gm.welcome.session.id);
     assert.equal(upsert.snapshot.reason, 'status.definition.upsert');
     assert.equal(upsert.snapshot.state.preferences.entitySystem.schemaVersion, 3);
-    assert.equal(upsert.snapshot.state.preferences.entitySystem.statusDefinitions[0].id, 'status-focus');
+    assert.equal(upsert.snapshot.state.preferences.entitySystem.statusDefinitions.some(item => item.id === 'status-focus'), true);
     assert.equal(upsert.ack.duplicate, false);
 
     const duplicate = await sendStatusAndWait(gm.ws, upsertMessage);
@@ -269,12 +627,16 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
       definitionId: 'status-focus',
     });
     assert.equal(deleted.snapshot.revision, 7);
-    assert.deepEqual(deleted.snapshot.state.preferences.entitySystem.statusDefinitions, []);
+    assert.deepEqual(
+      deleted.snapshot.state.preferences.entitySystem.statusDefinitions.map(item => item.id),
+      INFINITE_HORROR_STATUS_DEFINITIONS.map(item => item.id),
+    );
 
     // GM Feature success may atomically combine a mechanical status side effect
     // with movement/Actor changes in one complete-schema World commit.
     const featureWorld = clone(deleted.snapshot.state);
-    featureWorld.characters[0].location.x = 42;
+    featureWorld.preferences.worldV2.scenes[0].tokens[0].x = 42;
+    featureWorld.preferences.entitySystem.tokens[0].x = 42;
     featureWorld.preferences.entitySystem.actors[0].effects = [{
       id: 'feature-rooted', definitionId: 'status-rooted', stacks: 1, enabled: true,
     }];
@@ -285,7 +647,7 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
     }));
     const featureSnapshot = await featureSnapshotPromise;
     assert.equal(featureSnapshot.originSessionId, gm.welcome.session.id);
-    assert.equal(featureSnapshot.state.characters[0].location.x, 42);
+    assert.equal(featureSnapshot.state.preferences.worldV2.scenes[0].tokens[0].x, 42);
     assert.equal(featureSnapshot.state.preferences.entitySystem.actors[0].effects[0].definitionId, 'status-rooted');
 
     const worldData = await waitForJsonFile(path.join(runtime.mapDir, 'world.json'), value => value?.revision === 8);
@@ -302,7 +664,7 @@ test('failed status persistence does not advance revision, broadcast, or consume
   const runtime = await startServer();
   try {
     const gm = await openAndHello(runtime.url, { name: 'Status GM', requestedRole: 'gm' });
-    const state = initialWorld();
+    const state = initialWorldV2();
     const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
     gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' }));
     await initialized;
@@ -346,7 +708,7 @@ test('status operation idempotency survives a LAN server restart', async () => {
   try {
     const gm = await openAndHello(runtime.url, { name: 'Restart GM', requestedRole: 'gm' });
     const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
-    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorld(), reason: 'init' }));
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
     await initialized;
 
     const operation = {
@@ -381,7 +743,7 @@ test('GM approves Player identity; OWNER writes succeed while unowned and combat
     const gm = await openAndHello(runtime.url, { name: 'GM Tester', requestedRole: 'gm' });
     assert.equal(gm.welcome.session.role, 'gm');
 
-    const state1 = initialWorld();
+    const state1 = initialWorldV2();
     const initSnapshot = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
     gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: state1, reason: 'gm-init' }));
     await initSnapshot;

@@ -1,5 +1,5 @@
 import { ChatStore } from './store.js';
-import { damageTypeLabel, formatHealthSummary, healingTypeLabel, healthStatusLabel } from '../health/model.js';
+import { describeHealth, healthOperationPresentation, healthTypeLabel } from '../health/model.js';
 
 const STYLE_ID = 'rpgmap-chat-system-style';
 
@@ -58,16 +58,24 @@ function entryLabel(type) {
   return '系统';
 }
 
-function healthTargetsHtml(data, { healing = false } = {}) {
+function healthTargetsHtml(data) {
   const targets = Array.isArray(data?.targets) ? data.targets : [];
-  return targets.map(target => `<div class="chat-damage-target"><strong>${escapeHtml(target.actorName || '角色')}</strong><span>${escapeHtml(target.before || '—')} → ${escapeHtml(target.after || '—')}</span>${target.status ? `<br><span>${escapeHtml(target.status)}</span>` : ''}${Number(target.overflow) > 0 ? `<br><span>${healing ? '没有对应伤势或已恢复至上限，' : '生命槽已满，'}${escapeHtml(target.overflow)} 点未生效</span>` : ''}</div>`).join('');
+  return targets.map(target => `<div class="chat-damage-target"><strong>${escapeHtml(target.actorName || '角色')}</strong><span>${escapeHtml(target.before || '—')} → ${escapeHtml(target.after || '—')}</span>${target.status ? `<br><span>${escapeHtml(target.status)}</span>` : ''}${Number(target.overflow) > 0 ? `<br><span>${escapeHtml(target.overflowText || `${target.overflow} 点未生效`)}</span>` : ''}</div>`).join('');
+}
+
+function operationFormHtml(operation, selectedCount, ruleset) {
+  const config = healthOperationPresentation(operation, { ruleset });
+  const types = config.types || [];
+  const options = types.map(option => `<option value="${escapeHtml(option.id)}" ${String(option.id) === String(config.defaultType) ? 'selected' : ''}>${escapeHtml(option.label || option.id)}</option>`).join('');
+  const prefix = operation === 'damage' ? 'damage' : 'healing';
+  return `<form class="chat-${prefix}-form" data-chat-${prefix}-form><input type="number" min="0" step="1" placeholder="${escapeHtml(config.inputPlaceholder || '数值')}" data-${prefix}-amount><select data-${prefix}-type>${options}</select><button class="primary wide" type="submit">${escapeHtml(config.submitLabel || '应用到所选角色')}${selectedCount ? ` · ${selectedCount}` : ''}</button>${config.help ? `<div class="chat-selection-hint">${escapeHtml(config.help)}</div>` : ''}</form>`;
 }
 
 function messageHtml(message) {
   const detail = message.type === 'damage'
     ? healthTargetsHtml(message.data)
     : message.type === 'healing'
-      ? healthTargetsHtml(message.data, { healing: true })
+      ? healthTargetsHtml(message.data)
       : '';
   return `<article class="chat-entry ${escapeHtml(message.type)}" data-chat-message-id="${escapeHtml(message.id)}">
     <div class="chat-entry-head"><strong>${escapeHtml(entryLabel(message.type))}</strong><span>${escapeHtml(message.sender?.name || '')}</span><span>${escapeHtml(timeLabel(message.createdAt))}</span></div>
@@ -126,8 +134,8 @@ export function createChatController({ selection } = {}) {
             ${composerMode === 'message'
               ? '<form class="chat-message-form" data-chat-message-form><input type="text" maxlength="1000" autocomplete="off" placeholder="输入消息…" data-chat-message-input><button class="primary" type="submit">发送</button></form>'
               : composerMode === 'damage'
-                ? `<form class="chat-damage-form" data-chat-damage-form><input type="number" min="0" step="1" placeholder="伤害点数" data-damage-amount><select data-damage-type><option value="B">冲击 B</option><option value="L" selected>严重 L</option><option value="A">恶性 A</option></select><button class="primary wide" type="submit">应用到所选角色${selectedCount ? ` · ${selectedCount}` : ''}</button><div class="chat-selection-hint">这里输入的是已经完成防御、减免等前置处理后的结算伤害。伤势生命槽按 B / L / A 规则处理；普通 HP 模式直接扣除同等数值。</div></form>`
-                : `<form class="chat-healing-form" data-chat-healing-form><input type="number" min="0" step="1" placeholder="实际恢复生命槽" data-healing-amount><select data-healing-type><option value="B">恢复冲击 B</option><option value="L" selected>恢复严重 L</option><option value="A">恢复恶性 A</option></select><button class="primary wide" type="submit">恢复所选角色${selectedCount ? ` · ${selectedCount}` : ''}</button><div class="chat-selection-hint">输入规则结算后的实际恢复生命槽数。医疗/治疗点数的换算比例由具体效果决定，换算后再恢复对应 B / L / A；普通 HP 模式直接回复同等 HP。</div></form>`}
+                ? operationFormHtml('damage', selectedCount, api.ruleset)
+                : operationFormHtml('healing', selectedCount, api.ruleset)}
           </div>
         </div>`;
         const log = panel.querySelector('[data-chat-log]');
@@ -194,8 +202,9 @@ export function createChatController({ selection } = {}) {
         }
         if (event.target.matches('[data-chat-damage-form]')) {
           event.preventDefault();
+          const operation = healthOperationPresentation('damage', { ruleset: api.ruleset });
           const amount = Number(event.target.querySelector('[data-damage-amount]')?.value);
-          const type = event.target.querySelector('[data-damage-type]')?.value || 'L';
+          const type = event.target.querySelector('[data-damage-type]')?.value || operation.defaultType;
           if (!Number.isFinite(amount) || amount <= 0) { status('应用伤害：请输入大于 0 的伤害点数'); return; }
           const ids = selectedIds();
           if (!ids.length) { status('应用伤害：请先选择一个或多个 Token'); return; }
@@ -204,20 +213,23 @@ export function createChatController({ selection } = {}) {
           const targets = results.map(result => ({
             actorId: result.actorId,
             actorName: result.actorName,
-            before: formatHealthSummary(result.before),
-            after: formatHealthSummary(result.after),
-            status: healthStatusLabel(result.after),
+            before: describeHealth(result.before, { ruleset: api.ruleset }).summary,
+            after: describeHealth(result.after, { ruleset: api.ruleset }).summary,
+            status: describeHealth(result.after, { ruleset: api.ruleset }).status,
             applied: result.applied,
             overflow: result.overflow,
+            overflowText: Number(result.overflow) > 0 ? `${result.overflow} 点${operation.overflowLabel || '未生效'}` : '',
           }));
-          append('damage', `${results.length} 个角色受到 ${Math.floor(amount)} 点${damageTypeLabel(type)}伤害`, { amount: Math.floor(amount), damageType: type, targets });
-          status(`已应用 ${Math.floor(amount)} 点${damageTypeLabel(type)}伤害 · ${results.length} 个角色`);
+          const typeLabel = healthTypeLabel('damage', type, { ruleset: api.ruleset });
+          append('damage', `${results.length} 个角色受到 ${Math.floor(amount)} 点${typeLabel}${operation.unitLabel || '伤害'}`, { amount: Math.floor(amount), damageType: type, targets });
+          status(`已应用 ${Math.floor(amount)} 点${typeLabel}${operation.unitLabel || '伤害'} · ${results.length} 个角色`);
           return;
         }
         if (event.target.matches('[data-chat-healing-form]')) {
           event.preventDefault();
+          const operation = healthOperationPresentation('healing', { ruleset: api.ruleset });
           const amount = Number(event.target.querySelector('[data-healing-amount]')?.value);
-          const type = event.target.querySelector('[data-healing-type]')?.value || 'L';
+          const type = event.target.querySelector('[data-healing-type]')?.value || operation.defaultType;
           if (!Number.isFinite(amount) || amount <= 0) { status('恢复生命：请输入大于 0 的恢复数值'); return; }
           const ids = selectedIds();
           if (!ids.length) { status('恢复生命：请先选择一个或多个 Token'); return; }
@@ -225,21 +237,23 @@ export function createChatController({ selection } = {}) {
           if (!results.length) { status('恢复生命：没有可操作的角色；Player 只能恢复自己的当前回合角色'); return; }
           const applied = results.reduce((total, result) => total + Number(result.applied || 0), 0);
           if (!applied) {
-            const dead = results.some(result => result.blocked === 'dead');
-            status(dead ? '恢复生命：目标已死亡；普通恢复不能代替复活' : `恢复生命：所选角色没有可恢复的${healingTypeLabel(type)}伤势`);
+            const blocked = results.find(result => result.blocked)?.blocked;
+            status(operation.blockedMessages?.[blocked] || operation.noEffectMessage || '恢复生命：没有可恢复的数值');
             return;
           }
           const targets = results.map(result => ({
             actorId: result.actorId,
             actorName: result.actorName,
-            before: formatHealthSummary(result.before),
-            after: formatHealthSummary(result.after),
-            status: result.blocked === 'dead' ? '目标已死亡；普通恢复不能代替复活' : healthStatusLabel(result.after),
+            before: describeHealth(result.before, { ruleset: api.ruleset }).summary,
+            after: describeHealth(result.after, { ruleset: api.ruleset }).summary,
+            status: operation.blockedMessages?.[result.blocked] || describeHealth(result.after, { ruleset: api.ruleset }).status,
             applied: result.applied,
             overflow: result.overflow,
+            overflowText: Number(result.overflow) > 0 ? `${result.overflow} 点${operation.overflowLabel || '未生效'}` : '',
           }));
-          append('healing', `${results.length} 个角色恢复 ${applied} 点${healingTypeLabel(type)}生命槽`, { amount: Math.floor(amount), healingType: type, targets });
-          status(`已恢复 ${applied} 点${healingTypeLabel(type)}生命槽 · ${results.length} 个角色`);
+          const typeLabel = healthTypeLabel('healing', type, { ruleset: api.ruleset });
+          append('healing', `${results.length} 个角色恢复 ${applied} 点${typeLabel}${operation.unitLabel || ''}`, { amount: Math.floor(amount), healingType: type, targets });
+          status(`已恢复 ${applied} 点${typeLabel}${operation.unitLabel || ''} · ${results.length} 个角色`);
         }
       });
 

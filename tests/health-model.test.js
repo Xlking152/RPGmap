@@ -7,7 +7,7 @@ import {
   applyWoundDamage,
   createHealthRuntime,
   resolveHealth,
-} from '../src/health/model.js';
+} from '../src/rulesets/infinite-horror/health.js';
 
 test('wound track follows the rulebook 20-slot example', () => {
   let runtime = createHealthRuntime({ mode: HEALTH_MODE_WOUND_TRACK, max: 20, simpleCurrent: 20 });

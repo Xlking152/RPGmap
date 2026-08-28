@@ -3,8 +3,8 @@ function copyPoint(point) {
 }
 
 export class MovementSession {
-  constructor({ characterId, start, arrival = null, movementType = 'walk', snapStep = 5 }) {
-    this.characterId = characterId;
+  constructor({ tokenId = null, start, arrival = null, movementType = 'walk', snapStep = 5 }) {
+    this.tokenId = tokenId;
     this.start = copyPoint(start);
     this.waypoints = [];
     this.current = copyPoint(start);

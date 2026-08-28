@@ -12,26 +12,6 @@ export const STATUS_LIMITS = Object.freeze({
 
 export const STATUS_OPERATION_CACHE_LIMIT = 512;
 
-// Custom definitions live in the World. Built-ins are duplicated here so the
-// authority can validate references and enforce capabilities without executing
-// browser code or persisting redundant copies in each World.
-export const BUILTIN_STATUS_DEFINITIONS = Object.freeze([
-  Object.freeze({
-    id: 'status-spirit', name: '灵体', scopes: ['actor', 'token'], maxStacks: 1,
-    changes: [], capabilities: { collisionBypassGroups: ['structure'] }, builtIn: true,
-  }),
-  Object.freeze({
-    id: 'status-rooted', name: '定身', scopes: ['actor', 'token'], maxStacks: 1,
-    changes: [], capabilities: { canMove: false }, builtIn: true,
-  }),
-  Object.freeze({
-    id: 'status-incapacitated', name: '失能', scopes: ['actor', 'token'], maxStacks: 1,
-    changes: [], capabilities: { canMove: false, canInteract: false, canActInCombat: false }, builtIn: true,
-  }),
-]);
-export const BUILTIN_STATUS_IDS = new Set(BUILTIN_STATUS_DEFINITIONS.map(definition => definition.id));
-const BUILTIN_STATUS_BY_ID = new Map(BUILTIN_STATUS_DEFINITIONS.map(definition => [definition.id, definition]));
-
 const STATUS_MESSAGE_TYPES = new Set([
   'status.apply',
   'status.remove',
@@ -109,9 +89,7 @@ function definitionMap(entities) {
 }
 
 function definitionFor(entities, definitionId) {
-  const custom = definitionMap(entities).get(String(definitionId));
-  if (custom) return custom;
-  return BUILTIN_STATUS_BY_ID.get(String(definitionId)) || null;
+  return definitionMap(entities).get(String(definitionId)) || null;
 }
 
 function statusCollection(entities, scope, targetId) {
@@ -185,7 +163,7 @@ export function assertStatusInstance(value, label, { definitions, scope, legacy 
     if (legacy && typeof effect.name === 'string' && Array.isArray(effect.changes)) return effect;
     fail(`${label}.definitionId is required`, 'invalid_status_reference');
   }
-  const definition = definitions.get(definitionId) || BUILTIN_STATUS_BY_ID.get(definitionId) || null;
+  const definition = definitions.get(definitionId) || null;
   if (!definition) fail(`${label} references missing definition: ${definitionId}`, 'invalid_status_reference');
   if (!definition.scopes.includes(scope)) fail(`${label} cannot be applied to ${scope}`, 'status_scope_forbidden');
   if (scope === 'token' && (definition.changes || []).length) {
@@ -208,7 +186,6 @@ export function assertStatusState(entitySystem) {
   for (let index = 0; index < definitions.length; index += 1) {
     const definition = assertStatusDefinition(definitions[index], `entitySystem.statusDefinitions[${index}]`);
     const definitionId = String(definition.id);
-    if (BUILTIN_STATUS_IDS.has(definitionId)) fail(`Custom definition cannot replace built-in: ${definitionId}`, 'status_builtin_readonly');
     if (definitionIds.has(definitionId)) fail(`Duplicate status definition: ${definitionId}`, 'duplicate_id');
     definitionIds.add(definitionId);
   }
@@ -239,6 +216,7 @@ export function assertStatusState(entitySystem) {
 
 function normalizedDefinition(input) {
   const value = structuredClone(object(input, 'definition'));
+  value.builtIn = false;
   value.id = id(value.id, 'definition.id');
   value.name = text(value.name, 'definition.name', { required: true, max: 120 });
   value.description = text(value.description ?? '', 'definition.description');
@@ -277,13 +255,14 @@ function applyOne(state, message, context) {
 
   if (type === 'status.definition.upsert') {
     const definition = normalizedDefinition(message.definition);
-    if (BUILTIN_STATUS_IDS.has(definition.id)) fail('Built-in status definitions are read-only', 'status_builtin_readonly');
     const index = entities.statusDefinitions.findIndex(item => String(item?.id) === definition.id);
+    if (index >= 0 && entities.statusDefinitions[index]?.builtIn === true) {
+      fail('Built-in status definitions are read-only', 'status_builtin_readonly');
+    }
     if (index < 0) {
       if (entities.statusDefinitions.length >= STATUS_LIMITS.maxDefinitions) fail('Too many status definitions', 'status_limit');
       entities.statusDefinitions.push(definition);
     } else {
-      const oldDefinition = entities.statusDefinitions[index];
       const usedByToken = entities.tokens.some(token => (token.effects || []).some(effect => String(effect.definitionId) === definition.id));
       if (usedByToken && (definition.changes || []).length) fail('Token statuses cannot gain Actor numeric changes', 'status_scope_forbidden');
       const maxInUse = Math.max(1, ...entities.actors.concat(entities.tokens).flatMap(target => (target.effects || [])
@@ -301,16 +280,15 @@ function applyOne(state, message, context) {
           else delete effect.changes;
         }
       }
-      void oldDefinition;
     }
     return { action: 'definition.upsert', definitionId: definition.id };
   }
 
   if (type === 'status.definition.delete') {
     const definitionId = id(message.definitionId ?? message.statusId, 'definitionId');
-    if (BUILTIN_STATUS_IDS.has(definitionId)) fail('Built-in status definitions are read-only', 'status_builtin_readonly');
     const index = entities.statusDefinitions.findIndex(item => String(item?.id) === definitionId);
     if (index < 0) fail(`Status definition does not exist: ${definitionId}`, 'status_definition_not_found');
+    if (entities.statusDefinitions[index]?.builtIn === true) fail('Built-in status definitions are read-only', 'status_builtin_readonly');
     const referenced = entities.actors.concat(entities.tokens).some(target =>
       (target.effects || []).some(effect => String(effect.definitionId) === definitionId));
     if (referenced) fail('Status definition is still in use', 'status_definition_in_use');
@@ -402,55 +380,26 @@ export function isStructuralStatusMessage(message) {
   return String(message?.type || '').startsWith('status.definition.');
 }
 
-function finite(value, fallback = 0) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
+function plainObject(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function applyStatusChange(current, change, stacks) {
-  const amount = finite(change?.value);
-  if (change?.mode === 'set') return amount;
-  if (change?.mode === 'multiply') return current * amount;
-  if (change?.mode === 'min') return Math.min(current, amount);
-  if (change?.mode === 'max') return Math.max(current, amount);
-  return current + amount * stacks;
+function mergeActorDeltaValue(base, delta) {
+  if (delta === undefined) return structuredClone(base);
+  if (Array.isArray(delta)) return structuredClone(delta);
+  if (!plainObject(delta)) return structuredClone(delta);
+  const result = plainObject(base) ? structuredClone(base) : {};
+  for (const [key, value] of Object.entries(delta)) {
+    result[key] = mergeActorDeltaValue(result[key], value);
+  }
+  return result;
 }
 
-function healthMovementBlock(actor, actorStatuses) {
-  const forms = Array.isArray(actor?.forms) ? actor.forms : [];
-  const form = forms.find(item => String(item?.id) === String(actor?.currentFormId)) || forms[0] || null;
-  const hpBase = form?.resourceBases?.hp;
-  const hpRuntime = actor?.runtime?.resources?.hp;
-  const healthRuntime = actor?.runtime?.health;
-  // Old lightweight Worlds have no canonical HealthSystem record. Do not turn
-  // their absent max/current fields into a synthetic zero-HP death.
-  if (!hpBase && !hpRuntime && !healthRuntime) return null;
-
-  let maximum = Math.max(0, finite(hpRuntime?.maxOverride ?? hpBase?.baseMax));
-  let current = finite(hpRuntime?.current, maximum);
-  for (const { definition, effect } of actorStatuses) {
-    const stacks = Math.max(1, Math.floor(finite(effect?.stacks, 1)));
-    for (const change of definition?.changes || []) {
-      if (change?.target === 'resources.hp.max') maximum = applyStatusChange(maximum, change, stacks);
-      if (change?.target === 'resources.hp.current') current = applyStatusChange(current, change, stacks);
-    }
-  }
-  maximum = Math.max(0, maximum);
-
-  const mode = healthRuntime?.mode === 'wound-track' ? 'wound-track' : 'simple';
-  if (mode === 'simple') {
-    current = Math.max(0, Math.min(maximum, Math.floor(finite(current, maximum))));
-    return current <= 0 ? 'dead' : null;
-  }
-
-  const raw = healthRuntime?.wounds || {};
-  const aggravated = Math.max(0, Math.min(maximum, Math.floor(finite(raw.aggravated))));
-  const lethal = Math.max(0, Math.min(maximum - aggravated, Math.floor(finite(raw.lethal))));
-  const bashing = Math.max(0, Math.min(maximum - aggravated - lethal, Math.floor(finite(raw.bashing))));
-  const healthy = Math.max(0, maximum - aggravated - lethal - bashing);
-  if (maximum > 0 && aggravated >= maximum) return 'dead';
-  if (maximum > 0 && healthy === 0) return 'unconscious';
-  return null;
+function resolveAuthoritativeTokenActor(baseActor, token) {
+  if (!baseActor || token?.actorLink !== false || !plainObject(token?.actorDelta)) return baseActor;
+  const actor = mergeActorDeltaValue(baseActor, token.actorDelta);
+  actor.id = baseActor.id;
+  return actor;
 }
 
 /**
@@ -458,21 +407,19 @@ function healthMovementBlock(actor, actorStatuses) {
  * the latest authoritative World snapshot. This is the final server-side gate
  * for Player movement; GM relocation/import remains intentionally unrestricted.
  */
-export function resolveStatusCapabilitiesForCharacter(state, characterId) {
+export function resolveStatusCapabilitiesForToken(state, tokenId) {
   const entities = state?.preferences?.entitySystem;
   const tokens = Array.isArray(entities?.tokens) ? entities.tokens : [];
   const actors = Array.isArray(entities?.actors) ? entities.actors : [];
-  const token = tokens.find(item => String(item?.characterId) === String(characterId)
-    || String(item?.id) === String(characterId)) || null;
-  const actor = token ? actors.find(item => String(item?.id) === String(token.actorId)) || null : null;
+  const token = tokens.find(item => String(item?.id) === String(tokenId)) || null;
+  const baseActor = token ? actors.find(item => String(item?.id) === String(token.actorId)) || null : null;
+  const actor = resolveAuthoritativeTokenActor(baseActor, token);
   if (!token || !actor) {
     return { canMove: false, canInteract: false, canActInCombat: false, collisionBypassGroups: [], reasons: ['Actor / Token binding is missing'] };
   }
 
-  const definitions = new Map(BUILTIN_STATUS_BY_ID);
-  for (const definition of Array.isArray(entities.statusDefinitions) ? entities.statusDefinitions : []) {
-    definitions.set(String(definition?.id), definition);
-  }
+  const definitions = new Map((Array.isArray(entities.statusDefinitions) ? entities.statusDefinitions : [])
+    .map(definition => [String(definition?.id), definition]));
   const resolved = [];
   const collect = (target, scope) => {
     for (const effect of Array.isArray(target?.effects) ? target.effects : []) {
@@ -483,7 +430,6 @@ export function resolveStatusCapabilitiesForCharacter(state, characterId) {
     }
   };
   collect(actor, 'actor');
-  const actorStatusCount = resolved.length;
   collect(token, 'token');
 
   const capabilities = {
@@ -507,13 +453,6 @@ export function resolveStatusCapabilitiesForCharacter(state, characterId) {
   }
   capabilities.collisionBypassGroups = [...bypass];
 
-  const healthBlock = healthMovementBlock(actor, resolved.slice(0, actorStatusCount));
-  if (healthBlock) {
-    capabilities.canMove = false;
-    capabilities.canInteract = false;
-    capabilities.canActInCombat = false;
-    capabilities.reasons.push(healthBlock === 'dead' ? '死亡' : '昏迷');
-  }
   return capabilities;
 }
 
@@ -521,12 +460,25 @@ export function statusStateChanged(before, next) {
   const beforeEntities = before?.preferences?.entitySystem;
   const nextEntities = next?.preferences?.entitySystem;
   if (JSON.stringify(beforeEntities?.statusDefinitions ?? []) !== JSON.stringify(nextEntities?.statusDefinitions ?? [])) return true;
-  const projectTargets = targets => (Array.isArray(targets) ? targets : [])
+  const projectActors = targets => (Array.isArray(targets) ? targets : [])
     .map(target => ({ id: target?.id, effects: target?.effects ?? [] }))
     .sort((left, right) => String(left.id ?? '').localeCompare(String(right.id ?? '')));
+  const projectTokens = targets => (Array.isArray(targets) ? targets : [])
+    .map(target => ({
+      id: target?.id,
+      effects: target?.effects ?? [],
+      // Synthetic Actor effects are Actor-scoped mechanics persisted inside the
+      // unlinked Token's ActorDelta. Treat them exactly like Actor effects for
+      // permission purposes so an OWNER Player cannot forge GM-only statuses
+      // through a raw world.push.
+      actorDeltaEffects: plainObject(target?.actorDelta) && Array.isArray(target.actorDelta.effects)
+        ? target.actorDelta.effects
+        : null,
+    }))
+    .sort((left, right) => String(left.id ?? '').localeCompare(String(right.id ?? '')));
   const projection = entities => ({
-    actors: projectTargets(entities?.actors),
-    tokens: projectTargets(entities?.tokens),
+    actors: projectActors(entities?.actors),
+    tokens: projectTokens(entities?.tokens),
   });
   return JSON.stringify(projection(beforeEntities)) !== JSON.stringify(projection(nextEntities));
 }

@@ -96,18 +96,18 @@ test('direct movement is blocked by a closed generic Feature and restored by ope
 
   const closedGround = createNavigationGrid(map, {}, null, {
     appState: appState(false),
-    moverContext: { characterId: 'ground', elevationFt: 0 },
+    moverContext: { tokenId: 'ground', elevationFt: 0 },
   });
   assert.equal(findDirectNavigationPath(closedGround, start, destination), null, 'closed barrier must stop direct movement');
 
   const atBarrierHeight = createNavigationGrid(map, {}, null, {
     appState: appState(false),
-    moverContext: { characterId: 'at-height', elevationFt: 20 },
+    moverContext: { tokenId: 'at-height', elevationFt: 20 },
   });
   assert.equal(findDirectNavigationPath(atBarrierHeight, start, destination), null,
     'a Token at exactly the blocking height must still be stopped');
 
-  const session = new MovementSession({ characterId: 'ground', start });
+  const session = new MovementSession({ tokenId: 'ground', start });
   const blockedWaypointRoute = await calculateWaypointRoute({
     session,
     destination,
@@ -118,13 +118,13 @@ test('direct movement is blocked by a closed generic Feature and restored by ope
 
   const openedGround = createNavigationGrid(map, {}, null, {
     appState: appState(true),
-    moverContext: { characterId: 'ground', elevationFt: 0 },
+    moverContext: { tokenId: 'ground', elevationFt: 0 },
   });
   assert.ok(findDirectNavigationPath(openedGround, start, destination), 'opening the same Feature must restore direct passage');
 
   const closedAbove = createNavigationGrid(map, {}, null, {
     appState: appState(false),
-    moverContext: { characterId: 'flyer', elevationFt: 21 },
+    moverContext: { tokenId: 'flyer', elevationFt: 21 },
   });
   const aboveRoute = findDirectNavigationPath(closedAbove, start, destination);
   assert.deepEqual(aboveRoute.points, [start, destination], 'strictly higher mover must use the restored direct route');
@@ -143,11 +143,11 @@ test('real Lanzhou city gates block direct lines when closed and restore them wh
 
     const closedFull = createNavigationGrid(map, {}, null, {
       appState: closedState,
-      moverContext: { characterId: 'ground', elevationFt: 0 },
+      moverContext: { tokenId: 'ground', elevationFt: 0 },
     });
     const openedFull = createNavigationGrid(map, {}, null, {
       appState: openState,
-      moverContext: { characterId: 'ground', elevationFt: 0 },
+      moverContext: { tokenId: 'ground', elevationFt: 0 },
     });
     assert.equal(
       findDirectNavigationPath(closedFull, crossing.start, crossing.end),
@@ -168,7 +168,7 @@ test('opening a gate restores only the exact two-point direct crossing through t
 
   const sealed = createNavigationGrid(map, {}, null, {
     appState: cityGateState(),
-    moverContext: { characterId: 'ground', elevationFt: 0 },
+    moverContext: { tokenId: 'ground', elevationFt: 0 },
   });
   assert.equal(
     findDirectNavigationPath(sealed, outsideNorth, cityCenter),
@@ -178,7 +178,7 @@ test('opening a gate restores only the exact two-point direct crossing through t
 
   const northOpen = createNavigationGrid(map, {}, null, {
     appState: cityGateState('gate-north'),
-    moverContext: { characterId: 'ground', elevationFt: 0 },
+    moverContext: { tokenId: 'ground', elevationFt: 0 },
   });
   const direct = findDirectNavigationPath(northOpen, outsideNorth, cityCenter);
   assert.deepEqual(

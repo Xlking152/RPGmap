@@ -1,4 +1,5 @@
 import { assertStatusState } from './status-operations.mjs';
+import { assertWorldV2 } from './world-v2.mjs';
 
 // The release server applies these hostile-input limits before any permission
 // projection or authoritative World mutation.
@@ -81,14 +82,24 @@ export function assertSafeJson(value, label = 'world') {
 export function assertWorldState(value) {
   assertSafeJson(value, 'state');
   const state = object(value, 'state');
-  const characters = state.characters === undefined ? [] : array(state.characters, 'state.characters');
+  const preferences = state.preferences === undefined ? {} : object(state.preferences, 'state.preferences');
+  const hasWorldV2 = preferences.worldV2 !== undefined && preferences.worldV2 !== null;
+  const worldV2 = hasWorldV2 ? preferences.worldV2 : null;
+
+  // Character documents are accepted only while reading a pre-World legacy
+  // save. Once World V2 exists they are forbidden, even as an empty tombstone.
+  if (hasWorldV2 && Object.hasOwn(state, 'characters')) {
+    fail('World V2 state must not contain state.characters', 'legacy_character_forbidden');
+  }
+  const characters = !hasWorldV2 && state.characters !== undefined
+    ? array(state.characters, 'state.characters')
+    : [];
   const markers = state.markers === undefined ? [] : array(state.markers, 'state.markers');
   const attackAreas = state.attackAreas === undefined ? [] : array(state.attackAreas, 'state.attackAreas');
-  const characterIds = assertUniqueIds(characters, 'state.characters');
+  assertUniqueIds(characters, 'state.characters');
   assertUniqueIds(markers, 'state.markers');
   assertUniqueIds(attackAreas, 'state.attackAreas');
 
-  const preferences = state.preferences === undefined ? {} : object(state.preferences, 'state.preferences');
   const entities = preferences.entitySystem;
   let actorIds = new Set();
   let tokenIds = new Set();
@@ -96,14 +107,15 @@ export function assertWorldState(value) {
     const entityState = object(entities, 'state.preferences.entitySystem');
     actorIds = assertUniqueIds(entityState.actors, 'entitySystem.actors');
     tokenIds = assertUniqueIds(entityState.tokens, 'entitySystem.tokens');
-    const characterTokenIds = new Set();
     for (const [index, token] of entityState.tokens.entries()) {
       const actorId = id(token.actorId, `entitySystem.tokens[${index}].actorId`);
-      const characterId = id(token.characterId, `entitySystem.tokens[${index}].characterId`);
       if (!actorIds.has(actorId)) fail(`Token references missing Actor: ${actorId}`, 'invalid_reference');
-      if (!characterIds.has(characterId)) fail(`Token references missing Character: ${characterId}`, 'invalid_reference');
-      if (characterTokenIds.has(characterId)) fail(`Multiple Tokens reference Character: ${characterId}`, 'duplicate_id');
-      characterTokenIds.add(characterId);
+      if (hasWorldV2 && Object.hasOwn(token, 'characterId')) {
+        fail(`entitySystem.tokens[${index}].characterId is forbidden in World V2`, 'legacy_character_forbidden');
+      }
+      if (!hasWorldV2 && token.characterId !== undefined && token.characterId !== null && String(token.characterId).trim() !== '') {
+        id(token.characterId, `entitySystem.tokens[${index}].characterId`);
+      }
       if (token.diameterMeters !== undefined && ![1, 5, 10, 20].includes(Number(token.diameterMeters))) {
         fail(`entitySystem.tokens[${index}].diameterMeters must be 1, 5, 10, or 20`);
       }
@@ -111,12 +123,16 @@ export function assertWorldState(value) {
     assertStatusState(entityState);
   }
 
+  // World V2 is canonical. Flat entity/scene fields remain a reducer projection,
+  // but placement and identity never route through Character documents.
+  if (worldV2) assertWorldV2(worldV2);
+
   const chat = preferences.chatSystem;
   if (chat !== undefined) {
     const messages = array(object(chat, 'state.preferences.chatSystem').messages, 'chatSystem.messages', WORLD_LIMITS.maxChatMessages);
     assertUniqueIds(messages, 'chatSystem.messages');
     for (const [index, message] of messages.entries()) {
-      if (!['chat', 'system', 'combat', 'damage', 'healing', 'roll'].includes(String(message.type))) fail(`chatSystem.messages[${index}] has an invalid type`);
+      if (!['chat', 'system', 'combat', 'damage', 'healing', 'roll'].includes(String(message.type))) fail(`chatSystem.messages[${index}].type has an invalid type`);
       if (typeof message.text !== 'string' || message.text.length > 4_000) fail(`chatSystem.messages[${index}].text is invalid`, 'world_limit');
       if (typeof message.createdAt !== 'string') fail(`chatSystem.messages[${index}].createdAt is invalid`);
     }

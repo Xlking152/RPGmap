@@ -2,58 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  GROUND_PLACEMENT_MOVER_CONTEXT,
-  createPlacementContextGuard,
   getActiveMoverContext,
   resetElevationNavigationRuntime,
   setActiveMoverContext,
+  withActiveMoverContext,
 } from '../src/elevation/index.js';
 
-function fakePlacementRuntime() {
-  let clickCapture = null;
-  const shell = {
-    addEventListener(type, listener, capture) {
-      if (type === 'click' && capture === true) clickCapture = listener;
-    },
-    removeEventListener() {},
-  };
-  const mapElement = {
-    closest(selector) { return selector === '.app-shell' ? shell : null; },
-  };
-  const api = {
-    map: { getContainer() { return mapElement; } },
-    on() { return () => {}; },
-  };
-  return {
-    api,
-    click(target) {
-      assert.ok(clickCapture, 'placement guard must register a capture listener');
-      clickCapture({ target });
-    },
-  };
-}
-
-test('legacy Place Character UI resets Navigation mover context to a 0 ft ground token before placement', () => {
-  const runtime = fakePlacementRuntime();
-  createPlacementContextGuard().register(runtime.api);
-
-  setActiveMoverContext({ characterId: 'high-token', elevationFt: 80 });
-  runtime.click({
-    closest(selector) {
-      return selector === '[data-action="place-character"]' ? { dataset: { action: 'place-character' } } : null;
-    },
-  });
-
-  assert.deepEqual(getActiveMoverContext(), GROUND_PLACEMENT_MOVER_CONTEXT);
+test('elevation Navigation context stores canonical tokenId and non-negative elevation only', () => {
+  setActiveMoverContext({ tokenId: 'token-high', elevationFt: 80 });
+  assert.deepEqual(getActiveMoverContext(), { tokenId: 'token-high', elevationFt: 80 });
+  setActiveMoverContext({ tokenId: 'token-low', elevationFt: -20 });
+  assert.deepEqual(getActiveMoverContext(), { tokenId: 'token-low', elevationFt: 0 });
   resetElevationNavigationRuntime();
 });
 
-test('unrelated shell clicks do not change the active mover context', () => {
-  const runtime = fakePlacementRuntime();
-  createPlacementContextGuard().register(runtime.api);
-
-  setActiveMoverContext({ characterId: 'flyer', elevationFt: 45 });
-  runtime.click({ closest() { return null; } });
-  assert.deepEqual(getActiveMoverContext(), { characterId: 'flyer', elevationFt: 45 });
+test('withActiveMoverContext restores the prior Token mover after the task', async () => {
+  setActiveMoverContext({ tokenId: 'token-a', elevationFt: 15 });
+  await withActiveMoverContext({ tokenId: 'token-b', elevationFt: 45 }, async () => {
+    assert.deepEqual(getActiveMoverContext(), { tokenId: 'token-b', elevationFt: 45 });
+  });
+  assert.deepEqual(getActiveMoverContext(), { tokenId: 'token-a', elevationFt: 15 });
   resetElevationNavigationRuntime();
 });
