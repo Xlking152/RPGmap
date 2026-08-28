@@ -89,3 +89,23 @@ test('server reads built-ins from World and strips forged builtIn flags from cus
   }).state;
   assert.equal(state.preferences.entitySystem.statusDefinitions.find(item => item.id === 'status-forged').builtIn, false);
 });
+
+
+test('modern server schema rejects Definition-owned fields on Effect instances', () => {
+  const forgedValues = {
+    name: '伪造状态名', label: '伪造标签', description: '伪造描述', icon: 'shield',
+    color: '#225588', category: 'buff', scope: 'actor', scopes: ['actor'], maxStacks: 2,
+    capabilities: {}, statusId: 'status-rooted', changes: [],
+  };
+  for (const [key, value] of Object.entries(forgedValues)) {
+    const initial = world();
+    initial.preferences.entitySystem.actors[0].effects.push({
+      id: `effect-forged-${key}`, definitionId: 'status-rooted', stacks: 1, enabled: true, [key]: value,
+    });
+    assert.throws(
+      () => assertStatusState(initial.preferences.entitySystem),
+      error => error?.code === 'status_instance_rule_data_forbidden',
+      `modern EffectInstance should reject Definition-owned field: ${key}`,
+    );
+  }
+});

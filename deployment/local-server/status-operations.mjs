@@ -23,6 +23,10 @@ const SCOPES = new Set(['actor', 'token']);
 const CHANGE_MODES = new Set(['add', 'set', 'multiply', 'min', 'max']);
 const CAPABILITY_KEYS = new Set(['canMove', 'canInteract', 'canActInCombat', 'collisionBypassGroups']);
 const CATEGORIES = new Set(['buff', 'debuff', 'trait', 'status']);
+const DEFINITION_OWNED_EFFECT_KEYS = Object.freeze([
+  'name', 'label', 'description', 'icon', 'color', 'category', 'scope', 'scopes',
+  'maxStacks', 'capabilities', 'statusId', 'changes',
+]);
 const STATUS_ICON_NAMES = new Set([
   'activity', 'anchor', 'ban', 'bomb', 'building', 'building-2', 'circle-alert',
   'circle-dot', 'circle-slash', 'door-closed', 'droplet', 'eye', 'eye-off',
@@ -162,6 +166,13 @@ export function assertStatusInstance(value, label, { definitions, scope, legacy 
   if (!definitionId) {
     if (legacy && typeof effect.name === 'string' && Array.isArray(effect.changes)) return effect;
     fail(`${label}.definitionId is required`, 'invalid_status_reference');
+  }
+  if (!legacy) {
+    for (const key of DEFINITION_OWNED_EFFECT_KEYS) {
+      if (Object.hasOwn(effect, key)) {
+        fail(`${label}.${key} belongs to StatusDefinition, not EffectInstance`, 'status_instance_rule_data_forbidden');
+      }
+    }
   }
   const definition = definitions.get(definitionId) || null;
   if (!definition) fail(`${label} references missing definition: ${definitionId}`, 'invalid_status_reference');
