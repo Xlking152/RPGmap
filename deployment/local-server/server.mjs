@@ -30,6 +30,12 @@ import {
   isStatusMessage,
   isStructuralStatusMessage,
 } from './status-operations.mjs';
+import {
+  applyWorldOperations,
+  assertWorldOperationMessage,
+  createWorldOperationPatch,
+  projectWorldOperationState,
+} from './world-operations.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '0.0.0.0';
@@ -467,6 +473,18 @@ function sendStatusDenied(socket, message, code, description) {
     state: world.state,
   });
 }
+function sendWorldOperationDenied(socket, message, code, description, extra = {}) {
+  return sendSocket(socket, {
+    type: 'world.operation.denied',
+    operationId: statusOperationIdForReply(message?.operationId),
+    code: String(code || 'world_operation_denied'),
+    message: String(description || '服务器拒绝了 World 操作'),
+    revision: world.revision,
+    updatedAt: world.updatedAt,
+    state: world.state,
+    ...extra,
+  });
+}
 function sessionPermissions(session) {
   if (session.role === 'gm') {
     return { worldWrite: true, worldReset: true, manageAccess: true, combatManage: true, actorOwnerIds: ['*'], actorObserverIds: ['*'], defaultActorId: null };
@@ -775,6 +793,134 @@ server.on('upgrade', (req, socket) => {
         broadcastAccessSnapshots();
         return;
       }
+    }
+
+    if (message?.type === 'world.operation') {
+      let envelope;
+      try { envelope = assertWorldOperationMessage(message); }
+      catch (error) {
+        return sendWorldOperationDenied(socket, message, error?.code || 'invalid_world_operation', error?.message);
+      }
+
+      if (session.role !== 'gm' && session.identityStatus !== 'active') {
+        return sendWorldOperationDenied(socket, message, 'identity_pending', '等待 GM 批准身份后才能操作 World');
+      }
+
+      const completed = completedStatusOperations.get(envelope.operationId);
+      if (completed) {
+        // A duplicate may arrive after later revisions. A full snapshot is a
+        // recovery boundary here, not the ordinary operation broadcast path.
+        sendSocket(socket, statusSnapshot({
+          operationId: envelope.operationId,
+          originSessionId: session.id,
+          reason: 'world.operation.duplicate',
+        }));
+        return sendSocket(socket, {
+          type: 'world.operation.ack',
+          operationId: envelope.operationId,
+          revision: world.revision,
+          committedRevision: completed.revision,
+          results: completed.results,
+          duplicate: true,
+        });
+      }
+
+      if (!world.state) {
+        return sendWorldOperationDenied(socket, message, 'world_uninitialized', 'World 尚未初始化，必须先由 GM 创建完整 World');
+      }
+      if (envelope.baseRevision !== world.revision) {
+        return sendWorldOperationDenied(socket, message, 'revision_conflict', 'World 已被其他操作更新，请先重新载入最新状态');
+      }
+
+      let applied;
+      let patch;
+      try {
+        const now = new Date().toISOString();
+        applied = applyWorldOperations(world.state, envelope.operations, {
+          now,
+          userId: session.userId,
+          sessionId: session.id,
+          applyStatus(state, statusMessage) {
+            return applyStatusMessage(state, statusMessage, {
+              now,
+              userId: session.userId,
+              sessionId: session.id,
+            });
+          },
+        });
+        assertWorldState(applied.state);
+        if (!isSameChat(world.state, applied.state)) {
+          const error = new Error('聊天记录只能通过服务器提交');
+          error.code = 'chat_server_only';
+          throw error;
+        }
+        if (session.role !== 'gm') {
+          const user = findUser(session.userId);
+          // Operation reducers refresh canonical World projections such as
+          // entitySystem and gridVisible. Normalize both sides before applying
+          // the established ownership/status/combat checks so projection noise
+          // is not mistaken for an additional Player write.
+          const authorization = validatePlayerWorldPush({
+            before: projectWorldOperationState(structuredClone(world.state)),
+            next: projectWorldOperationState(structuredClone(applied.state)),
+            user,
+          });
+          if (!authorization.ok) {
+            return sendWorldOperationDenied(socket, message, authorization.code, authorization.message, {
+              activeActorId: authorization.activeActorId || null,
+            });
+          }
+        }
+        if (Buffer.byteLength(JSON.stringify(applied.state)) > MAX_WS_PAYLOAD) {
+          const error = new Error('World state is too large');
+          error.code = 'state_too_large';
+          throw error;
+        }
+        patch = createWorldOperationPatch(world.state, applied.state);
+      } catch (error) {
+        return sendWorldOperationDenied(socket, message, error?.code || 'invalid_world_operation', error?.message);
+      }
+
+      const nextRevision = world.revision + 1;
+      const nextWorld = {
+        schemaVersion: 1,
+        worldId: WORLD_ID,
+        revision: nextRevision,
+        updatedAt: new Date().toISOString(),
+        state: applied.state,
+        recentStatusOperations: recentStatusOperationsWith(
+          envelope.operationId,
+          nextRevision,
+          applied.results,
+        ),
+      };
+      try { await persistWorld(nextWorld); }
+      catch (error) {
+        return sendWorldOperationDenied(socket, message, 'persist_failed', `World 操作未保存：${error.message}`);
+      }
+
+      const baseRevision = world.revision;
+      world = nextWorld;
+      rememberStatusOperation(envelope.operationId, world.revision, applied.results);
+      broadcastWorld({
+        type: 'world.operation.committed',
+        operationId: envelope.operationId,
+        baseRevision,
+        revision: world.revision,
+        updatedAt: world.updatedAt,
+        patch,
+        results: applied.results,
+        originSessionId: session.id,
+      });
+      sendSocket(socket, {
+        type: 'world.operation.ack',
+        operationId: envelope.operationId,
+        revision: world.revision,
+        results: applied.results,
+        duplicate: false,
+      });
+      broadcastAccessSnapshots();
+      return;
     }
 
     if (isStatusMessage(message)) {

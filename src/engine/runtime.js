@@ -275,6 +275,9 @@ export function createRpgMapRuntime({
     const normalized = normalizeState(nextState);
     const multiplayer = api.multiplayer?.getStatus?.();
     if (multiplayer?.connected) {
+      if (typeof api.multiplayer?.performStateOperation === 'function') {
+        return api.multiplayer.performStateOperation(normalized, { reason });
+      }
       if (typeof api.multiplayer?.performWorldOperation !== 'function') {
         throw new Error('当前局域网控制器不支持服务器确认提交');
       }

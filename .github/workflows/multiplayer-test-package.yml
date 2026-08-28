@@ -47,6 +47,7 @@ jobs:
           test -f "$ROOT/world-schema.mjs"
           test -f "$ROOT/world-v2.mjs"
           test -f "$ROOT/status-operations.mjs"
+          test -f "$ROOT/world-operations.mjs"
           test -f "$ROOT/app/index.html"
           test -d "$ROOT/map/backups"
           (cd artifact && sha256sum -c "RPGmap-v${VERSION}.zip.sha256")

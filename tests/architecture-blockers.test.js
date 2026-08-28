@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { prepareRuleset } from '../src/ruleset/contract.js';
 import { RulesetRegistry } from '../src/ruleset/registry.js';
 import { getActiveRuleset, rulesetRegistry, setActiveRuleset } from '../src/ruleset/index.js';
-import { isWorldOperationChannelBusy } from '../src/multiplayer/controller.js';
+import { hasWorldOperationRevisionGap, isWorldOperationChannelBusy } from '../src/multiplayer/controller.js';
 import { actorUiCapabilities } from '../src/entities/ui.js';
 import { renderActorHealthPanel } from '../src/health/sheet-extension.js';
 import { synchronizeWorldV2FromRuntimeState } from '../src/world/model.js';
@@ -40,7 +40,17 @@ test('authoritative World operations start only while every network write channe
     { atomicWorldOperationQueueLength: 1 },
     { activeStatusOperation: {} },
     { statusOperationQueueLength: 1 },
+    { activeOperation: {} },
+    { operationQueueLength: 1 },
   ]) assert.equal(isWorldOperationChannelBusy(state), true);
+});
+
+test('operation commits require the next contiguous World revision', () => {
+  assert.equal(hasWorldOperationRevisionGap({ baseRevision: 4, revision: 5 }, 4), false);
+  assert.equal(hasWorldOperationRevisionGap({ baseRevision: 3, revision: 4 }, 4), true);
+  assert.equal(hasWorldOperationRevisionGap({ baseRevision: 4, revision: 6 }, 4), true);
+  assert.equal(hasWorldOperationRevisionGap({ baseRevision: '4', revision: 5 }, 4), true);
+  assert.equal(hasWorldOperationRevisionGap({ baseRevision: 4, revision: null }, 4), true);
 });
 
 test('Ruleset references reject missing, unknown, and incompatible versions explicitly', () => {

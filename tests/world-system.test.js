@@ -69,3 +69,20 @@ test('WorldSystem can create and activate another Scene using the loaded MapPack
   assertNoCharacters(fixture.current());
   assert.equal(fixture.current().markers.length, 0);
 });
+
+test('WorldSystem applies offline Actor and Token writes through the shared operation reducer', async () => {
+  const fixture = apiFixture();
+  createWorldSystem().register(fixture.api);
+  const updatedActor = fixture.api.world.listActors()[0];
+  updatedActor.notes = 'offline operation';
+  const result = await fixture.api.world.performOperations([
+    { type: 'actor.upsert', payload: { actor: updatedActor } },
+    { type: 'token.move', payload: { tokenId: 'token-1', placement: 'map', x: 9.5, y: 8.5 } },
+  ], { source: 'test:offline-operations', render: false });
+  assert.equal(result.offline, true);
+  assert.deepEqual(result.results.map(item => item.action), ['actor.upsert', 'token.move']);
+  assert.equal(fixture.api.world.listActors()[0].notes, 'offline operation');
+  assert.equal(fixture.api.world.getActiveScene().tokens[0].x, 9.5);
+  assert.equal(fixture.api.world.getActiveScene().tokens[0].y, 8.5);
+  assert.equal(fixture.events.some(event => event[0] === 'commit' && event[1] === 'test:offline-operations'), true);
+});

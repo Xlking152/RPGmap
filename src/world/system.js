@@ -10,6 +10,8 @@ import {
 } from './model.js';
 import { pruneProjectedWorldReferences } from './references.js';
 import { assertWorldRuleset } from './validation.js';
+import { reduceStatusOperation } from '../status/model.js';
+import { applyWorldOperations } from './operations.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -114,6 +116,42 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         return { offline: true };
       }
 
+      function reduceOperations(state, operations, { source = 'world.operation', now = new Date().toISOString() } = {}) {
+        return applyWorldOperations(state, operations, {
+          now,
+          source: { role: 'offline', source },
+          applyStatus(statusState, message, context) {
+            const next = clone(statusState);
+            next.preferences ||= {};
+            const reduced = reduceStatusOperation(next.preferences.entitySystem, message, {
+              source: context.source,
+              now: context.now,
+            });
+            next.preferences.entitySystem = reduced.state;
+            return { state: next, results: reduced.results };
+          },
+        });
+      }
+
+      async function performOperations(operations, {
+        source = 'world.operation',
+        render = true,
+        kind = 'world',
+        requestedOperationId = null,
+      } = {}) {
+        const multiplayer = api.multiplayer?.getStatus?.();
+        if (multiplayer?.connected) {
+          if (typeof api.multiplayer?.performOperations !== 'function') {
+            throw new Error('当前局域网控制器不支持通用 World 操作');
+          }
+          return api.multiplayer.performOperations(operations, { kind, requestedOperationId });
+        }
+        const applied = reduceOperations(api.getState?.() || {}, operations, { source });
+        coreCommitState(hydrateCanonical(applied.state), { source, render });
+        api.persistNow?.();
+        return { offline: true, operations: clone(applied.operations), results: clone(applied.results) };
+      }
+
       api.world = {
         schemaVersion: 2,
         get: snapshot,
@@ -149,6 +187,10 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
             source: 'world-v2:rename', reason: 'world.rename', render: false,
           });
           return snapshot();
+        },
+        performOperations,
+        reduceOperations(state, operations, options = {}) {
+          return reduceOperations(state, operations, options);
         },
         syncState(state) { return normalizeForRuntime(state); },
         projectState(state) { return hydrateCanonical(state); },

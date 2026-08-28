@@ -1,5 +1,9 @@
 import { isLocalHost, multiplayerSocketUrl, normalizeRequestedRole, sanitizeMultiplayerName } from './protocol.js';
 import { canControlActor, validateLocalPlayerChange } from './permissions.js';
+import {
+  applyWorldOperationPatch,
+  deriveWorldOperations,
+} from '../world/operations.js';
 
 const STYLE_ID = 'rpgmap-multiplayer-style';
 const STORAGE_PREFIX = 'rpgmap:multiplayer:';
@@ -68,8 +72,20 @@ export function isWorldOperationChannelBusy(state = {}) {
   return Boolean(
     state.applyingRemote || state.remoteApplyPending || state.inFlight || state.pendingPush
     || state.activeAtomicWorldOperation || state.atomicWorldOperationQueueLength
-    || state.activeStatusOperation || state.statusOperationQueueLength,
+    || state.activeStatusOperation || state.statusOperationQueueLength
+    || state.activeOperation || state.operationQueueLength,
   );
+}
+
+export function hasWorldOperationRevisionGap(message, currentRevision) {
+  const baseRevision = message?.baseRevision;
+  const nextRevision = message?.revision;
+  const current = currentRevision;
+  return !Number.isSafeInteger(baseRevision)
+    || !Number.isSafeInteger(nextRevision)
+    || !Number.isSafeInteger(current)
+    || baseRevision !== current
+    || nextRevision !== baseRevision + 1;
 }
 
 export function createMultiplayerController() {
@@ -106,6 +122,9 @@ export function createMultiplayerController() {
       let atomicWorldOperationQueue = [];
       let activeStatusOperation = null;
       let statusOperationQueue = [];
+      let activeOperation = null;
+      let operationQueue = [];
+      let lastObservedLocalState = null;
       let remoteApplyChain = Promise.resolve();
       let remoteApplyPending = 0;
       let remoteEpoch = 0;
@@ -265,7 +284,7 @@ export function createMultiplayerController() {
 
       function socketUrl() { return multiplayerSocketUrl(documentNode.defaultView?.location); }
 
-      function applyRemoteState(state, nextRevision, reason = 'remote') {
+      function applyRemoteState(state, nextRevision, reason = 'remote', { serverState = state } = {}) {
         if (!state || typeof state !== 'object') return Promise.resolve(false);
         const epoch = remoteEpoch;
         const requestedState = structuredClone(state);
@@ -278,7 +297,8 @@ export function createMultiplayerController() {
             await api.importState(requestedState, false);
             if (epoch !== remoteEpoch) return false;
             revision = requestedRevision;
-            lastServerState = structuredClone(requestedState);
+            lastServerState = structuredClone(serverState);
+            lastObservedLocalState = structuredClone(requestedState);
             setMapStatus(`联机同步完成 · revision ${revision}${reason ? ` · ${reason}` : ''}`);
             return true;
           } catch (error) {
@@ -305,7 +325,8 @@ export function createMultiplayerController() {
         // cannot overtake a pending combat/health World mutation, including a
         // mutation queued behind an earlier in-flight push.
         if (!connected || applyingRemote || inFlight || activeAtomicWorldOperation || atomicWorldOperationQueue.length
-          || activeStatusOperation || pendingPush || statusOperationQueue.length || !deferredChat.length) return;
+          || activeStatusOperation || pendingPush || statusOperationQueue.length
+          || activeOperation || operationQueue.length || !deferredChat.length) return;
         while (deferredChat.length) {
           const message = deferredChat[0];
           if (!send({ type: 'chat.append', ...message })) return;
@@ -370,6 +391,7 @@ export function createMultiplayerController() {
         if (error) operation.reject(error);
         else operation.resolve(detail || { operationId: operation.operationId, revision });
         queueMicrotask(() => {
+          flushOperations();
           flushStatusOperations();
           flushAtomicWorldOperations();
           flushPush();
@@ -379,7 +401,8 @@ export function createMultiplayerController() {
 
       function flushAtomicWorldOperations() {
         if (!connected || applyingRemote || inFlight || pendingPush || activeAtomicWorldOperation
-          || activeStatusOperation || statusOperationQueue.length || !atomicWorldOperationQueue.length) return;
+          || activeStatusOperation || statusOperationQueue.length
+          || activeOperation || operationQueue.length || !atomicWorldOperationQueue.length) return;
         const operation = atomicWorldOperationQueue.shift();
         activeAtomicWorldOperation = operation;
         if (!send({
@@ -406,6 +429,8 @@ export function createMultiplayerController() {
           atomicWorldOperationQueueLength: atomicWorldOperationQueue.length,
           activeStatusOperation,
           statusOperationQueueLength: statusOperationQueue.length,
+          activeOperation,
+          operationQueueLength: operationQueue.length,
         })) {
           const error = new Error('另一项服务器写入尚未完成，请在同步完成后重试');
           error.code = 'world_operation_busy';
@@ -424,6 +449,145 @@ export function createMultiplayerController() {
         });
       }
 
+      function rejectOperations(message = '联机连接已中断') {
+        const error = new Error(message);
+        error.code = 'operation_cancelled';
+        if (activeOperation) activeOperation.reject(error);
+        for (const operation of operationQueue) operation.reject(error);
+        activeOperation = null;
+        operationQueue = [];
+        api.emit?.('world:operation-pending-clear', { reason: message });
+      }
+
+      function rejectQueuedOperations(error) {
+        const queued = operationQueue;
+        operationQueue = [];
+        for (const operation of queued) operation.reject(error);
+        if (queued.length) api.emit?.('world:operation-pending-clear', { reason: error.message });
+      }
+
+      function finishOperation(error = null, detail = null) {
+        const operation = activeOperation;
+        if (!operation) return;
+        activeOperation = null;
+        if (error) operation.reject(error);
+        else operation.resolve(detail || {
+          operationId: operation.operationId,
+          revision,
+          results: operation.results || [],
+        });
+        api.emit?.('world:operation-result', {
+          operationId: operation.operationId,
+          kind: operation.kind,
+          ok: !error,
+          error: error?.message || '',
+          revision,
+        });
+        if (operation.kind === 'status') {
+          api.emit?.('status:operation-result', {
+            operationId: operation.operationId,
+            ok: !error,
+            error: error?.message || '',
+            revision,
+          });
+        }
+        queueMicrotask(flushPendingNetworkWork);
+      }
+
+      function maybeFinishOperation() {
+        if (!activeOperation || !activeOperation.acknowledged || !activeOperation.patchApplied) return;
+        finishOperation(null, {
+          operationId: activeOperation.operationId,
+          revision: activeOperation.revision || revision,
+          results: activeOperation.results || [],
+        });
+      }
+
+      function flushOperations() {
+        if (!connected || applyingRemote || inFlight || pendingPush || activeAtomicWorldOperation
+          || activeStatusOperation || statusOperationQueue.length || activeOperation || !operationQueue.length) return;
+        const operation = operationQueue.shift();
+        activeOperation = operation;
+        if (!send({
+          type: 'world.operation',
+          operationId: operation.operationId,
+          baseRevision: revision,
+          operations: operation.operations,
+        })) {
+          activeOperation = null;
+          operationQueue.unshift(operation);
+        }
+      }
+
+      function performOperations(operations, { kind = 'world', requestedOperationId = null } = {}) {
+        if (!connected) return Promise.reject(new Error('当前未连接局域网服务器'));
+        const values = Array.isArray(operations) ? structuredClone(operations) : [];
+        if (!values.length) return Promise.resolve({ unchanged: true, revision, results: [] });
+        const id = String(requestedOperationId || operationId(kind === 'status' ? 'status' : 'operation'));
+        return new Promise((resolve, reject) => {
+          operationQueue.push({
+            operationId: id,
+            operations: values,
+            kind,
+            resolve,
+            reject,
+            acknowledged: false,
+            patchApplied: false,
+            awaitingCanonicalSnapshot: false,
+            revision: null,
+            results: [],
+          });
+          api.emit?.('world:operation-pending', { operationId: id, kind, operations: values });
+          if (kind === 'status') api.emit?.('status:pending', { operationId: id, type: values[0]?.type || 'status.batch' });
+          flushOperations();
+        });
+      }
+
+      function performStateOperation(state, { reason = 'state-operation' } = {}) {
+        if (!connected) return Promise.reject(new Error('当前未连接局域网服务器'));
+        const before = api.exportState();
+        const derived = deriveWorldOperations(before, state);
+        if (derived.unsupported.length) {
+          api.emit?.('world:operation-unsynced', {
+            source: reason,
+            unsupported: [...derived.unsupported],
+          });
+        }
+        if (derived.unsupported.includes('world_identity') || derived.unsupported.includes('operation_limit')) {
+          const error = new Error(`当前变更不能通过原子 World 操作提交：${derived.unsupported.join(', ')}`);
+          error.code = 'world_operation_unsupported';
+          return Promise.reject(error);
+        }
+        if (!derived.operations.length) {
+          return Promise.resolve({ unchanged: true, localOnly: true, revision, results: [] });
+        }
+        return performOperations(derived.operations, { kind: 'world' });
+      }
+
+      function queueCommittedOperations(nextState, source = 'state:commit') {
+        const after = structuredClone(nextState);
+        const before = lastObservedLocalState || lastServerState;
+        lastObservedLocalState = structuredClone(after);
+        if (!connected || applyingRemote || !permissions.worldWrite || !before) return false;
+        const derived = deriveWorldOperations(before, after);
+        if (derived.unsupported.length) {
+          api.emit?.('world:operation-unsynced', {
+            source,
+            unsupported: [...derived.unsupported],
+          });
+        }
+        if (!derived.operations.length) return true;
+        if (derived.unsupported.includes('world_identity') || derived.unsupported.includes('operation_limit')) {
+          setMapStatus(`联机操作未提交：${derived.unsupported.join(', ')}`);
+          return true;
+        }
+        performOperations(derived.operations, { kind: 'world' }).catch(error => {
+          console.error('[RPGmap Multiplayer] World operation failed', error);
+          setMapStatus(`联机操作失败：${error.message}`);
+        });
+        return true;
+      }
+
       function finishStatusOperation(error = null, detail = null) {
         const operation = activeStatusOperation;
         if (!operation) return;
@@ -437,6 +601,7 @@ export function createMultiplayerController() {
           revision,
         });
         queueMicrotask(() => {
+          flushOperations();
           flushStatusOperations();
           flushAtomicWorldOperations();
           flushPush();
@@ -452,7 +617,7 @@ export function createMultiplayerController() {
 
       function flushStatusOperations() {
         if (!connected || applyingRemote || inFlight || pendingPush || activeAtomicWorldOperation
-          || activeStatusOperation || !statusOperationQueue.length) return;
+          || activeStatusOperation || activeOperation || operationQueue.length || !statusOperationQueue.length) return;
         const operation = statusOperationQueue.shift();
         activeStatusOperation = operation;
         if (!send({ type: operation.type, operationId: operation.operationId, clientRevision: revision, ...operation.payload })) {
@@ -465,15 +630,12 @@ export function createMultiplayerController() {
         if (!connected) return Promise.reject(new Error('当前未连接局域网服务器'));
         if (!getCapabilities().canManageStatuses) return Promise.reject(new Error('只有 GM 可以管理机械状态'));
         const id = String(payload.operationId || operationId('status'));
-        return new Promise((resolve, reject) => {
-          statusOperationQueue.push({
-            type: String(type || ''), operationId: id,
-            payload: { ...payload, operationId: undefined }, resolve, reject,
-            acknowledged: false, snapshotApplied: false, revision: null,
-          });
-          api.emit?.('status:pending', { operationId: id, type });
-          flushStatusOperations();
-        });
+        const operationPayload = { ...payload };
+        delete operationPayload.operationId;
+        return performOperations([{
+          type: String(type || ''),
+          payload: operationPayload,
+        }], { kind: 'status', requestedOperationId: id });
       }
 
       function flushPush() {
@@ -481,7 +643,7 @@ export function createMultiplayerController() {
         // authoritative operations. Blocking on both queues here would let a
         // pending push and a queued status/Feature operation deadlock each other.
         if (!connected || applyingRemote || inFlight || activeAtomicWorldOperation
-          || activeStatusOperation || !permissions.worldWrite || !pendingPush) return;
+          || activeStatusOperation || activeOperation || !permissions.worldWrite || !pendingPush) return;
         const nextState = api.exportState();
         if (session?.role !== 'gm' && lastServerState) {
           const authorization = validateLocalPlayerChange({ before: lastServerState, next: nextState, permissions });
@@ -521,6 +683,7 @@ export function createMultiplayerController() {
 
       function flushPendingNetworkWork() {
         queueMicrotask(() => {
+          flushOperations();
           flushStatusOperations();
           flushAtomicWorldOperations();
           flushPush();
@@ -561,7 +724,10 @@ export function createMultiplayerController() {
           }
           hideDialog();
           if (message.world?.state) {
-            applyRemoteState(message.world.state, revision, 'initial').then(() => { inFlight = false; flushPush(); });
+            applyRemoteState(message.world.state, revision, 'initial').then(() => {
+              inFlight = false;
+              flushPendingNetworkWork();
+            });
           } else if (session?.role === 'gm' && permissions.worldWrite) {
             lastServerState = null;
             pendingPush = true;
@@ -597,6 +763,17 @@ export function createMultiplayerController() {
           if (!getCapabilities().canManageStatuses && (activeStatusOperation || statusOperationQueue.length)) {
             rejectStatusOperations('状态管理权限已被移除');
           }
+          if (!getCapabilities().canManageStatuses) {
+            const error = new Error('状态管理权限已被移除');
+            error.code = 'status_permission_removed';
+            if (activeOperation?.kind === 'status') finishOperation(error);
+            const retained = [];
+            for (const operation of operationQueue) {
+              if (operation.kind === 'status') operation.reject(error);
+              else retained.push(operation);
+            }
+            operationQueue = retained;
+          }
           if (session && message.user) {
             session.name = message.user.name || session.name;
             session.defaultActorId = message.user.defaultActorId || null;
@@ -619,6 +796,81 @@ export function createMultiplayerController() {
           return;
         }
 
+        if (message.type === 'world.operation.committed') {
+          const incomingRevision = Number(message.revision);
+          if (hasWorldOperationRevisionGap(message, revision)) {
+            const error = new Error('联机操作 revision 出现缺口，正在重新载入服务器状态');
+            error.code = 'revision_gap';
+            rejectOperations(error.message);
+            send({ type: 'world.request' });
+            return;
+          }
+          let canonicalState;
+          let localState;
+          try {
+            canonicalState = applyWorldOperationPatch(lastServerState || api.exportState(), message.patch);
+            localState = applyWorldOperationPatch(api.exportState(), message.patch);
+          } catch (cause) {
+            const error = new Error(`无法应用服务器操作补丁：${cause.message}`);
+            error.code = cause.code || 'world_operation_patch_invalid';
+            rejectOperations(error.message);
+            send({ type: 'world.request' });
+            return;
+          }
+          const matchesActive = activeOperation
+            && String(message.operationId || '') === String(activeOperation.operationId);
+          const expectedOperationId = matchesActive ? activeOperation.operationId : null;
+          applyRemoteState(localState, incomingRevision, 'world.operation', { serverState: canonicalState }).then(applied => {
+            if (!applied) {
+              const error = new Error('服务器已经保存操作，但客户端无法载入操作补丁');
+              error.code = 'world_operation_patch_import_failed';
+              rejectOperations(error.message);
+              send({ type: 'world.request' });
+              return;
+            }
+            if (expectedOperationId && activeOperation
+              && String(activeOperation.operationId) === String(expectedOperationId)) {
+              activeOperation.patchApplied = true;
+              activeOperation.revision = incomingRevision;
+              activeOperation.results = Array.isArray(message.results) ? structuredClone(message.results) : [];
+              maybeFinishOperation();
+            } else {
+              flushPendingNetworkWork();
+            }
+          });
+          return;
+        }
+
+        if (message.type === 'world.operation.ack') {
+          if (!activeOperation || String(message.operationId || '') !== String(activeOperation.operationId)) return;
+          activeOperation.acknowledged = true;
+          activeOperation.revision = Number(message.revision) || revision;
+          activeOperation.results = Array.isArray(message.results) ? structuredClone(message.results) : activeOperation.results;
+          if (message.duplicate === true && !activeOperation.patchApplied) {
+            activeOperation.awaitingCanonicalSnapshot = true;
+            send({ type: 'world.request' });
+          }
+          maybeFinishOperation();
+          return;
+        }
+
+        if (message.type === 'world.operation.denied') {
+          if (!activeOperation || String(message.operationId || '') !== String(activeOperation.operationId)) return;
+          const error = new Error(message.message || '服务器拒绝了 World 操作');
+          error.code = message.code || 'world_operation_denied';
+          const finish = () => {
+            finishOperation(error);
+            rejectQueuedOperations(error);
+          };
+          if (message.state && typeof message.state === 'object') {
+            applyRemoteState(message.state, message.revision, '操作回滚').then(finish);
+          } else {
+            send({ type: 'world.request' });
+            finish();
+          }
+          return;
+        }
+
         if (message.type === 'world.snapshot') {
           const own = session?.id && message.originSessionId === session.id;
           const incomingRevision = Number(message.revision) || revision;
@@ -631,7 +883,26 @@ export function createMultiplayerController() {
           const canonicalStatusReload = activeStatusOperation
             && activeStatusOperation.awaitingCanonicalSnapshot === true
             && !message.operationId;
-          if (atomicWorldOperation) {
+          const genericOperation = activeOperation
+            && message.operationId
+            && String(message.operationId) === String(activeOperation.operationId);
+          const canonicalOperationReload = activeOperation
+            && activeOperation.awaitingCanonicalSnapshot === true
+            && !message.operationId;
+          if (genericOperation || canonicalOperationReload) {
+            const expectedOperationId = activeOperation.operationId;
+            activeOperation.revision = incomingRevision;
+            applyRemoteState(message.state, incomingRevision, message.reason || 'operation-reload').then(applied => {
+              if (!activeOperation || String(activeOperation.operationId) !== String(expectedOperationId)) return;
+              if (!applied) {
+                finishOperation(new Error('服务器已经保存操作，但客户端无法载入最新快照'));
+                return;
+              }
+              activeOperation.awaitingCanonicalSnapshot = false;
+              activeOperation.patchApplied = true;
+              maybeFinishOperation();
+            });
+          } else if (atomicWorldOperation) {
             const expectedOperationId = activeAtomicWorldOperation.operationId;
             applyRemoteState(message.state, incomingRevision, message.reason || 'atomic-world').then(applied => {
               if (!activeAtomicWorldOperation
@@ -660,10 +931,7 @@ export function createMultiplayerController() {
             if (message.state && typeof message.state === 'object') lastServerState = structuredClone(message.state);
             inFlight = false;
             activeWorldOperationId = null;
-            flushPush();
-            flushStatusOperations();
-            flushAtomicWorldOperations();
-            flushDeferredChat();
+            flushPendingNetworkWork();
           } else {
             inFlight = false;
             pendingPush = false;
@@ -722,6 +990,14 @@ export function createMultiplayerController() {
         }
 
         if (message.type === 'error') {
+          if (message.operationId && activeOperation
+            && String(message.operationId) === String(activeOperation.operationId)) {
+            const error = new Error(message.message || message.code || 'World 操作失败');
+            error.code = message.code || 'world_operation_error';
+            finishOperation(error);
+            rejectQueuedOperations(error);
+            return;
+          }
           if (message.operationId && activeAtomicWorldOperation
             && String(message.operationId) === String(activeAtomicWorldOperation.operationId)) {
             const error = new Error(message.message || message.code || 'World 操作失败');
@@ -762,7 +1038,9 @@ export function createMultiplayerController() {
         activeWorldOperationId = null;
         rejectAtomicWorldOperations('正在重新连接局域网服务器');
         rejectStatusOperations('正在重新连接局域网服务器');
+        rejectOperations('正在重新连接局域网服务器');
         lastServerState = null;
+        lastObservedLocalState = null;
         submittedPlayerKey = String(playerKey || '').trim().toUpperCase();
         renderButton();
         save('name', name);
@@ -802,6 +1080,9 @@ export function createMultiplayerController() {
           activeWorldOperationId = null;
           rejectAtomicWorldOperations('局域网连接已断开，未确认的 World 操作已取消');
           rejectStatusOperations('局域网连接已断开，未确认的状态操作已取消');
+          rejectOperations('局域网连接已断开，未确认的操作已取消');
+          lastServerState = null;
+          lastObservedLocalState = null;
           renderButton();
           publishCapabilities();
           if (!intentionalClose) setMapStatus('多人连接已断开 · 点击“联机”重新连接');
@@ -822,7 +1103,9 @@ export function createMultiplayerController() {
         activeWorldOperationId = null;
         rejectAtomicWorldOperations('已主动断开局域网连接，未确认的 World 操作已取消');
         rejectStatusOperations('已主动断开局域网连接，未确认的状态操作已取消');
+        rejectOperations('已主动断开局域网连接，未确认的操作已取消');
         lastServerState = null;
+        lastObservedLocalState = null;
         renderButton();
         hideDialog();
         publishCapabilities();
@@ -913,20 +1196,18 @@ export function createMultiplayerController() {
         }
       });
 
-      // state:commit is emitted synchronously for Entity/Health/Combat edits.
-      // Send it synchronously so LAN World changes win the ordering race with
-      // a following chat/combat event. The later storage notification is the
-      // same commit and must not create a second server revision.
-      api.on('state:commit', () => {
+      // Ordinary runtime commits converge through operation envelopes. Full
+      // world.push remains an initialization/import/recovery boundary only.
+      api.on('state:commit', detail => {
         localCommitSerial += 1;
-        pushCommittedWorld();
+        queueCommittedOperations(detail?.state || api.exportState(), detail?.source || 'state:commit');
       });
       api.on('state:saved', () => {
         if (lastSavedCommitSerial < localCommitSerial) {
           lastSavedCommitSerial = localCommitSerial;
           return;
         }
-        queuePush();
+        queueCommittedOperations(api.exportState(), 'state:saved');
       });
       api.on('state:import', queuePush);
 
@@ -939,6 +1220,8 @@ export function createMultiplayerController() {
         appendChat,
         appendChatAfterWorld,
         performStatusOperation,
+        performOperations,
+        performStateOperation,
         performWorldOperation,
         clearChat: () => send({ type: 'chat.clear' }),
         getCapabilities,
