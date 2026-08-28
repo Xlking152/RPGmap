@@ -293,7 +293,7 @@ export function renderActorStatusSheet({ api, actor, tokens = [], allTokens = to
     const snapshot = resolveStatusUiSnapshot(api, { actorId: actor?.id, tokenId: token.id });
     const synthetic = token.actorLink === false;
     const syntheticRows = synthetic
-      ? `<section class="entity-section status-target-section"><h3>Synthetic Actor · Token ${escapeStatusHtml(token.id)}</h3>${statusCards(snapshot.actorStatuses, { canManage, pendingKeys, scope: 'syntheticActor', targetId: token.id })}${statusCards(snapshot.derivedStatuses, { canManage: false, pendingKeys, scope: 'syntheticActor', targetId: token.id })}</section>`
+      ? `<section class="entity-section status-target-section"><h3>独立角色实例 · 棋子 ${escapeStatusHtml(token.id)}</h3>${statusCards(snapshot.actorStatuses, { canManage, pendingKeys, scope: 'syntheticActor', targetId: token.id })}${statusCards(snapshot.derivedStatuses, { canManage: false, pendingKeys, scope: 'syntheticActor', targetId: token.id })}</section>`
       : '';
     return `${syntheticRows}<section class="entity-section status-target-section"><h3>Token · ${escapeStatusHtml(token.id)}</h3>${statusCards(snapshot.tokenStatuses, { canManage, pendingKeys, scope: 'token', targetId: token.id })}</section>`;
   }).join('');

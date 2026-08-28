@@ -407,12 +407,11 @@ function resolveAuthoritativeTokenActor(baseActor, token) {
  * the latest authoritative World snapshot. This is the final server-side gate
  * for Player movement; GM relocation/import remains intentionally unrestricted.
  */
-export function resolveStatusCapabilitiesForCharacter(state, characterId) {
+export function resolveStatusCapabilitiesForToken(state, tokenId) {
   const entities = state?.preferences?.entitySystem;
   const tokens = Array.isArray(entities?.tokens) ? entities.tokens : [];
   const actors = Array.isArray(entities?.actors) ? entities.actors : [];
-  const token = tokens.find(item => String(item?.characterId) === String(characterId)
-    || String(item?.id) === String(characterId)) || null;
+  const token = tokens.find(item => String(item?.id) === String(tokenId)) || null;
   const baseActor = token ? actors.find(item => String(item?.id) === String(token.actorId)) || null : null;
   const actor = resolveAuthoritativeTokenActor(baseActor, token);
   if (!token || !actor) {

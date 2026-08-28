@@ -98,7 +98,7 @@ function resolvedMoverContext(explicit) {
       .filter(Boolean),
   )].sort();
   return Object.freeze({
-    characterId: source?.characterId == null ? null : String(source.characterId),
+    tokenId: source?.tokenId == null ? null : String(source.tokenId),
     elevationFt: Number.isFinite(elevationFt) && elevationFt >= 0 ? elevationFt : 0,
     diameterMeters: [1, 5, 10, 20].includes(requestedDiameter) ? requestedDiameter : 1,
     collisionBypassGroups: Object.freeze(collisionBypassGroups),
@@ -256,7 +256,7 @@ function makeGridFacade(navigation) {
 
 function runtimeGridRevision(appState, moverContext, scene) {
   const featureStates = appState?.preferences?.featureStates || {};
-  return `${moverContext.characterId ?? ''}|${moverContext.elevationFt}|${moverContext.diameterMeters}|${moverContext.statusVersion || ''}|${(moverContext.collisionBypassGroups || []).join(',')}|${JSON.stringify(featureStates)}|${JSON.stringify(scene || {})}`;
+  return `${moverContext.tokenId ?? ''}|${moverContext.elevationFt}|${moverContext.diameterMeters}|${moverContext.statusVersion || ''}|${(moverContext.collisionBypassGroups || []).join(',')}|${JSON.stringify(featureStates)}|${JSON.stringify(scene || {})}`;
 }
 
 export function createNavigationBase(mapPackage) {

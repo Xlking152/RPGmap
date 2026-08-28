@@ -4,8 +4,8 @@ import { INFINITE_HORROR_HEALTH } from './health.js';
 import { deriveInfiniteHorrorStatuses, INFINITE_HORROR_STATUS_DEFINITIONS } from './statuses.js';
 import {
   guessInfiniteHorrorFormName,
-  parseInfiniteHorrorCharacterSheets,
-  importInfiniteHorrorCharacterXlsx,
+  parseInfiniteHorrorActorSheets,
+  importInfiniteHorrorActorXlsx,
 } from './importers/xlsx.js';
 
 export const infiniteHorrorRuleset = prepareRuleset({
@@ -24,8 +24,8 @@ export const infiniteHorrorRuleset = prepareRuleset({
       id: 'character-card-v1',
       title: '无限跑团 Excel 角色卡',
       guessFormName: guessInfiniteHorrorFormName,
-      parse: parseInfiniteHorrorCharacterSheets,
-      importFile: importInfiniteHorrorCharacterXlsx,
+      parse: parseInfiniteHorrorActorSheets,
+      importFile: importInfiniteHorrorActorXlsx,
     },
   },
   metadata: {

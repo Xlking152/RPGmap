@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBoundUser, validatePlayerWorldPush } from '../deployment/local-server/access-control.mjs';
-import { resolveStatusCapabilitiesForCharacter as resolveStatusCapabilitiesForToken } from '../deployment/local-server/status-operations.mjs';
+import { resolveStatusCapabilitiesForToken } from '../deployment/local-server/status-operations.mjs';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 
 function state() {

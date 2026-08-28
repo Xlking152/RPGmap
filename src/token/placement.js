@@ -11,7 +11,7 @@ function finite(value, fallback = 0) {
  * UI placement policy for the current square-grid map shell.
  *
  * Token Runtime intentionally accepts arbitrary world coordinates; this adapter
- * owns the legacy shell's 1 m cell-centre snapping without teaching canonical
+ * owns the map shell's 1 m cell-centre snapping without teaching canonical
  * Token mutation APIs about one particular map UI.
  */
 export function snapActorTokenPlacementPoint(api, point = {}) {
@@ -38,8 +38,6 @@ export function inspectActorTokenPlacement(api, point = {}, { tokenId = null } =
 
 /**
  * Create one canonical Scene Token for an existing World Actor.
- * No Character document is created here; World V2 projects the active Scene
- * back into state.characters[] only for the not-yet-migrated editor shell.
  */
 export async function createActorTokenAtPoint(api, actorId, point, options = {}) {
   if (!api?.tokens?.create) throw new Error('Actor Token placement requires api.tokens.create()');
@@ -68,8 +66,7 @@ export async function createActorTokenAtPoint(api, actorId, point, options = {})
 }
 
 /**
- * Reposition an existing canonical Scene Token without touching the temporary
- * Character projection. The current Token id is supplied to the placement
+ * Reposition an existing canonical Scene Token. The current Token id is supplied to the placement
  * inspector so navigation can ignore the mover's own occupied cell.
  */
 export async function relocateActorTokenAtPoint(api, tokenId, point) {

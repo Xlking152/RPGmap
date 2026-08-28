@@ -14,7 +14,7 @@ test('movement snap steps cycle through 1/5/10/20/50/100 metres', () => {
 });
 
 test('movement snapping affects only the live control point and preserves placed waypoints', () => {
-  const session = new MovementSession({ characterId: 'hero', start: { x: 0, y: 0 }, snapStep: 20 });
+  const session = new MovementSession({ tokenId: 'hero', start: { x: 0, y: 0 }, snapStep: 20 });
   session.addWaypoint({ x: 40, y: 20 });
   session.updateCurrent(snapMovementPoint({ x: 87, y: 73 }, 20), { x: 87, y: 73 });
   assert.deepEqual(session.current, { x: 80.5, y: 80.5 });

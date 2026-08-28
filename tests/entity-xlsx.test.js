@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseWorksheetCells, parseSharedStrings, parseRelationships, parseWorkbookSheets, resolveZipPath } from '../src/entities/xlsx-lite.js';
-import { guessFormName, parseCharacterSheets } from '../src/entities/xlsx-importer.js';
+import { guessFormName, parseActorSheets } from '../src/entities/xlsx-importer.js';
 
 function sheet(values) { return { cells: new Map(Object.entries(values)), images: [] }; }
 
@@ -44,7 +44,7 @@ test('character card parser imports final resources, attributes, skills, saves a
     W47:'亢奋点数', W48:'恐惧点数', W49:'仇恨点数', W50:'欲眠点数', W51:'精神束缚',
     W52:'魅惑点数', AB52:7, AC52:42, AD52:56,
   });
-  const parsed = parseCharacterSheets({ overview: sheet({ I1:'#NAME?' }), detailed, fileName:'银（变身后）(1).xlsx' });
+  const parsed = parseActorSheets({ overview: sheet({ I1:'#NAME?' }), detailed, fileName:'银（变身后）(1).xlsx' });
   assert.equal(parsed.formName, '变身后');
   assert.equal(parsed.resources.hp.max, 41);
   assert.equal(parsed.attributes.find(item => item.id === 'strength').base, 24);

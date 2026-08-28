@@ -24,7 +24,7 @@ export function actorDisplayForm(actor, { ruleset } = {}) {
 /**
  * Build the map-facing display model from a canonical Scene Token plus its
  * resolved Actor (Base Actor for linked Tokens; Synthetic Actor for unlinked
- * Tokens). Character compatibility projection is intentionally not accepted.
+ * Tokens). Reducer projections are intentionally not accepted.
  */
 export function createTokenViewModel({ token, actor, selected = false, ruleset } = {}) {
   if (!token || !actor || token.hidden === true || token.placement !== 'map') return null;

@@ -14,21 +14,8 @@ import { CombatStore } from './store.js';
 import { installCombatStyles, renderCombatTopbar, renderCombatTracker } from './tracker.js';
 import { describeActor } from '../actor/index.js';
 
-function legacyTokenRefs(appState, ids) {
-  const entity = appState.preferences?.entitySystem || {};
-  const entityTokens = Array.isArray(entity.tokens) ? entity.tokens : [];
-  const characters = new Set((appState.characters || []).map(character => String(character.id)));
-  return (ids || [])
-    .map(String)
-    .filter(id => characters.has(id))
-    .map(tokenId => {
-      const entityToken = entityTokens.find(token => String(token.characterId || token.id) === tokenId);
-      return { tokenId, actorId: entityToken?.actorId ?? null };
-    });
-}
-
 function tokenRefs(api, ids) {
-  if (!api.tokens?.get) return legacyTokenRefs(api.getState(), ids);
+  if (!api.tokens?.get) return [];
   return (ids || []).map(String).flatMap(tokenId => {
     const token = api.tokens.get(tokenId);
     return token ? [{ tokenId: String(token.id), actorId: token.actorId ?? null }] : [];
@@ -43,26 +30,16 @@ function runtimeTokenView(api, tokenId) {
       try { resolved = api.tokens.resolveActor?.(token.id) || null; } catch {}
       const actor = resolved?.actor || null;
       const presentation = describeActor(actor, { ruleset: api.ruleset }) || {};
-      const character = api.getState().characters?.find(item => String(item.id) === String(token.id)) || null;
       return {
         token,
         actor,
         synthetic: resolved?.synthetic === true,
-        character,
-        name: presentation.name || actor?.name || character?.name || `Token ${token.id}`,
-        avatar: presentation.avatarDataUrl || actor?.img || character?.avatarDataUrl || null,
+        name: presentation.name || actor?.name || `Token ${token.id}`,
+        avatar: presentation.avatarDataUrl || actor?.img || null,
       };
     }
   }
-  const character = api.getState().characters?.find(item => String(item.id) === String(tokenId)) || null;
-  return character ? {
-    token: null,
-    actor: null,
-    synthetic: false,
-    character,
-    name: character.name || `Token ${tokenId}`,
-    avatar: character.avatarDataUrl || null,
-  } : null;
+  return null;
 }
 
 function tokenMapPoint(api, tokenId) {
@@ -74,9 +51,7 @@ function tokenMapPoint(api, tokenId) {
     const y = Number(token.y);
     return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
   }
-  const character = view?.character;
-  if (!character || character.visible === false || character.location?.type !== 'map') return null;
-  return { x: Number(character.location.x), y: Number(character.location.y) };
+  return null;
 }
 
 function ensureCombatPane(map) {
@@ -272,7 +247,7 @@ export function createCombatController({ selection } = {}) {
       function focusToken(tokenId, { center = true } = {}) {
         const view = runtimeTokenView(api, tokenId);
         if (!view) return false;
-        api.selectCharacter?.(tokenId);
+        api.selection?.replace?.([String(tokenId)], String(tokenId));
         const point = tokenMapPoint(api, tokenId);
         if (center && point) {
           api.map.panTo(worldToLatLng(point, api.mapPackage.height), { animate: true, duration: 0.25 });
@@ -390,10 +365,11 @@ export function createCombatController({ selection } = {}) {
       });
 
       selection?.subscribe?.(() => render());
-      api.on('character:move', renderTurn);
-      api.on('character:delete', event => {
+      api.on('token:move', renderTurn);
+      api.on('token:delete', event => {
         const combat = store.state.combat;
-        const item = combat?.combatants?.find(entry => String(entry.tokenId) === String(event.detail?.id));
+        const tokenId = event.detail?.tokenId || event.detail?.id;
+        const item = combat?.combatants?.find(entry => String(entry.tokenId) === String(tokenId));
         if (!item) return;
         removeCombatant(combat, item.id);
         if (!combat.combatants.length) store.clear();

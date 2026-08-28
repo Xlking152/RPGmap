@@ -66,7 +66,7 @@ export function createWorldStatePersistence({
         return {
           state: prepared.state,
           notice: {
-            message: `旧存档已一次性迁移到 World V2${prepared.migratedCharacters ? `，转换 ${prepared.migratedCharacters} 个 Character` : ''}；原始数据已备份`,
+            message: `旧存档已完成一次性升级${prepared.migratedCharacters ? `，转换 ${prepared.migratedCharacters} 个旧角色` : ''}；原始数据已备份`,
             type: 'success',
           },
         };

@@ -15,9 +15,6 @@ export class TokenDragPlan {
     this.phase = MovementPhase.IDLE;
     this.pointerId = null;
     this.tokenId = null;
-    // Compatibility alias while renderer/selection still publish Character-named
-    // events. New Movement code must prefer tokenId.
-    this.characterId = null;
     this.session = null;
     this.current = null;
     this.route = null;
@@ -25,13 +22,11 @@ export class TokenDragPlan {
     this.nextClickCreatesWaypoint = false;
     return this;
   }
-  begin({ tokenId = null, characterId = null, start, pointerId = null, client = null, snapStep = 5 }) {
-    const id = tokenId ?? characterId;
+  begin({ tokenId = null, start, pointerId = null, client = null, snapStep = 5 }) {
     this.phase = MovementPhase.DRAGGING;
     this.pointerId = pointerId;
-    this.tokenId = id;
-    this.characterId = id;
-    this.session = new MovementSession({ tokenId: id, start, snapStep });
+    this.tokenId = tokenId;
+    this.session = new MovementSession({ tokenId, start, snapStep });
     this.current = copyPoint(start);
     this.route = null;
     this.startClient = client ? { x: Number(client.x), y: Number(client.y) } : null;

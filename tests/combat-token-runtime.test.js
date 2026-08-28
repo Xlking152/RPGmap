@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { combatantView } from '../src/combat/tracker.js';
+
+const controllerSource = readFileSync(new URL('../src/combat/controller.js', import.meta.url), 'utf8');
 
 test('combatant view uses Token Runtime / Synthetic Actor data', () => {
   const combatant = { id: 'c-1', tokenId: 'npc-1', actorId: 'actor-template' };
@@ -30,4 +33,11 @@ test('combatant view never falls back to Character documents', () => {
   assert.equal(view.avatar, null);
   assert.equal(view.synthetic, false);
   assert.equal(view.token, null);
+});
+
+test('combat controller selects and observes canonical Tokens only', () => {
+  assert.match(controllerSource, /api\.selection\?\.replace/);
+  assert.match(controllerSource, /api\.on\('token:move'/);
+  assert.match(controllerSource, /api\.on\('token:delete'/);
+  assert.doesNotMatch(controllerSource, /state\(\)\.characters|selectCharacter|character:(?:move|delete)/);
 });

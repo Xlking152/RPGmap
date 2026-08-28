@@ -198,8 +198,8 @@ export function createMultiplayerController() {
         return clients.map(item => {
           const gm = item.role === 'gm';
           const pending = item.identityStatus === 'pending';
-          const character = !gm && item.defaultActorId ? ` · ${escapeHtml(actorName(item.defaultActorId))}` : '';
-          return `<span class="multiplayer-chip ${gm ? 'gm' : ''}">${gm ? 'GM' : pending ? '待批准' : 'P'} · ${escapeHtml(item.name || 'Player')}${character}</span>`;
+          const actor = !gm && item.defaultActorId ? ` · ${escapeHtml(actorName(item.defaultActorId))}` : '';
+          return `<span class="multiplayer-chip ${gm ? 'gm' : ''}">${gm ? 'GM' : pending ? '待批准' : 'P'} · ${escapeHtml(item.name || 'Player')}${actor}</span>`;
         }).join('');
       }
 

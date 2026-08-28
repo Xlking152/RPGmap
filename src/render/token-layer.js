@@ -24,25 +24,13 @@ function ensurePane(map, name, zIndex, { pointerEvents = null } = {}) {
   return pane;
 }
 
-function retireLegacyPane(map, name) {
-  const pane = map.getPane?.(name);
-  if (!pane) return;
-  pane.replaceChildren?.();
-  pane.style.display = 'none';
-  pane.style.pointerEvents = 'none';
-  pane.dataset.retired = 'true';
-}
-
 function installStyles(documentNode) {
   if (!documentNode?.head || documentNode.getElementById(STYLE_ID)) return;
   const style = documentNode.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
-    .leaflet-character-pane { display:none !important; pointer-events:none !important; }
-    .leaflet-tooltip.character-tooltip { display:none !important; }
-    .leaflet-statusBadge-pane { display:none !important; pointer-events:none !important; }
     .rpg-token-v2 { background:transparent !important; border:0 !important; overflow:visible !important; }
-    .rpg-token-v2 .rpg-character-core { border-radius:50%; overflow:hidden; }
+    .rpg-token-v2 .rpg-token-v2-core { border-radius:50%; overflow:hidden; }
     .rpg-token-v2 .rpg-token-v2-portrait { width:100%; height:100%; display:grid; place-items:center; border-radius:inherit; overflow:hidden; }
     .rpg-token-v2 .rpg-token-v2-portrait img { width:100%; height:100%; object-fit:cover; }
     .rpgmap-token-status-v2-marker { background:transparent !important; border:0 !important; pointer-events:none !important; overflow:visible !important; }
@@ -70,7 +58,7 @@ function tokenIcon(api, model) {
   const elevation = `<div class="token-elevation-label">${escapeHtml(formatFt(model.elevationFt))} ft</div>`;
   return L.divIcon({
     className: 'rpg-token-v2',
-    html: `<div class="rpg-character-core rpg-token-v2-core${model.selected ? ' selected' : ''}" data-token-id="${escapeHtml(model.id)}" style="--character-color:${model.color};--token-size:${size}px"><div class="rpg-token-v2-portrait" style="transform:rotate(${model.rotation}deg)">${portrait}</div></div>${elevation}`,
+    html: `<div class="rpg-token-v2-core${model.selected ? ' selected' : ''}" data-token-id="${escapeHtml(model.id)}" style="--token-color:${model.color};--token-size:${size}px"><div class="rpg-token-v2-portrait" style="transform:rotate(${model.rotation}deg)">${portrait}</div></div>${elevation}`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
@@ -104,8 +92,6 @@ export function createTokenRendererSystem() {
 
       const documentNode = api.map.getContainer().ownerDocument || document;
       installStyles(documentNode);
-      retireLegacyPane(api.map, 'characterPane');
-      retireLegacyPane(api.map, 'statusBadgePane');
       ensurePane(api.map, TOKEN_PANE, 515);
       ensurePane(api.map, STATUS_PANE, 540, { pointerEvents: 'none' });
 

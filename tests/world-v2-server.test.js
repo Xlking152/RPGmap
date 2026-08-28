@@ -69,3 +69,12 @@ test('World V2 rejects an active Scene reference that does not exist', () => {
   value.preferences.worldV2.activeSceneId = 'missing-scene';
   assert.throws(() => assertWorldState(value), /activeSceneId references missing Scene/);
 });
+
+test('World V2 rejects migration-only attack-area anchors', () => {
+  const value = state();
+  value.preferences.worldV2.scenes[0].attackAreas.push({
+    id: 'area-legacy',
+    anchor: { type: 'character', characterId: 'token-1' },
+  });
+  assert.throws(() => assertWorldState(value), { code: 'legacy_character_forbidden' });
+});

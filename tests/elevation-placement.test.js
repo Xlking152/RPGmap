@@ -9,7 +9,7 @@ import {
 } from '../src/elevation/index.js';
 
 test('elevation Navigation context stores canonical tokenId and non-negative elevation only', () => {
-  setActiveMoverContext({ tokenId: 'token-high', elevationFt: 80, characterId: 'retired' });
+  setActiveMoverContext({ tokenId: 'token-high', elevationFt: 80 });
   assert.deepEqual(getActiveMoverContext(), { tokenId: 'token-high', elevationFt: 80 });
   setActiveMoverContext({ tokenId: 'token-low', elevationFt: -20 });
   assert.deepEqual(getActiveMoverContext(), { tokenId: 'token-low', elevationFt: 0 });

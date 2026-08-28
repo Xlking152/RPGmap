@@ -20,6 +20,15 @@ const liveRuntimeFiles = [
   'src/ui/app-shell-v2.js',
   'src/world/model.js',
   'src/world/system.js',
+  'src/world/operations.js',
+  'src/world/references.js',
+  'src/combat/controller.js',
+  'src/health/sheet-extension.js',
+  'src/engine/navigation.js',
+  'src/movement/session.js',
+  'src/movement/state.js',
+  'src/movement/ghost.js',
+  'src/token/model.js',
   'src/movement/controller-v2.js',
   'src/movement/token-runtime.js',
   'src/measurement/controller-v2.js',
@@ -67,7 +76,9 @@ test('SaveV2 migration is isolated to the import/persistence boundary', () => {
 
 test('World V2 server authority rejects Character fields after migration', () => {
   const server = source('deployment/local-server/world-schema.mjs');
+  const statusOperations = source('deployment/local-server/status-operations.mjs');
   assert.match(server, /World V2 state must not contain state\.characters/);
   assert.match(server, /characterId is forbidden in World V2/);
   assert.match(server, /legacy_character_forbidden/);
+  assert.doesNotMatch(statusOperations, /resolveStatusCapabilitiesForCharacter|item\?\.characterId/);
 });

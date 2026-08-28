@@ -18,7 +18,6 @@ import { createHealingSystem } from './healing/index.js';
 import { createCombatSystem } from './combat/index.js';
 import { createMultiplayerSystem } from './multiplayer/index.js';
 import { createMultiplayerHostBootstrapSystem } from './multiplayer/host-bootstrap.js';
-import { createDefaultMapPackage } from './map-package/default-map.js';
 import { createStatusSystem, createStatusUiSystem } from './status/index.js';
 import { resolveRulesetReference, rulesetRegistry, setActiveRuleset } from './ruleset/index.js';
 import { createWorldSystem } from './world/index.js';
@@ -47,6 +46,7 @@ async function yieldForFirstPaint() {
 
 export async function startRpgMap() {
   const appContainer = document.getElementById('app');
+  const { createDefaultMapPackage } = await import('./map-package/default-map.js');
   const mapPackage = createDefaultMapPackage();
   const bootstrapStorage = createBrowserStorage();
   const defaultRuleset = rulesetRegistry.require('infinite-horror');

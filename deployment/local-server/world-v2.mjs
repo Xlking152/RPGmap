@@ -61,17 +61,6 @@ function syntheticActor(baseActor, actorDelta) {
   return actor;
 }
 
-function canonicalAttackArea(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return structuredClone(raw);
-  const area = structuredClone(raw);
-  const anchor = area.anchor;
-  if (anchor && typeof anchor === 'object' && !Array.isArray(anchor)
-    && anchor.type === 'character' && anchor.characterId != null) {
-    area.anchor = { type: 'token', tokenId: String(anchor.characterId) };
-  }
-  return area;
-}
-
 export function synchronizeWorldV2Mirror(state) {
   const raw = state?.preferences?.[WORLD_V2_STATE_KEY];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -93,7 +82,7 @@ export function synchronizeWorldV2Mirror(state) {
       tokens: structuredClone(Array.isArray(scene.tokens) ? scene.tokens : []),
     };
     state.markers = structuredClone(Array.isArray(scene.markers) ? scene.markers : []);
-    state.attackAreas = (Array.isArray(scene.attackAreas) ? scene.attackAreas : []).map(canonicalAttackArea);
+    state.attackAreas = structuredClone(Array.isArray(scene.attackAreas) ? scene.attackAreas : []);
     state.sceneEvents = structuredClone(Array.isArray(scene.sceneEvents) ? scene.sceneEvents : []);
     state.preferences.gridVisible = scene.settings?.gridVisible !== false;
   }
@@ -168,6 +157,9 @@ export function assertWorldV2(value) {
       if (anchor.type === 'token') {
         const tokenId = cleanId(anchor.tokenId, `worldV2.scenes[${sceneIndex}].attackAreas[${areaIndex}].anchor.tokenId`);
         if (!tokenIds.has(tokenId)) fail(`Attack area references missing Token: ${tokenId}`, 'invalid_reference');
+      }
+      if (anchor.type === 'character' || Object.hasOwn(anchor, 'characterId')) {
+        fail('World V2 attack-area anchors must use tokenId', 'legacy_character_forbidden');
       }
     }
     array(scene.sceneEvents, `worldV2.scenes[${sceneIndex}].sceneEvents`);

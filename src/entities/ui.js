@@ -4,7 +4,7 @@ import {
   cycleActorForm,
 } from './resolver.js';
 import { describeActor, describeActorSheet, performActorOperation } from '../actor/index.js';
-import { importCharacterXlsx } from './xlsx-importer.js';
+import { importActorXlsx } from './xlsx-importer.js';
 import { imageToAvatarDataUrl } from './avatar.js';
 import { EntityStore } from './store.js';
 import { createEntityTokenController } from './token-controller.js';
@@ -276,7 +276,7 @@ export function createEntityUiTool(options = {}) {
               ${canManageStructure && rulesetCapabilities.canImportXlsx ? '<button type="button" class="small-button primary" data-entity-action="import">导入角色卡</button>' : ''}${canManageStructure ? '<button type="button" class="small-button" data-entity-action="new">新建空白角色</button>' : ''}
               ${canManageStructure && legacyMarkerCount ? `<button type="button" class="small-button" data-entity-action="migrate-markers">迁移 ${legacyMarkerCount} 个旧标记</button>` : ''}
             </div>
-            <div class="entity-help">Actor 保存角色数据；Token 的位置、大小、显示、旋转、高度和删除均由当前 Scene 的 canonical Token Runtime 管理。${legacyMarkerCount ? `检测到 ${legacyMarkerCount} 个旧标记；它们会保留，只有 GM 确认迁移后才会删除。` : '双击 Token 或按列表中的“角色卡”打开属性。选中有多个形态的 Token 后按 <b>V</b> 切换形态。'}</div>
+            <div class="entity-help">角色资料与地图棋子分别管理；同一角色可以放置多个棋子，独立棋子也可以保留自己的状态。${legacyMarkerCount ? `检测到 ${legacyMarkerCount} 个旧标记；它们会保留，只有 GM 确认迁移后才会删除。` : '双击地图棋子或按列表中的“角色卡”打开属性。选中有多个形态的棋子后按 <b>V</b> 切换形态。'}</div>
             <div data-entity-list>${actors.length ? actors.map(actor => {
               const presentation = describeActor(actor, { ruleset: api.ruleset }) || {};
               const sheetCapabilities = actorUiCapabilities(api.ruleset, describeActorSheet(actor, { ruleset: api.ruleset }));
@@ -358,7 +358,7 @@ export function createEntityUiTool(options = {}) {
         importBusy = true;
         setStatus('正在读取角色卡…');
         try {
-          const imported = await importCharacterXlsx(file, { ruleset: api.ruleset });
+          const imported = await importActorXlsx(file, { ruleset: api.ruleset });
           if (imported.avatarImage) {
             try { imported.avatarDataUrl = await imageToAvatarDataUrl(imported.avatarImage); }
             catch (error) { console.warn('Excel 头像导入失败，保留空头像', error); }
@@ -382,7 +382,7 @@ export function createEntityUiTool(options = {}) {
             entityState().actors.push(actor);
             store.persist();
             openSheet(actor.id);
-            setStatus(`已创建 Actor“${actor.name}” · 可点击“放置 Token”放到地图`);
+            setStatus(`已创建角色“${actor.name}” · 可点击“放置棋子”放到地图`);
           }
           renderPanel();
         } catch (error) {
@@ -619,7 +619,7 @@ export function createEntityUiTool(options = {}) {
       api.on('multiplayer:capabilities', () => { renderPanel(); renderSheet(); });
 
       if (migration.droppedMarkers || migration.migratedCharacters || migration.migratedTokenLocations || migration.blockedTokenLocations) {
-        setStatus(`Entity System 已启用：迁移 ${migration.migratedCharacters} 个旧角色${migration.migratedTokenLocations ? `，吸附 ${migration.migratedTokenLocations} 个 Token 到 1m 格子` : ''}${migration.blockedTokenLocations ? `，${migration.blockedTokenLocations} 个 Token 位于阻挡格，需 GM 重新放置` : ''}${migration.droppedMarkers ? `，移除 ${migration.droppedMarkers} 个旧标记` : ''}`);
+        setStatus(`角色系统已就绪：迁移 ${migration.migratedCharacters} 个旧角色${migration.migratedTokenLocations ? `，吸附 ${migration.migratedTokenLocations} 个棋子到 1m 格子` : ''}${migration.blockedTokenLocations ? `，${migration.blockedTokenLocations} 个棋子位于阻挡格，需 GM 重新放置` : ''}${migration.droppedMarkers ? `，移除 ${migration.droppedMarkers} 个旧标记` : ''}`);
       }
       renderPanel();
     },

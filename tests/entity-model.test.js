@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createActorFromImport, createTokenForActor, addFormToActor, migrateLegacyCharacters, normalizeEntityState } from '../src/entities/model.js';
+import { createActorFromImport, createTokenForActor, addFormToActor, normalizeEntityState } from '../src/entities/model.js';
+import { migrateLegacyCharacters } from '../src/legacy/save-v2.js';
 import { addCustomResource, addEffect, cycleActorForm, resolveActor, setAttributeAdjustment, setResourceCurrent } from '../src/entities/resolver.js';
 import { performActorOperation } from '../src/actor/index.js';
 

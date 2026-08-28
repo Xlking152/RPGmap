@@ -5,7 +5,7 @@ import {
   performActorOperation,
 } from '../src/actor/index.js';
 import { addEffect } from '../src/entities/resolver.js';
-import { parseCharacterSheets } from '../src/entities/xlsx-importer.js';
+import { parseActorSheets } from '../src/entities/xlsx-importer.js';
 import { describeHealth } from '../src/health/model.js';
 import { prepareRuleset } from '../src/ruleset/contract.js';
 import { setActiveRuleset } from '../src/ruleset/index.js';
@@ -84,8 +84,8 @@ test('explicit Ruleset contexts stay isolated when two runtimes interleave', () 
   assert.deepEqual(secondStatuses.derivedStatuses.map(status => status.label), ['context-second']);
   assert.equal(describeHealth({ current: 3 }, { ruleset: first }).summary, 'context-first:3');
   assert.equal(describeHealth({ current: 7 }, { ruleset: second }).summary, 'context-second:7');
-  assert.deepEqual(parseCharacterSheets({}, { ruleset: first }), { parsedBy: 'context-first' });
-  assert.deepEqual(parseCharacterSheets({}, { ruleset: second }), { parsedBy: 'context-second' });
+  assert.deepEqual(parseActorSheets({}, { ruleset: first }), { parsedBy: 'context-first' });
+  assert.deepEqual(parseActorSheets({}, { ruleset: second }), { parsedBy: 'context-second' });
 });
 
 test('Ruleset Contract keeps private data behind operations and reports unknown boundaries', () => {
@@ -111,5 +111,5 @@ test('Ruleset Contract keeps private data behind operations and reports unknown 
     title: 'No Importer',
     version: '1.0.0',
   });
-  assert.throws(() => parseCharacterSheets({}, { ruleset: noImporter }), error => error.code === 'ruleset_capability_missing');
+  assert.throws(() => parseActorSheets({}, { ruleset: noImporter }), error => error.code === 'ruleset_capability_missing');
 });

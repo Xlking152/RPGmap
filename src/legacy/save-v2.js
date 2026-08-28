@@ -2,7 +2,7 @@ import {
   migrateSave as migrateLegacySchema,
   validateAndNormalizeSave as validateLegacySave,
 } from '../engine/state.js';
-import { migrateLegacyCharacters } from '../entities/model.js';
+import { createActorFromImport, createTokenForActor, normalizeEntityState } from '../entities/model.js';
 import { canonicalAttackAreas } from '../world/attack-anchors.js';
 import { normalizeWorldV2, projectWorldV2ToRuntimeState, WORLD_STATE_KEY } from '../world/model.js';
 
@@ -85,6 +85,27 @@ function legacyTokenToWorldToken(token, characterById) {
     showName: token?.showName !== false,
     effects: clone(Array.isArray(token?.effects) ? token.effects : []),
   };
+}
+
+export function migrateLegacyCharacters(entityState, characters = [], { ruleset } = {}) {
+  const next = normalizeEntityState(entityState, ruleset ? { ruleset } : {});
+  const linkedIds = new Set(next.tokens.map(token => String(token.id)));
+  let migrated = 0;
+  for (const character of characters || []) {
+    if (!character?.id || linkedIds.has(String(character.id))) continue;
+    const actor = createActorFromImport({
+      formName: '默认形态',
+      identity: { name: character.name || '未命名角色' },
+      avatarDataUrl: character.avatarDataUrl || null,
+      tokenAppearance: { color: character.color || '#3d9b63', scale: 1 },
+      source: { type: 'legacy-character', legacyId: character.id },
+    }, { formName: '默认形态', ...(ruleset ? { ruleset } : {}) });
+    next.actors.push(actor);
+    next.tokens.push(createTokenForActor(actor.id, character.id));
+    linkedIds.add(String(character.id));
+    migrated += 1;
+  }
+  return { state: next, migrated };
 }
 
 export function isLegacySaveV2Payload(raw) {
@@ -173,7 +194,7 @@ export function migrateLegacySaveV2(raw, {
     toVersion: schemaMigration.toVersion,
     warnings: Object.freeze([
       ...(schemaMigration.warnings || []),
-      `旧 Character 已一次性转换为 ${tokens.length} 个 Scene Token`,
+      `旧角色已一次性转换为 ${tokens.length} 个场景棋子`,
     ]),
   });
 }

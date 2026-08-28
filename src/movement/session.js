@@ -3,11 +3,8 @@ function copyPoint(point) {
 }
 
 export class MovementSession {
-  constructor({ tokenId = null, characterId = null, start, arrival = null, movementType = 'walk', snapStep = 5 }) {
-    this.tokenId = tokenId ?? characterId;
-    // Compatibility alias for older callers/tests while the rest of the map
-    // shell is migrated. Movement itself treats tokenId as canonical.
-    this.characterId = this.tokenId;
+  constructor({ tokenId = null, start, arrival = null, movementType = 'walk', snapStep = 5 }) {
+    this.tokenId = tokenId;
     this.start = copyPoint(start);
     this.waypoints = [];
     this.current = copyPoint(start);

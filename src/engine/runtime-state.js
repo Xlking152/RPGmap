@@ -158,7 +158,7 @@ export function prepareRuntimeState(raw, { mapPackage, ruleset } = {}) {
     fromVersion: String(parsed.mapVersion ?? state.mapVersion),
     toVersion: state.mapVersion,
     warnings: Object.freeze(Object.prototype.hasOwnProperty.call(parsed, 'characters')
-      ? ['已移除旧 Character 运行时字段']
+      ? ['已移除旧角色运行时字段']
       : []),
   });
 }

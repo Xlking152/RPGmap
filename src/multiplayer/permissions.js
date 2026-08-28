@@ -150,7 +150,7 @@ export function validateLocalPlayerChange({ before, next, permissions = {} } = {
   if (!before || !next) return { ok: true };
   if (permissions.actorOwnerIds?.includes?.('*')) return { ok: true };
   if (hasLegacyIdentity(before) || hasLegacyIdentity(next)) {
-    return { ok: false, code: 'legacy_character_forbidden', message: 'Runtime V2 不接受 Character identity' };
+    return { ok: false, code: 'legacy_character_forbidden', message: '当前存档不接受旧角色标识字段' };
   }
   if (!worldV2(before) || !worldV2(next)) {
     return { ok: false, code: 'world_v2_required', message: 'Player preflight requires World V2' };

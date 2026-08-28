@@ -10,6 +10,8 @@ const entityUiSource = readFileSync(new URL('../src/entities/ui.js', import.meta
 const tokenControllerSource = readFileSync(new URL('../src/entities/token-controller.js', import.meta.url), 'utf8');
 const sceneRenderer = readFileSync(new URL('../src/render/scene-renderer.js', import.meta.url), 'utf8');
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const indexSource = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+const viteSource = readFileSync(new URL('../vite.config.js', import.meta.url), 'utf8');
 
 test('application entry boots the Character-free World/Scene Token runtime', () => {
   assert.match(mainSource, /createRpgMapRuntime/);
@@ -27,6 +29,18 @@ test('application chrome keeps the restrained neutral, river and brick palette',
   assert.match(styles, /\.section \{[\s\S]*?border-bottom: 1px solid var\(--line\);/);
   assert.doesNotMatch(styles, /linear-gradient/i);
   assert.equal(packageJson.dependencies.lucide, '1.30.0');
+  assert.equal(packageJson.version, '1.7.0');
+  assert.match(indexSource, /application-version" content="1\.7\.0"/);
+  assert.match(indexSource, /RPGmap 1\.7\.0/);
+});
+
+test('production entry splits the map and large vendors without suppressing chunk warnings', () => {
+  assert.match(mainSource, /await import\('\.\/map-package\/default-map\.js'\)/);
+  assert.match(viteSource, /manualChunks/);
+  assert.match(viteSource, /vendor-leaflet/);
+  assert.match(viteSource, /vendor-icons/);
+  assert.match(viteSource, /vendor-geometry/);
+  assert.doesNotMatch(viteSource, /chunkSizeWarningLimit/);
 });
 
 test('modern shell owns Actor/current panels and Token-first tools without legacy proxies', () => {

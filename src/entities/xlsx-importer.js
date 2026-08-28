@@ -15,7 +15,7 @@ export function guessFormName(fileName = '', { ruleset = getCompatibilityRuleset
   return typeof guess === 'function' ? guess(fileName) : String(fileName || '').trim() || '默认形态';
 }
 
-export function parseCharacterSheets(input = {}, { ruleset = getCompatibilityRuleset() } = {}) {
+export function parseActorSheets(input = {}, { ruleset = getCompatibilityRuleset() } = {}) {
   const parse = xlsxImporter(ruleset).parse;
   if (typeof parse !== 'function') {
     const error = new Error('Ruleset XLSX importer does not implement parse()');
@@ -25,7 +25,7 @@ export function parseCharacterSheets(input = {}, { ruleset = getCompatibilityRul
   return parse(input);
 }
 
-export async function importCharacterXlsx(file, { ruleset = getCompatibilityRuleset() } = {}) {
+export async function importActorXlsx(file, { ruleset = getCompatibilityRuleset() } = {}) {
   const importFile = xlsxImporter(ruleset).importFile;
   if (typeof importFile !== 'function') {
     const error = new Error('Ruleset XLSX importer does not implement importFile()');

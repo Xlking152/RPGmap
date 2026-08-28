@@ -29,7 +29,7 @@ export function pruneProjectedWorldReferences(state) {
 
   const entity = preferences.entitySystem || {};
   const actorIds = new Set(array(entity.actors).map(actor => id(actor?.id)).filter(Boolean));
-  const tokenIds = new Set(array(entity.tokens).map(token => id(token?.id ?? token?.characterId)).filter(Boolean));
+  const tokenIds = new Set(array(entity.tokens).map(token => id(token?.id)).filter(Boolean));
   const normalized = normalizeCombatState(combatRaw);
   const combat = normalized.combat;
   if (!combat?.combatants?.length) {

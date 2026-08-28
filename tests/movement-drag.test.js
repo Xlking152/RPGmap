@@ -5,7 +5,7 @@ import { MovementPhase, TokenDragPlan } from '../src/movement/state.js';
 
 test('ctrl drag release enters planning without creating the first waypoint', () => {
   const drag = new TokenDragPlan();
-  drag.begin({ characterId: 'hero', start: { x: 0, y: 0 }, pointerId: 1, client: { x: 10, y: 10 } });
+  drag.begin({ tokenId: 'hero', start: { x: 0, y: 0 }, pointerId: 1, client: { x: 10, y: 10 } });
   drag.update({ x: 20, y: 0 }, { valid: true, destination: { x: 20, y: 0 } }, { x: 20, y: 0 });
 
   const addedOnRelease = drag.addWaypoint({ x: 20, y: 0 });

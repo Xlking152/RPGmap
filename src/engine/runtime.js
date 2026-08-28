@@ -41,7 +41,7 @@ function shellMarkup() {
           <span class="brand-mark" aria-hidden="true">R</span>
           <span class="brand-copy">
             <h1 data-role="app-title"></h1>
-            <p>World V2 · Scene Token Runtime</p>
+            <p>场景地图 · 角色与战斗</p>
           </span>
         </div>
         <nav class="toolbar" aria-label="地图工具"></nav>
@@ -443,6 +443,6 @@ export function createRpgMapRuntime({
   fitInitialView(false);
   renderScene();
   if (loaded.notice) showToast(loaded.notice.message, loaded.notice.type);
-  emit('runtime:ready', { canonical: 'World.scenes[].tokens[]', characterDocuments: false });
+  emit('runtime:ready', { worldAuthority: 'World.scenes[].tokens[]' });
   return api;
 }

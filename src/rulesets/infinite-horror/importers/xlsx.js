@@ -28,7 +28,7 @@ export function guessInfiniteHorrorFormName(fileName = '') {
   return stem || '默认形态';
 }
 
-export function parseInfiniteHorrorCharacterSheets({ overview, detailed, fileName = '', avatarImage = null } = {}) {
+export function parseInfiniteHorrorActorSheets({ overview, detailed, fileName = '', avatarImage = null } = {}) {
   if (!overview || !detailed) throw new Error('角色卡必须包含“角色概览”和“具体数值表”');
 
   const identity = {
@@ -144,12 +144,12 @@ export function parseInfiniteHorrorCharacterSheets({ overview, detailed, fileNam
   };
 }
 
-export async function importInfiniteHorrorCharacterXlsx(file) {
+export async function importInfiniteHorrorActorXlsx(file) {
   const arrayBuffer = file instanceof ArrayBuffer ? file : await file.arrayBuffer();
   const workbook = await readXlsxCachedWorkbook(arrayBuffer, INFINITE_HORROR_XLSX_REQUIRED_SHEETS);
   const overview = workbook.sheets.get('角色概览');
   const detailed = workbook.sheets.get('具体数值表');
   if (!overview || !detailed) throw new Error('无法识别角色卡：缺少“角色概览”或“具体数值表”');
   const avatarImage = detailed.images?.[0] || overview.images?.[0] || null;
-  return parseInfiniteHorrorCharacterSheets({ overview, detailed, fileName: file?.name || '', avatarImage });
+  return parseInfiniteHorrorActorSheets({ overview, detailed, fileName: file?.name || '', avatarImage });
 }

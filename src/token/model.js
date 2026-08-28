@@ -89,8 +89,7 @@ function detachTokenAreaAnchors(scene, token) {
   scene.attackAreas = array(scene.attackAreas).map(area => {
     const anchor = object(area?.anchor);
     const canonical = anchor.type === 'token' && String(anchor.tokenId ?? '') === tokenId;
-    const legacy = anchor.type === 'character' && String(anchor.characterId ?? '') === tokenId;
-    if (!canonical && !legacy) return area;
+    if (!canonical) return area;
     const next = clone(area);
     next.anchor = { type: 'free', markerId: null };
     if (token.placement === 'map' && Number.isFinite(Number(token.x)) && Number.isFinite(Number(token.y))) {

@@ -174,7 +174,7 @@ export function createAppShellUiV2() {
         const title = documentNode.createElement('div');
         const strong = documentNode.createElement('strong'); strong.textContent = view.name;
         const small = documentNode.createElement('small');
-        small.textContent = view.synthetic ? 'Synthetic Actor · 独立实例' : 'Linked Actor';
+        small.textContent = view.synthetic ? '独立角色实例' : '共享角色资料';
         title.append(strong, documentNode.createElement('br'), small);
         head.append(avatar, title);
         card.append(head);
@@ -188,8 +188,8 @@ export function createAppShellUiV2() {
         const meta = documentNode.createElement('div');
         meta.className = 'ui-token-meta';
         for (const text of [
-          `Token ${token.id}`,
-          `Actor ${token.actorId}`,
+          `棋子 ID ${token.id}`,
+          `角色 ID ${token.actorId}`,
           locationLabel(token),
           `高度 ${Number(token.elevationFt || 0)} ft`,
         ]) {

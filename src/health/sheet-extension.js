@@ -20,7 +20,7 @@ function selectedActor(api) {
   const tokenId = api.selection?.getPrimaryTokenId?.();
   if (!tokenId) return null;
   const state = normalizeEntityState(api.getState().preferences?.entitySystem, { ruleset: api.ruleset });
-  const token = state.tokens.find(item => String(item.characterId || item.id) === String(tokenId));
+  const token = state.tokens.find(item => String(item.id) === String(tokenId));
   return token ? state.actors.find(actor => String(actor.id) === String(token.actorId)) || null : null;
 }
 

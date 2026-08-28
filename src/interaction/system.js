@@ -65,8 +65,8 @@ function tokenDisplay(api, token) {
 }
 
 function portrait(documentNode, view) {
-  const node = createElement(documentNode, 'span', 'character-portrait small');
-  node.style.setProperty('--character-color', view.color || '#3d9b63');
+  const node = createElement(documentNode, 'span', 'token-portrait small');
+  node.style.setProperty('--token-color', view.color || '#3d9b63');
   if (view.avatarDataUrl) {
     const image = documentNode.createElement('img');
     image.src = view.avatarDataUrl;
@@ -302,7 +302,7 @@ export function createFeatureInteractionSystem() {
             const button = createElement(documentNode, 'button', 'occupant-button');
             button.type = 'button';
             button.dataset.tokenId = token.id;
-            button.title = view.synthetic ? 'Synthetic Actor Token' : 'Linked Actor Token';
+            button.title = view.synthetic ? '独立角色实例' : '共享角色棋子';
             const copy = createElement(documentNode, 'span', 'feature-token-copy');
             copy.append(createElement(documentNode, 'span', '', view.name));
             if (view.synthetic) copy.append(createElement(documentNode, 'small', '', '独立实例'));

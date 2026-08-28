@@ -107,8 +107,7 @@ function detachTokenAnchors(scene, token) {
   const tokenId = String(token?.id ?? '');
   scene.attackAreas = (Array.isArray(scene.attackAreas) ? scene.attackAreas : []).map(area => {
     const anchor = plainObject(area?.anchor) ? area.anchor : {};
-    const matches = (anchor.type === 'token' && String(anchor.tokenId ?? '') === tokenId)
-      || (anchor.type === 'character' && String(anchor.characterId ?? '') === tokenId);
+    const matches = anchor.type === 'token' && String(anchor.tokenId ?? '') === tokenId;
     if (!matches) return area;
     const next = clone(area);
     next.anchor = { type: 'free', markerId: null };
