@@ -262,7 +262,7 @@ export function synchronizeWorldV2FromRuntimeState(state, { mapPackage, ruleset,
   return normalizeWorldV2({
     ...world,
     actors,
-    statusDefinitions: clone(array(entity.statusDefinitions).length ? entity.statusDefinitions : world.statusDefinitions),
+    statusDefinitions: clone(Array.isArray(entity.statusDefinitions) ? entity.statusDefinitions : world.statusDefinitions),
     scenes: nextScenes,
     updatedAt: new Date().toISOString(),
   }, { mapPackage, ruleset });

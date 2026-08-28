@@ -64,6 +64,14 @@ function parseMessage(event) {
   try { return JSON.parse(String(event.data)); } catch { return null; }
 }
 
+export function isWorldOperationChannelBusy(state = {}) {
+  return Boolean(
+    state.applyingRemote || state.remoteApplyPending || state.inFlight || state.pendingPush
+    || state.activeAtomicWorldOperation || state.atomicWorldOperationQueueLength
+    || state.activeStatusOperation || state.statusOperationQueueLength,
+  );
+}
+
 export function createMultiplayerController() {
   return {
     register(api) {
@@ -389,6 +397,20 @@ export function createMultiplayerController() {
       function performWorldOperation(state, { reason = 'atomic-world' } = {}) {
         if (!connected) return Promise.reject(new Error('当前未连接局域网服务器'));
         if (!permissions.worldWrite) return Promise.reject(new Error('当前身份没有 World 写入权限'));
+        if (isWorldOperationChannelBusy({
+          applyingRemote,
+          remoteApplyPending,
+          inFlight,
+          pendingPush,
+          activeAtomicWorldOperation,
+          atomicWorldOperationQueueLength: atomicWorldOperationQueue.length,
+          activeStatusOperation,
+          statusOperationQueueLength: statusOperationQueue.length,
+        })) {
+          const error = new Error('另一项服务器写入尚未完成，请在同步完成后重试');
+          error.code = 'world_operation_busy';
+          return Promise.reject(error);
+        }
         const id = operationId('world');
         return new Promise((resolve, reject) => {
           atomicWorldOperationQueue.push({

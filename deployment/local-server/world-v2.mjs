@@ -134,7 +134,7 @@ export function synchronizeWorldV2Mirror(state) {
   }
   world.schemaVersion = WORLD_V2_SCHEMA_VERSION;
   world.actors = actors;
-  world.statusDefinitions = Array.isArray(entity.statusDefinitions) && entity.statusDefinitions.length
+  world.statusDefinitions = Array.isArray(entity.statusDefinitions)
     ? structuredClone(entity.statusDefinitions)
     : (Array.isArray(world.statusDefinitions) ? structuredClone(world.statusDefinitions) : []);
   world.scenes = scenes;

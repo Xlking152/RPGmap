@@ -70,8 +70,9 @@ function healthSignature(actor, state, view) {
   ].join('|');
 }
 
-function healthPanelHtml(api, actor) {
+export function renderActorHealthPanel(api, actor) {
   const health = resolveActorHealth(actor);
+  if (!health) return '';
   const view = describeHealth(health);
   const editable = canEditHealth(api, actor.id);
   const disabled = editable ? '' : ' disabled title="需要 OWNER 权限且必须轮到该角色行动"';
@@ -112,6 +113,12 @@ export function createHealthSheetExtension() {
         const body = sheet.querySelector('.entity-sheet-body');
         if (!actor || !body) return;
         const health = resolveActorHealth(actor);
+        if (!health) {
+          body.querySelector('[data-health-panel]')?.remove();
+          const hpRow = body.querySelector('[data-sheet-role="health-base"]');
+          if (hpRow) hpRow.style.display = '';
+          return;
+        }
         const view = describeHealth(health);
         const signature = healthSignature(actor, health, view);
         const existing = body.querySelector('[data-health-panel]');
@@ -121,7 +128,7 @@ export function createHealthSheetExtension() {
         enhancing = true;
         try {
           existing?.remove();
-          body.insertAdjacentHTML('afterbegin', healthPanelHtml(api, actor));
+          body.insertAdjacentHTML('afterbegin', renderActorHealthPanel(api, actor));
           const panel = body.querySelector('[data-health-panel]');
           if (panel) panel.dataset.healthSignature = signature;
         } finally {
@@ -135,6 +142,10 @@ export function createHealthSheetExtension() {
         const firstCard = inspector?.querySelector('.ui-inspector-card');
         if (!inspector || !actor || !firstCard) return;
         const health = resolveActorHealth(actor);
+        if (!health) {
+          inspector.querySelector('[data-health-mini]')?.remove();
+          return;
+        }
         const view = describeHealth(health);
         const hpMini = [...firstCard.querySelectorAll('.ui-resource-mini')].find(node => node.querySelector('span')?.textContent?.trim() === '生命');
         if (hpMini) hpMini.style.display = view.hideBaseResource ? 'none' : '';

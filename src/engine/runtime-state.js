@@ -7,6 +7,7 @@ import {
   projectWorldV2ToRuntimeState,
 } from '../world/model.js';
 import { isLegacySaveV2Payload, migrateLegacySaveV2 } from '../legacy/save-v2.js';
+import { assertPersistedWorldV2, assertWorldRuleset } from '../world/validation.js';
 
 export const RUNTIME_SAVE_VERSION = 2;
 
@@ -126,6 +127,8 @@ export function validateRuntimeState(raw, { mapPackage, ruleset } = {}) {
 
   const rawWorld = next.preferences?.[WORLD_STATE_KEY];
   if (rawWorld) {
+    assertPersistedWorldV2(rawWorld);
+    assertWorldRuleset(rawWorld, ruleset);
     const world = normalizeWorldV2(rawWorld, { mapPackage, ruleset });
     next = projectWorldV2ToRuntimeState(next, world, { mapPackage, ruleset });
     next.markers = cleanMarkers(next.markers ?? []);

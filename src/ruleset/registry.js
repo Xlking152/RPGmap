@@ -26,6 +26,28 @@ export class RulesetRegistry {
     return ruleset;
   }
 
+  resolveReference(reference = {}) {
+    const id = typeof reference?.id === 'string' ? reference.id.trim() : '';
+    const version = typeof reference?.version === 'string' ? reference.version.trim() : '';
+    if (!id || !version) {
+      const error = new Error('World ruleset id and version are required');
+      error.code = 'world_ruleset_missing';
+      throw error;
+    }
+    const ruleset = this.get(id);
+    if (!ruleset) {
+      const error = new Error(`Unknown ruleset: ${id}`);
+      error.code = 'unknown_ruleset';
+      throw error;
+    }
+    if (String(ruleset.version) !== version) {
+      const error = new Error(`Ruleset ${id} v${version} is incompatible with installed v${ruleset.version}`);
+      error.code = 'ruleset_version_incompatible';
+      throw error;
+    }
+    return ruleset;
+  }
+
   list() {
     return [...this.rulesets.values()];
   }

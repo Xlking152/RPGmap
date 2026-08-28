@@ -22,6 +22,10 @@ export function setActiveRuleset(id) {
   return ruleset;
 }
 
+export function resolveRulesetReference(reference) {
+  return rulesetRegistry.resolveReference(reference);
+}
+
 export function activeRulesetIdValue() {
   return activeRulesetId;
 }
