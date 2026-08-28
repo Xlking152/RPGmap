@@ -86,11 +86,17 @@ test('TokenSystem move and feature placement update canonical World placement', 
 
 test('TokenSystem preserves actorLink/actorDelta and deletes canonical state only', async () => {
   const fixture = apiFixture();
-  await fixture.api.tokens.create({ actorId: 'actor-1', id: 'npc-one', actorLink: false, actorDelta: { name: '独立 NPC' } });
+  await fixture.api.tokens.create({
+    actorId: 'actor-1',
+    id: 'npc-one',
+    actorLink: false,
+    actorDelta: { system: { runtime: { health: { mode: 'simple', current: 5 } } } },
+  });
   await fixture.api.tokens.update('npc-one', { hidden: true, elevationFt: 15 });
   const token = fixture.api.tokens.get('npc-one');
   assert.equal(token.actorLink, false);
-  assert.equal(token.actorDelta.name, '独立 NPC');
+  assert.equal(token.actorDelta.system.runtime.health.current, 5);
+  assert.equal(token.actorDelta.system.runtime.resources?.hp, undefined);
   assert.equal(Object.hasOwn(token.actorDelta, 'runtime'), false);
   assert.equal(token.hidden, true);
   assert.equal(token.elevationFt, 15);
