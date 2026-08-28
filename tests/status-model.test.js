@@ -6,7 +6,7 @@ import {
   reduceStatusOperation,
   resolveStatuses,
 } from '../src/status/model.js';
-import { resolveResource } from '../src/entities/resolver.js';
+import { resolveActor } from '../src/entities/resolver.js';
 import { getActiveRuleset } from '../src/ruleset/index.js';
 
 const BUILTIN_STATUS_DEFINITIONS = getActiveRuleset().statuses.definitions;
@@ -15,15 +15,22 @@ function actor(id = 'actor-1') {
   return {
     id,
     name: '测试角色',
-    currentFormId: 'form-1',
-    forms: [{
-      id: 'form-1',
-      source: { type: 'xlsx' },
-      resourceBases: { hp: { id: 'hp', name: '生命', kind: 'hp', baseMax: 5 } },
-    }],
-    runtime: {
-      resources: { hp: { current: 5, maxOverride: null, policy: 'preserve' } },
-      health: { mode: 'wound-track', wounds: { bashing: 0, lethal: 0, aggravated: 0 } },
+    system: {
+      schemaVersion: 3,
+      currentFormId: 'form-1',
+      forms: [{
+        id: 'form-1',
+        source: { type: 'xlsx' },
+        healthBase: { baseMax: 5 },
+        resourceBases: {},
+      }],
+      runtime: {
+        resources: {},
+        customResources: [],
+        attributeAdjustments: {},
+        badStatuses: {},
+        health: { mode: 'wound-track', maxOverride: null, wounds: { bashing: 0, lethal: 0, aggravated: 0 } },
+      },
     },
     effects: [],
   };
@@ -112,8 +119,7 @@ test('resolveStatuses combines Actor and Token statuses with disabling capabilit
 
 test('unconscious, dead, and B/L/A badges are derived read-only statuses', () => {
   const unconsciousState = emptyState();
-  unconsciousState.actors[0].runtime.health.wounds = { bashing: 2, lethal: 3, aggravated: 0 };
-  unconsciousState.actors[0].runtime.resources.hp.current = 0;
+  unconsciousState.actors[0].system.runtime.health.wounds = { bashing: 2, lethal: 3, aggravated: 0 };
   const unconscious = resolveStatuses(unconsciousState, { actorId: 'actor-1' });
   assert.deepEqual(unconscious.derivedStatuses.map(status => status.definitionId), [
     'derived-unconscious', 'derived-wound-b', 'derived-wound-l',
@@ -124,8 +130,7 @@ test('unconscious, dead, and B/L/A badges are derived read-only statuses', () =>
   assert.equal(unconscious.capabilities.canActInCombat, false);
 
   const deadState = emptyState();
-  deadState.actors[0].runtime.health.wounds = { bashing: 0, lethal: 0, aggravated: 5 };
-  deadState.actors[0].runtime.resources.hp.current = 0;
+  deadState.actors[0].system.runtime.health.wounds = { bashing: 0, lethal: 0, aggravated: 5 };
   const dead = resolveStatuses(deadState, { actorId: 'actor-1' });
   assert.deepEqual(dead.derivedStatuses.map(status => status.definitionId), ['derived-dead', 'derived-wound-a']);
   assert.equal(dead.derivedStatuses.some(status => status.definitionId === 'derived-unconscious'), false);
@@ -133,17 +138,17 @@ test('unconscious, dead, and B/L/A badges are derived read-only statuses', () =>
 
 test('bad-status points derive the highest reached light, severe, or destruction badge', () => {
   const state = emptyState();
-  state.actors[0].forms[0].badStatuses = [{
+  state.actors[0].system.forms[0].badStatuses = [{
     id: 'bad-status-fear', name: '恐惧点数', light: 2, severe: 4, destruction: 7,
   }];
-  state.actors[0].runtime.badStatuses = { 'bad-status-fear': 5 };
+  state.actors[0].system.runtime.badStatuses = { 'bad-status-fear': 5 };
   const severe = resolveStatuses(state, { actorId: 'actor-1' });
   const badge = severe.derivedStatuses.find(status => status.definitionId.includes('bad-status-fear'));
   assert.equal(badge.label, '恐惧点数 · 重度');
   assert.equal(badge.stacks, 5);
   assert.equal(badge.readOnly, true);
 
-  state.actors[0].runtime.badStatuses['bad-status-fear'] = 7;
+  state.actors[0].system.runtime.badStatuses['bad-status-fear'] = 7;
   const destruction = resolveStatuses(state, { actorId: 'actor-1' });
   assert.equal(destruction.derivedStatuses.find(status => status.definitionId.includes('bad-status-fear')).label, '恐惧点数 · 毁灭');
 });
@@ -182,7 +187,7 @@ test('offline reducer applies server-shaped operations atomically', () => {
   const initial = emptyState();
   const definition = {
     id: 'status-warded', name: '守护', scopes: ['actor'], maxStacks: 3,
-    changes: [{ target: 'resources.hp.max', mode: 'add', value: 2 }], capabilities: {},
+    changes: [{ target: 'health.max', mode: 'add', value: 2 }], capabilities: {},
   };
   const defined = reduceStatusOperation(initial, { type: 'status.definition.upsert', definition });
   const applied = reduceStatusOperation(defined.state, {
@@ -195,7 +200,7 @@ test('offline reducer applies server-shaped operations atomically', () => {
   assert.equal(applied.state.actors[0].effects[0].id, 'effect-fixed');
   assert.equal(applied.state.actors[0].effects[0].stacks, 3);
   assert.deepEqual(applied.state.actors[0].effects[0].changes, definition.changes);
-  assert.equal(resolveResource(applied.state.actors[0], 'hp').max, 11);
+  assert.equal(resolveActor(applied.state.actors[0]).health.max, 11);
   assert.equal(initial.statusDefinitions.length, BUILTIN_STATUS_DEFINITIONS.length);
   assert.equal(initial.actors[0].effects.length, 0);
 
