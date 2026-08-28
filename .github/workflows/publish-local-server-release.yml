@@ -110,5 +110,6 @@ jobs:
           gh release create "v${{ needs.candidate.outputs.version }}" \
             "release/RPGmap-v${{ needs.candidate.outputs.version }}.zip" \
             "release/RPGmap-v${{ needs.candidate.outputs.version }}.zip.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
             --target "${{ needs.candidate.outputs.commit }}" --title "RPGmap ${{ needs.candidate.outputs.version }}" \
             --notes "Windows Local/LAN release built and checksum-verified from ${{ needs.candidate.outputs.commit }}."
