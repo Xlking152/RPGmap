@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.0.0
+
+- World schema 2 成为唯一持久化权威，Actor、Scene、Token、Combat、Effect 与状态通过通用 World operation schema 1 原子提交；完整 World 只保留在初始化、显式导入和恢复边界。
+- Actor 使用稳定通用外壳，规则数据统一进入 `actor.system`；Ruleset Contract 负责默认值、旧存档迁移、规范化、验证、派生、展示、属性路径和运行时操作。
+- Infinite Horror 的 Health、B/L/A、状态与角色形态语义已移入规则包，同时兼容旧 SaveV1/V2、旧 Actor 字段和 Synthetic Actor Delta，不丢失角色、Token、伤势、状态或自定义定义。
+- Runtime、角色卡、Token、聊天、导入器、Effect 与多人服务器改为使用显式 Ruleset 上下文和通用 Actor/Ruleset 接口；最小假 Ruleset 与源码边界测试防止 Core 注入 Infinite Horror 语义。
+- Local/LAN 使用服务器权威、带 revision 与幂等 operation ID 的通用操作协议；Player ownership、Combat 回合锁和 GM-only 状态权限继续由服务器验证。
+- 应用发行版本提升到 `2.0.0`；World schema 保持 2、operation schema 保持 1、`world.ruleset.id` 保持 `infinite-horror`，Infinite Horror Ruleset 版本保持 `1.0.0`。
+
 ## v1.7.0
 
 - Entity System 升级为 schema v3：World 保存自定义状态定义，Actor 状态跨形态和 Token 生效，Token 状态只影响单个地图实例；旧 effects 会确定性迁移。
