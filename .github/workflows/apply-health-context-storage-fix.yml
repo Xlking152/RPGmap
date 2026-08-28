@@ -1,0 +1,52 @@
+name: Apply Health Context Storage Fix
+
+on:
+  push:
+    branches:
+      - refactor/status-definition-authority
+    paths:
+      - .github/workflows/apply-health-context-storage-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refactor/status-definition-authority
+      - name: Patch non-destructive Health normalization
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'src/rulesets/infinite-horror/actor.js';
+          let source = fs.readFileSync(path, 'utf8');
+
+          const oldBlock = `  const hpMaxOverride = rawHealthMaxOverride ?? legacyHpMaxOverride;\n  const hpMax = hpMaxOverride ?? hpBaseMax;\n  const hpCurrent = finite(legacyHp.current, hpMax);`;
+          const newBlock = `  const hpMaxOverride = rawHealthMaxOverride ?? legacyHpMaxOverride;\n  const hpMax = hpMaxOverride ?? hpBaseMax;\n  const hpCurrent = finite(legacyHp.current, hpMax);\n  // StatusDefinition effects live outside Actor.system, so persistence normalization\n  // must not truncate runtime Health using only the unmodified form maximum.\n  // Preserve enough storage capacity for the existing runtime; resolution below\n  // will clamp the visible/mechanical state against the current effect-aware max.\n  const storedWounds = object(rawHealth?.wounds);\n  const healthStorageMax = Math.max(\n    hpMax,\n    hpCurrent,\n    finite(rawHealth?.current),\n    finite(storedWounds.bashing) + finite(storedWounds.lethal) + finite(storedWounds.aggravated),\n  );`;
+          if (!source.includes(oldBlock)) throw new Error('Health storage block not found');
+          source = source.replace(oldBlock, newBlock);
+
+          const oldNormalize = `        max: hpMax,\n        simpleCurrent: hpCurrent,`;
+          const newNormalize = `        max: healthStorageMax,\n        simpleCurrent: hpCurrent,`;
+          if (!source.includes(oldNormalize)) throw new Error('Health normalize max block not found');
+          source = source.replace(oldNormalize, newNormalize);
+
+          const oldResolve = `  if (type === 'health.resolve') return { changed: false, value: deriveInfiniteHorrorActor(actor).health };`;
+          const newResolve = `  if (type === 'health.resolve') return { changed: false, value: deriveInfiniteHorrorActor(actor, context).health };`;
+          if (!source.includes(oldResolve)) throw new Error('health.resolve context line not found');
+          source = source.replace(oldResolve, newResolve);
+
+          fs.writeFileSync(path, source);
+          NODE
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/rulesets/infinite-horror/actor.js
+          git commit -m "Preserve effect-aware Health runtime storage"
+          git push origin HEAD:refactor/status-definition-authority
