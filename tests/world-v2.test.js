@@ -6,6 +6,7 @@ import {
   activeWorldScene,
   createEmptyWorldScene,
   createWorldV2FromRuntimeState,
+  normalizeWorldV2,
   projectWorldV2ToRuntimeState,
   synchronizeWorldV2FromRuntimeState,
 } from '../src/world/model.js';
@@ -59,7 +60,7 @@ test('World V2 projects canonical Scene Tokens into Entity reducer state without
   assert.equal(projected.preferences[WORLD_STATE_KEY].schemaVersion, 2);
 });
 
-test('runtime reducer synchronization preserves canonical active Scene placement', () => {
+test('runtime projection synchronization is read-only and preserves canonical World data', () => {
   const state = modernState();
   let world = createWorldV2FromRuntimeState(state, { mapPackage, ruleset });
   world = createEmptyWorldScene(world, { mapPackage, id: 'scene-second', name: '第二场景' });
@@ -70,6 +71,7 @@ test('runtime reducer synchronization preserves canonical active Scene placement
   const synced = synchronizeWorldV2FromRuntimeState(draft, { mapPackage, ruleset, existingWorld: world });
   assert.equal(activeWorldScene(synced).tokens[0].x, 10.5);
   assert.equal(activeWorldScene(synced).tokens[0].y, 20.5);
+  assert.deepEqual(activeWorldScene(synced).tokens[0].effects, []);
   assert.equal(synced.scenes.find(scene => scene.id === 'scene-second').tokens.length, 0);
 });
 
@@ -82,4 +84,47 @@ test('feature placement is canonical in Scene Token and Character projection sta
   assert.equal(Object.hasOwn(projected, 'characters'), false);
   assert.equal(projected.preferences.entitySystem.tokens[0].placement, 'feature');
   assert.equal(projected.preferences.entitySystem.tokens[0].featureId, 'building-7');
+});
+
+test('World normalization and projection preserve unknown extension fields', () => {
+  const world = createWorldV2FromRuntimeState(modernState(), { mapPackage, ruleset });
+  world.extension = { module: 'world-extension', enabled: true };
+  world.ruleset.extension = { channel: 'stable' };
+  world.actors[0].ownership = { user: 'OWNER' };
+  world.actors[0].system.extension = { customResource: 7 };
+  world.actors[0].system.runtime.health.extension = { track: 'custom' };
+  world.statusDefinitions.push({
+    id: 'custom-extension',
+    name: 'Custom',
+    scopes: ['actor'],
+    extension: { source: 'module' },
+  });
+  const scene = activeWorldScene(world);
+  scene.extension = { lighting: 'custom' };
+  scene.mapPackage.extension = { variant: 'night' };
+  scene.settings.extension = { fog: true };
+  scene.tokens[0].extension = { aura: 4 };
+  scene.tokens[0].effects = [{
+    id: 'effect-extension',
+    definitionId: 'custom-extension',
+    stacks: 1,
+    enabled: true,
+    extension: { duration: 3 },
+  }];
+
+  const normalized = normalizeWorldV2(world, { mapPackage, ruleset });
+  const projected = projectWorldV2ToRuntimeState(modernState(), normalized, { mapPackage, ruleset });
+  const roundTrip = normalizeWorldV2(projected.preferences[WORLD_STATE_KEY], { mapPackage, ruleset });
+  const roundTripScene = activeWorldScene(roundTrip);
+  assert.deepEqual(roundTrip.extension, world.extension);
+  assert.deepEqual(roundTrip.ruleset.extension, world.ruleset.extension);
+  assert.deepEqual(roundTrip.actors[0].ownership, world.actors[0].ownership);
+  assert.deepEqual(roundTrip.actors[0].system.extension, world.actors[0].system.extension);
+  assert.deepEqual(roundTrip.actors[0].system.runtime.health.extension, { track: 'custom' });
+  assert.deepEqual(roundTrip.statusDefinitions.at(-1).extension, { source: 'module' });
+  assert.deepEqual(roundTripScene.extension, scene.extension);
+  assert.deepEqual(roundTripScene.mapPackage.extension, scene.mapPackage.extension);
+  assert.deepEqual(roundTripScene.settings.extension, scene.settings.extension);
+  assert.deepEqual(roundTripScene.tokens[0].extension, scene.tokens[0].extension);
+  assert.deepEqual(roundTripScene.tokens[0].effects[0].extension, { duration: 3 });
 });

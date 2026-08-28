@@ -1,17 +1,15 @@
 import {
   WORLD_STATE_KEY,
   activeWorldScene,
-  attachWorldV2,
   createEmptyWorldScene,
   createWorldV2FromRuntimeState,
   normalizeWorldV2,
   projectWorldV2ToRuntimeState,
-  synchronizeWorldV2FromRuntimeState,
 } from './model.js';
 import { pruneProjectedWorldReferences } from './references.js';
 import { assertWorldRuleset } from './validation.js';
 import { reduceStatusOperation } from '../status/model.js';
-import { applyWorldOperations } from './operations.js';
+import { applyWorldOperations, deriveWorldOperations } from './operations.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -42,17 +40,14 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       if (typeof coreCommitState !== 'function') throw new Error('World V2 requires api.commitState()');
       if (!runtimeRuleset?.id) throw new Error('World V2 requires api.ruleset');
 
-      function normalizeForRuntime(state, { preferCanonical = false } = {}) {
+      function normalizeForRuntime(state) {
         const rawWorld = currentWorldFromState(state);
         let ruleset = runtimeRuleset;
         let world;
         if (rawWorld) {
           ruleset = requireRuntimeRuleset(rawWorld, runtimeRuleset);
           world = normalizeWorldV2(rawWorld, { mapPackage, ruleset });
-          world = normalizeWorldV2(world, { mapPackage, ruleset });
-          if (preferCanonical) return projectWorldV2ToRuntimeState(state, world, { mapPackage, ruleset });
-          world = synchronizeWorldV2FromRuntimeState(state, { mapPackage, ruleset, existingWorld: world });
-          return attachWorldV2(state, world);
+          return projectWorldV2ToRuntimeState(state, world, { mapPackage, ruleset });
         }
 
         // Legacy save conversion happens before WorldSystem, at the persistence
@@ -63,9 +58,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       }
 
       function hydrateCanonical(state) {
-        const rawWorld = currentWorldFromState(state);
-        if (!rawWorld) return normalizeForRuntime(state);
-        return normalizeForRuntime(state, { preferCanonical: true });
+        return normalizeForRuntime(state);
       }
 
       const initialState = api.getState?.() || {};
@@ -73,14 +66,35 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       const initial = hydrateCanonical(initialState);
       coreCommitState(initial, { source: 'world-v2:hydrate', render: false });
 
-      api.commitState = (nextState, options = {}) => coreCommitState(
-        normalizeForRuntime(nextState),
-        options,
-      );
+      function applyProjectionIntent(nextState, options = {}) {
+        const current = api.getState?.() || {};
+        if (!currentWorldFromState(current)) return coreCommitState(normalizeForRuntime(nextState), options);
+        if (JSON.stringify(currentWorldFromState(nextState)) !== JSON.stringify(currentWorldFromState(current))) {
+          const error = new Error('Runtime state was based on a stale canonical World snapshot');
+          error.code = 'world_state_stale';
+          throw error;
+        }
+        const derived = deriveWorldOperations(current, nextState);
+        const blocking = derived.unsupported.filter(reason => reason === 'world_identity' || reason === 'operation_limit');
+        if (blocking.length) {
+          const error = new Error(`Runtime state cannot change canonical World boundary: ${blocking.join(', ')}`);
+          error.code = 'world_operation_unsupported';
+          throw error;
+        }
+        const applied = derived.operations.length
+          ? reduceOperations(current, derived.operations, { source: options.source || 'state:commit' })
+          : { state: current };
+        const merged = clone(nextState);
+        merged.preferences ||= {};
+        merged.preferences[WORLD_STATE_KEY] = clone(currentWorldFromState(applied.state));
+        return coreCommitState(hydrateCanonical(merged), options);
+      }
+
+      api.commitState = applyProjectionIntent;
 
       if (typeof coreCommitAuthoritativeState === 'function') {
         api.commitAuthoritativeState = (nextState, options = {}) => coreCommitAuthoritativeState(
-          normalizeForRuntime(nextState),
+          hydrateCanonical(nextState),
           options,
         );
       }
@@ -126,6 +140,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
             const reduced = reduceStatusOperation(next.preferences.entitySystem, message, {
               source: context.source,
               now: context.now,
+              ruleset: runtimeRuleset,
             });
             next.preferences.entitySystem = reduced.state;
             return { state: next, results: reduced.results };
@@ -192,7 +207,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         reduceOperations(state, operations, options = {}) {
           return reduceOperations(state, operations, options);
         },
-        syncState(state) { return normalizeForRuntime(state); },
+        syncState(state) { return hydrateCanonical(state); },
         projectState(state) { return hydrateCanonical(state); },
       };
 

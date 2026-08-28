@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
+import { synchronizeWorldV2Mirror } from '../deployment/local-server/world-v2.mjs';
 
 function state() {
   return {
@@ -40,15 +41,17 @@ function state() {
   };
 }
 
-test('server validation preserves authoritative World V2 placement while merging reducer Actor/Token fields', () => {
+test('server projection regenerates reducer mirrors from authoritative World V2', () => {
   const value = state();
   value.preferences.entitySystem.tokens[0].elevationFt = 15;
   assert.equal(assertWorldState(value), value);
+  synchronizeWorldV2Mirror(value);
   assert.equal(value.preferences.worldV2.actors[0].id, 'actor-1');
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].actorId, 'actor-1');
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].x, 12.5);
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].y, 18.5);
-  assert.equal(value.preferences.worldV2.scenes[0].tokens[0].elevationFt, 15);
+  assert.equal(value.preferences.worldV2.scenes[0].tokens[0].elevationFt, 0);
+  assert.equal(value.preferences.entitySystem.tokens[0].elevationFt, 0);
   assert.equal(Object.hasOwn(value, 'characters'), false);
 });
 

@@ -61,13 +61,6 @@ function syntheticActor(baseActor, actorDelta) {
   return actor;
 }
 
-function entityState(state) {
-  const value = state?.preferences?.entitySystem;
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value
-    : { actors: [], tokens: [], statusDefinitions: [] };
-}
-
 function canonicalAttackArea(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return structuredClone(raw);
   const area = structuredClone(raw);
@@ -79,67 +72,31 @@ function canonicalAttackArea(raw) {
   return area;
 }
 
-function mergeRuntimeTokenFields(canonicalToken, runtimeToken) {
-  if (!runtimeToken || String(runtimeToken.id ?? '') !== String(canonicalToken.id ?? '')) {
-    return structuredClone(canonicalToken);
-  }
-  const next = structuredClone(canonicalToken);
-  next.actorLink = runtimeToken.actorLink !== false;
-  if (runtimeToken.actorDelta && typeof runtimeToken.actorDelta === 'object' && !Array.isArray(runtimeToken.actorDelta)) {
-    next.actorDelta = structuredClone(runtimeToken.actorDelta);
-  }
-  if (runtimeToken.actorDelta === null) next.actorDelta = null;
-  if (runtimeToken.diameterMeters !== undefined) next.diameterMeters = Number(runtimeToken.diameterMeters);
-  if (runtimeToken.rotation !== undefined) next.rotation = Number(runtimeToken.rotation);
-  if (runtimeToken.elevationFt !== undefined) next.elevationFt = Number(runtimeToken.elevationFt);
-  if (runtimeToken.hidden !== undefined) next.hidden = runtimeToken.hidden === true;
-  if (runtimeToken.locked !== undefined) next.locked = runtimeToken.locked === true;
-  if (runtimeToken.showName !== undefined) next.showName = runtimeToken.showName !== false;
-  if (Array.isArray(runtimeToken.effects)) next.effects = structuredClone(runtimeToken.effects);
-  return next;
-}
-
 export function synchronizeWorldV2Mirror(state) {
   const raw = state?.preferences?.[WORLD_V2_STATE_KEY];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const world = structuredClone(raw);
-  const entity = entityState(state);
-  const actors = Array.isArray(entity.actors) && entity.actors.length
-    ? structuredClone(entity.actors)
-    : (Array.isArray(world.actors) ? structuredClone(world.actors) : []);
-  const actorIds = new Set(actors.map(actor => String(actor?.id ?? '')).filter(Boolean));
-  const runtimeTokens = new Map((Array.isArray(entity.tokens) ? entity.tokens : [])
-    .filter(token => token?.id != null)
-    .map(token => [String(token.id), token]));
   const scenes = Array.isArray(world.scenes) ? world.scenes : [];
   const activeSceneId = String(world.activeSceneId ?? '');
   const activeIndex = scenes.findIndex(scene => String(scene?.id ?? '') === activeSceneId);
   if (activeIndex >= 0) {
-    const canonicalTokens = Array.isArray(scenes[activeIndex]?.tokens) ? scenes[activeIndex].tokens : [];
-    scenes[activeIndex] = {
-      ...scenes[activeIndex],
-      // Placement/id/Actor binding are canonical Scene data. Flat Entity state
-      // can only feed reducer-owned mechanical/display fields back into them.
-      tokens: canonicalTokens
-        .filter(token => actorIds.has(String(token?.actorId ?? '')))
-        .map(token => mergeRuntimeTokenFields(token, runtimeTokens.get(String(token?.id ?? '')))),
-      markers: Array.isArray(state.markers) ? structuredClone(state.markers) : [],
-      attackAreas: Array.isArray(state.attackAreas) ? state.attackAreas.map(canonicalAttackArea) : [],
-      sceneEvents: Array.isArray(state.sceneEvents) ? structuredClone(state.sceneEvents) : [],
-      settings: {
-        ...(scenes[activeIndex]?.settings && typeof scenes[activeIndex].settings === 'object' ? scenes[activeIndex].settings : {}),
-        gridVisible: state?.preferences?.gridVisible !== false,
-      },
+    const scene = scenes[activeIndex];
+    const entity = state.preferences.entitySystem && typeof state.preferences.entitySystem === 'object'
+      && !Array.isArray(state.preferences.entitySystem)
+      ? state.preferences.entitySystem
+      : {};
+    state.preferences.entitySystem = {
+      ...structuredClone(entity),
+      schemaVersion: Math.max(3, Number(entity.schemaVersion) || 0),
+      actors: structuredClone(Array.isArray(world.actors) ? world.actors : []),
+      statusDefinitions: structuredClone(Array.isArray(world.statusDefinitions) ? world.statusDefinitions : []),
+      tokens: structuredClone(Array.isArray(scene.tokens) ? scene.tokens : []),
     };
+    state.markers = structuredClone(Array.isArray(scene.markers) ? scene.markers : []);
+    state.attackAreas = (Array.isArray(scene.attackAreas) ? scene.attackAreas : []).map(canonicalAttackArea);
+    state.sceneEvents = structuredClone(Array.isArray(scene.sceneEvents) ? scene.sceneEvents : []);
+    state.preferences.gridVisible = scene.settings?.gridVisible !== false;
   }
-  world.schemaVersion = WORLD_V2_SCHEMA_VERSION;
-  world.actors = actors;
-  world.statusDefinitions = Array.isArray(entity.statusDefinitions)
-    ? structuredClone(entity.statusDefinitions)
-    : (Array.isArray(world.statusDefinitions) ? structuredClone(world.statusDefinitions) : []);
-  world.scenes = scenes;
-  world.updatedAt = new Date().toISOString();
-  state.preferences[WORLD_V2_STATE_KEY] = world;
   return world;
 }
 

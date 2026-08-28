@@ -77,6 +77,7 @@ function normalizeWorldToken(raw, actorIds, { rawActorsById = new Map(), actorsB
     } else actorDelta = clone(token.actorDelta);
   }
   return {
+    ...clone(token),
     id: tokenId,
     actorId,
     actorLink: token.actorLink !== false,
@@ -116,14 +117,15 @@ function normalizeScene(raw, {
     tokens.push(token);
   }
   return {
+    ...clone(source),
     id: id(source.id, sceneIdForMap(mapId)),
     name: text(source.name, text(mapPackage?.title ?? mapPackage?.name, mapId)),
-    mapPackage: { id: mapId, version: mapVersion },
+    mapPackage: { ...clone(mapRef), id: mapId, version: mapVersion },
     tokens,
     markers: clone(array(source.markers)),
     attackAreas: canonicalAttackAreas(source.attackAreas),
     sceneEvents: clone(array(source.sceneEvents)),
-    settings: { gridVisible: source.settings?.gridVisible !== false },
+    settings: { ...clone(object(source.settings)), gridVisible: source.settings?.gridVisible !== false },
   };
 }
 
@@ -150,10 +152,12 @@ export function normalizeWorldV2(raw, { mapPackage = null, ruleset = null } = {}
   const rulesetRef = object(source.ruleset);
   const now = new Date().toISOString();
   return {
+    ...clone(source),
     schemaVersion: WORLD_SCHEMA_VERSION,
     id: id(source.id, 'world-default'),
     name: text(source.name, `${text(ruleset?.title, 'RPGmap')} World`),
     ruleset: {
+      ...clone(rulesetRef),
       id: id(rulesetRef.id, id(ruleset?.id, 'infinite-horror')),
       version: text(rulesetRef.version, text(ruleset?.version, '1.0.0')),
     },
@@ -215,61 +219,17 @@ export function createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worl
   }, { mapPackage, ruleset });
 }
 
-function mergeRuntimeTokenFields(canonicalToken, runtimeToken) {
-  if (!runtimeToken || String(runtimeToken.id) !== String(canonicalToken.id)) return canonicalToken;
-  return {
-    ...canonicalToken,
-    actorLink: runtimeToken.actorLink !== false,
-    actorDelta: runtimeToken.actorDelta && typeof runtimeToken.actorDelta === 'object' && !Array.isArray(runtimeToken.actorDelta)
-      ? clone(runtimeToken.actorDelta)
-      : canonicalToken.actorDelta,
-    diameterMeters: Math.max(0.1, finite(runtimeToken.diameterMeters, canonicalToken.diameterMeters)),
-    rotation: finite(runtimeToken.rotation, canonicalToken.rotation),
-    elevationFt: finite(runtimeToken.elevationFt, canonicalToken.elevationFt),
-    hidden: runtimeToken.hidden === true,
-    locked: runtimeToken.locked === true,
-    showName: runtimeToken.showName !== false,
-    effects: clone(array(runtimeToken.effects)),
-  };
-}
-
+/** Compatibility helper retained for old callers. Runtime projections are
+ * read-only; only new-World creation may seed canonical data from a projection. */
 export function synchronizeWorldV2FromRuntimeState(state, { mapPackage, ruleset, existingWorld = null } = {}) {
   const base = existingWorld || state?.preferences?.[WORLD_STATE_KEY];
   if (!base) return createWorldV2FromRuntimeState(state, { mapPackage, ruleset });
-  const world = normalizeWorldV2(base, { mapPackage, ruleset });
-  const entity = runtimeEntityState(state);
-  const actors = (array(entity.actors).length ? entity.actors : world.actors)
-    .filter(Boolean)
-    .map(actor => normalizeActorDocument(actor, ruleset ? { ruleset } : {}));
-  const actorIds = new Set(actors.map(actor => id(actor?.id)).filter(Boolean));
-  const runtimeTokens = new Map(array(entity.tokens).map(token => [String(token?.id ?? ''), token]));
-  const scene = activeWorldScene(world);
-  const nextScenes = world.scenes.map(item => String(item.id) === String(scene?.id)
-    ? {
-        ...item,
-        mapPackage: mapMetadata(mapPackage || item.mapPackage),
-        // Placement/id/Actor binding are canonical Scene data. Flat Entity drafts may update
-        // effects/property fields, but can never move or rebind a Scene Token.
-        tokens: item.tokens
-          .filter(token => actorIds.has(String(token.actorId)))
-          .map(token => mergeRuntimeTokenFields(token, runtimeTokens.get(String(token.id)))),
-        markers: clone(array(state?.markers)),
-        attackAreas: canonicalAttackAreas(state?.attackAreas),
-        sceneEvents: clone(array(state?.sceneEvents)),
-        settings: { ...object(item.settings), gridVisible: state?.preferences?.gridVisible !== false },
-      }
-    : item);
-  return normalizeWorldV2({
-    ...world,
-    actors,
-    statusDefinitions: clone(Array.isArray(entity.statusDefinitions) ? entity.statusDefinitions : world.statusDefinitions),
-    scenes: nextScenes,
-    updatedAt: new Date().toISOString(),
-  }, { mapPackage, ruleset });
+  return normalizeWorldV2(base, { mapPackage, ruleset });
 }
 
 function runtimeTokenFromWorld(token) {
   return {
+    ...clone(token),
     id: token.id,
     actorId: token.actorId,
     actorLink: token.actorLink !== false,
@@ -308,6 +268,7 @@ export function projectWorldV2ToRuntimeState(state, rawWorld, { mapPackage, rule
   next.preferences ||= {};
   next.preferences.gridVisible = scene.settings?.gridVisible !== false;
   next.preferences.entitySystem = {
+    ...clone(object(next.preferences.entitySystem)),
     schemaVersion: Math.max(3, Number(next.preferences.entitySystem?.schemaVersion) || 0),
     statusDefinitions: clone(world.statusDefinitions),
     actors: clone(world.actors),

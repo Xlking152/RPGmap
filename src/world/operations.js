@@ -141,7 +141,7 @@ function mergeRuntimeToken(canonical, runtime) {
   return next;
 }
 
-function synchronizeWorldFromProjection(state) {
+function applyStatusProjectionToWorld(state) {
   const world = worldFromState(state);
   const entity = state.preferences?.entitySystem;
   if (!plainObject(entity)) return state;
@@ -344,7 +344,7 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
       if (!plainObject(applied?.state)) fail('Status operation handler returned invalid state', 'status_handler_invalid');
       Object.keys(state).forEach(key => delete state[key]);
       Object.assign(state, clone(applied.state));
-      synchronizeWorldFromProjection(state);
+      applyStatusProjectionToWorld(state);
       results.push(...(Array.isArray(applied.results) ? clone(applied.results) : []));
     } else {
       results.push(applyCanonicalOperation(state, operation));
@@ -487,7 +487,21 @@ function unsupportedProjection(state) {
 
 export function deriveWorldOperations(beforeState, afterState) {
   const beforeWorld = worldFromState(beforeState);
-  const afterWorld = worldFromState(afterState);
+  const afterWorld = clone(worldFromState(afterState));
+  const entity = afterState?.preferences?.entitySystem;
+  if (plainObject(entity)) {
+    if (Array.isArray(entity.actors)) afterWorld.actors = clone(entity.actors);
+    const scene = activeScene(afterWorld);
+    const tokens = mapById(entity.tokens || []);
+    scene.tokens = (scene.tokens || []).map(token => mergeRuntimeToken(token, tokens.get(String(token.id))));
+  }
+  const scene = activeScene(afterWorld);
+  if (Array.isArray(afterState?.markers)) scene.markers = clone(afterState.markers);
+  if (Array.isArray(afterState?.attackAreas)) scene.attackAreas = clone(afterState.attackAreas);
+  if (Array.isArray(afterState?.sceneEvents)) scene.sceneEvents = clone(afterState.sceneEvents);
+  if (afterState?.preferences?.gridVisible !== undefined) {
+    scene.settings = { ...clone(scene.settings || {}), gridVisible: afterState.preferences.gridVisible !== false };
+  }
   const operations = [];
   const unsupported = [];
   if (Number(beforeWorld.schemaVersion) !== Number(afterWorld.schemaVersion)

@@ -86,3 +86,21 @@ test('WorldSystem applies offline Actor and Token writes through the shared oper
   assert.equal(fixture.api.world.getActiveScene().tokens[0].y, 8.5);
   assert.equal(fixture.events.some(event => event[0] === 'commit' && event[1] === 'test:offline-operations'), true);
 });
+
+test('a stale reducer projection cannot overwrite a newer canonical World', async () => {
+  const fixture = apiFixture();
+  createWorldSystem().register(fixture.api);
+  const stale = fixture.api.getState();
+  const actorUpdate = fixture.api.world.listActors()[0];
+  actorUpdate.notes = 'new canonical value';
+  await fixture.api.world.performOperations([
+    { type: 'actor.upsert', payload: { actor: actorUpdate } },
+  ], { source: 'test:newer-world', render: false });
+
+  stale.preferences.entitySystem.actors[0].notes = 'stale projection value';
+  assert.throws(
+    () => fixture.api.commitState(stale, { source: 'test:stale-projection', render: false }),
+    error => error.code === 'world_state_stale',
+  );
+  assert.equal(fixture.api.world.listActors()[0].notes, 'new canonical value');
+});

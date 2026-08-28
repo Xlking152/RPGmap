@@ -48,6 +48,7 @@ function cleanMarkers(markers) {
     const y = Number(source.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new TypeError(`Marker ${id} requires finite x/y`);
     return {
+      ...clone(source),
       id,
       name: String(source.name || `标记 ${index + 1}`).slice(0, 80),
       x,

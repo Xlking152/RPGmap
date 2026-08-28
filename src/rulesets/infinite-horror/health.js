@@ -20,11 +20,12 @@ export function defaultHealthMode(sourceType) {
 }
 
 export function normalizeWounds(raw, max) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? structuredClone(raw) : {};
   const limit = nonNegativeInt(max);
   const aggravated = clamp(nonNegativeInt(raw?.aggravated), 0, limit);
   const lethal = clamp(nonNegativeInt(raw?.lethal), 0, Math.max(0, limit - aggravated));
   const bashing = clamp(nonNegativeInt(raw?.bashing), 0, Math.max(0, limit - aggravated - lethal));
-  return { bashing, lethal, aggravated };
+  return { ...source, bashing, lethal, aggravated };
 }
 
 export function createHealthRuntime({ mode = HEALTH_MODE_SIMPLE, max = 0, simpleCurrent = max } = {}) {
@@ -44,7 +45,7 @@ export function normalizeHealthRuntime(raw, { defaultMode = HEALTH_MODE_SIMPLE, 
     ? raw.mode
     : defaultMode;
   if (!raw || typeof raw !== 'object') return createHealthRuntime({ mode, max, simpleCurrent });
-  return { mode, wounds: normalizeWounds(raw.wounds, max) };
+  return { ...structuredClone(raw), mode, wounds: normalizeWounds(raw.wounds, max) };
 }
 
 export function resolveHealth(runtime, { max = 0, simpleCurrent = max } = {}) {

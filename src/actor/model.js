@@ -39,7 +39,8 @@ function compatibleActor(actor, ruleset = getCompatibilityRuleset()) {
 function shell(raw = {}, { name = '', system = {} } = {}) {
   const source = object(raw);
   const now = new Date().toISOString();
-  return {
+  const document = {
+    ...clone(source),
     id: text(source.id == null ? '' : String(source.id), uid('actor')),
     name: text(name, text(source.name, '未命名角色')).slice(0, 80),
     system: clone(object(system)),
@@ -48,6 +49,10 @@ function shell(raw = {}, { name = '', system = {} } = {}) {
     createdAt: text(source.createdAt, now),
     updatedAt: text(source.updatedAt, text(source.createdAt, now)),
   };
+  delete document.forms;
+  delete document.currentFormId;
+  delete document.runtime;
+  return document;
 }
 
 export function createActorDocument(raw = {}, { ruleset = getCompatibilityRuleset() } = {}) {

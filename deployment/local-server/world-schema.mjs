@@ -1,5 +1,5 @@
 import { assertStatusState } from './status-operations.mjs';
-import { assertWorldV2, synchronizeWorldV2Mirror } from './world-v2.mjs';
+import { assertWorldV2 } from './world-v2.mjs';
 
 // The release server applies these hostile-input limits before any permission
 // projection or authoritative World mutation.
@@ -84,6 +84,7 @@ export function assertWorldState(value) {
   const state = object(value, 'state');
   const preferences = state.preferences === undefined ? {} : object(state.preferences, 'state.preferences');
   const hasWorldV2 = preferences.worldV2 !== undefined && preferences.worldV2 !== null;
+  const worldV2 = hasWorldV2 ? preferences.worldV2 : null;
 
   // Character documents are accepted only while reading a pre-World legacy
   // save. Once World V2 exists they are forbidden, even as an empty tombstone.
@@ -124,7 +125,6 @@ export function assertWorldState(value) {
 
   // World V2 is canonical. Flat entity/scene fields remain a reducer projection,
   // but placement and identity never route through Character documents.
-  const worldV2 = synchronizeWorldV2Mirror(state);
   if (worldV2) assertWorldV2(worldV2);
 
   const chat = preferences.chatSystem;

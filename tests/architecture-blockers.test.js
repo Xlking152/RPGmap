@@ -102,7 +102,7 @@ test('World normalization refuses to use a different or incompatible active Rule
   );
 });
 
-test('explicitly empty custom status definitions remain empty in browser and server mirrors', () => {
+test('read-only projections cannot erase canonical custom status definitions', () => {
   const existingWorld = rawWorld();
   existingWorld.statusDefinitions = [{ id: 'custom-status' }];
   const state = {
@@ -116,11 +116,12 @@ test('explicitly empty custom status definitions remain empty in browser and ser
     mapPackage: { id: 'test-map', version: '1.0.0' },
     existingWorld,
   });
-  assert.deepEqual(browser.statusDefinitions, []);
+  assert.deepEqual(browser.statusDefinitions, [{ id: 'custom-status' }]);
 
   const serverState = structuredClone(state);
   synchronizeWorldV2Mirror(serverState);
-  assert.deepEqual(serverState.preferences.worldV2.statusDefinitions, []);
+  assert.deepEqual(serverState.preferences.worldV2.statusDefinitions, [{ id: 'custom-status' }]);
+  assert.deepEqual(serverState.preferences.entitySystem.statusDefinitions, [{ id: 'custom-status' }]);
 });
 
 test('minimal Ruleset without Health, variants, or XLSX importer hides optional UI', () => {

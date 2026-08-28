@@ -209,3 +209,23 @@ test('offline reducer applies server-shaped operations atomically', () => {
   assert.equal(applied.state.actors[0].effects.length, 1);
   assert.equal(getStatusDefinitions(applied.state).some(item => item.id === 'status-warded'), true);
 });
+
+test('status normalization preserves custom definition and Effect extension metadata', () => {
+  const state = emptyState();
+  state.statusDefinitions = [{
+    id: 'status-extension',
+    name: 'Extension',
+    scopes: ['actor'],
+    extension: { provider: 'test-module' },
+  }];
+  state.actors[0].effects = [{
+    id: 'effect-extension',
+    definitionId: 'status-extension',
+    stacks: 1,
+    enabled: true,
+    extension: { expiresAtRound: 4 },
+  }];
+  const normalized = normalizeEntityStatusState(state);
+  assert.deepEqual(normalized.statusDefinitions[0].extension, { provider: 'test-module' });
+  assert.deepEqual(normalized.actors[0].effects[0].extension, { expiresAtRound: 4 });
+});

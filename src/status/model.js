@@ -68,6 +68,7 @@ export function normalizeStatusDefinition(value, { fallbackScopes = ['actor'], t
   const maxStacks = requestedMax > 1 && changes.some(change => change.mode !== 'add') ? 1 : requestedMax;
   const categoryValue = String(value.category || 'status');
   return {
+    ...clone(value),
     id,
     name: cleanText(value.name || value.label, id, 120),
     description: cleanText(value.description),
@@ -140,12 +141,16 @@ function ensureUniqueInstanceId(candidate, targetId, definitionId, index, usedId
 }
 function normalizeInstance(effect, { definition, scope, targetId, index, usedIds }) {
   const instance = {
+    ...clone(effect),
     id: ensureUniqueInstanceId(effect?.id, targetId, definition.id, index, usedIds),
     definitionId: definition.id,
     stacks: integer(effect?.stacks, 1, 1, Number(definition.maxStacks) || 1),
     enabled: effect?.enabled !== false,
     note: cleanText(effect?.note),
   };
+  for (const key of ['name', 'label', 'description', 'icon', 'color', 'category', 'scope', 'scopes', 'maxStacks', 'capabilities', 'statusId']) {
+    delete instance[key];
+  }
   if (plainObject(effect?.source)) instance.source = clone(effect.source);
   if (cleanText(effect?.createdAt)) instance.createdAt = cleanText(effect.createdAt);
   if (scope === 'actor' && definition.changes?.length) instance.changes = clone(definition.changes);

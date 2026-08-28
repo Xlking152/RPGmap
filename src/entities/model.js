@@ -94,6 +94,7 @@ export function normalizeEntityState(raw, { ruleset } = {}) {
     tokens,
   });
   return {
+    ...clone(raw),
     schemaVersion: STATUS_SCHEMA_VERSION,
     statusDefinitions: normalizedStatuses.statusDefinitions,
     actors: normalizedStatuses.actors.map(actor => normalizeActorDocument(actor, ruleset ? { ruleset } : {})),
