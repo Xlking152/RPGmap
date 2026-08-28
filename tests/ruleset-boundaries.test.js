@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { performActorHealthOperation, resolveActorHealth } from '../src/health/actor.js';
 import {
+  deriveActorDocument,
   describeActorSheet,
   listActorAttributePaths,
   normalizeActorDocument,
@@ -134,9 +134,12 @@ test('minimal ruleset controls runtime operations, presentation, and derived sta
       system: { value: 4, limit: 10 },
       effects: [],
     };
-    const result = performActorHealthOperation(actor, { type: 'increment', amount: 3 });
+    const result = performActorOperation(actor, {
+      type: 'health.runtime',
+      operation: { type: 'increment', amount: 3 },
+    });
     assert.equal(result.changed, true);
-    assert.equal(resolveActorHealth(actor).current, 7);
+    assert.equal(deriveActorDocument(actor).health.current, 7);
     assert.equal(actor.system.value, 7);
     assert.deepEqual(listActorAttributePaths(actor).map(item => item.path), ['system.value']);
     assert.equal(resolveActorAttribute(actor, 'system.value'), 7);
