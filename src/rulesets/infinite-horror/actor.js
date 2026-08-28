@@ -252,8 +252,10 @@ export function normalizeInfiniteHorrorSystem(rawSystem = {}) {
   delete resources.hp;
 
   const hpBaseMax = Math.max(0, finite(current?.resourceBases?.hp?.baseMax));
-  const rawHealth = clone(object(runtimeSource.health));
-  const rawHealthMaxOverride = rawHealth.maxOverride === null || rawHealth.maxOverride === undefined
+  const hasHealthRuntime = runtimeSource.health && typeof runtimeSource.health === 'object'
+    && !Array.isArray(runtimeSource.health);
+  const rawHealth = hasHealthRuntime ? clone(runtimeSource.health) : null;
+  const rawHealthMaxOverride = rawHealth?.maxOverride === null || rawHealth?.maxOverride === undefined
     ? null
     : Math.max(0, finite(rawHealth.maxOverride));
   const legacyHpMaxOverride = legacyHp.maxOverride === null || legacyHp.maxOverride === undefined
@@ -262,32 +264,6 @@ export function normalizeInfiniteHorrorSystem(rawSystem = {}) {
   const hpMaxOverride = rawHealthMaxOverride ?? legacyHpMaxOverride;
   const hpMax = hpMaxOverride ?? hpBaseMax;
   const hpCurrent = finite(legacyHp.current, hpMax);
-  let healthInput = rawHealth;
-
-  // Schema V1 kept current HP in runtime.resources.hp even when wound data was
-  // also present. Unlinked Token deltas could therefore override only that
-  // legacy path. Reconcile a V1 mismatch once during migration, then discard
-  // the legacy resource so Health Runtime becomes the sole authority.
-  if (Number(source.schemaVersion) < INFINITE_HORROR_ACTOR_SYSTEM_VERSION
-    && rawHealth.mode === 'wound-track'
-    && legacyHp.current !== undefined) {
-    const legacyHealth = INFINITE_HORROR_HEALTH.normalizeRuntime(rawHealth, {
-      defaultMode: 'wound-track',
-      max: hpMax,
-      simpleCurrent: hpCurrent,
-      legacyMaxOverride: legacyHpMaxOverride,
-    });
-    const legacyState = INFINITE_HORROR_HEALTH.resolve(legacyHealth, { max: hpMax });
-    const requestedCurrent = Math.max(0, Math.min(hpMax, Math.floor(hpCurrent)));
-    if (legacyState.current !== requestedCurrent) {
-      healthInput = INFINITE_HORROR_HEALTH.createRuntime({
-        mode: 'wound-track',
-        max: hpMax,
-        simpleCurrent: requestedCurrent,
-        maxOverride: hpMaxOverride,
-      });
-    }
-  }
 
   return {
     ...source,
@@ -300,7 +276,7 @@ export function normalizeInfiniteHorrorSystem(rawSystem = {}) {
       customResources: Array.isArray(runtimeSource.customResources) ? clone(runtimeSource.customResources) : [],
       attributeAdjustments: clone(object(runtimeSource.attributeAdjustments)),
       badStatuses,
-      health: INFINITE_HORROR_HEALTH.normalizeRuntime(healthInput, {
+      health: INFINITE_HORROR_HEALTH.normalizeRuntime(rawHealth, {
         defaultMode: INFINITE_HORROR_HEALTH.defaultModeForSource(current?.source?.type),
         max: hpMax,
         simpleCurrent: hpCurrent,
