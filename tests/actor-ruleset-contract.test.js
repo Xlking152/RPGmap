@@ -123,7 +123,7 @@ test('Actor presentation and legacy HP paths resolve through Ruleset Health Runt
   assert.equal(resolveActorAttribute(actor, 'system.resources.hp.max'), 17);
 });
 
-test('legacy Synthetic Actor HP deltas migrate into token-local Health Runtime without changing the template', () => {
+test('legacy wound Health wins over a stale resource-only Synthetic Actor HP mirror', () => {
   const world = normalizeWorldV2({
     schemaVersion: 2,
     id: 'world-test',
@@ -150,11 +150,10 @@ test('legacy Synthetic Actor HP deltas migrate into token-local Health Runtime w
   });
   const token = world.scenes[0].tokens[0];
   assert.equal(Object.hasOwn(token.actorDelta, 'runtime'), false);
-  assert.equal(token.actorDelta.system.runtime.resources?.hp, undefined);
-  assert.ok(token.actorDelta.system.runtime.health);
+  assert.equal(token.actorDelta.system?.runtime?.resources?.hp, undefined);
   const resolved = resolveTokenActor(world, token.id);
-  assert.equal(resolveActor(resolved.actor).resources.find(item => item.id === 'hp').current, 3);
-  assert.equal(resolveActor(resolved.baseActor).resources.find(item => item.id === 'hp').current, 7);
+  assert.equal(resolveActor(resolved.actor).health.current, 7);
+  assert.equal(resolveActor(resolved.baseActor).health.current, 7);
 });
 
 test('Core Actor consumers do not read Infinite Horror legacy storage fields', async () => {
