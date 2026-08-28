@@ -1,0 +1,22 @@
+name: Status Refactor CI
+
+on:
+  push:
+    branches:
+      - refactor/status-definition-authority
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.12.0
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - name: Check JavaScript syntax
+        run: find src deployment scripts tests -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check
+      - run: npm run build
+      - run: npm run package:local-server
