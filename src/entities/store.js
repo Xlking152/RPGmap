@@ -64,8 +64,15 @@ export class EntityStore {
     const appState = this.api.getState();
     const raw = appState.preferences?.[PREFERENCE_KEY];
     const normalized = normalizeEntityState(raw, { ruleset: this.api.ruleset });
-    let changed = entityContentChanged(raw, normalized)
-      || (migrateLegacy && Number(raw?.schemaVersion) !== STATUS_SCHEMA_VERSION);
+
+    // Normalization always produces a safe read view, but only an explicit
+    // migration/repair load may write that normalized projection back. Modern
+    // runtime reloads pass migrateLegacy:false and are therefore strictly
+    // read-only even if they encounter stale or malformed projection data.
+    let changed = migrateLegacy === true && (
+      entityContentChanged(raw, normalized)
+      || Number(raw?.schemaVersion) !== STATUS_SCHEMA_VERSION
+    );
 
     if (this.canonicalTokenReadView) this.installCanonicalTokenReadView(normalized);
     else {
@@ -82,7 +89,7 @@ export class EntityStore {
       }
       changed = true;
     }
-    if (changed) this.persist({ appState });
+    if (changed) this.persist({ appState, source: 'entities:migration' });
     return { migratedCharacters: 0, migratedTokenLocations: 0, blockedTokenLocations: 0, droppedMarkers };
   }
 
