@@ -1,0 +1,44 @@
+name: Apply Status UI Context Patch
+
+on:
+  push:
+    branches:
+      - refactor/status-definition-authority
+    paths:
+      - .github/workflows/apply-status-ui-context.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refactor/status-definition-authority
+      - name: Patch Entity UI Actor context
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'src/entities/ui.js';
+          let source = fs.readFileSync(path, 'utf8');
+          const oldImport = "import { describeActor, describeActorSheet, performActorOperation } from '../actor/index.js';";
+          const newImport = "import { describeActor, describeActorSheet as describeActorSheetDocument, performActorOperation as performActorDocumentOperation } from '../actor/index.js';";
+          if (!source.includes(oldImport)) throw new Error('Actor import pattern not found');
+          source = source.replace(oldImport, newImport);
+          const anchor = "      const migration = store.load({ migrateLegacy: true, dropMarkers: options.dropLegacyMarkers !== false });\n";
+          const insertion = `${anchor}      const describeActorSheet = actor => describeActorSheetDocument(actor, store.actorContext(actor));\n      const performActorOperation = (actor, operation) => performActorDocumentOperation(actor, operation, store.actorContext(actor));\n`;
+          if (!source.includes(anchor)) throw new Error('EntityStore load anchor not found');
+          source = source.replace(anchor, insertion);
+          fs.writeFileSync(path, source);
+          NODE
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/entities/ui.js
+          git commit -m "Resolve Entity UI actors with StatusDefinitions"
+          git push origin HEAD:refactor/status-definition-authority
