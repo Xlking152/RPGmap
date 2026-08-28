@@ -2,12 +2,12 @@ import { deriveActorDocument, performActorOperation } from '../actor/index.js';
 import { EntityStore } from '../entities/store.js';
 import { createActorDelta } from '../token/actor.js';
 
-function resolveActorHealth(actor, ruleset) {
-  return deriveActorDocument(actor, { ruleset })?.health || null;
+function resolveActorHealth(actor, context) {
+  return deriveActorDocument(actor, context)?.health || null;
 }
 
-function runHealthOperation(actor, operation, ruleset) {
-  return performActorOperation(actor, operation, { ruleset });
+function runHealthOperation(actor, operation, context) {
+  return performActorOperation(actor, operation, context);
 }
 
 function healthTargetsForTokens(store, api, tokenIds = []) {
@@ -71,36 +71,38 @@ export function createHealthController() {
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });
           const actor = store.actor(actorId);
-          return actor ? resolveActorHealth(actor, api.ruleset) : null;
+          return actor ? resolveActorHealth(actor, store.actorContext(actor)) : null;
         },
         resolveToken(tokenId) {
+          const store = new EntityStore(api);
+          store.load({ migrateLegacy: false, dropMarkers: false });
           if (api.tokens?.resolveActor) {
             try {
               const resolved = api.tokens.resolveActor(tokenId);
-              if (resolved?.actor) return resolveActorHealth(resolved.actor, api.ruleset);
+              if (resolved?.actor) return resolveActorHealth(resolved.actor, store.actorContext(resolved.actor));
             } catch {}
           }
-          const store = new EntityStore(api);
-          store.load({ migrateLegacy: false, dropMarkers: false });
           const actor = store.actorForToken(tokenId);
-          return actor ? resolveActorHealth(actor, api.ruleset) : null;
+          return actor ? resolveActorHealth(actor, store.actorContext(actor)) : null;
         },
         setMode(actorId, mode) {
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });
           const actor = store.actor(actorId);
           if (!actor || !canEditActor(actor.id)) return null;
-          const result = runHealthOperation(actor, { type: 'health.set-mode', mode }, api.ruleset);
+          const context = store.actorContext(actor);
+          const result = runHealthOperation(actor, { type: 'health.set-mode', mode }, context);
           if (result.changed) persistHealth(store, [actor.id]);
-          return result.value || resolveActorHealth(actor, api.ruleset);
+          return result.value || resolveActorHealth(actor, context);
         },
         performActorOperation(actorId, operation) {
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });
           const actor = store.actor(actorId);
           if (!actor || !canEditActor(actor.id)) return null;
-          const before = resolveActorHealth(actor, api.ruleset);
-          const result = runHealthOperation(actor, { type: 'health.runtime', operation }, api.ruleset);
+          const context = store.actorContext(actor);
+          const before = resolveActorHealth(actor, context);
+          const result = runHealthOperation(actor, { type: 'health.runtime', operation }, context);
           if (result.changed) persistHealth(store, [actor.id]);
           return {
             before,
@@ -114,18 +116,19 @@ export function createHealthController() {
           store.load({ migrateLegacy: false, dropMarkers: false });
           const targets = controllableTargets(healthTargetsForTokens(store, api, tokenIds));
           const results = targets.map(target => {
+            const context = store.actorContext(target.actor);
             const operation = runHealthOperation(target.actor, {
               type: 'health.damage',
               amount: damage?.amount,
               damageType: damage?.type,
-            }, api.ruleset);
+            }, context);
             const result = {
               tokenId: target.tokenId,
               actorId: target.actor.id,
               actorName: target.actor.name,
               synthetic: target.synthetic,
               before: operation.before || null,
-              after: operation.value || resolveActorHealth(target.actor, api.ruleset),
+              after: operation.value || resolveActorHealth(target.actor, context),
               applied: operation.applied || 0,
               overflow: operation.overflow || 0,
               blocked: operation.blocked || null,
@@ -145,18 +148,19 @@ export function createHealthController() {
           store.load({ migrateLegacy: false, dropMarkers: false });
           const targets = controllableTargets(healthTargetsForTokens(store, api, tokenIds));
           const results = targets.map(target => {
+            const context = store.actorContext(target.actor);
             const operation = runHealthOperation(target.actor, {
               type: 'health.healing',
               amount: healing?.amount,
               damageType: healing?.type,
-            }, api.ruleset);
+            }, context);
             const result = {
               tokenId: target.tokenId,
               actorId: target.actor.id,
               actorName: target.actor.name,
               synthetic: target.synthetic,
               before: operation.before || null,
-              after: operation.value || resolveActorHealth(target.actor, api.ruleset),
+              after: operation.value || resolveActorHealth(target.actor, context),
               applied: operation.applied || 0,
               overflow: operation.overflow || 0,
               blocked: operation.blocked || null,
