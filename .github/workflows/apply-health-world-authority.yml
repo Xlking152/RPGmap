@@ -24,7 +24,21 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - name: Patch remaining Health confirmation callsites
         run: python .github/health-authority-patch.py
-      - run: npm test
+      - name: Run tests with diagnostic capture
+        shell: bash
+        run: |
+          set +e
+          npm test > /tmp/health-test.log 2>&1
+          CODE=$?
+          if [ "$CODE" -ne 0 ]; then
+            tail -n 350 /tmp/health-test.log > .github/health-test-failure.txt
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/health-test-failure.txt
+            git commit -m "Capture Health authority test failure"
+            git push origin HEAD:refactor/health-world-operation-authority
+            exit "$CODE"
+          fi
       - name: Check JavaScript syntax
         run: find src deployment scripts tests -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check
       - run: npm run build
