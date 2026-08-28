@@ -1,7 +1,7 @@
 import { INFINITE_HORROR_BAD_STATUS_DEFS, INFINITE_HORROR_RESOURCE_DEFS } from './definitions.js';
 import { INFINITE_HORROR_HEALTH } from './health.js';
 
-export const INFINITE_HORROR_ACTOR_SYSTEM_VERSION = 2;
+export const INFINITE_HORROR_ACTOR_SYSTEM_VERSION = 3;
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -102,12 +102,21 @@ function normalizeForm(raw = {}) {
   const saves = Array.isArray(form.checks?.saves) ? clone(form.checks.saves) : [];
   const savesWereThresholds = saves.some(item => item && typeof item === 'object'
     && 'light' in item && 'severe' in item && 'devastating' in item);
+  const resourceBases = clone(object(form.resourceBases));
+  const legacyHpBase = clone(object(resourceBases.hp));
+  const healthBase = clone(object(form.healthBase));
+  delete resourceBases.hp;
+
   form.id = identifier(form.id, defaultIdFactory('form'));
   form.name = text(form.name, '默认形态');
   form.avatarDataUrl = typeof form.avatarDataUrl === 'string' ? form.avatarDataUrl : null;
   form.identity = { ...object(form.identity), name: text(form.identity?.name, '未命名角色') };
   form.description = clone(object(form.description));
-  form.resourceBases = clone(object(form.resourceBases));
+  form.healthBase = {
+    ...healthBase,
+    baseMax: Math.max(0, finite(healthBase.baseMax ?? healthBase.max ?? legacyHpBase.baseMax ?? legacyHpBase.max)),
+  };
+  form.resourceBases = resourceBases;
   form.attributes = Array.isArray(form.attributes) ? clone(form.attributes) : [];
   form.checks = {
     ...clone(object(form.checks)),
@@ -146,6 +155,9 @@ function formFromImport(imported, { variantId, variantName, idFactory = defaultI
     avatarDataUrl: card.avatarDataUrl,
     identity: card.identity,
     description: card.description,
+    healthBase: {
+      baseMax: Math.max(0, finite(card.resources?.hp?.max ?? card.resources?.hp)),
+    },
     resourceBases,
     attributes: card.attributes,
     checks: card.checks,
@@ -159,12 +171,11 @@ function formFromImport(imported, { variantId, variantName, idFactory = defaultI
 function initialRuntime(form) {
   const resources = {};
   for (const definition of INFINITE_HORROR_RESOURCE_DEFS) {
-    if (definition.id === 'hp') continue;
     const maximum = Math.max(0, finite(form.resourceBases?.[definition.id]?.baseMax));
     resources[definition.id] = { current: maximum, maxOverride: null, policy: 'preserve' };
   }
   const badStatuses = Object.fromEntries((form.badStatuses || []).map(status => [status.id, 0]));
-  const hpMax = Math.max(0, finite(form.resourceBases?.hp?.baseMax));
+  const hpMax = Math.max(0, finite(form.healthBase?.baseMax));
   return {
     resources,
     customResources: [],
@@ -231,13 +242,13 @@ export function normalizeInfiniteHorrorSystem(rawSystem = {}) {
   const resources = clone(object(runtimeSource.resources));
   const legacyHp = clone(object(resources.hp));
   const badStatuses = clone(object(runtimeSource.badStatuses));
+
   for (const form of forms) {
     for (const status of form.badStatuses || []) {
       if (badStatuses[status.id] === undefined) badStatuses[status.id] = 0;
     }
   }
   for (const definition of INFINITE_HORROR_RESOURCE_DEFS) {
-    if (definition.id === 'hp') continue;
     const maximum = Math.max(0, finite(current?.resourceBases?.[definition.id]?.baseMax));
     const existing = object(resources[definition.id]);
     resources[definition.id] = {
@@ -251,7 +262,7 @@ export function normalizeInfiniteHorrorSystem(rawSystem = {}) {
   }
   delete resources.hp;
 
-  const hpBaseMax = Math.max(0, finite(current?.resourceBases?.hp?.baseMax));
+  const hpBaseMax = Math.max(0, finite(current?.healthBase?.baseMax));
   const hasHealthRuntime = runtimeSource.health && typeof runtimeSource.health === 'object'
     && !Array.isArray(runtimeSource.health);
   const rawHealth = hasHealthRuntime ? clone(runtimeSource.health) : null;
@@ -302,6 +313,9 @@ export function validateInfiniteHorrorSystem(system) {
   if (system?.runtime?.resources?.hp !== undefined) {
     errors.push('system.runtime.resources.hp is legacy-only; current HP belongs to system.runtime.health');
   }
+  if (system?.forms?.some(form => form?.resourceBases?.hp !== undefined)) {
+    errors.push('form.resourceBases.hp is legacy-only; base HP belongs to form.healthBase');
+  }
   return errors;
 }
 
@@ -316,9 +330,11 @@ function applyMode(current, mode, rawValue) {
 
 function canonicalPath(path) {
   let value = String(path || '');
-  if (!value.startsWith('system.') && (value.startsWith('resources.') || value.startsWith('attributes.'))) {
+  if (!value.startsWith('system.')
+    && (value.startsWith('resources.') || value.startsWith('attributes.') || value.startsWith('health.'))) {
     value = `system.${value}`;
   }
+  // Read legacy status/effect paths without exposing them as new Ruleset paths.
   if (value === 'system.resources.hp.current') return 'system.health.current';
   if (value === 'system.resources.hp.max') return 'system.health.max';
   return value;
@@ -353,7 +369,7 @@ function resolveResourceValue(actor, form, resourceId, context = {}) {
   if (custom) {
     let max = Math.max(0, finite(custom.max));
     for (const change of effectsFor(actor, `system.resources.${resourceId}.max`, context)) {
-      max = applyMode(max, change.mode, change.value);
+      max = Math.max(0, applyMode(max, change.mode, change.value));
     }
     let current = finite(custom.current);
     for (const change of effectsFor(actor, `system.resources.${resourceId}.current`, context)) {
@@ -361,36 +377,9 @@ function resolveResourceValue(actor, form, resourceId, context = {}) {
     }
     return { ...clone(custom), max, current, custom: true };
   }
+
   const base = form?.resourceBases?.[resourceId];
   if (!base) return null;
-
-  if (resourceId === 'hp') {
-    const healthRuntime = actor.system?.runtime?.health || {};
-    let max = healthRuntime.maxOverride === null || healthRuntime.maxOverride === undefined
-      ? finite(base.baseMax)
-      : finite(healthRuntime.maxOverride);
-    for (const change of effectsFor(actor, 'system.health.max', context)) {
-      max = Math.max(0, applyMode(max, change.mode, change.value));
-    }
-    const runtime = INFINITE_HORROR_HEALTH.normalizeRuntime(healthRuntime, {
-      defaultMode: INFINITE_HORROR_HEALTH.defaultModeForSource(form.source?.type),
-      max,
-      simpleCurrent: max,
-    });
-    const health = INFINITE_HORROR_HEALTH.resolve(runtime, { max });
-    return {
-      id: resourceId,
-      name: base.name,
-      kind: base.kind,
-      baseMax: finite(base.baseMax),
-      max: health.max,
-      current: health.current,
-      policy: 'health-runtime',
-      custom: false,
-      health: true,
-    };
-  }
-
   const runtime = actor.system?.runtime?.resources?.[resourceId] || {
     current: base.baseMax,
     maxOverride: null,
@@ -400,7 +389,7 @@ function resolveResourceValue(actor, form, resourceId, context = {}) {
     ? finite(base.baseMax)
     : finite(runtime.maxOverride);
   for (const change of effectsFor(actor, `system.resources.${resourceId}.max`, context)) {
-    max = applyMode(max, change.mode, change.value);
+    max = Math.max(0, applyMode(max, change.mode, change.value));
   }
   let current = finite(runtime.current, max);
   for (const change of effectsFor(actor, `system.resources.${resourceId}.current`, context)) {
@@ -416,6 +405,22 @@ function resolveResourceValue(actor, form, resourceId, context = {}) {
     policy: runtime.policy || 'preserve',
     custom: false,
   };
+}
+
+function resolveHealthValue(actor, form, context = {}) {
+  const runtime = actor.system?.runtime?.health || {};
+  let max = runtime.maxOverride === null || runtime.maxOverride === undefined
+    ? finite(form?.healthBase?.baseMax)
+    : finite(runtime.maxOverride);
+  for (const change of effectsFor(actor, 'system.health.max', context)) {
+    max = Math.max(0, applyMode(max, change.mode, change.value));
+  }
+  const normalized = INFINITE_HORROR_HEALTH.normalizeRuntime(runtime, {
+    defaultMode: INFINITE_HORROR_HEALTH.defaultModeForSource(form?.source?.type),
+    max,
+    simpleCurrent: max,
+  });
+  return INFINITE_HORROR_HEALTH.resolve(normalized, { max });
 }
 
 function resolveBadStatus(actor, form, statusId) {
@@ -458,16 +463,14 @@ export function deriveInfiniteHorrorActor(actor, context = {}) {
     ...Object.keys(form.resourceBases || {}),
     ...(system.runtime?.customResources || []).map(item => String(item.id)),
   ])];
-  const resources = resourceIds.map(id => resolveResourceValue(normalizedActor, form, id, context)).filter(Boolean);
-  const hp = resources.find(resource => resource.id === 'hp') || { max: 0, current: 0 };
   return {
     id: actor.id,
     name: actor.name,
     form: clone(form),
     variants: system.forms.map(item => ({ id: item.id, name: item.name })),
     currentVariantId: form.id,
-    resources,
-    health: INFINITE_HORROR_HEALTH.resolve(system.runtime?.health, { max: hp.max }),
+    resources: resourceIds.map(id => resolveResourceValue(normalizedActor, form, id, context)).filter(Boolean),
+    health: resolveHealthValue(normalizedActor, form, context),
     attributes: (form.attributes || []).map(item => resolveAttributeValue(normalizedActor, form, item.id, context)).filter(Boolean),
     checks: clone(form.checks || { skills: [], saves: [] }),
     badStatuses: (form.badStatuses || []).map(item => resolveBadStatus(normalizedActor, form, item.id)).filter(Boolean),
@@ -479,6 +482,7 @@ export function infiniteHorrorAttributePaths(actor) {
   const derived = deriveInfiniteHorrorActor(actor);
   if (!derived) return [];
   return [
+    ...(derived.health ? [{ path: 'system.health.max', label: '生命 · 最大', kind: 'number' }] : []),
     ...derived.resources.flatMap(resource => [
       { path: `system.resources.${resource.id}.current`, label: `${resource.name} · 当前`, kind: 'number' },
       { path: `system.resources.${resource.id}.max`, label: `${resource.name} · 最大`, kind: 'number' },
@@ -505,41 +509,43 @@ export function resolveInfiniteHorrorAttribute(actor, path, context = {}) {
 
 function healthContext(actor) {
   const derived = deriveInfiniteHorrorActor(actor);
-  const hp = derived?.resources?.find(resource => resource.id === 'hp') || { max: 0, current: 0 };
-  const form = derived?.form;
   return {
     derived,
-    hp,
+    max: derived?.health?.max ?? 0,
     options: {
-      defaultMode: INFINITE_HORROR_HEALTH.defaultModeForSource(form?.source?.type),
-      max: hp.max,
+      defaultMode: INFINITE_HORROR_HEALTH.defaultModeForSource(derived?.form?.source?.type),
+      max: derived?.health?.max ?? 0,
     },
   };
 }
 
 function setResourceCurrent(actor, resourceId, rawValue) {
-  if (String(resourceId) === 'hp') return false;
   const runtime = actor.system.runtime;
   const custom = runtime.customResources.find(item => String(item.id) === String(resourceId));
-  if (custom) custom.current = finite(rawValue);
-  else {
-    runtime.resources[resourceId] ||= { current: 0, maxOverride: null, policy: 'preserve' };
-    runtime.resources[resourceId].current = finite(rawValue);
+  if (custom) {
+    custom.current = finite(rawValue);
+    return true;
   }
+  const form = currentFormFromSystem(actor.system);
+  if (!form?.resourceBases?.[resourceId]) return false;
+  runtime.resources[resourceId] ||= { current: finite(form.resourceBases[resourceId].baseMax), maxOverride: null, policy: 'preserve' };
+  runtime.resources[resourceId].current = finite(rawValue);
   return true;
 }
 
 function setResourceMaximum(actor, resourceId, rawValue) {
-  if (String(resourceId) === 'hp') return false;
   const runtime = actor.system.runtime;
   const custom = runtime.customResources.find(item => String(item.id) === String(resourceId));
-  if (custom) custom.max = Math.max(0, finite(rawValue));
-  else {
-    runtime.resources[resourceId] ||= { current: 0, maxOverride: null, policy: 'preserve' };
-    runtime.resources[resourceId].maxOverride = rawValue === '' || rawValue === null || rawValue === undefined
-      ? null
-      : Math.max(0, finite(rawValue));
+  if (custom) {
+    custom.max = Math.max(0, finite(rawValue));
+    return true;
   }
+  const form = currentFormFromSystem(actor.system);
+  if (!form?.resourceBases?.[resourceId]) return false;
+  runtime.resources[resourceId] ||= { current: finite(form.resourceBases[resourceId].baseMax), maxOverride: null, policy: 'preserve' };
+  runtime.resources[resourceId].maxOverride = rawValue === '' || rawValue === null || rawValue === undefined
+    ? null
+    : Math.max(0, finite(rawValue));
   return true;
 }
 
@@ -548,24 +554,22 @@ function healthResult(actor, operation) {
   const before = beforeContext.derived?.health;
   const runtime = INFINITE_HORROR_HEALTH.normalizeRuntime(actor.system.runtime.health, beforeContext.options);
   if (operation.type === 'health.set-mode') {
-    const switched = INFINITE_HORROR_HEALTH.switchMode(runtime, operation.mode, {
-      max: beforeContext.hp.max,
-    });
+    const switched = INFINITE_HORROR_HEALTH.switchMode(runtime, operation.mode, { max: beforeContext.max });
     actor.system.runtime.health = switched.runtime;
     return { changed: true, value: deriveInfiniteHorrorActor(actor).health, before };
   }
   if (operation.type === 'health.runtime') {
-    const result = INFINITE_HORROR_HEALTH.applyRuntimeOperation(runtime, operation.operation, {
-      max: beforeContext.hp.max,
-    });
-    if (!result?.changed) return { changed: false, blocked: result?.blocked || 'unsupported', before, value: result?.state || before };
+    const result = INFINITE_HORROR_HEALTH.applyRuntimeOperation(runtime, operation.operation, { max: beforeContext.max });
+    if (!result?.changed) {
+      return { changed: false, blocked: result?.blocked || 'unsupported', before, value: result?.state || before };
+    }
     actor.system.runtime.health = result.runtime;
     return { changed: true, before, value: deriveInfiniteHorrorActor(actor).health };
   }
   const method = operation.type === 'health.damage' ? 'applyDamage' : 'applyHealing';
   const result = INFINITE_HORROR_HEALTH[method]({
     runtime,
-    max: beforeContext.hp.max,
+    max: beforeContext.max,
     amount: operation.amount,
     type: operation.damageType,
   });
@@ -596,7 +600,6 @@ export function applyInfiniteHorrorActorOperation(actor, operation = {}, context
     actor.system.forms.push(form);
     actor.system.currentFormId = form.id;
     for (const definition of INFINITE_HORROR_RESOURCE_DEFS) {
-      if (definition.id === 'hp') continue;
       actor.system.runtime.resources[definition.id] ||= {
         current: form.resourceBases?.[definition.id]?.baseMax || 0,
         maxOverride: null,
@@ -625,43 +628,28 @@ export function applyInfiniteHorrorActorOperation(actor, operation = {}, context
     return { changed: true, value: clone(form) };
   }
   if (type === 'resource.set-current') {
-    if (String(operation.resourceId) === 'hp') {
-      const before = deriveInfiniteHorrorActor(actor).health;
-      const result = healthResult(actor, {
-        type: 'health.runtime',
-        operation: { type: 'set-current', value: operation.value },
-      });
-      return { ...result, before, value: result.value?.current ?? before?.current ?? 0 };
-    }
-    setResourceCurrent(actor, operation.resourceId, operation.value);
-    return { changed: true, value: resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.current`) };
+    const changed = setResourceCurrent(actor, operation.resourceId, operation.value);
+    return changed
+      ? { changed: true, value: resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.current`) }
+      : { changed: false, blocked: 'resource_not_found' };
   }
   if (type === 'resource.step') {
-    if (String(operation.resourceId) === 'hp') {
-      const health = deriveInfiniteHorrorActor(actor).health;
-      const result = healthResult(actor, {
-        type: 'health.runtime',
-        operation: { type: 'set-current', value: finite(health?.current) + finite(operation.amount) },
-      });
-      return { ...result, value: result.value?.current ?? health?.current ?? 0 };
-    }
-    const current = finite(resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.current`));
-    setResourceCurrent(actor, operation.resourceId, current + finite(operation.amount));
-    return { changed: true, value: resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.current`) };
+    const current = resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.current`);
+    if (current === null) return { changed: false, blocked: 'resource_not_found' };
+    const changed = setResourceCurrent(actor, operation.resourceId, finite(current) + finite(operation.amount));
+    return changed
+      ? { changed: true, value: resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.current`) }
+      : { changed: false, blocked: 'resource_not_found' };
   }
   if (type === 'resource.set-max') {
-    if (String(operation.resourceId) === 'hp') {
-      const result = healthResult(actor, {
-        type: 'health.runtime',
-        operation: { type: 'set-max', value: operation.value },
-      });
-      return { ...result, value: result.value?.max ?? deriveInfiniteHorrorActor(actor).health?.max ?? 0 };
-    }
-    setResourceMaximum(actor, operation.resourceId, operation.value);
-    return { changed: true, value: resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.max`) };
+    const changed = setResourceMaximum(actor, operation.resourceId, operation.value);
+    return changed
+      ? { changed: true, value: resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.max`) }
+      : { changed: false, blocked: 'resource_not_found' };
   }
   if (type === 'resource.add-custom') {
     const resourceId = identifier(operation.resourceId, (context.idFactory || defaultIdFactory)('resource'));
+    if (resourceId === 'hp') return { changed: false, blocked: 'reserved_resource_id' };
     const resource = {
       id: resourceId,
       name: text(operation.name, '特殊能量'),
@@ -698,10 +686,6 @@ export function applyInfiniteHorrorActorOperation(actor, operation = {}, context
   return { changed: false, blocked: 'unknown_actor_operation' };
 }
 
-function healthRole(resource) {
-  return resource.id === 'hp' ? 'health-base' : '';
-}
-
 function statusLevel(status) {
   if (status.destruction > 0 && status.current >= status.destruction) return 'danger';
   if (status.severe > 0 && status.current >= status.severe) return 'severe';
@@ -729,7 +713,6 @@ export function describeInfiniteHorrorActorSheet(actor) {
     current: resource.current,
     max: resource.max,
     custom: resource.custom,
-    role: healthRole(resource),
     currentOperation: { type: 'resource.set-current', resourceId: resource.id },
     maxOperation: { type: 'resource.set-max', resourceId: resource.id },
     decrementOperation: { type: 'resource.step', resourceId: resource.id, amount: -1 },
