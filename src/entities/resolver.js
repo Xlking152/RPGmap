@@ -5,11 +5,6 @@ import {
   resolveActorAttribute,
 } from '../actor/index.js';
 
-function finite(value, fallback = 0) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
-}
-
 export function resolveActor(actor, context = {}) {
   return deriveActorDocument(actor, context);
 }
@@ -54,33 +49,6 @@ export function setActorForm(actor, formId, context = {}) {
 
 export function cycleActorForm(actor, direction = 1, context = {}) {
   return performActorOperation(actor, { type: 'variant.cycle', direction }, context).value || null;
-}
-
-function canonicalEffectPath(actor, target, context) {
-  const raw = String(target || '');
-  const paths = new Set(listActorAttributePaths(actor, context).map(item => String(item?.path || '')).filter(Boolean));
-  if (paths.has(raw)) return raw;
-  const systemPath = raw.startsWith('system.') ? raw : `system.${raw}`;
-  if (paths.has(systemPath)) return systemPath;
-  const error = new Error(`Unknown Actor attribute path: ${raw || '(empty)'}`);
-  error.code = 'unknown_actor_attribute_path';
-  throw error;
-}
-
-export function addEffect(actor, { name = '临时效果', enabled = true, changes = [] } = {}, context = {}) {
-  actor.effects ||= [];
-  const effect = {
-    id: `effect-${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`,
-    name: String(name || '临时效果'),
-    enabled,
-    changes: changes.map(change => ({
-      target: canonicalEffectPath(actor, change.target, context),
-      mode: change.mode || 'add',
-      value: finite(change.value),
-    })).filter(change => change.target),
-  };
-  actor.effects.push(effect);
-  return effect;
 }
 
 export { listActorAttributePaths, performActorOperation, resolveActorAttribute };
