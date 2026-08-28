@@ -10,7 +10,8 @@ function escapeHtml(value) {
 }
 
 function currentEntityState(api) {
-  return normalizeEntityState(api.getState().preferences?.entitySystem, { ruleset: api.ruleset });
+  const appState = typeof api?.getState === 'function' ? api.getState() : null;
+  return normalizeEntityState(appState?.preferences?.entitySystem, { ruleset: api?.ruleset });
 }
 
 function actorFromSheet(api, documentNode) {
@@ -23,12 +24,13 @@ function actorFromSheet(api, documentNode) {
 function actorContext(api, actor) {
   const state = currentEntityState(api);
   return {
-    ruleset: api.ruleset,
+    ruleset: api?.ruleset,
     effects: resolveActorEffects(actor, state.statusDefinitions),
   };
 }
 
 function resolveActorHealth(actor, api) {
+  if (!api?.ruleset?.health) return null;
   return deriveActorDocument(actor, actorContext(api, actor))?.health || null;
 }
 
