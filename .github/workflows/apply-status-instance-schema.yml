@@ -1,0 +1,54 @@
+name: Apply Status Instance Schema Boundary
+
+on:
+  push:
+    branches:
+      - refactor/status-definition-authority
+    paths:
+      - .github/workflows/apply-status-instance-schema.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refactor/status-definition-authority
+      - name: Enforce runtime-only EffectInstance schema
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const serverPath = 'deployment/local-server/status-operations.mjs';
+          let server = fs.readFileSync(serverPath, 'utf8');
+          const categories = "const CATEGORIES = new Set(['buff', 'debuff', 'trait', 'status']);";
+          const definitionOwned = `${categories}\nconst DEFINITION_OWNED_EFFECT_KEYS = Object.freeze([\n  'name', 'label', 'description', 'icon', 'color', 'category', 'scope', 'scopes',\n  'maxStacks', 'capabilities', 'statusId', 'changes',\n]);`;
+          if (!server.includes(categories)) throw new Error('Status category constant not found');
+          if (!server.includes('DEFINITION_OWNED_EFFECT_KEYS')) server = server.replace(categories, definitionOwned);
+
+          const boundary = `  if (!definitionId) {\n    if (legacy && typeof effect.name === 'string' && Array.isArray(effect.changes)) return effect;\n    fail(\`${'${label}'}.definitionId is required\`, 'invalid_status_reference');\n  }`;
+          const boundaryWithGuard = `${boundary}\n  if (!legacy) {\n    for (const key of DEFINITION_OWNED_EFFECT_KEYS) {\n      if (Object.hasOwn(effect, key)) {\n        fail(\`${'${label}'}.${'${key}'} belongs to StatusDefinition, not EffectInstance\`, 'status_instance_rule_data_forbidden');\n      }\n    }\n  }`;
+          if (!server.includes(boundary)) throw new Error('EffectInstance definition boundary not found');
+          if (!server.includes("status_instance_rule_data_forbidden")) server = server.replace(boundary, boundaryWithGuard);
+          fs.writeFileSync(serverPath, server);
+
+          const testPath = 'tests/status-server-operations.test.js';
+          let test = fs.readFileSync(testPath, 'utf8');
+          const marker = "test('modern server schema rejects Definition-owned fields on Effect instances'";
+          if (!test.includes(marker)) {
+            test += `\n\ntest('modern server schema rejects Definition-owned fields on Effect instances', () => {\n  const forgedValues = {\n    name: '伪造状态名', label: '伪造标签', description: '伪造描述', icon: 'shield',\n    color: '#225588', category: 'buff', scope: 'actor', scopes: ['actor'], maxStacks: 2,\n    capabilities: {}, statusId: 'status-rooted', changes: [],\n  };\n  for (const [key, value] of Object.entries(forgedValues)) {\n    const initial = world();\n    initial.preferences.entitySystem.actors[0].effects.push({\n      id: \`effect-forged-\${key}\`, definitionId: 'status-rooted', stacks: 1, enabled: true, [key]: value,\n    });\n    assert.throws(\n      () => assertStatusState(initial.preferences.entitySystem),\n      error => error?.code === 'status_instance_rule_data_forbidden',\n      \`modern EffectInstance should reject Definition-owned field: \${key}\`,\n    );\n  }\n});\n`;
+          }
+          fs.writeFileSync(testPath, test);
+          NODE
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deployment/local-server/status-operations.mjs tests/status-server-operations.test.js
+          git commit -m "Enforce runtime-only EffectInstance schema"
+          git push origin HEAD:refactor/status-definition-authority
