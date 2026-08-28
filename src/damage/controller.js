@@ -3,11 +3,15 @@ export function createDamageController({ selection } = {}) {
     register(api) {
       const selectedIds = () => selection?.getSelectedTokenIds?.() || api.selection?.getSelectedTokenIds?.() || [];
       api.damage = {
-        applyToTokenIds(tokenIds, damage) {
-          return api.health?.applyDamageToTokenIds?.(tokenIds, damage) || [];
+        async applyToTokenIds(tokenIds, damage) {
+          return api.health?.applyDamageToTokenIds
+            ? api.health.applyDamageToTokenIds(tokenIds, damage)
+            : [];
         },
-        applyToSelected(damage) {
-          return api.health?.applyDamageToTokenIds?.(selectedIds(), damage) || [];
+        async applyToSelected(damage) {
+          return api.health?.applyDamageToTokenIds
+            ? api.health.applyDamageToTokenIds(selectedIds(), damage)
+            : [];
         },
       };
     },
