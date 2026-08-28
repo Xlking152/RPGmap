@@ -91,8 +91,7 @@ export function createHealthController() {
           const actor = store.actor(actorId);
           if (!actor || !canEditActor(actor.id)) return null;
           const result = runHealthOperation(actor, { type: 'health.set-mode', mode }, api.ruleset);
-          if (!result.changed) return result.value || resolveActorHealth(actor, api.ruleset);
-          persistHealth(store, [actor.id]);
+          if (result.changed) persistHealth(store, [actor.id]);
           return result.value || resolveActorHealth(actor, api.ruleset);
         },
         performActorOperation(actorId, operation) {
@@ -100,10 +99,15 @@ export function createHealthController() {
           store.load({ migrateLegacy: false, dropMarkers: false });
           const actor = store.actor(actorId);
           if (!actor || !canEditActor(actor.id)) return null;
+          const before = resolveActorHealth(actor, api.ruleset);
           const result = runHealthOperation(actor, { type: 'health.runtime', operation }, api.ruleset);
-          if (!result.changed) return result;
-          persistHealth(store, [actor.id]);
-          return result;
+          if (result.changed) persistHealth(store, [actor.id]);
+          return {
+            before,
+            after: result.value || before,
+            changed: Boolean(result.changed),
+            blocked: result.blocked || null,
+          };
         },
         applyDamageToTokenIds(tokenIds, damage) {
           const store = new EntityStore(api);
@@ -120,8 +124,11 @@ export function createHealthController() {
               actorId: target.actor.id,
               actorName: target.actor.name,
               synthetic: target.synthetic,
-              ...operation,
-              ...(operation.value || {}),
+              before: operation.before || null,
+              after: operation.value || resolveActorHealth(target.actor, api.ruleset),
+              applied: operation.applied || 0,
+              overflow: operation.overflow || 0,
+              blocked: operation.blocked || null,
             };
             persistSyntheticActor(target);
             return result;
@@ -148,8 +155,11 @@ export function createHealthController() {
               actorId: target.actor.id,
               actorName: target.actor.name,
               synthetic: target.synthetic,
-              ...operation,
-              ...(operation.value || {}),
+              before: operation.before || null,
+              after: operation.value || resolveActorHealth(target.actor, api.ruleset),
+              applied: operation.applied || 0,
+              overflow: operation.overflow || 0,
+              blocked: operation.blocked || null,
             };
             persistSyntheticActor(target);
             return result;
