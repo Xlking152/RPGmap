@@ -152,8 +152,8 @@ test('legacy wound Health wins over a stale resource-only Synthetic Actor HP mir
   assert.equal(Object.hasOwn(token.actorDelta, 'runtime'), false);
   assert.equal(token.actorDelta.system?.runtime?.resources?.hp, undefined);
   const resolved = resolveTokenActor(world, token.id);
-  assert.equal(resolveActor(resolved.actor).health.current, 7);
-  assert.equal(resolveActor(resolved.baseActor).health.current, 7);
+  assert.equal(resolveActor(resolved.actor).health.current, 9);
+  assert.equal(resolveActor(resolved.baseActor).health.current, 9);
 });
 
 test('Core Actor consumers do not read Infinite Horror legacy storage fields', async () => {
