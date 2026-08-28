@@ -1,0 +1,125 @@
+name: Apply Status Target Validation
+
+on:
+  push:
+    branches:
+      - refactor/status-definition-authority
+    paths:
+      - .github/workflows/apply-status-target-validation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refactor/status-definition-authority
+      - name: Patch Ruleset-aware Status target validation
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          function replace(path, from, to, label = path) {
+            let source = fs.readFileSync(path, 'utf8');
+            if (!source.includes(from)) throw new Error(`Pattern not found (${label})`);
+            source = source.replace(from, to);
+            fs.writeFileSync(path, source);
+          }
+
+          // Ruleset Contract: expose an optional Status target canonicalizer.
+          replace(
+            'src/ruleset/contract.js',
+            `    statuses: Object.freeze({\n      definitions: frozenArray(statuses.definitions),\n      derive: optionalFunction(statuses.derive),\n    }),`,
+            `    statuses: Object.freeze({\n      definitions: frozenArray(statuses.definitions),\n      derive: optionalFunction(statuses.derive),\n      canonicalizeChangeTarget: optionalFunction(statuses.canonicalizeChangeTarget),\n    }),`,
+            'ruleset statuses contract',
+          );
+
+          // Infinite Horror: make the existing path canonicalizer a public Ruleset helper.
+          {
+            const path = 'src/rulesets/infinite-horror/actor.js';
+            let source = fs.readFileSync(path, 'utf8');
+            if (!source.includes('function canonicalPath(path) {')) throw new Error('Infinite Horror canonicalPath declaration not found');
+            source = source.replace('function canonicalPath(path) {', 'export function canonicalizeInfiniteHorrorAttributePath(path) {');
+            source = source.replaceAll('canonicalPath(', 'canonicalizeInfiniteHorrorAttributePath(');
+            fs.writeFileSync(path, source);
+          }
+
+          replace(
+            'src/rulesets/infinite-horror/index.js',
+            `import { INFINITE_HORROR_ACTOR } from './actor.js';`,
+            `import { canonicalizeInfiniteHorrorAttributePath, INFINITE_HORROR_ACTOR } from './actor.js';`,
+            'Infinite Horror actor import',
+          );
+          replace(
+            'src/rulesets/infinite-horror/index.js',
+            `  statuses: {\n    definitions: INFINITE_HORROR_STATUS_DEFINITIONS,\n    derive: deriveInfiniteHorrorStatuses,\n  },`,
+            `  statuses: {\n    definitions: INFINITE_HORROR_STATUS_DEFINITIONS,\n    derive: deriveInfiniteHorrorStatuses,\n    canonicalizeChangeTarget: (_actor, path) => canonicalizeInfiniteHorrorAttributePath(path),\n  },`,
+            'Infinite Horror status contract',
+          );
+
+          // Status Controller: canonicalize on authoring and validate on Actor application.
+          replace(
+            'src/status/controller.js',
+            `} from './model.js';\n`,
+            `} from './model.js';\nimport { validateStatusDefinitionForActors } from './target-validation.js';\n`,
+            'Status target validator import',
+          );
+          replace(
+            'src/status/controller.js',
+            `      function definitions() {\n        return getStatusDefinitions(currentEntityState());\n      }\n\n      function resolve(context = {}, tokenId = null) {`,
+            `      function definitions() {\n        return getStatusDefinitions(currentEntityState());\n      }\n\n      function definitionById(state, definitionId) {\n        return getStatusDefinitions(state).find(definition =>\n          String(definition.id) === String(definitionId || '')) || null;\n      }\n\n      function affectedActors(state, definitionId, actorId = null) {\n        const result = new Map();\n        const add = (key, actor) => { if (actor) result.set(String(key), actor); };\n        if (actorId != null) {\n          add(\`actor:\${actorId}\`, (state.actors || []).find(actor => String(actor?.id) === String(actorId)));\n        }\n        for (const actor of state.actors || []) {\n          if ((actor.effects || []).some(effect => String(effect?.definitionId) === String(definitionId))) {\n            add(\`actor:\${actor.id}\`, actor);\n          }\n        }\n        if (typeof api.tokens?.resolveActor === 'function') {\n          for (const token of state.tokens || []) {\n            if (token?.actorLink !== false) continue;\n            let resolved = null;\n            try { resolved = api.tokens.resolveActor(token.id); } catch { resolved = null; }\n            if (!resolved?.synthetic || !resolved.actor) continue;\n            if ((resolved.actor.effects || []).some(effect => String(effect?.definitionId) === String(definitionId))) {\n              add(\`synthetic:\${token.id}\`, resolved.actor);\n            }\n          }\n        }\n        return [...result.values()];\n      }\n\n      function canonicalDefinition(definition, options = {}) {\n        const state = currentEntityState();\n        const actors = affectedActors(state, definition?.id, options?.actorId);\n        return validateStatusDefinitionForActors(definition, actors, api.ruleset);\n      }\n\n      function validateApplyPayload(payload) {\n        if (payload?.scope !== 'actor') return;\n        const state = currentEntityState();\n        const actor = (state.actors || []).find(item => String(item?.id) === String(payload.targetId));\n        const definition = definitionById(state, payload.definitionId ?? payload.statusId);\n        if (actor && definition) validateStatusDefinitionForActors(definition, [actor], api.ruleset);\n      }\n\n      function resolve(context = {}, tokenId = null) {`,
+            'Status controller validation helpers',
+          );
+          replace(
+            'src/status/controller.js',
+            `      function apply(input, targetId, definitionId, options) {\n        return perform('status.apply', targetPayload(input, targetId, definitionId, options));\n      }`,
+            `      async function apply(input, targetId, definitionId, options) {\n        const payload = targetPayload(input, targetId, definitionId, options);\n        validateApplyPayload(payload);\n        return perform('status.apply', payload);\n      }`,
+            'Status controller apply validation',
+          );
+          replace(
+            'src/status/controller.js',
+            `      function applyBatch(operations = []) {\n        const values = Array.isArray(operations) ? operations.map(operation => clone(operation)) : [];\n        return perform('status.batch', { operations: values });\n      }\n\n      function upsertDefinition(definition) {\n        return perform('status.definition.upsert', { definition: clone(definition) });\n      }`,
+            `      async function applyBatch(operations = []) {\n        const values = Array.isArray(operations) ? operations.map(operation => clone(operation)) : [];\n        for (const operation of values) {\n          if (operation?.type === 'status.apply') validateApplyPayload(operation);\n        }\n        return perform('status.batch', { operations: values });\n      }\n\n      async function upsertDefinition(definition, options = {}) {\n        const canonical = canonicalDefinition(definition, options);\n        return perform('status.definition.upsert', { definition: canonical });\n      }`,
+            'Status batch and definition validation',
+          );
+
+          // Synthetic Actor writes bypass the base controller, so validate them too.
+          replace(
+            'src/token/status-bridge.js',
+            `import { resolveStatuses } from '../status/model.js';\n`,
+            `import { resolveStatuses } from '../status/model.js';\nimport { validateStatusDefinitionForActors } from '../status/target-validation.js';\n`,
+            'Synthetic Status validator import',
+          );
+          replace(
+            'src/token/status-bridge.js',
+            `      function currentSyntheticStatus(tokenId, definitionId) {\n        return resolve({ tokenId }).actorStatuses.find(status =>\n          String(status.definitionId) === String(definitionId)) || null;\n      }\n\n      async function commitSyntheticOperations(operations) {`,
+            `      function currentSyntheticStatus(tokenId, definitionId) {\n        return resolve({ tokenId }).actorStatuses.find(status =>\n          String(status.definitionId) === String(definitionId)) || null;\n      }\n\n      function validateSyntheticApply(operation) {\n        if (operation?.type !== 'status.apply') return;\n        let resolved = null;\n        try { resolved = api.tokens?.resolveActor?.(operation.targetId); } catch { resolved = null; }\n        const definition = api.status.getDefinitions?.().find(item =>\n          String(item?.id) === String(operation.definitionId ?? operation.statusId));\n        if (resolved?.synthetic && resolved.actor && definition) {\n          validateStatusDefinitionForActors(definition, [resolved.actor], api.ruleset);\n        }\n      }\n\n      async function commitSyntheticOperations(operations) {\n        for (const operation of operations) validateSyntheticApply(operation);`,
+            'Synthetic Status apply validation',
+          );
+
+          // Definition editor supplies the current Actor context for immediate validation.
+          replace(
+            'src/status/ui.js',
+            `    try {\n      const values = new FormData(form);`,
+            `    try {\n      const context = getContext?.() || {};\n      const values = new FormData(form);`,
+            'Status definition editor context',
+          );
+          replace(
+            'src/status/ui.js',
+            `      void perform(\`definition:\${id}\`, async () => { const result = await statusApiCall(api, 'upsertDefinition', definition); closeDefinitionEditor(); return result; }, '状态定义已获服务器确认').then(() => {`,
+            `      void perform(\`definition:\${id}\`, async () => { const result = await statusApiCall(api, 'upsertDefinition', definition, { actorId: context.actor?.id }); closeDefinitionEditor(); return result; }, '状态定义已获服务器确认').then(() => {`,
+            'Status definition editor validation options',
+          );
+          NODE
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/ruleset/contract.js src/rulesets/infinite-horror/actor.js src/rulesets/infinite-horror/index.js src/status/controller.js src/status/ui.js src/token/status-bridge.js
+          git commit -m "Validate Status targets through Ruleset contract"
+          git push origin HEAD:refactor/status-definition-authority
