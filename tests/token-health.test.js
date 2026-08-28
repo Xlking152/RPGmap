@@ -57,7 +57,8 @@ test('damage to one unlinked Token writes actorDelta and leaves its Base Actor a
 
   const damagedToken = api.tokens.get('npc-a');
   assert.equal(damagedToken.actorLink, false);
-  assert.equal(damagedToken.actorDelta.system.runtime.resources.hp.current, 7);
+  assert.equal(damagedToken.actorDelta.system.runtime.health.current, 7);
+  assert.equal(damagedToken.actorDelta.system.runtime.resources?.hp, undefined);
 });
 
 test('two unlinked Tokens sharing one template take damage independently', async () => {
@@ -90,9 +91,10 @@ test('healing an unlinked Token updates only that Token delta', async () => {
   await api.tokens.create({
     actorId: 'actor-template', id: 'npc-a', actorLink: false,
     actorDelta: {
-      runtime: {
-        resources: { hp: { current: 4 } },
-        health: { mode: 'simple' },
+      system: {
+        runtime: {
+          health: { mode: 'simple', current: 4 },
+        },
       },
     },
   });
