@@ -33,11 +33,16 @@ const liveRuntimeFiles = [
   'src/movement/ghost.js',
   'src/token/model.js',
   'src/movement/controller-v2.js',
+  'src/movement/controller-v3.js',
+  'src/movement/route-inspector.js',
   'src/movement/token-runtime.js',
   'src/measurement/controller-v2.js',
   'src/elevation/model.js',
   'src/elevation/runtime-context.js',
+  'src/interaction/map-inspector.js',
   'src/scene/areas.js',
+  'src/scene/area-handle-geometry.js',
+  'src/scene/area-handles.js',
 ];
 
 function source(path) {
