@@ -36,7 +36,16 @@ export function createTokenRuntimeSystem() {
         get(tokenId) { return getActiveSceneToken(api.world.get(), tokenId); },
         resolveActor(tokenId) { return resolveTokenActor(api.world.get(), tokenId, { ruleset: api.ruleset }); },
         async create(options = {}) {
-          return commit(createSceneToken(api.world.get(), options), {
+          const world = api.world.get();
+          const actor = world.actors?.find(item => String(item?.id) === String(options.actorId));
+          if (!actor) throw new Error(`Unknown Actor: ${options.actorId || '(missing)'}`);
+          const prototype = object(actor.prototypeToken);
+          const input = {
+            ...options,
+            diameterMeters: options.diameterMeters ?? prototype.diameterMeters ?? 1,
+            showName: options.showName ?? prototype.showName ?? true,
+          };
+          return commit(createSceneToken(world, input), {
             source: 'token-v2:create', reason: 'token.create', render: true,
           });
         },
