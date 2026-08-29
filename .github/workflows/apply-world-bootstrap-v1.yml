@@ -24,7 +24,21 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - name: Apply integration patch
         run: python .github/world-bootstrap-patch.py
-      - run: npm test
+      - name: Run tests with diagnostic capture
+        shell: bash
+        run: |
+          set +e
+          npm test > /tmp/world-bootstrap-test.log 2>&1
+          CODE=$?
+          if [ "$CODE" -ne 0 ]; then
+            tail -n 500 /tmp/world-bootstrap-test.log > .github/world-bootstrap-test-failure.txt
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/world-bootstrap-test-failure.txt
+            git commit -m "Capture World Bootstrap test failure" || true
+            git push origin HEAD:feature/world-bootstrap-v1
+            exit "$CODE"
+          fi
       - name: Check JavaScript syntax
         shell: bash
         run: find src deployment scripts tests -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check
