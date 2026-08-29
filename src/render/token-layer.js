@@ -2,6 +2,7 @@ import L from 'leaflet';
 import { worldToLatLng } from '../engine/geometry.js';
 import { formatFt } from '../elevation/model.js';
 import { resolveStatusUiSnapshot, renderTokenStatusBadges } from '../status/ui.js';
+import { interpolateTokenPoint, normalizeTokenPoint, sameTokenPoint, tokenMoveDuration } from './token-motion.js';
 import { createTokenViewModel } from './token-view-model.js';
 
 const TOKEN_PANE = 'tokenV2Pane';
@@ -33,6 +34,9 @@ function installStyles(documentNode) {
     .rpg-token-v2 .rpg-token-v2-core { border-radius:50%; overflow:hidden; }
     .rpg-token-v2 .rpg-token-v2-portrait { width:100%; height:100%; display:grid; place-items:center; border-radius:inherit; overflow:hidden; }
     .rpg-token-v2 .rpg-token-v2-portrait img { width:100%; height:100%; object-fit:cover; }
+    .token-v2-label-row { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+    .token-v2-elevation-label { display:inline-flex; align-items:center; min-height:17px; padding:1px 4px; border-radius:4px; color:#eaf6f7; background:rgba(42,67,72,.92); font-size:9px; font-weight:800; line-height:1.2; }
+    .token-v2-name-label { font-weight:750; }
     .rpgmap-token-status-v2-marker { background:transparent !important; border:0 !important; pointer-events:none !important; overflow:visible !important; }
   `;
   documentNode.head.append(style);
@@ -55,10 +59,9 @@ function tokenIcon(api, model) {
   const portrait = model.avatarDataUrl
     ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="">`
     : `<span>${escapeHtml((Array.from(model.name)[0] || '?').toUpperCase())}</span>`;
-  const elevation = `<div class="token-elevation-label">${escapeHtml(formatFt(model.elevationFt))} ft</div>`;
   return L.divIcon({
     className: 'rpg-token-v2',
-    html: `<div class="rpg-token-v2-core${model.selected ? ' selected' : ''}" data-token-id="${escapeHtml(model.id)}" style="--token-color:${model.color};--token-size:${size}px"><div class="rpg-token-v2-portrait" style="transform:rotate(${model.rotation}deg)">${portrait}</div></div>${elevation}`,
+    html: `<div class="rpg-token-v2-core${model.selected ? ' selected' : ''}" data-token-id="${escapeHtml(model.id)}" style="--token-color:${model.color};--token-size:${size}px"><div class="rpg-token-v2-portrait" style="transform:rotate(${model.rotation}deg)">${portrait}</div></div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
@@ -69,8 +72,15 @@ function setTooltip(api, documentNode, view, model) {
     if (view.getTooltip?.()) view.unbindTooltip();
     return;
   }
-  const node = documentNode.createElement('span');
-  node.textContent = model.name;
+  const row = documentNode.createElement('span');
+  row.className = 'token-v2-label-row';
+  const elevation = documentNode.createElement('span');
+  elevation.className = 'token-v2-elevation-label';
+  elevation.textContent = `${formatFt(model.elevationFt)} ft`;
+  const name = documentNode.createElement('span');
+  name.className = 'token-v2-name-label';
+  name.textContent = model.name;
+  row.append(elevation, name);
   const options = {
     permanent: true,
     direction: 'top',
@@ -78,7 +88,7 @@ function setTooltip(api, documentNode, view, model) {
     className: 'marker-tooltip token-v2-tooltip',
   };
   if (view.getTooltip?.()) view.unbindTooltip();
-  view.bindTooltip(node, options);
+  view.bindTooltip(row, options);
 }
 
 export function createTokenRendererSystem() {
@@ -89,6 +99,14 @@ export function createTokenRendererSystem() {
       }
 
       const documentNode = api.map.getContainer().ownerDocument || document;
+      const windowNode = documentNode.defaultView || globalThis;
+      const reducedMotion = windowNode.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true;
+      const requestFrame = callback => windowNode.requestAnimationFrame
+        ? windowNode.requestAnimationFrame(callback)
+        : windowNode.setTimeout(() => callback(windowNode.performance?.now?.() || Date.now()), 16);
+      const cancelFrame = id => windowNode.cancelAnimationFrame
+        ? windowNode.cancelAnimationFrame(id)
+        : windowNode.clearTimeout(id);
       installStyles(documentNode);
       ensurePane(api.map, TOKEN_PANE, 515);
       ensurePane(api.map, STATUS_PANE, 540, { pointerEvents: 'none' });
@@ -96,6 +114,8 @@ export function createTokenRendererSystem() {
       const tokenLayer = L.layerGroup([], { pane: TOKEN_PANE }).addTo(api.map);
       const statusLayer = L.layerGroup([], { pane: STATUS_PANE }).addTo(api.map);
       const views = new Map();
+      const visualPoints = new Map();
+      const animations = new Map();
       let selectedIds = new Set(api.selection?.getSelectedTokenIds?.() || []);
       let destroyed = false;
       const off = [];
@@ -115,9 +135,18 @@ export function createTokenRendererSystem() {
         }
       }
 
+      function cancelMotion(id, { emitEnd = false } = {}) {
+        const motion = animations.get(id);
+        if (!motion) return;
+        if (motion.frame !== null) cancelFrame(motion.frame);
+        animations.delete(id);
+        if (emitEnd) api.emit?.('token:visual-move-end', { id, tokenId: id, point: visualPoints.get(id) || null });
+      }
+
       function renderStatuses(models, tokensById) {
         statusLayer.clearLayers();
         for (const model of models) {
+          if (animations.has(model.id)) continue;
           const token = tokensById.get(model.id);
           if (!token) continue;
           const snapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
@@ -138,6 +167,66 @@ export function createTokenRendererSystem() {
         }
       }
 
+      function beginSegment(motion, target) {
+        motion.from = normalizeTokenPoint(visualPoints.get(motion.id) || motion.from || target);
+        motion.target = normalizeTokenPoint(target);
+        motion.startedAt = null;
+        motion.duration = tokenMoveDuration(motion.from, motion.target);
+        const step = timestamp => {
+          if (destroyed || animations.get(motion.id) !== motion) return;
+          if (motion.startedAt === null) motion.startedAt = Number(timestamp) || 0;
+          const elapsed = Math.max(0, (Number(timestamp) || 0) - motion.startedAt);
+          const progress = motion.duration > 0 ? Math.min(1, elapsed / motion.duration) : 1;
+          const point = interpolateTokenPoint(motion.from, motion.target, progress) || motion.target;
+          visualPoints.set(motion.id, point);
+          motion.view.setLatLng(worldToLatLng(point, api.mapPackage.height));
+          if (progress < 1) {
+            motion.frame = requestFrame(step);
+            return;
+          }
+          visualPoints.set(motion.id, motion.target);
+          motion.view.setLatLng(worldToLatLng(motion.target, api.mapPackage.height));
+          if (motion.queue.length) {
+            const next = motion.queue.shift();
+            beginSegment(motion, next);
+            return;
+          }
+          animations.delete(motion.id);
+          motion.frame = null;
+          api.emit?.('token:visual-move-end', { id: motion.id, tokenId: motion.id, point: motion.target });
+          render();
+        };
+        motion.frame = requestFrame(step);
+      }
+
+      function moveView(model, view) {
+        const id = model.id;
+        const target = normalizeTokenPoint(model);
+        if (!target) return;
+        const current = visualPoints.get(id);
+        if (!current) {
+          visualPoints.set(id, target);
+          view.setLatLng(worldToLatLng(target, api.mapPackage.height));
+          return;
+        }
+        const active = animations.get(id);
+        if (active) {
+          active.view = view;
+          if (sameTokenPoint(active.target, target) || active.queue.some(point => sameTokenPoint(point, target))) return;
+          active.queue.push(target);
+          return;
+        }
+        if (sameTokenPoint(current, target) || reducedMotion) {
+          visualPoints.set(id, target);
+          view.setLatLng(worldToLatLng(target, api.mapPackage.height));
+          return;
+        }
+        const motion = { id, view, from: current, target, queue: [], frame: null, startedAt: null, duration: 0 };
+        animations.set(id, motion);
+        api.emit?.('token:visual-move-start', { id, tokenId: id, from: current, to: target });
+        beginSegment(motion, target);
+      }
+
       function render() {
         if (destroyed) return;
         const tokens = api.tokens.list();
@@ -147,20 +236,24 @@ export function createTokenRendererSystem() {
 
         for (const [id, view] of views) {
           if (visibleIds.has(id)) continue;
+          cancelMotion(id, { emitEnd: true });
           tokenLayer.removeLayer(view);
           views.delete(id);
+          visualPoints.delete(id);
         }
 
         for (const model of models) {
           let view = views.get(model.id);
           if (!view) {
-            view = L.marker(worldToLatLng({ x: model.x, y: model.y }, api.mapPackage.height), {
+            const point = normalizeTokenPoint(model);
+            view = L.marker(worldToLatLng(point, api.mapPackage.height), {
               icon: tokenIcon(api, model),
               keyboard: true,
               pane: TOKEN_PANE,
               title: model.showName ? model.name : 'Token',
               rpgTokenId: model.id,
             }).addTo(tokenLayer);
+            visualPoints.set(model.id, point);
             view.on('click', event => {
               L.DomEvent.stopPropagation(event);
               const token = api.tokens.get(model.id);
@@ -170,7 +263,7 @@ export function createTokenRendererSystem() {
             });
             views.set(model.id, view);
           }
-          view.setLatLng(worldToLatLng({ x: model.x, y: model.y }, api.mapPackage.height));
+          moveView(model, view);
           view.setIcon(tokenIcon(api, model));
           view.options.title = model.showName ? model.name : 'Token';
           setTooltip(api, documentNode, view, model);
@@ -196,6 +289,7 @@ export function createTokenRendererSystem() {
         destroyed = true;
         api.map.off('zoomend', render);
         api.map.off('resize', render);
+        for (const id of [...animations.keys()]) cancelMotion(id);
         tokenLayer.clearLayers();
         statusLayer.clearLayers();
         api.map.removeLayer?.(tokenLayer);
@@ -207,6 +301,8 @@ export function createTokenRendererSystem() {
         canonicalSceneTokens: true,
         renderTokens: render,
         getVisibleTokenIds() { return [...views.keys()]; },
+        getVisualTokenPoint(tokenId) { return normalizeTokenPoint(visualPoints.get(String(tokenId))); },
+        isTokenMoving(tokenId) { return animations.has(String(tokenId)); },
       });
       render();
       api.emit?.('renderer:ready', { canonicalSceneTokens: true, count: views.size });
