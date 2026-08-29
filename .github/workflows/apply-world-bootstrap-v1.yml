@@ -31,6 +31,7 @@ jobs:
       - name: Diagnose tests file by file
         shell: bash
         run: |
+          # Iteration 2: Actor top-level presentation fields are now part of the Core contract.
           set +e
           : > /tmp/world-bootstrap-test.log
           CODE=0
