@@ -117,15 +117,15 @@ export function createAppShellUiV2() {
 
       if (toolbar) {
         toolbar.replaceChildren();
+        // Select/browse mode already owns direct Feature inspection through the
+        // map inspector, so a second "inspect" tool button only duplicates UI.
         const select = button(documentNode, '选择', () => { setMainTool('pan'); activatePanel('current'); });
         select.dataset.mainTool = 'pan';
         select.classList.add('active');
-        const inspect = button(documentNode, '检查地物', () => { setMainTool('inspect'); activatePanel('inspect'); });
-        inspect.dataset.mainTool = 'inspect';
         const range = button(documentNode, '范围', () => { setMainTool('aoe'); activatePanel('areas'); });
         range.dataset.mainTool = 'aoe';
         const layers = button(documentNode, '图层', () => { setMainTool('pan'); activatePanel('layers'); });
-        toolbar.append(select, inspect, range, layers);
+        toolbar.append(select, range, layers);
       }
 
       if (toolbarRight) {
