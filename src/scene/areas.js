@@ -93,7 +93,15 @@ export function createSceneAreaSystem() {
       }
 
       function resolvedArea(area) {
-        return { ...area, origin: resolvedOrigin(area) };
+        // Live Scene areas keep their canonical Token/Marker anchor. Damage
+        // geometry is a resolved snapshot: the legacy geometry validator only
+        // needs the current origin, and historical damage must not follow a
+        // Token after the attack has already been committed.
+        return {
+          ...area,
+          origin: resolvedOrigin(area),
+          anchor: { type: 'free', markerId: null },
+        };
       }
 
       async function commitAreas(nextAreas, source = 'scene-area') {
@@ -345,7 +353,9 @@ export function createSceneAreaSystem() {
           const anchor = type === 'token' ? { type: 'token', tokenId: value }
             : type === 'marker' ? { type: 'marker', markerId: value }
               : { type: 'free', markerId: null };
-          void patchArea(area.id, { anchor, origin: resolvedOrigin(area) });
+          // Resolve the new binding rather than the previous one so the stored
+          // fallback origin immediately matches the selected Token/Marker.
+          void patchArea(area.id, { anchor, origin: resolvedOrigin({ ...area, anchor }) });
           return;
         }
         if (['visible', 'destructionEnabled', 'severeDamage', 'craterEnabled'].includes(target.name)) {

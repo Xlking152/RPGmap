@@ -154,10 +154,9 @@ export function createChatController({ selection } = {}) {
           const appendAfterWorld = ['combat', 'damage', 'healing'].includes(requested)
             ? api.multiplayer?.appendChatAfterWorld
             : api.multiplayer?.appendChat;
-          if (!appendAfterWorld?.({ text, event, data })) {
-            status('聊天未发送：服务器连接不可用');
-          }
-          return null;
+          const sent = appendAfterWorld?.({ text, event, data }) === true;
+          if (!sent) status('聊天未发送：服务器连接不可用');
+          return sent;
         }
         const item = store.append({ type, text, data });
         render();
@@ -197,7 +196,11 @@ export function createChatController({ selection } = {}) {
           const input = event.target.querySelector('[data-chat-message-input]');
           const value = input?.value?.trim();
           if (!value) return;
-          append('chat', value);
+          const sent = append('chat', value);
+          if (sent === false) return;
+          input.value = '';
+          input.focus();
+          if (api.multiplayer?.getStatus?.()?.connected) status('消息已发送 · 等待服务器同步');
           return;
         }
         if (event.target.matches('[data-chat-damage-form]')) {
