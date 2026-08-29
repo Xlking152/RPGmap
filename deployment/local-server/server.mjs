@@ -36,6 +36,10 @@ import {
   createWorldOperationPatch,
   projectWorldOperationState,
 } from './world-operations.mjs';
+import {
+  migrateLegacySceneFeatureStates,
+  stripLegacyFeatureStateProjection,
+} from './feature-states.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '0.0.0.0';
@@ -314,8 +318,15 @@ const loadedWorld = await loadRequiredJson(WORLD_FILE, 'world');
 if (loadedWorld !== undefined) {
   if (!loadedWorld || typeof loadedWorld !== 'object' || Array.isArray(loadedWorld)) await quarantineCorruptFile(WORLD_FILE, 'world', new Error('root must be an object'));
   if (loadedWorld.state !== null && loadedWorld.state !== undefined) {
-    try { assertWorldState(loadedWorld.state); }
-    catch (error) { await quarantineCorruptFile(WORLD_FILE, 'world', error); }
+    try {
+      const migration = migrateLegacySceneFeatureStates(loadedWorld.state);
+      assertWorldState(migration.state);
+      loadedWorld.state = migration.state;
+      if (migration.migrated) await writeJsonWithBackup(WORLD_FILE, 'world', loadedWorld);
+    } catch (error) {
+      if (error?.code === 'feature_state_migration_conflict') throw error;
+      await quarantineCorruptFile(WORLD_FILE, 'world', error);
+    }
   }
   world = {
     schemaVersion: 1,
@@ -377,7 +388,11 @@ if (loadedAccess !== undefined) {
 
 let persistChain = Promise.resolve();
 function persistWorld(snapshot) {
-  const task = persistChain.catch(() => {}).then(() => writeJsonWithBackup(WORLD_FILE, 'world', snapshot));
+  const durable = {
+    ...structuredClone(snapshot),
+    state: snapshot.state ? stripLegacyFeatureStateProjection(snapshot.state) : snapshot.state,
+  };
+  const task = persistChain.catch(() => {}).then(() => writeJsonWithBackup(WORLD_FILE, 'world', durable));
   persistChain = task;
   return task;
 }
@@ -815,6 +830,15 @@ server.on('upgrade', (req, socket) => {
         return sendWorldOperationDenied(socket, message, 'identity_pending', '等待 GM 批准身份后才能操作 World');
       }
 
+      if (session.role !== 'gm' && envelope.operations.some(operation => operation.type === 'scene.featureState.patch')) {
+        return sendWorldOperationDenied(
+          socket,
+          message,
+          'scene_feature_state_gm_only',
+          'Only the GM can modify Scene Feature State',
+        );
+      }
+
       const completed = completedStatusOperations.get(envelope.operationId);
       if (completed) {
         // A duplicate may arrive after later revisions. A full snapshot is a
@@ -1024,18 +1048,20 @@ server.on('upgrade', (req, socket) => {
       if (!message.state || typeof message.state !== 'object' || Array.isArray(message.state)) {
         return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'invalid_state', message: 'World state must be an object' });
       }
+      let incomingState;
       try {
-        assertWorldState(message.state);
+        incomingState = migrateLegacySceneFeatureStates(message.state).state;
+        assertWorldState(incomingState);
       } catch (error) {
         return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: error?.code || 'invalid_state', message: error?.message || 'World state 无效' });
       }
-      if (world.state && !isSameChat(world.state, message.state)) {
+      if (world.state && !isSameChat(world.state, incomingState)) {
         return sendSocket(socket, { type: 'world.denied', operationId: worldOperationId, code: 'chat_server_only', message: '聊天记录只能通过服务器提交', revision: world.revision, updatedAt: world.updatedAt, state: world.state });
       }
       if (session.role !== 'gm') {
         if (session.identityStatus !== 'active') return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'identity_pending', message: '等待 GM 批准身份后才能操作 World' });
         const user = findUser(session.userId);
-        const authorization = validatePlayerWorldPush({ before: world.state, next: message.state, user });
+        const authorization = validatePlayerWorldPush({ before: world.state, next: incomingState, user });
         if (!authorization.ok) {
           return sendSocket(socket, {
             type: 'world.denied',
@@ -1059,14 +1085,14 @@ server.on('upgrade', (req, socket) => {
           state: world.state,
         });
       }
-      const encoded = JSON.stringify(message.state);
+      const encoded = JSON.stringify(incomingState);
       if (Buffer.byteLength(encoded) > MAX_WS_PAYLOAD) return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'state_too_large', message: 'World state is too large' });
       const nextWorld = {
         schemaVersion: 1,
         worldId: WORLD_ID,
         revision: world.revision + 1,
         updatedAt: new Date().toISOString(),
-        state: message.state,
+        state: incomingState,
         recentStatusOperations: world.recentStatusOperations || [],
       };
       try { await persistWorld(nextWorld); }

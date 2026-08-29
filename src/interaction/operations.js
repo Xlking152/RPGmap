@@ -39,6 +39,7 @@ export function createFeatureOperations({
   mapPackage,
   getState,
   replaceState,
+  performOperations = null,
   selectFeature = null,
   planFeatureEntry = null,
   exitFeature = null,
@@ -55,6 +56,8 @@ export function createFeatureOperations({
   if (typeof replaceState !== 'function') throw new TypeError('Feature Operations require replaceState(state)');
 
   const send = (name, detail) => emit?.(name, detail);
+
+  const statusWorldOperations = mutations => mutations.map(({ type, ...payload }) => ({ type, payload }));
 
   const actionsForFeature = (featureId, context = {}) => listFeatureInteractions({
     mapPackage,
@@ -100,8 +103,15 @@ export function createFeatureOperations({
   const patchState = (featureId, patch) => {
     const feature = featureById(mapPackage, featureId);
     if (!feature) return null;
-    const next = patchFeatureRuntimeState(getState(), feature.id, patch);
-    return Promise.resolve(replaceState(next, { source: 'feature:patch', featureId: feature.id })).then(() => {
+    const commit = typeof performOperations === 'function'
+      ? performOperations([{
+        type: 'scene.featureState.patch',
+        payload: { featureId: feature.id, patch },
+      }], { source: 'feature:patch' })
+      : replaceState(patchFeatureRuntimeState(getState(), feature.id, patch), {
+        source: 'feature:patch', featureId: feature.id,
+      });
+    return Promise.resolve(commit).then(() => {
       const featureState = getFeatureRuntimeState(getState(), feature);
       send('interaction:state-change', { featureId: feature.id, state: featureState });
       return featureState;
@@ -130,9 +140,14 @@ export function createFeatureOperations({
         if (typeof selectFeature !== 'function') return result(action, feature.id, false, 'Runtime 未提供 selectFeature port');
         const ok = selectFeature(feature.id, options) !== false;
         if (!ok) return result(action, feature.id, false, 'Feature 无法被选择', { tokenId });
-        const draft = applyStatusEffects(state, feature, action, tokenId);
-        if (draft.state !== state) await Promise.resolve(replaceState(draft.state, { source: 'feature:inspect', featureId: feature.id }));
-        return result(action, feature.id, true, '', { tokenId, statusMutations: draft.mutations, message: actionMessage(action, feature) });
+        const mutations = statusMutationsFor(feature, action, state, tokenId);
+        if (mutations.length && typeof performOperations === 'function') {
+          await performOperations(statusWorldOperations(mutations), { source: 'feature:inspect' });
+        } else if (mutations.length) {
+          const draft = applyStatusEffects(state, feature, action, tokenId);
+          await Promise.resolve(replaceState(draft.state, { source: 'feature:inspect', featureId: feature.id }));
+        }
+        return result(action, feature.id, true, '', { tokenId, statusMutations: mutations, message: actionMessage(action, feature) });
       }
 
       if (action === 'enter') {
@@ -175,12 +190,20 @@ export function createFeatureOperations({
 
       if (action === 'open' || action === 'close') {
         const open = action === 'open';
-        const changed = setFeatureOpenState(state, feature.id, open);
-        const draft = applyStatusEffects(changed, feature, action, tokenId);
-        await Promise.resolve(replaceState(draft.state, { source: `feature:${action}`, featureId: feature.id }));
+        const mutations = statusMutationsFor(feature, action, state, tokenId);
+        if (typeof performOperations === 'function') {
+          await performOperations([
+            { type: 'scene.featureState.patch', payload: { featureId: feature.id, patch: { open } } },
+            ...statusWorldOperations(mutations),
+          ], { source: `feature:${action}` });
+        } else {
+          const changed = setFeatureOpenState(state, feature.id, open);
+          const draft = applyStatusEffects(changed, feature, action, tokenId);
+          await Promise.resolve(replaceState(draft.state, { source: `feature:${action}`, featureId: feature.id }));
+        }
         const featureState = getFeatureRuntimeState(getState(), feature);
         send('interaction:state-change', { featureId: feature.id, open, state: featureState, tokenId });
-        return result(action, feature.id, true, '', { tokenId, open, state: featureState, statusMutations: draft.mutations, message: actionMessage(action, feature) });
+        return result(action, feature.id, true, '', { tokenId, open, state: featureState, statusMutations: mutations, message: actionMessage(action, feature) });
       }
 
       return result(action, feature.id, false, '未知 Interaction Action');

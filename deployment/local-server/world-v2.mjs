@@ -1,4 +1,5 @@
 import { assertStatusState } from './status-operations.mjs';
+import { assertFeatureStatePatch, isPlainObject } from './feature-states.js';
 
 export const WORLD_V2_SCHEMA_VERSION = 2;
 export const WORLD_V2_STATE_KEY = 'worldV2';
@@ -84,6 +85,8 @@ export function synchronizeWorldV2Mirror(state) {
     state.markers = structuredClone(Array.isArray(scene.markers) ? scene.markers : []);
     state.attackAreas = structuredClone(Array.isArray(scene.attackAreas) ? scene.attackAreas : []);
     state.sceneEvents = structuredClone(Array.isArray(scene.sceneEvents) ? scene.sceneEvents : []);
+    state.preferences.featureStates = structuredClone(isPlainObject(scene.featureStates) ? scene.featureStates : {});
+    delete state.preferences.featureInteractions;
     state.preferences.gridVisible = scene.settings?.gridVisible !== false;
   }
   return world;
@@ -109,6 +112,14 @@ export function assertWorldV2(value) {
     cleanId(mapPackage.id, `worldV2.scenes[${sceneIndex}].mapPackage.id`);
     if (typeof mapPackage.version !== 'string' || !mapPackage.version.trim()) {
       fail(`worldV2.scenes[${sceneIndex}].mapPackage.version is required`);
+    }
+    if (scene.featureStates !== undefined) {
+      if (!isPlainObject(scene.featureStates)) fail(`worldV2.scenes[${sceneIndex}].featureStates must be an object`);
+      for (const [featureId, state] of Object.entries(scene.featureStates)) {
+        cleanId(featureId, `worldV2.scenes[${sceneIndex}].featureStates key`);
+        if (!isPlainObject(state)) fail(`worldV2.scenes[${sceneIndex}].featureStates.${featureId} must be an object`);
+        assertFeatureStatePatch(state);
+      }
     }
     const tokenIds = unique(scene.tokens, `worldV2.scenes[${sceneIndex}].tokens`);
     for (const [tokenIndex, tokenRaw] of scene.tokens.entries()) {

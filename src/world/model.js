@@ -1,6 +1,7 @@
 import { canonicalAttackAreas } from './attack-anchors.js';
 import { normalizeActorDocument } from '../actor/index.js';
 import { createActorDelta, mergeActorDelta } from '../token/actor.js';
+import { normalizeFeatureStateRecords } from './feature-states.js';
 
 export const WORLD_SCHEMA_VERSION = 2;
 export const WORLD_STATE_KEY = 'worldV2';
@@ -125,6 +126,7 @@ function normalizeScene(raw, {
     markers: clone(array(source.markers)),
     attackAreas: canonicalAttackAreas(source.attackAreas),
     sceneEvents: clone(array(source.sceneEvents)),
+    featureStates: normalizeFeatureStateRecords(source.featureStates),
     settings: { ...clone(object(source.settings)), gridVisible: source.settings?.gridVisible !== false },
   };
 }
@@ -212,6 +214,7 @@ export function createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worl
       markers: clone(array(state?.markers)),
       attackAreas: canonicalAttackAreas(state?.attackAreas),
       sceneEvents: clone(array(state?.sceneEvents)),
+      featureStates: {},
       settings: { gridVisible: state?.preferences?.gridVisible !== false },
     }],
     createdAt: now,
@@ -269,6 +272,8 @@ export function projectWorldV2ToRuntimeState(state, rawWorld, { mapPackage, rule
   delete next.characters;
   next.preferences ||= {};
   next.preferences.gridVisible = scene.settings?.gridVisible !== false;
+  next.preferences.featureStates = clone(scene.featureStates || {});
+  delete next.preferences.featureInteractions;
   next.preferences.entitySystem = {
     ...clone(object(next.preferences.entitySystem)),
     schemaVersion: Math.max(3, Number(next.preferences.entitySystem?.schemaVersion) || 0),
@@ -297,7 +302,7 @@ export function createEmptyWorldScene(world, { mapPackage, id: sceneId, name = '
     id: candidate,
     name: name || `Scene ${normalized.scenes.length + 1}`,
     mapPackage: mapRef,
-    tokens: [], markers: [], attackAreas: [], sceneEvents: [],
+    tokens: [], markers: [], attackAreas: [], sceneEvents: [], featureStates: {},
     settings: { gridVisible: true },
   }, { mapPackage, actorIds: new Set(normalized.actors.map(actor => String(actor.id))) });
   return normalizeWorldV2({ ...normalized, scenes: [...normalized.scenes, scene], updatedAt: new Date().toISOString() }, { mapPackage });

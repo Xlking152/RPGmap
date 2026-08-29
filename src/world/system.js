@@ -204,6 +204,16 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           return snapshot();
         },
         performOperations,
+        patchFeatureState(featureId, patch, options = {}) {
+          return performOperations([{
+            type: 'scene.featureState.patch',
+            payload: {
+              sceneId: options.sceneId ?? snapshot().activeSceneId,
+              featureId,
+              patch,
+            },
+          }], { ...options, source: options.source || 'scene.featureState.patch' });
+        },
         reduceOperations(state, operations, options = {}) {
           return reduceOperations(state, operations, options);
         },

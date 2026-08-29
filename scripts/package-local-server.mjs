@@ -43,6 +43,7 @@ for (const file of [
   await copy(path.join('deployment', 'local-server', file), file);
 }
 await copy('src/world/operations.js', 'world-operations.mjs');
+await copy('src/world/feature-states.js', 'feature-states.js');
 for (const [source, target] of [
   ['文档/操作指南.md', 'docs/OPERATION-GUIDE.md'],
   ['CHANGELOG.md', 'docs/CHANGELOG.md'],

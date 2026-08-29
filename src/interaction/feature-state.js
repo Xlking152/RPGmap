@@ -1,7 +1,11 @@
 import { featureSceneStatus } from '../engine/feature-selection.js';
+import {
+  FEATURE_STATE_KEY,
+  LEGACY_FEATURE_INTERACTION_STATE_KEY,
+  applyFeatureStateMergePatch,
+} from '../world/feature-states.js';
 
-export const FEATURE_STATE_KEY = 'featureStates';
-export const LEGACY_FEATURE_INTERACTION_STATE_KEY = 'featureInteractions';
+export { FEATURE_STATE_KEY, LEGACY_FEATURE_INTERACTION_STATE_KEY };
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -30,6 +34,10 @@ function initialCustom(feature) {
 }
 
 function persistedState(state, featureId) {
+  const world = state?.preferences?.worldV2;
+  const scene = world?.scenes?.find(item => String(item?.id ?? '') === String(world?.activeSceneId ?? ''));
+  const canonical = scene?.featureStates?.[featureId];
+  if (isPlainObject(canonical)) return canonical;
   const preferences = state?.preferences;
   if (!isPlainObject(preferences)) return {};
   const current = preferences[FEATURE_STATE_KEY]?.[featureId];
@@ -66,10 +74,10 @@ export function patchFeatureState(state, featureId, patch = {}) {
 
   const next = structuredClone(state);
   next.preferences ||= {};
-  next.preferences[FEATURE_STATE_KEY] ||= {};
-
+  const world = next.preferences.worldV2;
+  const scene = world?.scenes?.find(item => String(item?.id ?? '') === String(world?.activeSceneId ?? ''));
   const legacy = next.preferences[LEGACY_FEATURE_INTERACTION_STATE_KEY]?.[id];
-  const current = next.preferences[FEATURE_STATE_KEY][id];
+  const current = scene?.featureStates?.[id] ?? next.preferences[FEATURE_STATE_KEY]?.[id];
   const record = {
     ...(isPlainObject(legacy) ? legacy : {}),
     ...(isPlainObject(current) ? current : {}),
@@ -79,13 +87,20 @@ export function patchFeatureState(state, featureId, patch = {}) {
     if (typeof patch.open !== 'boolean') throw new TypeError('Feature State open must be boolean');
     record.open = patch.open;
   }
-  if (Object.prototype.hasOwnProperty.call(patch, 'custom')) {
-    if (patch.custom === null) delete record.custom;
-    else if (!isPlainObject(patch.custom)) throw new TypeError('Feature State custom must be an object or null');
-    else record.custom = structuredClone(patch.custom);
+  if (Object.prototype.hasOwnProperty.call(patch, 'custom') && patch.custom !== null && !isPlainObject(patch.custom)) {
+    throw new TypeError('Feature State custom must be an object or null');
   }
-
-  next.preferences[FEATURE_STATE_KEY][id] = record;
+  const merged = applyFeatureStateMergePatch(record, patch);
+  if (scene) {
+    scene.featureStates = isPlainObject(scene.featureStates) ? scene.featureStates : {};
+    if (merged === null || Object.keys(merged).length === 0) delete scene.featureStates[id];
+    else scene.featureStates[id] = merged;
+    next.preferences[FEATURE_STATE_KEY] = structuredClone(scene.featureStates);
+    delete next.preferences[LEGACY_FEATURE_INTERACTION_STATE_KEY];
+  } else {
+    next.preferences[FEATURE_STATE_KEY] ||= {};
+    next.preferences[FEATURE_STATE_KEY][id] = merged;
+  }
   return next;
 }
 
