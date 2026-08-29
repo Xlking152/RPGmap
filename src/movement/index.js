@@ -1,5 +1,5 @@
 import { MovementSettings } from './settings.js';
-import { createMovementControllerV2 } from './controller-v2.js';
+import { createMovementControllerV3 } from './controller-v3.js';
 import { createMovementTokenRuntimeSystem } from './token-runtime.js';
 
 export { MovementSession } from './session.js';
@@ -10,6 +10,8 @@ export { MOVEMENT_DISTANCE_STEPS, normalizeMovementDistanceStep, movementDisplay
 export { MovementSettings } from './settings.js';
 export { applyMovementStatusMutations, createMovementTokenRuntimeSystem } from './token-runtime.js';
 export { createMovementControllerV2 } from './controller-v2.js';
+export { createMovementControllerV3 } from './controller-v3.js';
+export { createMovementRouteInspector } from './route-inspector.js';
 
 export function createMovementSystem(options = {}) {
   const settings = new MovementSettings(options);
@@ -18,7 +20,7 @@ export function createMovementSystem(options = {}) {
     register(api) {
       settings.attach(api);
       createMovementTokenRuntimeSystem().register(api);
-      createMovementControllerV2({ settings }).register(api);
+      createMovementControllerV3({ settings }).register(api);
     },
   };
 }
