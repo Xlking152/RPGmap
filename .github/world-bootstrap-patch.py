@@ -212,10 +212,10 @@ replace(
 # creating Leaflet, so World bootstrap works identically offline and online.
 server = Path("deployment/local-server/server.mjs")
 source = server.read_text()
-pattern = re.compile(r"function worldBootstrapInfo\(\) \{.*?\n\}\n\n", re.S)
+pattern = re.compile(r"function worldBootstrapInfo\(\) \{.*?\n\}\nfunction sendWelcome", re.S)
 match = pattern.search(source)
 if not match:
-    raise RuntimeError("Pattern not found: server worldBootstrapInfo")
+    raise RuntimeError("Pattern not found: server worldBootstrapInfo boundary")
 replacement = """function worldBootstrapInfo() {
   const rawWorld = world.state?.preferences?.worldV2;
   if (!world.state) return { initialized: false, kind: 'empty', schemaVersion: null, worldId: WORLD_ID, name: null, activeSceneId: null, mapPackage: null, ruleset: null };
@@ -241,8 +241,7 @@ replacement = """function worldBootstrapInfo() {
     },
   };
 }
-
-"""
+function sendWelcome"""
 server.write_text(source[:match.start()] + replacement + source[match.end():])
 
 # A server-authoritative Scene activation can change MapPackage. Do not import
