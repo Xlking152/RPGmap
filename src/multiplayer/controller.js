@@ -88,6 +88,11 @@ export function hasWorldOperationRevisionGap(message, currentRevision) {
     || nextRevision !== baseRevision + 1;
 }
 
+export function shouldApplyOwnServerSnapshot(message) {
+  const reason = String(message?.reason || '');
+  return reason === 'chat.append' || reason === 'chat.clear';
+}
+
 export function createMultiplayerController() {
   return {
     register(api) {
@@ -334,9 +339,6 @@ export function createMultiplayerController() {
       }
 
       function flushDeferredChat() {
-        // A chat event increments the server World revision.  It therefore
-        // cannot overtake a pending combat/health World mutation, including a
-        // mutation queued behind an earlier in-flight push.
         if (!connected || applyingRemote || inFlight || activeAtomicWorldOperation || atomicWorldOperationQueue.length
           || activeStatusOperation || pendingPush || statusOperationQueue.length
           || activeOperation || operationQueue.length || !deferredChat.length) return;
@@ -374,7 +376,6 @@ export function createMultiplayerController() {
           canClearChat: gm,
           canManageStatuses: gm,
           canEditActor: actorId => gm || canControlActor({ actorId, state: api.getState(), permissions }),
-          // Creating/rebinding a Token changes World structure and remains GM-only.
           canPlaceActor: () => gm,
         };
       }
@@ -652,9 +653,6 @@ export function createMultiplayerController() {
       }
 
       function flushPush() {
-        // A local World commit that already exists must drain before queued
-        // authoritative operations. Blocking on both queues here would let a
-        // pending push and a queued status/Feature operation deadlock each other.
         if (!connected || applyingRemote || inFlight || activeAtomicWorldOperation
           || activeStatusOperation || activeOperation || !permissions.worldWrite || !pendingPush) return;
         const nextState = api.exportState();
@@ -688,9 +686,6 @@ export function createMultiplayerController() {
       function pushCommittedWorld() {
         if (!connected || applyingRemote || !permissions.worldWrite) return;
         pendingPush = true;
-        // Preserve WebSocket ordering: a World change must leave before its
-        // combat/chat event, otherwise the server can broadcast the older
-        // snapshot back and make a new combat or health update disappear.
         flushPush();
       }
 
@@ -939,6 +934,14 @@ export function createMultiplayerController() {
               activeStatusOperation.snapshotApplied = true;
               maybeFinishStatusOperation();
             });
+          } else if (own && shouldApplyOwnServerSnapshot(message)) {
+            // Chat is server-only: unlike ordinary optimistic World mutations,
+            // the sender has not applied this change locally before the server
+            // broadcasts it. Re-import exactly these authoritative snapshots.
+            inFlight = false;
+            pendingPush = false;
+            activeWorldOperationId = null;
+            applyRemoteState(message.state, incomingRevision, message.reason || 'server-only').then(flushPendingNetworkWork);
           } else if (own) {
             revision = incomingRevision;
             if (message.state && typeof message.state === 'object') lastServerState = structuredClone(message.state);
@@ -958,8 +961,6 @@ export function createMultiplayerController() {
           activeStatusOperation.acknowledged = true;
           activeStatusOperation.revision = Number(message.revision) || revision;
           if (message.duplicate === true && !activeStatusOperation.snapshotApplied) {
-            // A retried operation may have been committed before reconnecting.
-            // Reload the canonical World before reporting success.
             activeStatusOperation.awaitingCanonicalSnapshot = true;
             send({ type: 'world.request' });
           }
@@ -988,8 +989,6 @@ export function createMultiplayerController() {
           inFlight = false;
           activeWorldOperationId = null;
           pendingPush = false;
-          // The World operation that this event describes was not accepted;
-          // do not leave a misleading combat/damage/recovery log behind it.
           deferredChat = [];
           const text = message.type === 'world.denied' ? (message.message || '服务器拒绝了当前操作') : '检测到并发更新，已重新载入服务器状态';
           setMapStatus('联机：' + text);
@@ -1209,8 +1208,6 @@ export function createMultiplayerController() {
         }
       });
 
-      // Ordinary runtime commits converge through operation envelopes. Full
-      // world.push remains an initialization/import/recovery boundary only.
       api.on('state:commit', detail => {
         localCommitSerial += 1;
         queueCommittedOperations(detail?.state || api.exportState(), detail?.source || 'state:commit');
