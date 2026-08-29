@@ -64,23 +64,21 @@ function tokenIcon(api, model) {
   });
 }
 
-function setTooltip(documentNode, view, model) {
+function setTooltip(api, documentNode, view, model) {
   if (!model.showName) {
     if (view.getTooltip?.()) view.unbindTooltip();
     return;
   }
   const node = documentNode.createElement('span');
   node.textContent = model.name;
-  if (!view.getTooltip?.()) {
-    view.bindTooltip(node, {
-      permanent: true,
-      direction: 'bottom',
-      offset: [0, 12],
-      className: 'marker-tooltip token-v2-tooltip',
-    });
-  } else {
-    view.getTooltip().setContent(node);
-  }
+  const options = {
+    permanent: true,
+    direction: 'top',
+    offset: [0, -(renderSize(api, model) / 2 + 8)],
+    className: 'marker-tooltip token-v2-tooltip',
+  };
+  if (view.getTooltip?.()) view.unbindTooltip();
+  view.bindTooltip(node, options);
 }
 
 export function createTokenRendererSystem() {
@@ -175,7 +173,7 @@ export function createTokenRendererSystem() {
           view.setLatLng(worldToLatLng({ x: model.x, y: model.y }, api.mapPackage.height));
           view.setIcon(tokenIcon(api, model));
           view.options.title = model.showName ? model.name : 'Token';
-          setTooltip(documentNode, view, model);
+          setTooltip(api, documentNode, view, model);
         }
         renderStatuses(models, tokensById);
       }
