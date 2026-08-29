@@ -1,4 +1,5 @@
 import { createFeatureControlLayer } from './control-layer.js';
+import { createFeatureMapInspector } from './map-inspector.js';
 import { createFeatureInteractionSystem as createCoreFeatureInteractionSystem } from './system.js';
 
 export {
@@ -37,6 +38,7 @@ export {
 } from './control-model.js';
 
 export { createFeatureControlLayer };
+export { createFeatureMapInspector, featureAtMapLatLng } from './map-inspector.js';
 export { createFeatureOperations } from './operations.js';
 export {
   evaluateFeatureStatusRule,
@@ -45,16 +47,18 @@ export {
 } from './status-rules.js';
 
 /**
- * Register the generic Feature API first, then mount the map-facing control layer
- * on top of that same API. Controls are only another UI entry point; they never
- * implement a second open/close state machine.
+ * Register the generic Feature API first, then mount map-facing entry points on
+ * top of that same API. The direct map inspector and open/close controls are UI
+ * adapters only; neither owns a second Feature-state machine.
  */
 export function createFeatureInteractionSystem() {
   const core = createCoreFeatureInteractionSystem();
+  const inspector = createFeatureMapInspector();
   const controls = createFeatureControlLayer();
   return Object.freeze({
     register(api) {
       core.register(api);
+      inspector.register(api);
       controls.register(api);
     },
   });
