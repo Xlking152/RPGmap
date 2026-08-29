@@ -2,7 +2,16 @@ import {
   applyFeatureStateMergePatch,
   assertFeatureStatePatch,
   isPlainObject as isFeatureStateObject,
+  migrateLegacySceneFeatureStates,
+  stripLegacyFeatureStateProjection,
 } from './feature-states.js';
+
+export {
+  assertFeatureStatePatch,
+  isFeatureStateObject as isPlainObject,
+  migrateLegacySceneFeatureStates,
+  stripLegacyFeatureStateProjection,
+};
 
 export const WORLD_OPERATION_SCHEMA_VERSION = 1;
 export const WORLD_OPERATION_BATCH_LIMIT = 64;

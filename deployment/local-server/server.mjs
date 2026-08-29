@@ -34,12 +34,10 @@ import {
   applyWorldOperations,
   assertWorldOperationMessage,
   createWorldOperationPatch,
-  projectWorldOperationState,
-} from './world-operations.mjs';
-import {
   migrateLegacySceneFeatureStates,
+  projectWorldOperationState,
   stripLegacyFeatureStateProjection,
-} from './feature-states.js';
+} from './world-operations.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '0.0.0.0';

@@ -17,6 +17,7 @@ export default defineConfig({
   base: './',
   plugins: [stripUnusedLeafletRasterCss()],
   build: {
+    manifest: true,
     target: 'es2020',
     outDir: 'dist',
     emptyOutDir: true,

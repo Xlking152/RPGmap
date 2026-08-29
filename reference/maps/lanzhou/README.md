@@ -1,4 +1,4 @@
-# Lanzhou Reference MapPackage
+# 兰州城 Reference MapPackage
 
 兰州城是 RPGmap 的复杂 **Reference Map**，用于验证真实大地图能够通过统一 MapPackage Contract、Feature Capability 和 Generic Feature UI 运行，而不是把兰州专属逻辑写入 Core。
 
@@ -25,7 +25,7 @@ index.js         最终 MapPackage 组装入口
 
 逻辑层通过 `LANZHOU_LAYER_PLAN.sourceLayers` 解释物理子层，Core 不依赖 SVG 的历史嵌套结构。
 
-## Feature taxonomy
+## Feature taxonomy（对象分类）
 
 兰州自己的显示词汇放在 `LANZHOU_FEATURE_TAXONOMY`，例如：
 

@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const runtimeSource = readFileSync(new URL('../src/engine/runtime.js', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+const mapRuntimeSource = readFileSync(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
 const builtinsSource = readFileSync(new URL('../src/map-package/builtins.js', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const appShellSource = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
@@ -15,13 +16,14 @@ const indexSource = readFileSync(new URL('../index.html', import.meta.url), 'utf
 const viteSource = readFileSync(new URL('../vite.config.js', import.meta.url), 'utf8');
 
 test('application entry boots the Character-free World/Scene Token runtime', () => {
-  assert.match(mainSource, /createRpgMapRuntime/);
-  assert.match(mainSource, /createWorldSystem\(\{ worldId, worldName \}\)/);
-  assert.match(mainSource, /createSceneManagerSystem\(/);
-  assert.match(mainSource, /createTokenRuntimeSystem\(\)/);
-  assert.match(mainSource, /createTokenRendererSystem\(\)/);
-  assert.match(mainSource, /createSceneAreaSystem\(\)/);
-  assert.doesNotMatch(mainSource, /engine\/app\.js|character-retirement|createCanonicalPanelOwnershipSystem|createCharacterRetirementSystem/);
+  assert.match(mainSource, /await import\('\.\/runtime\/map-runtime\.js'\)/);
+  assert.match(mapRuntimeSource, /createRpgMapRuntime/);
+  assert.match(mapRuntimeSource, /createWorldSystem\(\{ worldId, worldName \}\)/);
+  assert.match(mapRuntimeSource, /createSceneManagerSystem\(/);
+  assert.match(mapRuntimeSource, /createTokenRuntimeSystem\(\)/);
+  assert.match(mapRuntimeSource, /createTokenRendererSystem\(\)/);
+  assert.match(mapRuntimeSource, /createSceneAreaSystem\(\)/);
+  assert.doesNotMatch(`${mainSource}\n${mapRuntimeSource}`, /engine\/app\.js|character-retirement|createCanonicalPanelOwnershipSystem|createCharacterRetirementSystem/);
   assert.doesNotMatch(runtimeSource, /characterPane|selectCharacter|placeCharacter|repositionCharacter|deleteCharacter|character:create|character:move|character:delete/);
 });
 
@@ -31,20 +33,23 @@ test('application chrome keeps the restrained neutral, river and brick palette',
   assert.match(styles, /\.section \{[\s\S]*?border-bottom: 1px solid var\(--line\);/);
   assert.doesNotMatch(styles, /linear-gradient/i);
   assert.equal(packageJson.dependencies.lucide, '1.30.0');
-  assert.equal(packageJson.version, '2.0.0');
-  assert.match(indexSource, /application-version" content="2\.0\.0"/);
-  assert.match(indexSource, /RPGmap 2\.0\.0/);
+  assert.equal(packageJson.version, '2.1.0');
+  assert.match(indexSource, /application-version" content="2\.1\.0"/);
+  assert.match(indexSource, /RPGmap 2\.1\.0/);
 });
 
 test('production registry splits the built-in map and large vendors without suppressing chunk warnings', () => {
   assert.match(mainSource, /registerBuiltInMapPackages/);
-  assert.match(mainSource, /mapPackageRegistry\.load/);
+  assert.match(mainSource, /await import\('\.\/runtime\/map-runtime\.js'\)/);
+  assert.match(mapRuntimeSource, /mapPackageRegistry\.load/);
+  assert.doesNotMatch(mainSource, /leaflet|styles\.css|createRpgMapRuntime/);
   assert.match(builtinsSource, /await import\('\.\/default-map\.js'\)/);
   assert.match(viteSource, /manualChunks/);
   assert.match(viteSource, /vendor-leaflet/);
   assert.match(viteSource, /vendor-icons/);
   assert.match(viteSource, /vendor-geometry/);
   assert.doesNotMatch(viteSource, /chunkSizeWarningLimit/);
+  assert.match(viteSource, /manifest: true/);
 });
 
 test('modern shell owns Actor/current panels and Token-first tools without legacy proxies', () => {

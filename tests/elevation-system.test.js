@@ -7,6 +7,7 @@ const elevationModelSource = await readFile(new URL('../src/elevation/model.js',
 const elevationIndexSource = await readFile(new URL('../src/elevation/index.js', import.meta.url), 'utf8');
 const appShellSource = await readFile(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
 const mainSource = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
+const mapRuntimeSource = await readFile(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
 
 test('Elevation V2 writes only through canonical Token Runtime', () => {
   assert.match(elevationSource, /api\.tokens\.update\(token\.id, \{ elevationFt \}/);
@@ -27,6 +28,7 @@ test('runtime registers Token elevation and modern shell opens it by token id', 
   assert.match(elevationIndexSource, /createTokenElevationSystem/);
   assert.doesNotMatch(elevationIndexSource, /placement-context|createElevationSystem as|moverContextForCharacter/);
   assert.match(appShellSource, /openTokenElevationEditor\?\.\(token\.id, event\)/);
-  assert.match(mainSource, /createTokenElevationSystem\(\)/);
-  assert.doesNotMatch(mainSource, /createElevationSystem\(\)|moverContextForCharacter|character-retirement/);
+  assert.match(mainSource, /runtime\/map-runtime\.js/);
+  assert.match(mapRuntimeSource, /createTokenElevationSystem\(\)/);
+  assert.doesNotMatch(`${mainSource}\n${mapRuntimeSource}`, /createElevationSystem\(\)|moverContextForCharacter|character-retirement/);
 });

@@ -1,6 +1,6 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, mkdir } from 'node:fs/promises';
+import { access, mkdir, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -305,6 +305,9 @@ async function runLocal(port) {
   const credentials = createSessionCredentials();
   console.log('[INFO] Starting RPGmap Local / LAN...');
   const server = spawnServer(serverEnv({ port, credentials }));
+  if (process.env.RPGMAP_SMOKE_PID_FILE) {
+    await writeFile(path.resolve(process.env.RPGMAP_SMOKE_PID_FILE), `${server.pid}\n`, 'utf8');
+  }
   let shuttingDown = false;
   const cleanup = () => {
     if (shuttingDown) return;

@@ -20,8 +20,14 @@ jobs:
           node-version: '22.12.0'
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - run: npm audit --registry=https://registry.npmjs.org --audit-level=high
+      - run: npm audit --registry=https://registry.npmjs.org --omit=dev --audit-level=high
       - run: npm test
+      - name: Check tracked JavaScript syntax
+        shell: bash
+        run: git ls-files -z -- '*.js' '*.mjs' | xargs -0 -n1 node --check
       - run: npm run build
+      - run: npm run check:bundle
       - id: meta
         shell: bash
         run: |
@@ -34,28 +40,8 @@ jobs:
       - run: npm run package:local-server
         env:
           RPGMAP_SOURCE_COMMIT: ${{ steps.meta.outputs.commit }}
-      - name: Archive candidate
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd artifact
-          sha256sum -c "RPGmap-v${{ steps.meta.outputs.version }}.zip.sha256"
-          test "$(node -p "require('./RPGmap-v${{ steps.meta.outputs.version }}/VERSION.json').version")" = "${{ steps.meta.outputs.version }}"
-          test "$(node -p "require('./RPGmap-v${{ steps.meta.outputs.version }}/VERSION.json').commit")" = "${{ steps.meta.outputs.commit }}"
-          ROOT="RPGmap-v${{ steps.meta.outputs.version }}"
-          test -f "$ROOT/start-rpgmap.bat"
-          test -f "$ROOT/launcher.mjs"
-          test -f "$ROOT/server.mjs"
-          test -f "$ROOT/access-control.mjs"
-          test -f "$ROOT/portable-storage.mjs"
-          test -f "$ROOT/world-schema.mjs"
-          test -f "$ROOT/world-v2.mjs"
-          test -f "$ROOT/status-operations.mjs"
-          test -f "$ROOT/world-operations.mjs"
-          test -f "$ROOT/app/index.html"
-          test "$(find "$ROOT" -maxdepth 1 -name '*.bat' | wc -l)" -eq 1
-          test ! -e "$ROOT/cloudflared.exe"
-          test ! -e "$ROOT/start-rpgmap.sh"
+      - name: Verify release package
+        run: node scripts/verify-package.mjs --root=artifact/RPGmap-v${{ steps.meta.outputs.version }} --archive=artifact/RPGmap-v${{ steps.meta.outputs.version }}.zip --commit=${{ steps.meta.outputs.commit }}
       - uses: actions/upload-artifact@v7
         with:
           name: release-candidate-v${{ steps.meta.outputs.version }}
@@ -81,12 +67,10 @@ jobs:
         run: |
           $version = '${{ needs.candidate.outputs.version }}'
           $zip = Join-Path $PWD "release/RPGmap-v$version.zip"
-          $checksum = Join-Path $PWD "release/RPGmap-v$version.zip.sha256"
-          $expected = (Get-Content -LiteralPath $checksum -Raw).Split(' ')[0].Trim().ToLowerInvariant()
-          $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) { throw 'Candidate ZIP checksum mismatch.' }
           Expand-Archive -LiteralPath $zip -DestinationPath release/unpacked -Force
           $root = Join-Path $PWD "release/unpacked/RPGmap-v$version"
+          & node scripts/verify-package.mjs "--root=$root" "--archive=$zip" "--commit=${{ needs.candidate.outputs.commit }}"
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate package verification failed.' }
           & ./scripts/windows-smoke.ps1 -Root $root -TimeoutSeconds 30
 
   publish:

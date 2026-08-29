@@ -6,17 +6,15 @@
 
 ```text
 MapPackage 源码（reference/）
-        ↓ build
-RPGmap Core + 选中的 MapPackage
-        ↓
-app/index.html
-        ↓
-server.mjs
+        ↓ Vite build
+app/ 动态 chunk + assets
+        ↓ World/Scene 选择后加载
+Map Runtime
         ↓
 Browser
 ```
 
-因此，打包完成后的 `app/index.html` 是完整可运行客户端；`reference/` 只是给开发者、地图作者和后续维护使用的源码/规范参考。删除发布包里的 `reference/` 不应影响已经 build 好的 RPGmap 运行。
+因此，打包完成后的 `app/` 是完整可运行客户端；`reference/` 只是给开发者、地图作者和后续维护使用的源码/规范参考。正式 ZIP 不复制 raw `reference/`，兰州代码和素材只以编译 chunk/assets 存在。
 
 ---
 
@@ -245,7 +243,7 @@ Core 负责：
 10. 运行 `npm run build`。
 11. 将默认地图工厂切换到新 MapPackage 后做浏览器运行测试。
 
-当前默认地图选择集中在：
+当前默认地图加载器集中在：
 
 ```text
 src/map-package/default-map.js

@@ -9,10 +9,13 @@ const source = file => readFileSync(path.join(ROOT, file), 'utf8');
 
 test('application startup selects World before loading its MapPackage Runtime', () => {
   const main = source('src/main.js');
+  const mapRuntime = source('src/runtime/map-runtime.js');
   assert.match(main, /chooseWorldBeforeMap/);
   assert.match(main, /readWorldBootstrap/);
   assert.match(main, /worldBootstrap\.mapPackage/);
-  assert.match(main, /mapPackageRegistry\.load/);
+  assert.match(main, /await import\('\.\/runtime\/map-runtime\.js'\)/);
+  assert.match(mapRuntime, /mapPackageRegistry\.load/);
+  assert.ok(main.indexOf('chooseWorldBeforeMap') < main.indexOf("import('./runtime/map-runtime.js')"));
   assert.doesNotMatch(main, /createDefaultMapPackage\s*\(/);
   assert.doesNotMatch(main, /rulesetRegistry\.require\(['"]infinite-horror['"]\)/);
 });

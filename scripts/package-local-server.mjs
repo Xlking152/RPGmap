@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { build as viteBuild } from 'vite';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8'));
@@ -14,6 +15,13 @@ const archiveName = `RPGmap-v${version}.zip`;
 const archive = path.join(outputRoot, archiveName);
 const checksum = `${archive}.sha256`;
 const execFileAsync = promisify(execFile);
+
+async function sourceCommit() {
+  const configured = String(process.env.RPGMAP_SOURCE_COMMIT || process.env.GITHUB_SHA || '').trim();
+  const commit = configured || (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim();
+  if (!/^[0-9a-f]{40}$/i.test(commit)) throw new Error('RPGmap package requires a full 40-character source commit');
+  return commit.toLowerCase();
+}
 
 async function copy(relative, target = relative) {
   await cp(path.join(projectRoot, relative), path.join(root, target), { recursive: true });
@@ -27,7 +35,6 @@ await mkdir(path.join(root, 'map', 'backups'), { recursive: true });
 await mkdir(path.join(root, 'docs'), { recursive: true });
 
 await copy('dist', 'app');
-await copy('reference');
 for (const file of [
   'server.mjs',
   'access-control.mjs',
@@ -38,21 +45,29 @@ for (const file of [
   'status-operations.mjs',
   'launcher.mjs',
   'start-rpgmap.bat',
-  'README.md',
 ]) {
   await copy(path.join('deployment', 'local-server', file), file);
 }
-await copy('src/world/operations.js', 'world-operations.mjs');
-await copy('src/world/feature-states.js', 'feature-states.js');
-for (const [source, target] of [
-  ['文档/操作指南.md', 'docs/OPERATION-GUIDE.md'],
-  ['CHANGELOG.md', 'docs/CHANGELOG.md'],
-]) await copy(source, target);
-await copy('deployment/local-server/map/README.txt', 'map/README.txt');
+await viteBuild({
+  configFile: false,
+  logLevel: 'error',
+  build: {
+    target: 'es2020',
+    emptyOutDir: false,
+    minify: false,
+    outDir: root,
+    lib: {
+      entry: path.join(projectRoot, 'src', 'world', 'operations.js'),
+      formats: ['es'],
+      fileName: () => 'world-operations.mjs',
+    },
+  },
+});
+await copy('文档/操作指南.md', 'docs/OPERATION-GUIDE.md');
 
 await writeFile(path.join(root, 'VERSION.json'), `${JSON.stringify({
   app: 'RPGmap', version, releaseTag: `v${version}`,
-  commit: process.env.RPGMAP_SOURCE_COMMIT || process.env.GITHUB_SHA || 'local-build',
+  commit: await sourceCommit(),
   serverMode: 'multiplayer', platform: 'windows', storageMode: 'portable-map-root-server-authoritative',
   launcherMode: 'local-lan-v2', defaultPort: 30000,
 }, null, 2)}\n`);
@@ -71,5 +86,11 @@ try {
 }
 const hash = createHash('sha256').update(await readFile(archive)).digest('hex');
 await writeFile(checksum, `${hash} *${archiveName}\n`, 'utf8');
+
+await execFileAsync(process.execPath, [
+  path.join(projectRoot, 'scripts', 'verify-package.mjs'),
+  `--root=${root}`,
+  `--archive=${archive}`,
+]);
 
 console.log(archive);
