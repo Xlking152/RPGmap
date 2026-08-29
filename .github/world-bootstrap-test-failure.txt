@@ -1,17 +1,126 @@
-# Subtest: MapPackage presentation can move, resize, style or suppress a Feature control
-ok 2 - MapPackage presentation can move, resize, style or suppress a Feature control
-  ---
-  duration_ms: 0.258172
+  duration_ms: 1.118312
   ...
-# Subtest: Feature control action is derived only from generic Feature State
-ok 3 - Feature control action is derived only from generic Feature State
+# Subtest: MapPackage Registry rejects unknown ids and incompatible versions
+ok 2 - MapPackage Registry rejects unknown ids and incompatible versions
   ---
-  duration_ms: 0.199175
+  duration_ms: 0.551732
   ...
-# Subtest: Minimal Reference door and Lanzhou openable Features all expose generic controls
-ok 4 - Minimal Reference door and Lanzhou openable Features all expose generic controls
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 35.973967
+===== tests/map-package.test.js =====
+TAP version 13
+# Subtest: Lanzhou map package keeps the 6000 x 5000 contract and the layered SVG structure
+ok 1 - Lanzhou map package keeps the 6000 x 5000 contract and the layered SVG structure
   ---
-  duration_ms: 3.706998
+  duration_ms: 3.650334
+  ...
+# Subtest: all buildings expose historical details and stable entrances
+ok 2 - all buildings expose historical details and stable entrances
+  ---
+  duration_ms: 0.270111
+  ...
+# Subtest: feature IDs are unique and every visible feature owns one SVG group inside the destructible layer
+ok 3 - feature IDs are unique and every visible feature owns one SVG group inside the destructible layer
+  ---
+  duration_ms: 14.660251
+  ...
+# Subtest: four city wall towers are independent wall features with their own SVG groups
+ok 4 - four city wall towers are independent wall features with their own SVG groups
+  ---
+  duration_ms: 7.706252
+  ...
+# Subtest: Chenghuang temple is a distinct destructible compound with no duplicate shop
+ok 5 - Chenghuang temple is a distinct destructible compound with no duplicate shop
+  ---
+  duration_ms: 0.901365
+  ...
+# Subtest: liquid bodies are valid map polygons for flood backfill
+ok 6 - liquid bodies are valid map polygons for flood backfill
+  ---
+  duration_ms: 0.135601
+  ...
+# Subtest: protected map layers cannot be selected as destructible categories
+ok 7 - protected map layers cannot be selected as destructible categories
+  ---
+  duration_ms: 0.159863
+  ...
+# Subtest: building polygons have zero positive-area overlap
+ok 8 - building polygons have zero positive-area overlap
+  ---
+  duration_ms: 19.495652
+  ...
+# Subtest: building polygons do not enter declared road buffers
+ok 9 - building polygons do not enter declared road buffers
+  ---
+  duration_ms: 25.978478
+  ...
+# Subtest: SVG is self-contained vector markup without raster or external references
+ok 10 - SVG is self-contained vector markup without raster or external references
+  ---
+  duration_ms: 0.990406
+  ...
+# Subtest: optional generated art stays isolated from the default vector map package
+ok 11 - optional generated art stays isolated from the default vector map package
+  ---
+  duration_ms: 4.376511
+  ...
+# Subtest: generated building sprites cover all 50 ordinary buildings with stable isolated variants
+ok 12 - generated building sprites cover all 50 ordinary buildings with stable isolated variants
+  ---
+  duration_ms: 4.786187
+  ...
+# Subtest: all nine generated building prototypes preserve partial, destroyed, restore and undo semantics
+ok 13 - all nine generated building prototypes preserve partial, destroyed, restore and undo semantics
+  ---
+  duration_ms: 15.585306
+  ...
+# Subtest: generated landmarks stay inside their independently destructible feature groups
+ok 14 - generated landmarks stay inside their independently destructible feature groups
+  ---
+  duration_ms: 2.596007
+  ...
+# Subtest: map presentation metadata supports zoom hierarchy and automatic label avoidance
+ok 15 - map presentation metadata supports zoom hierarchy and automatic label avoidance
+  ---
+  duration_ms: 0.612866
+  ...
+1..15
+# tests 15
+# suites 0
+# pass 15
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 156.27595
+===== tests/map-presentation.test.js =====
+TAP version 13
+# Subtest: zoom presentation uses stable overview, mid and detail thresholds
+ok 1 - zoom presentation uses stable overview, mid and detail thresholds
+  ---
+  duration_ms: 0.434974
+  ...
+# Subtest: label placement selects the first collision-free candidate
+ok 2 - label placement selects the first collision-free candidate
+  ---
+  duration_ms: 0.524473
+  ...
+# Subtest: label overlap treats configured padding as protected breathing room
+ok 3 - label overlap treats configured padding as protected breathing room
+  ---
+  duration_ms: 0.078142
+  ...
+# Subtest: label placement reports unavoidable viewport overflow separately from collisions
+ok 4 - label placement reports unavoidable viewport overflow separately from collisions
+  ---
+  duration_ms: 0.151017
   ...
 1..4
 # tests 4
@@ -21,166 +130,23 @@ ok 4 - Minimal Reference door and Lanzhou openable Features all expose generic c
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 74.311801
-===== tests/feature-selection.test.js =====
+# duration_ms 35.237428
+===== tests/measurement-ruler.test.js =====
 TAP version 13
-# Subtest: feature inspection prefers visual importance and then the smaller footprint
-ok 1 - feature inspection prefers visual importance and then the smaller footprint
+# Subtest: ruler session supports one ruler with chained waypoints
+ok 1 - ruler session supports one ruler with chained waypoints
   ---
-  duration_ms: 2.291903
+  duration_ms: 1.013035
   ...
-# Subtest: inspection no longer falls back to map categories
-ok 2 - inspection no longer falls back to map categories
+# Subtest: right-click style removal keeps ruler origin and removes latest waypoint
+ok 2 - right-click style removal keeps ruler origin and removes latest waypoint
   ---
-  duration_ms: 0.311317
+  duration_ms: 0.17233
   ...
-# Subtest: scene event feature IDs are unique for damage and restore records
-ok 3 - scene event feature IDs are unique for damage and restore records
+# Subtest: ruler formatting preserves useful precision for short distances
+ok 3 - ruler formatting preserves useful precision for short distances
   ---
-  duration_ms: 0.22704
-  ...
-# Subtest: feature status follows damage, partial clipping, restore and linear undo semantics
-ok 4 - feature status follows damage, partial clipping, restore and linear undo semantics
-  ---
-  duration_ms: 1.142534
-  ...
-# Subtest: feature bounds combine all selected object geometry
-ok 5 - feature bounds combine all selected object geometry
-  ---
-  duration_ms: 0.514169
-  ...
-1..5
-# tests 5
-# suites 0
-# pass 5
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 75.640504
-===== tests/feature-ui.test.js =====
-TAP version 13
-# Subtest: MapPackage normalizes map-owned Feature taxonomy for generic UI labels
-ok 1 - MapPackage normalizes map-owned Feature taxonomy for generic UI labels
-  ---
-  duration_ms: 1.564991
-  ...
-# Subtest: generic Feature UI model renders details and entrance without category rules
-ok 2 - generic Feature UI model renders details and entrance without category rules
-  ---
-  duration_ms: 0.864374
-  ...
-# Subtest: Feature UI model exposes Token placement helpers and no Character helpers
-ok 3 - Feature UI model exposes Token placement helpers and no Character helpers
-  ---
-  duration_ms: 0.323972
-  ...
-# Subtest: reference maps declare taxonomy instead of relying on Core category labels
-ok 4 - reference maps declare taxonomy instead of relying on Core category labels
-  ---
-  duration_ms: 0.596291
-  ...
-# Subtest: Lanzhou Layer Plan points to real tagged physical SVG layers
-ok 5 - Lanzhou Layer Plan points to real tagged physical SVG layers
-  ---
-  duration_ms: 3.157729
-  ...
-1..5
-# tests 5
-# suites 0
-# pass 5
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 75.601019
-===== tests/geometry.test.js =====
-TAP version 13
-# Subtest: world and Leaflet coordinates round-trip using height inversion
-ok 1 - world and Leaflet coordinates round-trip using height inversion
-  ---
-  duration_ms: 3.248508
-  ...
-# Subtest: distance uses map units as metres and formats metres/kilometres
-ok 2 - distance uses map units as metres and formats metres/kilometres
-  ---
-  duration_ms: 0.372398
-  ...
-# Subtest: circle polygon has the requested radius in both dimensions
-ok 3 - circle polygon has the requested radius in both dimensions
-  ---
-  duration_ms: 1.974654
-  ...
-# Subtest: sector heading zero points up in a y-down world
-ok 4 - sector heading zero points up in a y-down world
-  ---
-  duration_ms: 0.25745
-  ...
-# Subtest: rectangle uses origin as near-edge midpoint and extends along heading
-ok 5 - rectangle uses origin as near-edge midpoint and extends along heading
-  ---
-  duration_ms: 0.282489
-  ...
-# Subtest: attack aliases and GeoJSON-style feature polygons are supported
-ok 6 - attack aliases and GeoJSON-style feature polygons are supported
-  ---
-  duration_ms: 0.880385
-  ...
-# Subtest: object-like features hit on any positive-area overlap
-ok 7 - object-like features hit on any positive-area overlap
-  ---
-  duration_ms: 6.433732
-  ...
-# Subtest: clip features hit on any positive-area intersection and ignore boundary touch
-ok 8 - clip features hit on any positive-area intersection and ignore boundary touch
-  ---
-  duration_ms: 1.300949
-  ...
-# Subtest: category filtering only returns requested feature categories
-ok 9 - category filtering only returns requested feature categories
-  ---
-  duration_ms: 0.857379
-  ...
-# Subtest: snap supports 1/5/10/20 metre grids and free placement
-ok 10 - snap supports 1/5/10/20 metre grids and free placement
-  ---
-  duration_ms: 0.555191
-  ...
-# Subtest: marker box selection supports reverse drags and includes boundary markers only
-ok 11 - marker box selection supports reverse drags and includes boundary markers only
-  ---
-  duration_ms: 0.347289
-  ...
-# Subtest: routeSegments returns segment and cumulative distances
-ok 12 - routeSegments returns segment and cumulative distances
-  ---
-  duration_ms: 0.220647
-  ...
-1..12
-# tests 12
-# suites 0
-# pass 12
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 97.279218
-===== tests/health-healing.test.js =====
-TAP version 13
-# Subtest: resolved wound healing restores the selected B/L/A slots to healthy
-ok 1 - resolved wound healing restores the selected B/L/A slots to healthy
-  ---
-  duration_ms: 12.908113
-  ...
-# Subtest: ordinary wound healing does not replace resurrection after all slots become A
-ok 2 - ordinary wound healing does not replace resurrection after all slots become A
-  ---
-  duration_ms: 3.370051
-  ...
-# Subtest: direct B/L/A editing is normalized by canonical Health Runtime
-ok 3 - direct B/L/A editing is normalized by canonical Health Runtime
-  ---
-  duration_ms: 3.490687
+  duration_ms: 0.099127
   ...
 1..3
 # tests 3
@@ -190,13 +156,34 @@ ok 3 - direct B/L/A editing is normalized by canonical Health Runtime
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 90.462538
-===== tests/health-legacy-path-boundary.test.js =====
+# duration_ms 44.552963
+===== tests/movement-distance.test.js =====
 TAP version 13
-# Subtest: legacy HP path compatibility is max-only and never exposes current HP as a Resource
-ok 1 - legacy HP path compatibility is max-only and never exposes current HP as a Resource
+# Subtest: movement distance steps normalize and round upward without changing actual distance
+ok 1 - movement distance steps normalize and round upward without changing actual distance
   ---
-  duration_ms: 7.768212
+  duration_ms: 0.751154
+  ...
+# Subtest: route is split at waypoint legs and produces per-leg plus total display costs
+ok 2 - route is split at waypoint legs and produces per-leg plus total display costs
+  ---
+  duration_ms: 0.386863
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 34.850907
+===== tests/movement-drag.test.js =====
+TAP version 13
+# Subtest: ctrl drag release enters planning without creating the first waypoint
+ok 1 - ctrl drag release enters planning without creating the first waypoint
+  ---
+  duration_ms: 0.827795
   ...
 1..1
 # tests 1
@@ -206,59 +193,23 @@ ok 1 - legacy HP path compatibility is max-only and never exposes current HP as 
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 71.855786
-===== tests/health-model.test.js =====
+# duration_ms 34.203197
+===== tests/movement-path.test.js =====
 TAP version 13
-# Subtest: wound track follows the rulebook 20-slot example
-ok 1 - wound track follows the rulebook 20-slot example
+# Subtest: MovementSession manages FVTT-style waypoints
+ok 1 - MovementSession manages FVTT-style waypoints
   ---
-  duration_ms: 2.29191
+  duration_ms: 0.861763
   ...
-# Subtest: mixed B then L overflow upgrades wounds in the documented order
-ok 2 - mixed B then L overflow upgrades wounds in the documented order
+# Subtest: calculateWaypointRoute sums routed segments and reports the blocked leg
+ok 2 - calculateWaypointRoute sums routed segments and reports the blocked leg
   ---
-  duration_ms: 0.404288
+  duration_ms: 0.376859
   ...
-# Subtest: all aggravated slots means dead
-ok 3 - all aggravated slots means dead
+# Subtest: manual waypoints and the final destination use the same strict direct planner
+ok 3 - manual waypoints and the final destination use the same strict direct planner
   ---
-  duration_ms: 1.005296
-  ...
-# Subtest: simple hp remains available as a generic mode
-ok 4 - simple hp remains available as a generic mode
-  ---
-  duration_ms: 0.337833
-  ...
-# Subtest: injury state uses B-equivalent weighting from the rulebook
-ok 5 - injury state uses B-equivalent weighting from the rulebook
-  ---
-  duration_ms: 0.252985
-  ...
-1..5
-# tests 5
-# suites 0
-# pass 5
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 62.255809
-===== tests/health-world-operation-authority.test.js =====
-TAP version 13
-# Subtest: Health controller has no projection-first persistence path
-ok 1 - Health controller has no projection-first persistence path
-  ---
-  duration_ms: 1.090916
-  ...
-# Subtest: Health UI and chat wait for canonical Health confirmation
-ok 2 - Health UI and chat wait for canonical Health confirmation
-  ---
-  duration_ms: 0.398818
-  ...
-# Subtest: Damage and Healing facades expose confirmation-based async operations
-ok 3 - Damage and Healing facades expose confirmation-based async operations
-  ---
-  duration_ms: 1.03991
+  duration_ms: 0.759533
   ...
 1..3
 # tests 3
@@ -268,23 +219,44 @@ ok 3 - Damage and Healing facades expose confirmation-based async operations
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 57.54959
-===== tests/host-bootstrap.test.js =====
+# duration_ms 35.253051
+===== tests/movement-server-authority.test.js =====
 TAP version 13
-# Subtest: host launch URL keeps GM bootstrap in a localhost hash fragment
-ok 1 - host launch URL keeps GM bootstrap in a localhost hash fragment
+# Subtest: canonical Scene Token placement survives server normalization
+ok 1 - canonical Scene Token placement survives server normalization
   ---
-  duration_ms: 1.750805
+  duration_ms: 1.162522
   ...
-# Subtest: host bootstrap clears the secret hash and auto-connects localhost as GM
-ok 2 - host bootstrap clears the secret hash and auto-connects localhost as GM
+# Subtest: owned canonical Scene Token movement survives authorization without Character mirror
+ok 2 - owned canonical Scene Token movement survives authorization without Character mirror
   ---
-  duration_ms: 0.50628
+  duration_ms: 2.621007
   ...
-# Subtest: host bootstrap never auto-connects from a non-local URL
-ok 3 - host bootstrap never auto-connects from a non-local URL
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 40.465339
+===== tests/movement-snap.test.js =====
+TAP version 13
+# Subtest: movement snap steps cycle through 1/5/10/20/50/100 metres
+ok 1 - movement snap steps cycle through 1/5/10/20/50/100 metres
   ---
-  duration_ms: 0.225784
+  duration_ms: 0.728174
+  ...
+# Subtest: movement snapping affects only the live control point and preserves placed waypoints
+ok 2 - movement snapping affects only the live control point and preserves placed waypoints
+  ---
+  duration_ms: 0.286971
+  ...
+# Subtest: automatic movement step follows map scale bands
+ok 3 - automatic movement step follows map scale bands
+  ---
+  duration_ms: 0.125186
   ...
 1..3
 # tests 3
@@ -294,207 +266,235 @@ ok 3 - host bootstrap never auto-connects from a non-local URL
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 64.843031
-===== tests/interaction.test.js =====
+# duration_ms 33.765559
+===== tests/movement-token-runtime.test.js =====
 TAP version 13
-# Subtest: MapPackage contract normalizes action capabilities including open/close
-ok 1 - MapPackage contract normalizes action capabilities including open/close
+# Subtest: Movement Runtime commits map movement to Scene.tokens without mutating Character location directly
+ok 1 - Movement Runtime commits map movement to Scene.tokens without mutating Character location directly
   ---
-  duration_ms: 1.974153
+  duration_ms: 4.446504
   ...
-# Subtest: MapPackage contract validates structured status rules without script fields
-ok 2 - MapPackage contract validates structured status rules without script fields
+# Subtest: Movement Runtime enters and exits a Feature by changing canonical Token placement
+ok 2 - Movement Runtime enters and exits a Feature by changing canonical Token placement
   ---
-  duration_ms: 1.114911
+  duration_ms: 1.488023
   ...
-# Subtest: inspection uses Capability instead of map-category allowlists
-ok 3 - inspection uses Capability instead of map-category allowlists
+# Subtest: Feature Actor-status side effects on an unlinked Token write Synthetic Actor actorDelta only
+ok 3 - Feature Actor-status side effects on an unlinked Token write Synthetic Actor actorDelta only
   ---
-  duration_ms: 1.265253
+  duration_ms: 2.263409
   ...
-# Subtest: Feature State unifies open, Scene damage status and custom state
-ok 4 - Feature State unifies open, Scene damage status and custom state
-  ---
-  duration_ms: 8.789317
-  ...
-# Subtest: Feature State reads legacy featureInteractions but writes unified featureStates
-ok 5 - Feature State reads legacy featureInteractions but writes unified featureStates
-  ---
-  duration_ms: 0.581992
-  ...
-# Subtest: open/close interactions are derived from generic Feature state
-ok 6 - open/close interactions are derived from generic Feature state
-  ---
-  duration_ms: 1.281002
-  ...
-# Subtest: enter action is Capability-driven and reacts to canonical Token/Scene state
-ok 7 - enter action is Capability-driven and reacts to canonical Token/Scene state
-  ---
-  duration_ms: 3.701944
-  ...
-# Subtest: direct Feature damage reuses normal Scene damage events without category routing
-ok 8 - direct Feature damage reuses normal Scene damage events without category routing
-  ---
-  duration_ms: 4.045559
-  ...
-# Subtest: Feature Operations await Token-based Runtime ports before reporting success
-ok 9 - Feature Operations await Token-based Runtime ports before reporting success
-  ---
-  duration_ms: 4.145416
-  ...
-# Subtest: Feature status requirements and side effects use tokenId atomically
-ok 10 - Feature status requirements and side effects use tokenId atomically
-  ---
-  duration_ms: 1.314135
-  ...
-1..10
-# tests 10
+1..3
+# tests 3
 # suites 0
-# pass 10
+# pass 3
 # fail 0
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 110.444441
-===== tests/launcher.test.js =====
+# duration_ms 63.263681
+===== tests/multiplayer-permissions.test.js =====
 TAP version 13
-# Subtest: launcher accepts only the Local/LAN startup mode
-ok 1 - launcher accepts only the Local/LAN startup mode
+# Subtest: client maps canonical Token to Actor ownership
+ok 1 - client maps canonical Token to Actor ownership
   ---
-  duration_ms: 0.925025
+  duration_ms: 0.724372
   ...
-# Subtest: Windows browser launch delegates only to the system default browser
-ok 2 - Windows browser launch delegates only to the system default browser
+# Subtest: client preflight allows owned Token movement and blocks unowned Token movement
+ok 2 - client preflight allows owned Token movement and blocks unowned Token movement
   ---
-  duration_ms: 0.912412
+  duration_ms: 1.62923
   ...
-# Subtest: Local/LAN credentials create a six-digit Join Code and unique GM Secret
-ok 3 - Local/LAN credentials create a six-digit Join Code and unique GM Secret
+# Subtest: client canControlActor follows active Combat turn
+ok 3 - client canControlActor follows active Combat turn
   ---
-  duration_ms: 0.7945
+  duration_ms: 0.301794
   ...
-# Subtest: Local/LAN READY display keeps invite and GM secret concise and separated
-ok 4 - Local/LAN READY display keeps invite and GM secret concise and separated
+# Subtest: client resolves a combatant without actorId through canonical Token binding
+ok 4 - client resolves a combatant without actorId through canonical Token binding
   ---
-  duration_ms: 0.450034
+  duration_ms: 0.348999
   ...
-# Subtest: port guard identifies an existing RPGmap Local/LAN server
-ok 5 - port guard identifies an existing RPGmap Local/LAN server
+# Subtest: GM wildcard bypasses local ownership preflight
+ok 5 - GM wildcard bypasses local ownership preflight
   ---
-  duration_ms: 34.948786
+  duration_ms: 0.136589
   ...
-# Subtest: port guard reports RPGmap as Local/LAN even when stale health metadata says public
-ok 6 - port guard reports RPGmap as Local/LAN even when stale health metadata says public
+# Subtest: Player cannot change an owned Token diameter
+ok 6 - Player cannot change an owned Token diameter
   ---
-  duration_ms: 10.757349
+  duration_ms: 0.165029
   ...
-# Subtest: port guard reports a non-RPGmap HTTP listener as a generic conflict
-ok 7 - port guard reports a non-RPGmap HTTP listener as a generic conflict
+# Subtest: Player cannot forge Actor, Token, or definition status changes through World push
+ok 7 - Player cannot forge Actor, Token, or definition status changes through World push
   ---
-  duration_ms: 7.974028
+  duration_ms: 0.323925
   ...
-1..7
-# tests 7
+# Subtest: World V2 mirror allows owned movement but keeps World structure GM-only
+ok 8 - World V2 mirror allows owned movement but keeps World structure GM-only
+  ---
+  duration_ms: 1.116349
+  ...
+# Subtest: client preflight rejects Character-era identity fields
+ok 9 - client preflight rejects Character-era identity fields
+  ---
+  duration_ms: 0.281437
+  ...
+1..9
+# tests 9
 # suites 0
-# pass 7
+# pass 9
 # fail 0
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 194.359778
-===== tests/legacy-runtime-retirement.test.js =====
+# duration_ms 39.535847
+===== tests/multiplayer-protocol.test.js =====
 TAP version 13
-# Subtest: retired Character AppCore and bridge files are physically absent
-ok 1 - retired Character AppCore and bridge files are physically absent
+# Subtest: multiplayer socket URL follows current HTTP/HTTPS host
+ok 1 - multiplayer socket URL follows current HTTP/HTTPS host
   ---
-  duration_ms: 1.083552
+  duration_ms: 0.445569
   ...
-# Subtest: live runtime sources cannot restore Character document identity, events, APIs, or panes
-ok 2 - live runtime sources cannot restore Character document identity, events, APIs, or panes
+# Subtest: local host detection and role normalization
+ok 2 - local host detection and role normalization
   ---
-  duration_ms: 3.308396
+  duration_ms: 0.095269
   ...
-# Subtest: SaveV2 migration is isolated to the import/persistence boundary
-ok 3 - SaveV2 migration is isolated to the import/persistence boundary
+# Subtest: multiplayer name is bounded and sanitized
+ok 3 - multiplayer name is bounded and sanitized
   ---
-  duration_ms: 0.328015
+  duration_ms: 0.149105
   ...
-# Subtest: World V2 server authority rejects Character fields after migration
-ok 4 - World V2 server authority rejects Character fields after migration
-  ---
-  duration_ms: 1.026315
-  ...
-1..4
-# tests 4
+1..3
+# tests 3
 # suites 0
-# pass 4
+# pass 3
 # fail 0
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 62.652743
-===== tests/map-package-framework.test.js =====
+# duration_ms 32.985747
+===== tests/multiplayer-server.test.js =====
 TAP version 13
-# Subtest: Lanzhou is normalized through the generic MapPackage contract
-ok 1 - Lanzhou is normalized through the generic MapPackage contract
+# Subtest: health exposes only World bootstrap metadata for empty and initialized LAN state
+not ok 1 - health exposes only World bootstrap metadata for empty and initialized LAN state
   ---
-  duration_ms: 5.620273
-  ...
-# Subtest: minimal reference map uses the same Core destruction and Scene State logic
-ok 2 - minimal reference map uses the same Core destruction and Scene State logic
-  ---
-  duration_ms: 8.783797
-  ...
-# Subtest: application entry resolves MapPackages through the registry without implementation coupling
-ok 3 - application entry resolves MapPackages through the registry without implementation coupling
-  ---
-  duration_ms: 4.906524
-  ...
-# Subtest: invalid maps are rejected before they enter the Engine
-ok 4 - invalid maps are rejected before they enter the Engine
-  ---
-  duration_ms: 0.46903
-  ...
-1..4
-# tests 4
-# suites 0
-# pass 4
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 107.743824
-===== tests/map-package-registry.test.js =====
-TAP version 13
-# node:internal/modules/esm/get_format:218
-#   throw new ERR_UNKNOWN_FILE_EXTENSION(ext, filepath);
-#         ^
-# TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension ".webp" for /home/runner/work/RPGmap/RPGmap/reference/maps/lanzhou/assets/barracks-02.webp
-#     at Object.getFileProtocolModuleFormat [as file:] (node:internal/modules/esm/get_format:218:9)
-#     at defaultGetFormat (node:internal/modules/esm/get_format:244:36)
-#     at defaultLoad (node:internal/modules/esm/load:122:22)
-#     at async ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:483:32) {
-#   code: 'ERR_UNKNOWN_FILE_EXTENSION'
-# }
-# Node.js v22.12.0
-# Subtest: tests/map-package-registry.test.js
-not ok 1 - tests/map-package-registry.test.js
-  ---
-  duration_ms: 53.783847
-  location: '/home/runner/work/RPGmap/RPGmap/tests/map-package-registry.test.js:1:1'
+  duration_ms: 85.164522
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:195:1'
   failureType: 'testCodeFailure'
-  exitCode: 1
-  signal: ~
-  error: 'test failed'
-  code: 'ERR_TEST_FAILURE'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      {
+    +   activeSceneId: null,
+        initialized: false,
+        kind: 'empty',
+    +   mapPackage: null,
+    +   name: null,
+        ruleset: null,
+        schemaVersion: null,
+    +   worldId: 'default'
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    initialized: false
+    kind: 'empty'
+    schemaVersion: ~
+    ruleset: ~
+  actual:
+    initialized: false
+    kind: 'empty'
+    schemaVersion: ~
+    worldId: 'default'
+    name: ~
+    activeSceneId: ~
+    mapPackage: ~
+    ruleset: ~
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:199:12)
+    process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    async Test.run (node:internal/test_runner/test:935:9)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
   ...
-1..1
-# tests 1
-# suites 0
-# pass 0
-# fail 1
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 61.613915
-FAILED_OR_TIMED_OUT=1 FILE=tests/map-package-registry.test.js
+# Subtest: health identifies a persisted pre-World SaveV2 as an explicit LAN legacy bootstrap
+not ok 2 - health identifies a persisted pre-World SaveV2 as an explicit LAN legacy bootstrap
+  ---
+  duration_ms: 54.018425
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:221:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      {
+    +   activeSceneId: null,
+        initialized: true,
+        kind: 'legacy',
+    +   mapPackage: null,
+    +   name: null,
+        ruleset: null,
+        schemaVersion: null,
+    +   worldId: 'default'
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    initialized: true
+    kind: 'legacy'
+    schemaVersion: ~
+    ruleset: ~
+  actual:
+    initialized: true
+    kind: 'legacy'
+    schemaVersion: ~
+    worldId: 'default'
+    name: ~
+    activeSceneId: ~
+    mapPackage: ~
+    ruleset: ~
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:233:12)
+    process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    async Test.run (node:internal/test_runner/test:935:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:633:7)
+  ...
+# Subtest: generic World operations commit atomically, broadcast patches, and recover idempotently
+not ok 3 - generic World operations commit atomically, broadcast patches, and recover idempotently
+  ---
+  duration_ms: 15058.642646
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:261:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching WebSocket message timeout after 15000ms
+    Recent messages:
+    {"type":"error","code":"request_failed","message":"请求未完成，服务器保持运行。"}
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
+    listOnTimeout (node:internal/timers:594:17)
+    process.processTimers (node:internal/timers:529:7)
+  ...
+# Subtest: generic World operations reuse Player ownership and status permission checks
+not ok 4 - generic World operations reuse Player ownership and status permission checks
+  ---
+  duration_ms: 15057.618423
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:359:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching WebSocket message timeout after 15000ms
+    Recent messages:
+    {"type":"error","code":"request_failed","message":"请求未完成，服务器保持运行。"}
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
+    listOnTimeout (node:internal/timers:594:17)
+    process.processTimers (node:internal/timers:529:7)
+  ...
+FAILED_OR_TIMED_OUT=124 FILE=tests/multiplayer-server.test.js
