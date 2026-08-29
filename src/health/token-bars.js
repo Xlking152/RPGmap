@@ -54,6 +54,7 @@ export function createHealthTokenBars() {
       ensurePane(api.map);
       installStyles(documentNode);
       const layer = L.layerGroup([], { pane: PANE }).addTo(api.map);
+      const movingTokenIds = new Set();
       let destroyed = false;
       const off = [];
 
@@ -62,6 +63,7 @@ export function createHealthTokenBars() {
         layer.clearLayers();
         for (const token of api.tokens.list()) {
           if (token?.hidden === true || token?.placement !== 'map') continue;
+          if (movingTokenIds.has(String(token.id)) || api.renderer?.isTokenMoving?.(token.id)) continue;
           const x = Number(token.x);
           const y = Number(token.y);
           if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
@@ -90,10 +92,21 @@ export function createHealthTokenBars() {
         off.push(api.on(eventName, render));
       }
       off.push(api.on('state:commit', render));
+      off.push(api.on('token:visual-move-start', event => {
+        const id = String(event.detail?.tokenId || event.detail?.id || '');
+        if (id) movingTokenIds.add(id);
+        render();
+      }));
+      off.push(api.on('token:visual-move-end', event => {
+        const id = String(event.detail?.tokenId || event.detail?.id || '');
+        if (id) movingTokenIds.delete(id);
+        render();
+      }));
       api.map.on('zoomend', render);
       api.map.on('resize', render);
       off.push(api.on('app:destroy', () => {
         destroyed = true;
+        movingTokenIds.clear();
         api.map.off('zoomend', render);
         api.map.off('resize', render);
         layer.clearLayers();
