@@ -1,6 +1,6 @@
 # RPGmap
 
-RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.1.1**，提供 World/Scene 管理、Actor/Token、地图移动与测距、生命/伤势、状态、战斗、聊天，以及 Windows 本机/局域网多人运行包。
+RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.1.2**，提供 World/Scene 管理、Actor/Token、地图移动与测距、生命/伤势、状态、战斗、聊天，以及 Windows 本机/局域网多人运行包。
 
 内置的“北宋兰州城”是复杂 Reference MapPackage，用于验证建筑、城墙、城门、桥梁、水体、破坏、洪水、导航和 29 张 WebP 美术资源能够通过通用 Core 运行。
 
@@ -9,7 +9,7 @@ RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前�
 正式 Windows Release：
 
 1. 安装 Node.js `20.19+` 或 `22.12+`。
-2. 下载并解压 `RPGmap-v2.1.1.zip`。
+2. 下载并解压 `RPGmap-v2.1.2.zip`。
 3. 双击 `start-rpgmap.bat`。
 4. GM 使用启动窗口中的 Local URL 与 GM Secret；同一局域网的 Player 使用 LAN URL 与 Join Code。
 
@@ -52,6 +52,8 @@ Scene
 - World V2 是持久化权威；Entity/UI/compatibility projection 只能只读生成。
 - 普通多人写入使用 operation schema 1；完整 World 只用于初始化、快照、显式导入和恢复。
 
+v2.1.2 恢复 v1.6.3 的 Token 拖动、范围手柄和地图地物检查体验，但不恢复旧 Character Runtime；详细结构审计与修改过程见 [v2.1.2 Interaction Restoration](reference/V2.1.2-INTERACTION-RESTORATION.md)。
+
 启动入口 `src/main.js` 只包含 World Manager bootstrap。选择 World/Scene 后才动态导入 `src/runtime/map-runtime.js`、Leaflet、地图 CSS、兰州逻辑与资源。
 
 ## 本地开发
@@ -75,14 +77,6 @@ npm run dev
 ## 发布
 
 - Candidate workflow 在 PR 与 `main` push 上执行完整测试、构建、包验证和 Windows smoke。
-- 正式版本使用指向 `main` merge commit 的 annotated `vX.Y.Z` tag。
+- 正式版本最终使用指向 `main` release commit 的 `vX.Y.Z` tag；release workflow 也支持受校验的 `release-vX.Y.Z` 自动化入口，由发布任务创建同名正式 tag/release。
 - Release 只发布 ZIP 与 `.sha256`，ZIP 不包含 raw `reference/`、源码、测试或过程文档。
-- `VERSION.json` 必须记录与 tag 一致的版本和完整 source commit。
-
-## 文档
-
-- [开发说明](文档/开发说明.md)：所有权、Contract、迁移、操作协议、测试和发布边界。
-- [未来规划](文档/未来规划.md)：External MapPackage、Multi-World、资产、权限、空间模型与 VTT 功能。
-- [操作指南](文档/操作指南.md)：Windows Local/LAN 的使用、权限、存档与故障排查。
-- [MapPackage 规范](reference/README.md)：地图作者的目录、Capability、SVG 与 DIY 约定。
-- [变更日志](CHANGELOG.md)：正式版本变更记录。
+- `VERSION.json` 必须记录与正式 release target 一致的版本和完整 source commit。
