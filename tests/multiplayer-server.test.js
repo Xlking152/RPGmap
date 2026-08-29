@@ -197,7 +197,14 @@ test('health exposes only World bootstrap metadata for empty and initialized LAN
   try {
     const empty = await (await fetch(`${runtime.httpUrl}/api/health`)).json();
     assert.deepEqual(empty.world, {
-      initialized: false, kind: 'empty', schemaVersion: null, ruleset: null,
+      initialized: false,
+      kind: 'empty',
+      schemaVersion: null,
+      worldId: 'default',
+      name: null,
+      activeSceneId: null,
+      mapPackage: null,
+      ruleset: null,
     });
 
     const gm = await openAndHello(runtime.url, { name: 'Bootstrap GM', requestedRole: 'gm' });
@@ -209,6 +216,10 @@ test('health exposes only World bootstrap metadata for empty and initialized LAN
       initialized: true,
       kind: 'world-v2',
       schemaVersion: 2,
+      worldId: 'world-test',
+      name: 'Test World',
+      activeSceneId: 'scene-test',
+      mapPackage: { id: 'test', version: '1' },
       ruleset: { id: 'infinite-horror', version: '1.0.0' },
     });
     assert.equal(Object.hasOwn(health.world, 'state'), false);
@@ -231,7 +242,14 @@ test('health identifies a persisted pre-World SaveV2 as an explicit LAN legacy b
   try {
     const health = await (await fetch(`${runtime.httpUrl}/api/health`)).json();
     assert.deepEqual(health.world, {
-      initialized: true, kind: 'legacy', schemaVersion: null, ruleset: null,
+      initialized: true,
+      kind: 'legacy',
+      schemaVersion: null,
+      worldId: 'default',
+      name: null,
+      activeSceneId: null,
+      mapPackage: null,
+      ruleset: null,
     });
   } finally {
     await stopServer(runtime);

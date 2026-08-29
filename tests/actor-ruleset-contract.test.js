@@ -112,8 +112,8 @@ test('Infinite Horror migrates legacy HP base/runtime into independent Health da
   assert.equal(derived.health.current, 9);
   assert.equal(derived.health.max, 12);
   assert.equal(derived.health.mode, 'wound-track');
-  assert.equal(derived.resources.stamina.current, 4);
-  assert.equal(derived.resources.focus.current, 2);
+  assert.equal(derived.resources.find(resource => resource.id === 'stamina')?.current, 4);
+  assert.equal(derived.resources.find(resource => resource.id === 'focus')?.current, 2);
 });
 
 test('Actor presentation exposes canonical Health paths and Resource operations cannot mutate HP', () => {
@@ -133,7 +133,7 @@ test('Actor presentation exposes canonical Health paths and Resource operations 
 
   const directSet = performActorOperation(actor, { type: 'resource.set-current', resourceId: 'hp', value: 1 }, context);
   const directMax = performActorOperation(actor, { type: 'resource.set-max', resourceId: 'hp', value: 99 }, context);
-  const custom = performActorOperation(actor, { type: 'resource.custom-create', id: 'hp', name: '假生命', max: 99 }, context);
+  const custom = performActorOperation(actor, { type: 'resource.add-custom', resourceId: 'hp', name: '假生命', max: 99 }, context);
   assert.equal(directSet.changed, false);
   assert.equal(directSet.blocked, 'health_is_not_resource');
   assert.equal(directMax.changed, false);

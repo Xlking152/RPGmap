@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createDefaultMapPackage } from '../src/map-package/default-map.js';
+import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
 import { MapPackageRegistry } from '../src/map-package/registry.js';
 
 test('MapPackage Registry lazy-loads and caches a registered package', async () => {
-  const sample = createDefaultMapPackage();
+  const sample = createMinimalReferencePackage();
   const registry = new MapPackageRegistry();
   let loads = 0;
   registry.registerLoader({
@@ -24,7 +24,7 @@ test('MapPackage Registry lazy-loads and caches a registered package', async () 
 });
 
 test('MapPackage Registry rejects unknown ids and incompatible versions', async () => {
-  const sample = createDefaultMapPackage();
+  const sample = createMinimalReferencePackage();
   const registry = new MapPackageRegistry();
   registry.registerPackage(sample);
   await assert.rejects(registry.load({ id: 'missing-map' }), error => error.code === 'map_package_not_found');

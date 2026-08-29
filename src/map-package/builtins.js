@@ -1,4 +1,4 @@
-import { createDefaultMapPackage, DEFAULT_REFERENCE_MAP_ID } from './default-map.js';
+import { DEFAULT_REFERENCE_MAP_ID } from './constants.js';
 import { mapPackageRegistry } from './registry.js';
 
 export function registerBuiltInMapPackages(registry = mapPackageRegistry) {
@@ -7,7 +7,10 @@ export function registerBuiltInMapPackages(registry = mapPackageRegistry) {
       id: DEFAULT_REFERENCE_MAP_ID,
       title: '北宋兰州 Reference Map',
       source: 'reference/maps/lanzhou',
-      load: async () => createDefaultMapPackage(),
+      load: async () => {
+        const { createDefaultMapPackage } = await import('./default-map.js');
+        return createDefaultMapPackage();
+      },
     });
   }
   return registry;

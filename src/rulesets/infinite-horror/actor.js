@@ -194,6 +194,13 @@ export function createInfiniteHorrorActorFromImport(imported, context = {}) {
   const form = formFromImport(card, context);
   return {
     name: text(context.name, card.identity.name),
+    img: card.avatarDataUrl,
+    prototypeToken: {
+      texture: { src: card.avatarDataUrl },
+      color: card.tokenAppearance.color,
+      diameterMeters: 1,
+      showName: true,
+    },
     system: {
       schemaVersion: INFINITE_HORROR_ACTOR_SYSTEM_VERSION,
       currentFormId: form.id,
@@ -226,7 +233,18 @@ export function migrateInfiniteHorrorActor(rawActor = {}) {
   if (actor.runtime && typeof actor.runtime === 'object') {
     existing.runtime = mergeValue(existing.runtime, actor.runtime);
   }
-  return { name: text(actor.name, '未命名角色'), system: existing };
+  const forms = Array.isArray(existing.forms) ? existing.forms : [];
+  const current = forms.find(form => String(form?.id) === String(existing.currentFormId)) || forms[0] || null;
+  const hasImg = Object.prototype.hasOwnProperty.call(actor, 'img');
+  const hasPrototype = Object.prototype.hasOwnProperty.call(actor, 'prototypeToken');
+  const img = hasImg ? actor.img : (actor.avatarDataUrl ?? current?.avatarDataUrl ?? null);
+  const prototypeToken = hasPrototype ? clone(actor.prototypeToken) : {
+    texture: { src: img },
+    color: text(current?.tokenAppearance?.color, '#3d9b63'),
+    diameterMeters: 1,
+    showName: true,
+  };
+  return { name: text(actor.name, '未命名角色'), img, prototypeToken, system: existing };
 }
 
 function currentFormFromSystem(system) {
@@ -272,7 +290,7 @@ export function normalizeInfiniteHorrorSystem(rawSystem = {}) {
   const legacyHpMaxOverride = legacyHp.maxOverride === null || legacyHp.maxOverride === undefined
     ? null
     : Math.max(0, finite(legacyHp.maxOverride));
-  const hpMaxOverride = rawHealthMaxOverride ?? legacyHpMaxOverride;
+  const hpMaxOverride = hasHealthRuntime ? rawHealthMaxOverride : legacyHpMaxOverride;
   const hpMax = hpMaxOverride ?? hpBaseMax;
   const hpCurrent = finite(legacyHp.current, hpMax);
   // StatusDefinition effects live outside Actor.system, so persistence normalization
@@ -302,7 +320,7 @@ export function normalizeInfiniteHorrorSystem(rawSystem = {}) {
         defaultMode: INFINITE_HORROR_HEALTH.defaultModeForSource(current?.source?.type),
         max: healthStorageMax,
         simpleCurrent: hpCurrent,
-        legacyMaxOverride: legacyHpMaxOverride,
+        legacyMaxOverride: hasHealthRuntime ? null : legacyHpMaxOverride,
       }),
     },
   };
@@ -639,12 +657,14 @@ export function applyInfiniteHorrorActorOperation(actor, operation = {}, context
     return { changed: true, value: clone(form) };
   }
   if (type === 'resource.set-current') {
+    if (String(operation.resourceId) === 'hp') return { changed: false, blocked: 'health_is_not_resource' };
     const changed = setResourceCurrent(actor, operation.resourceId, operation.value);
     return changed
       ? { changed: true, value: resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.current`) }
       : { changed: false, blocked: 'resource_not_found' };
   }
   if (type === 'resource.step') {
+    if (String(operation.resourceId) === 'hp') return { changed: false, blocked: 'health_is_not_resource' };
     const current = resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.current`);
     if (current === null) return { changed: false, blocked: 'resource_not_found' };
     const changed = setResourceCurrent(actor, operation.resourceId, finite(current) + finite(operation.amount));
@@ -653,6 +673,7 @@ export function applyInfiniteHorrorActorOperation(actor, operation = {}, context
       : { changed: false, blocked: 'resource_not_found' };
   }
   if (type === 'resource.set-max') {
+    if (String(operation.resourceId) === 'hp') return { changed: false, blocked: 'health_is_not_resource' };
     const changed = setResourceMaximum(actor, operation.resourceId, operation.value);
     return changed
       ? { changed: true, value: resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.max`) }

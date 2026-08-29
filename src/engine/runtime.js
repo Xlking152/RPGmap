@@ -75,6 +75,8 @@ function inside(point, mapPackage) {
 
 export function createRpgMapRuntime({
   container,
+  worldId = null,
+  worldName = '',
   mapPackage,
   ruleset,
   storageAdapter,
@@ -106,6 +108,8 @@ export function createRpgMapRuntime({
   let gridFrame = null;
 
   const persistence = createWorldStatePersistence({
+    worldId,
+    worldName,
     mapPackage,
     ruleset,
     storageAdapter,
@@ -316,7 +320,7 @@ export function createRpgMapRuntime({
     const url = URL.createObjectURL(blob);
     const link = documentNode.createElement('a');
     link.href = url;
-    link.download = `${mapPackage.id}-world-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `${worldId || mapPackage.id}-world-${new Date().toISOString().slice(0, 10)}.json`;
     documentNode.body.append(link);
     link.click();
     link.remove();

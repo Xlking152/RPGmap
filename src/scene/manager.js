@@ -12,11 +12,12 @@ function sceneMapId(scene) {
 
 function installSceneSelector(api, sceneApi) {
   const mapElement = api.map?.getContainer?.();
+  const documentNode = mapElement?.ownerDocument || globalThis.document;
   const shell = mapElement?.closest?.('.app-shell');
   const toolbar = shell?.querySelector?.('.toolbar-right');
-  if (!toolbar || toolbar.querySelector('[data-scene-manager]')) return;
+  if (!documentNode || !toolbar || toolbar.querySelector('[data-scene-manager]')) return;
 
-  const wrap = document.createElement('label');
+  const wrap = documentNode.createElement('label');
   wrap.dataset.sceneManager = 'true';
   wrap.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:11px;color:#5d696a';
   wrap.innerHTML = '<span>Scene</span><select data-scene-manager-select style="max-width:180px;padding:5px 6px;border:1px solid #c8d1ce;border-radius:6px;background:#fff"></select>';

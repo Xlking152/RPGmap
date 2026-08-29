@@ -70,11 +70,13 @@ test('minimal reference map uses the same Core destruction and Scene State logic
   assert.ok(scene.destroyedObjectIds.includes('demo-house'));
 });
 
-test('application entry depends on Default MapPackage, not Lanzhou implementation details', async () => {
+test('application entry resolves MapPackages through the registry without implementation coupling', async () => {
   const mainSource = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
   const compatibilityShim = await readFile(new URL('../src/maps/lanzhou.js', import.meta.url), 'utf8');
 
-  assert.match(mainSource, /createDefaultMapPackage/);
+  assert.match(mainSource, /registerBuiltInMapPackages/);
+  assert.match(mainSource, /mapPackageRegistry\.load/);
+  assert.doesNotMatch(mainSource, /createDefaultMapPackage/);
   assert.doesNotMatch(mainSource, /Lanzhou|lanzhou|assets\/generated/);
   assert.match(compatibilityShim, /reference\/maps\/lanzhou\/package\.js/);
 });

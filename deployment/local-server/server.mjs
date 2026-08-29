@@ -544,14 +544,23 @@ function multiplayerInfo() {
 
 function worldBootstrapInfo() {
   const rawWorld = world.state?.preferences?.worldV2;
-  if (!world.state) return { initialized: false, kind: 'empty', schemaVersion: null, ruleset: null };
+  if (!world.state) return { initialized: false, kind: 'empty', schemaVersion: null, worldId: WORLD_ID, name: null, activeSceneId: null, mapPackage: null, ruleset: null };
   if (!rawWorld || typeof rawWorld !== 'object' || Array.isArray(rawWorld)) {
-    return { initialized: true, kind: 'legacy', schemaVersion: null, ruleset: null };
+    return { initialized: true, kind: 'legacy', schemaVersion: null, worldId: WORLD_ID, name: null, activeSceneId: null, mapPackage: null, ruleset: null };
   }
+  const scenes = Array.isArray(rawWorld.scenes) ? rawWorld.scenes : [];
+  const activeScene = scenes.find(scene => String(scene?.id || '') === String(rawWorld.activeSceneId || '')) || scenes[0] || null;
   return {
     initialized: true,
     kind: 'world-v2',
     schemaVersion: Number(rawWorld.schemaVersion) || null,
+    worldId: String(rawWorld.id || WORLD_ID),
+    name: String(rawWorld.name || ''),
+    activeSceneId: activeScene?.id ? String(activeScene.id) : null,
+    mapPackage: activeScene?.mapPackage?.id ? {
+      id: String(activeScene.mapPackage.id),
+      version: String(activeScene.mapPackage.version || ''),
+    } : null,
     ruleset: {
       id: String(rawWorld.ruleset?.id || ''),
       version: String(rawWorld.ruleset?.version || ''),

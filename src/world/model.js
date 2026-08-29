@@ -261,6 +261,8 @@ export function projectWorldV2ToRuntimeState(state, rawWorld, { mapPackage, rule
   const actorIds = new Set(world.actors.map(actor => String(actor?.id)));
   const tokens = scene.tokens.filter(token => actorIds.has(String(token.actorId)));
   const next = clone(state || {});
+  next.mapId = currentMap.id;
+  next.mapVersion = currentMap.version;
   next.markers = clone(scene.markers);
   next.attackAreas = canonicalAttackAreas(scene.attackAreas);
   next.sceneEvents = clone(scene.sceneEvents);

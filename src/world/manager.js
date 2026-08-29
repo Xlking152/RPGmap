@@ -240,7 +240,7 @@ export function createWorldCatalogManager(storageAdapter, { idFactory = newWorld
       id: worldId,
       name: header?.name || '迁移的 RPGmap World',
       ruleset: header?.ruleset?.id ? header.ruleset : fallbackRuleset,
-      mapPackage: header?.mapPackage?.id ? header.mapPackage : { id: mapId, version: String(mapPackage.version || '1') },
+      mapPackage: header?.mapPackage?.id ? header.mapPackage : { id: mapId, version: String(mapPackage.version || '') },
       createdAt: now,
       updatedAt: header?.updatedAt || now,
     });

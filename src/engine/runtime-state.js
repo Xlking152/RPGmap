@@ -109,8 +109,9 @@ export function createInitialRuntimeState(mapPackage, { ruleset } = {}) {
 export function validateRuntimeState(raw, { mapPackage, ruleset } = {}) {
   const source = object(raw, 'state');
   const metadata = mapMetadata(mapPackage);
-  const mapId = String(source.mapId ?? metadata.id).trim();
-  const mapVersion = String(source.mapVersion ?? metadata.version).trim();
+  const hasCanonicalWorld = Boolean(source.preferences?.[WORLD_STATE_KEY]);
+  const mapId = hasCanonicalWorld ? metadata.id : String(source.mapId ?? metadata.id).trim();
+  const mapVersion = hasCanonicalWorld ? metadata.version : String(source.mapVersion ?? metadata.version).trim();
   if (mapId !== metadata.id) throw new TypeError('state.mapId does not match MapPackage');
   if (mapVersion !== metadata.version) throw new TypeError('state.mapVersion does not match MapPackage');
 

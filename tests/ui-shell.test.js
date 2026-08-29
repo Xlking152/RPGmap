@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const runtimeSource = readFileSync(new URL('../src/engine/runtime.js', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+const builtinsSource = readFileSync(new URL('../src/map-package/builtins.js', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const appShellSource = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
 const entityUiSource = readFileSync(new URL('../src/entities/ui.js', import.meta.url), 'utf8');
@@ -15,7 +16,8 @@ const viteSource = readFileSync(new URL('../vite.config.js', import.meta.url), '
 
 test('application entry boots the Character-free World/Scene Token runtime', () => {
   assert.match(mainSource, /createRpgMapRuntime/);
-  assert.match(mainSource, /createWorldSystem\(\)/);
+  assert.match(mainSource, /createWorldSystem\(\{ worldId, worldName \}\)/);
+  assert.match(mainSource, /createSceneManagerSystem\(/);
   assert.match(mainSource, /createTokenRuntimeSystem\(\)/);
   assert.match(mainSource, /createTokenRendererSystem\(\)/);
   assert.match(mainSource, /createSceneAreaSystem\(\)/);
@@ -34,8 +36,10 @@ test('application chrome keeps the restrained neutral, river and brick palette',
   assert.match(indexSource, /RPGmap 2\.0\.0/);
 });
 
-test('production entry splits the map and large vendors without suppressing chunk warnings', () => {
-  assert.match(mainSource, /await import\('\.\/map-package\/default-map\.js'\)/);
+test('production registry splits the built-in map and large vendors without suppressing chunk warnings', () => {
+  assert.match(mainSource, /registerBuiltInMapPackages/);
+  assert.match(mainSource, /mapPackageRegistry\.load/);
+  assert.match(builtinsSource, /await import\('\.\/default-map\.js'\)/);
   assert.match(viteSource, /manualChunks/);
   assert.match(viteSource, /vendor-leaflet/);
   assert.match(viteSource, /vendor-icons/);
