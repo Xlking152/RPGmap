@@ -180,6 +180,40 @@ export function createWorldCatalogManager(storageAdapter, { idFactory = newWorld
     return clone(catalog.worlds[index]);
   }
 
+  function activateStoredScene(worldId, sceneId) {
+    const descriptor = get(worldId);
+    if (!descriptor) throw new Error(`Unknown World: ${worldId}`);
+    const raw = storageAdapter.get(descriptor.storageKey);
+    const state = parseJson(raw);
+    const world = object(state?.preferences?.worldV2);
+    if (!world.id) {
+      const error = new Error(`World ${worldId} has no persisted World V2 state`);
+      error.code = 'world_save_missing';
+      throw error;
+    }
+    const target = array(world.scenes).find(scene => String(scene?.id) === String(sceneId));
+    if (!target) throw new Error(`Unknown Scene: ${sceneId}`);
+    world.activeSceneId = String(target.id);
+    world.updatedAt = new Date().toISOString();
+    state.preferences.worldV2 = world;
+    storageAdapter.set(descriptor.storageKey, JSON.stringify(state));
+
+    const catalog = readCatalog();
+    const index = catalog.worlds.findIndex(item => String(item.id) === String(worldId));
+    if (index >= 0) {
+      catalog.worlds[index] = normalizeDescriptor({
+        ...catalog.worlds[index],
+        name: text(world.name, catalog.worlds[index].name),
+        ruleset: object(world.ruleset),
+        mapPackage: object(target.mapPackage),
+        updatedAt: world.updatedAt,
+      });
+      catalog.activeWorldId = catalog.worlds[index].id;
+      writeCatalog(catalog);
+    }
+    return clone(target);
+  }
+
   function remove(worldId) {
     const catalog = readCatalog();
     const index = catalog.worlds.findIndex(world => String(world.id) === String(worldId));
@@ -226,6 +260,7 @@ export function createWorldCatalogManager(storageAdapter, { idFactory = newWorld
     select,
     create,
     updateFromSave,
+    activateStoredScene,
     remove,
     adoptLegacyMapWorld,
   });
