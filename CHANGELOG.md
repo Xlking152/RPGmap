@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.1.3
+
+- 修复 Local/LAN 普通聊天发送者看不到自己消息的问题：`chat.append` / `chat.clear` 属于服务器独占写入，即使快照来自当前 Session 也会重新载入权威 World；普通自己发出的 World operation 仍避免重复 import。
+- 聊天发送请求被 WebSocket 接受后才清空输入并重新 focus；连接不可用时保留原输入并给出错误提示。
+- 删除顶部重复的“检查地物”按钮；“选择”模式继续同时负责 Token 选择和建筑、城墙、城门、桥梁等 Feature 的直接检查，Feature Interaction / 门开关逻辑保持不变。
+- 修复 Scene Token 绑定范围无法“预览影响 / 应用破坏”：实时 Scene Area 继续保存 canonical Token anchor，破坏计算只接收当前已解析坐标的一次性 free geometry snapshot，历史 damage event 不会随着 Token 后续移动而漂移。
+- 修复切换范围绑定对象时 fallback origin 仍按旧 anchor 计算的问题，新 Token/Marker 绑定会立即使用新对象当前位置。
+- 新增 v2.1.3 聊天、选择/检查和 Token-bound AoE 回归测试；World schema 2、operation schema 1、Infinite Horror Ruleset `1.0.0` 与 Lanzhou MapPackage 数据版本 `1.0.5` 均保持不变。
+
+## v2.1.2
+
+- 在保留 World V2 / Scene Token / Ruleset 架构的前提下恢复 v1.6.3 的 Token 实时拖动路线、waypoint、滚轮吸附和阻挡反馈。
+- 恢复圆形、扇形、矩形范围的地图拖拽手柄，同时保持 drag 过程本地预览、dragend 后才提交 World。
+- Token 名称固定到 Token 上方，HP bar 保持下方，避免尺寸变化后重叠。
+- 恢复选择/浏览状态下直接点击 inspectable Feature 打开地物详情；门继续使用现有通用 FeatureControlLayer 直接开关。
+- 扩展 Character Runtime retirement 测试覆盖新的 movement / inspector / area adapter；不重新引入旧 Character Runtime。
+
 ## v2.1.1
 
 - 修复地图 Runtime 在 Leaflet 设置中心和缩放前注册 Feature 控件，导致启动抛出 `Set map center and zoom first.` 并显示空白地图的问题。
