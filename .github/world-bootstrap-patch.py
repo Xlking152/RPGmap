@@ -125,6 +125,46 @@ replace(
     "Ruleset legacy Core appearance migration",
 )
 
+# Preserve the previous Health authority rule: once a Health Runtime exists it
+# owns maxOverride too. A stale resources.hp mirror may only seed actors that do
+# not yet have Health Runtime data.
+replace(
+    ih,
+    "const hpMaxOverride = rawHealthMaxOverride ?? legacyHpMaxOverride;",
+    "const hpMaxOverride = hasHealthRuntime ? rawHealthMaxOverride : legacyHpMaxOverride;",
+    "Health max override authority precedence",
+)
+
+# HP is not a generic Resource. Keep the explicit operation boundary so callers
+# get a stable reason instead of treating Health as a missing Resource.
+replace(
+    ih,
+    """  if (type === 'resource.set-current') {
+    const changed = setResourceCurrent(actor, operation.resourceId, operation.value);""",
+    """  if (type === 'resource.set-current') {
+    if (String(operation.resourceId) === 'hp') return { changed: false, blocked: 'health_is_not_resource' };
+    const changed = setResourceCurrent(actor, operation.resourceId, operation.value);""",
+    "block HP resource set-current",
+)
+replace(
+    ih,
+    """  if (type === 'resource.step') {
+    const current = resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.current`);""",
+    """  if (type === 'resource.step') {
+    if (String(operation.resourceId) === 'hp') return { changed: false, blocked: 'health_is_not_resource' };
+    const current = resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.current`);""",
+    "block HP resource step",
+)
+replace(
+    ih,
+    """  if (type === 'resource.set-max') {
+    const changed = setResourceMaximum(actor, operation.resourceId, operation.value);""",
+    """  if (type === 'resource.set-max') {
+    if (String(operation.resourceId) === 'hp') return { changed: false, blocked: 'health_is_not_resource' };
+    const changed = setResourceMaximum(actor, operation.resourceId, operation.value);""",
+    "block HP resource set-max",
+)
+
 # Compatibility Entity helper may carry explicit Core Token overrides.
 entities = "src/entities/model.js"
 replace(
@@ -231,4 +271,23 @@ replace(
             if (epoch !== remoteEpoch) return false;
             revision = requestedRevision;""",
     "multiplayer cross-Map Scene reload",
+)
+
+# Update the pre-existing Actor contract test to the established v3 API shape:
+# deriveActorDocument.resources is an array, and custom Resources use
+# resource.add-custom/resourceId.
+contract_test = "tests/actor-ruleset-contract.test.js"
+replace(
+    contract_test,
+    """  assert.equal(derived.resources.stamina.current, 4);
+  assert.equal(derived.resources.focus.current, 2);""",
+    """  assert.equal(derived.resources.find(resource => resource.id === 'stamina')?.current, 4);
+  assert.equal(derived.resources.find(resource => resource.id === 'focus')?.current, 2);""",
+    "Actor derived Resource array assertions",
+)
+replace(
+    contract_test,
+    "const custom = performActorOperation(actor, { type: 'resource.custom-create', id: 'hp', name: '假生命', max: 99 }, context);",
+    "const custom = performActorOperation(actor, { type: 'resource.add-custom', resourceId: 'hp', name: '假生命', max: 99 }, context);",
+    "Actor custom Resource operation name",
 )
