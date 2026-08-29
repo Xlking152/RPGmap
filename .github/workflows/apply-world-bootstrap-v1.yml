@@ -31,7 +31,7 @@ jobs:
       - name: Diagnose tests file by file
         shell: bash
         run: |
-          # Iteration 2: Actor top-level presentation fields are now part of the Core contract.
+          # Iteration 3: preserve Health authority while completing World Bootstrap integration.
           set +e
           : > /tmp/world-bootstrap-test.log
           CODE=0
@@ -65,6 +65,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/engine/runtime.js src/engine/runtime-state.js src/world/model.js src/rulesets/infinite-horror/actor.js src/entities/model.js src/world/manager.js src/scene/manager.js src/multiplayer/controller.js deployment/local-server/server.mjs
+          git add src/engine/runtime.js src/engine/runtime-state.js src/world/model.js src/rulesets/infinite-horror/actor.js src/entities/model.js src/world/manager.js src/scene/manager.js src/multiplayer/controller.js deployment/local-server/server.mjs tests/actor-ruleset-contract.test.js
           git commit -m "Integrate World-first bootstrap runtime"
           git push origin HEAD:feature/world-bootstrap-v1
