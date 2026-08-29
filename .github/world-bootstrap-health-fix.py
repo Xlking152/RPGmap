@@ -34,3 +34,16 @@ new_test = """test('application entry resolves MapPackages through the registry 
 if old_test not in test_source:
     raise RuntimeError('Pattern not found: legacy Default MapPackage entry test')
 test_path.write_text(test_source.replace(old_test, new_test, 1))
+
+# Registry behavior is a pure Node unit test. Use the asset-free minimal package
+# instead of the browser-oriented default Lanzhou package, whose module graph
+# intentionally imports .webp assets through Vite.
+registry_test = Path('tests/map-package-registry.test.js')
+registry_source = registry_test.read_text()
+registry_source = registry_source.replace(
+    "import { createDefaultMapPackage } from '../src/map-package/default-map.js';",
+    "import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';",
+    1,
+)
+registry_source = registry_source.replace('createDefaultMapPackage()', 'createMinimalReferencePackage()')
+registry_test.write_text(registry_source)
