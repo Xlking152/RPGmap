@@ -1,33 +1,17 @@
-1..7
-# tests 7
-# suites 0
-# pass 7
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 188.281476
-===== tests/legacy-runtime-retirement.test.js =====
-TAP version 13
-# Subtest: retired Character AppCore and bridge files are physically absent
-ok 1 - retired Character AppCore and bridge files are physically absent
+# Subtest: MapPackage presentation can move, resize, style or suppress a Feature control
+ok 2 - MapPackage presentation can move, resize, style or suppress a Feature control
   ---
-  duration_ms: 1.018044
+  duration_ms: 0.258172
   ...
-# Subtest: live runtime sources cannot restore Character document identity, events, APIs, or panes
-ok 2 - live runtime sources cannot restore Character document identity, events, APIs, or panes
+# Subtest: Feature control action is derived only from generic Feature State
+ok 3 - Feature control action is derived only from generic Feature State
   ---
-  duration_ms: 2.960163
+  duration_ms: 0.199175
   ...
-# Subtest: SaveV2 migration is isolated to the import/persistence boundary
-ok 3 - SaveV2 migration is isolated to the import/persistence boundary
+# Subtest: Minimal Reference door and Lanzhou openable Features all expose generic controls
+ok 4 - Minimal Reference door and Lanzhou openable Features all expose generic controls
   ---
-  duration_ms: 0.322046
-  ...
-# Subtest: World V2 server authority rejects Character fields after migration
-ok 4 - World V2 server authority rejects Character fields after migration
-  ---
-  duration_ms: 0.832093
+  duration_ms: 3.706998
   ...
 1..4
 # tests 4
@@ -37,464 +21,480 @@ ok 4 - World V2 server authority rejects Character fields after migration
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 57.242304
+# duration_ms 74.311801
+===== tests/feature-selection.test.js =====
+TAP version 13
+# Subtest: feature inspection prefers visual importance and then the smaller footprint
+ok 1 - feature inspection prefers visual importance and then the smaller footprint
+  ---
+  duration_ms: 2.291903
+  ...
+# Subtest: inspection no longer falls back to map categories
+ok 2 - inspection no longer falls back to map categories
+  ---
+  duration_ms: 0.311317
+  ...
+# Subtest: scene event feature IDs are unique for damage and restore records
+ok 3 - scene event feature IDs are unique for damage and restore records
+  ---
+  duration_ms: 0.22704
+  ...
+# Subtest: feature status follows damage, partial clipping, restore and linear undo semantics
+ok 4 - feature status follows damage, partial clipping, restore and linear undo semantics
+  ---
+  duration_ms: 1.142534
+  ...
+# Subtest: feature bounds combine all selected object geometry
+ok 5 - feature bounds combine all selected object geometry
+  ---
+  duration_ms: 0.514169
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 75.640504
+===== tests/feature-ui.test.js =====
+TAP version 13
+# Subtest: MapPackage normalizes map-owned Feature taxonomy for generic UI labels
+ok 1 - MapPackage normalizes map-owned Feature taxonomy for generic UI labels
+  ---
+  duration_ms: 1.564991
+  ...
+# Subtest: generic Feature UI model renders details and entrance without category rules
+ok 2 - generic Feature UI model renders details and entrance without category rules
+  ---
+  duration_ms: 0.864374
+  ...
+# Subtest: Feature UI model exposes Token placement helpers and no Character helpers
+ok 3 - Feature UI model exposes Token placement helpers and no Character helpers
+  ---
+  duration_ms: 0.323972
+  ...
+# Subtest: reference maps declare taxonomy instead of relying on Core category labels
+ok 4 - reference maps declare taxonomy instead of relying on Core category labels
+  ---
+  duration_ms: 0.596291
+  ...
+# Subtest: Lanzhou Layer Plan points to real tagged physical SVG layers
+ok 5 - Lanzhou Layer Plan points to real tagged physical SVG layers
+  ---
+  duration_ms: 3.157729
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 75.601019
+===== tests/geometry.test.js =====
+TAP version 13
+# Subtest: world and Leaflet coordinates round-trip using height inversion
+ok 1 - world and Leaflet coordinates round-trip using height inversion
+  ---
+  duration_ms: 3.248508
+  ...
+# Subtest: distance uses map units as metres and formats metres/kilometres
+ok 2 - distance uses map units as metres and formats metres/kilometres
+  ---
+  duration_ms: 0.372398
+  ...
+# Subtest: circle polygon has the requested radius in both dimensions
+ok 3 - circle polygon has the requested radius in both dimensions
+  ---
+  duration_ms: 1.974654
+  ...
+# Subtest: sector heading zero points up in a y-down world
+ok 4 - sector heading zero points up in a y-down world
+  ---
+  duration_ms: 0.25745
+  ...
+# Subtest: rectangle uses origin as near-edge midpoint and extends along heading
+ok 5 - rectangle uses origin as near-edge midpoint and extends along heading
+  ---
+  duration_ms: 0.282489
+  ...
+# Subtest: attack aliases and GeoJSON-style feature polygons are supported
+ok 6 - attack aliases and GeoJSON-style feature polygons are supported
+  ---
+  duration_ms: 0.880385
+  ...
+# Subtest: object-like features hit on any positive-area overlap
+ok 7 - object-like features hit on any positive-area overlap
+  ---
+  duration_ms: 6.433732
+  ...
+# Subtest: clip features hit on any positive-area intersection and ignore boundary touch
+ok 8 - clip features hit on any positive-area intersection and ignore boundary touch
+  ---
+  duration_ms: 1.300949
+  ...
+# Subtest: category filtering only returns requested feature categories
+ok 9 - category filtering only returns requested feature categories
+  ---
+  duration_ms: 0.857379
+  ...
+# Subtest: snap supports 1/5/10/20 metre grids and free placement
+ok 10 - snap supports 1/5/10/20 metre grids and free placement
+  ---
+  duration_ms: 0.555191
+  ...
+# Subtest: marker box selection supports reverse drags and includes boundary markers only
+ok 11 - marker box selection supports reverse drags and includes boundary markers only
+  ---
+  duration_ms: 0.347289
+  ...
+# Subtest: routeSegments returns segment and cumulative distances
+ok 12 - routeSegments returns segment and cumulative distances
+  ---
+  duration_ms: 0.220647
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 12
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 97.279218
+===== tests/health-healing.test.js =====
+TAP version 13
+# Subtest: resolved wound healing restores the selected B/L/A slots to healthy
+ok 1 - resolved wound healing restores the selected B/L/A slots to healthy
+  ---
+  duration_ms: 12.908113
+  ...
+# Subtest: ordinary wound healing does not replace resurrection after all slots become A
+ok 2 - ordinary wound healing does not replace resurrection after all slots become A
+  ---
+  duration_ms: 3.370051
+  ...
+# Subtest: direct B/L/A editing is normalized by canonical Health Runtime
+ok 3 - direct B/L/A editing is normalized by canonical Health Runtime
+  ---
+  duration_ms: 3.490687
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 90.462538
+===== tests/health-legacy-path-boundary.test.js =====
+TAP version 13
+# Subtest: legacy HP path compatibility is max-only and never exposes current HP as a Resource
+ok 1 - legacy HP path compatibility is max-only and never exposes current HP as a Resource
+  ---
+  duration_ms: 7.768212
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 71.855786
+===== tests/health-model.test.js =====
+TAP version 13
+# Subtest: wound track follows the rulebook 20-slot example
+ok 1 - wound track follows the rulebook 20-slot example
+  ---
+  duration_ms: 2.29191
+  ...
+# Subtest: mixed B then L overflow upgrades wounds in the documented order
+ok 2 - mixed B then L overflow upgrades wounds in the documented order
+  ---
+  duration_ms: 0.404288
+  ...
+# Subtest: all aggravated slots means dead
+ok 3 - all aggravated slots means dead
+  ---
+  duration_ms: 1.005296
+  ...
+# Subtest: simple hp remains available as a generic mode
+ok 4 - simple hp remains available as a generic mode
+  ---
+  duration_ms: 0.337833
+  ...
+# Subtest: injury state uses B-equivalent weighting from the rulebook
+ok 5 - injury state uses B-equivalent weighting from the rulebook
+  ---
+  duration_ms: 0.252985
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 62.255809
+===== tests/health-world-operation-authority.test.js =====
+TAP version 13
+# Subtest: Health controller has no projection-first persistence path
+ok 1 - Health controller has no projection-first persistence path
+  ---
+  duration_ms: 1.090916
+  ...
+# Subtest: Health UI and chat wait for canonical Health confirmation
+ok 2 - Health UI and chat wait for canonical Health confirmation
+  ---
+  duration_ms: 0.398818
+  ...
+# Subtest: Damage and Healing facades expose confirmation-based async operations
+ok 3 - Damage and Healing facades expose confirmation-based async operations
+  ---
+  duration_ms: 1.03991
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 57.54959
+===== tests/host-bootstrap.test.js =====
+TAP version 13
+# Subtest: host launch URL keeps GM bootstrap in a localhost hash fragment
+ok 1 - host launch URL keeps GM bootstrap in a localhost hash fragment
+  ---
+  duration_ms: 1.750805
+  ...
+# Subtest: host bootstrap clears the secret hash and auto-connects localhost as GM
+ok 2 - host bootstrap clears the secret hash and auto-connects localhost as GM
+  ---
+  duration_ms: 0.50628
+  ...
+# Subtest: host bootstrap never auto-connects from a non-local URL
+ok 3 - host bootstrap never auto-connects from a non-local URL
+  ---
+  duration_ms: 0.225784
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 64.843031
+===== tests/interaction.test.js =====
+TAP version 13
+# Subtest: MapPackage contract normalizes action capabilities including open/close
+ok 1 - MapPackage contract normalizes action capabilities including open/close
+  ---
+  duration_ms: 1.974153
+  ...
+# Subtest: MapPackage contract validates structured status rules without script fields
+ok 2 - MapPackage contract validates structured status rules without script fields
+  ---
+  duration_ms: 1.114911
+  ...
+# Subtest: inspection uses Capability instead of map-category allowlists
+ok 3 - inspection uses Capability instead of map-category allowlists
+  ---
+  duration_ms: 1.265253
+  ...
+# Subtest: Feature State unifies open, Scene damage status and custom state
+ok 4 - Feature State unifies open, Scene damage status and custom state
+  ---
+  duration_ms: 8.789317
+  ...
+# Subtest: Feature State reads legacy featureInteractions but writes unified featureStates
+ok 5 - Feature State reads legacy featureInteractions but writes unified featureStates
+  ---
+  duration_ms: 0.581992
+  ...
+# Subtest: open/close interactions are derived from generic Feature state
+ok 6 - open/close interactions are derived from generic Feature state
+  ---
+  duration_ms: 1.281002
+  ...
+# Subtest: enter action is Capability-driven and reacts to canonical Token/Scene state
+ok 7 - enter action is Capability-driven and reacts to canonical Token/Scene state
+  ---
+  duration_ms: 3.701944
+  ...
+# Subtest: direct Feature damage reuses normal Scene damage events without category routing
+ok 8 - direct Feature damage reuses normal Scene damage events without category routing
+  ---
+  duration_ms: 4.045559
+  ...
+# Subtest: Feature Operations await Token-based Runtime ports before reporting success
+ok 9 - Feature Operations await Token-based Runtime ports before reporting success
+  ---
+  duration_ms: 4.145416
+  ...
+# Subtest: Feature status requirements and side effects use tokenId atomically
+ok 10 - Feature status requirements and side effects use tokenId atomically
+  ---
+  duration_ms: 1.314135
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 10
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 110.444441
+===== tests/launcher.test.js =====
+TAP version 13
+# Subtest: launcher accepts only the Local/LAN startup mode
+ok 1 - launcher accepts only the Local/LAN startup mode
+  ---
+  duration_ms: 0.925025
+  ...
+# Subtest: Windows browser launch delegates only to the system default browser
+ok 2 - Windows browser launch delegates only to the system default browser
+  ---
+  duration_ms: 0.912412
+  ...
+# Subtest: Local/LAN credentials create a six-digit Join Code and unique GM Secret
+ok 3 - Local/LAN credentials create a six-digit Join Code and unique GM Secret
+  ---
+  duration_ms: 0.7945
+  ...
+# Subtest: Local/LAN READY display keeps invite and GM secret concise and separated
+ok 4 - Local/LAN READY display keeps invite and GM secret concise and separated
+  ---
+  duration_ms: 0.450034
+  ...
+# Subtest: port guard identifies an existing RPGmap Local/LAN server
+ok 5 - port guard identifies an existing RPGmap Local/LAN server
+  ---
+  duration_ms: 34.948786
+  ...
+# Subtest: port guard reports RPGmap as Local/LAN even when stale health metadata says public
+ok 6 - port guard reports RPGmap as Local/LAN even when stale health metadata says public
+  ---
+  duration_ms: 10.757349
+  ...
+# Subtest: port guard reports a non-RPGmap HTTP listener as a generic conflict
+ok 7 - port guard reports a non-RPGmap HTTP listener as a generic conflict
+  ---
+  duration_ms: 7.974028
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 194.359778
+===== tests/legacy-runtime-retirement.test.js =====
+TAP version 13
+# Subtest: retired Character AppCore and bridge files are physically absent
+ok 1 - retired Character AppCore and bridge files are physically absent
+  ---
+  duration_ms: 1.083552
+  ...
+# Subtest: live runtime sources cannot restore Character document identity, events, APIs, or panes
+ok 2 - live runtime sources cannot restore Character document identity, events, APIs, or panes
+  ---
+  duration_ms: 3.308396
+  ...
+# Subtest: SaveV2 migration is isolated to the import/persistence boundary
+ok 3 - SaveV2 migration is isolated to the import/persistence boundary
+  ---
+  duration_ms: 0.328015
+  ...
+# Subtest: World V2 server authority rejects Character fields after migration
+ok 4 - World V2 server authority rejects Character fields after migration
+  ---
+  duration_ms: 1.026315
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 62.652743
 ===== tests/map-package-framework.test.js =====
 TAP version 13
 # Subtest: Lanzhou is normalized through the generic MapPackage contract
 ok 1 - Lanzhou is normalized through the generic MapPackage contract
   ---
-  duration_ms: 5.304269
+  duration_ms: 5.620273
   ...
 # Subtest: minimal reference map uses the same Core destruction and Scene State logic
 ok 2 - minimal reference map uses the same Core destruction and Scene State logic
   ---
-  duration_ms: 8.697286
+  duration_ms: 8.783797
   ...
-# Subtest: application entry depends on Default MapPackage, not Lanzhou implementation details
-not ok 3 - application entry depends on Default MapPackage, not Lanzhou implementation details
+# Subtest: application entry resolves MapPackages through the registry without implementation coupling
+ok 3 - application entry resolves MapPackages through the registry without implementation coupling
   ---
-  duration_ms: 5.924756
-  location: '/home/runner/work/RPGmap/RPGmap/tests/map-package-framework.test.js:73:1'
-  failureType: 'testCodeFailure'
-  error: |-
-    The input did not match the regular expression /createDefaultMapPackage/. Input:
-    
-    "import 'leaflet/dist/leaflet.css';\n" +
-      "import './styles.css';\n" +
-      "import { createRpgMapRuntime } from './engine/runtime.js';\n" +
-      "import { createBrowserStorage, createMemoryStorage } from './app/storage.js';\n" +
-      "import { prepareStoredWorldState } from './app/world-storage.js';\n" +
-      "import { createAppLifecycleSystem } from './engine/lifecycle.js';\n" +
-      "import { createMovementSystem } from './movement/index.js';\n" +
-      "import { createMeasurementSystem } from './measurement/index.js';\n" +
-      "import { createEntitySystem } from './entities/index.js';\n" +
-      "import { createAppShellUi } from './ui/index.js';\n" +
-      "import { createSelectionSystem } from './selection/index.js';\n" +
-      "import { createFeatureInteractionSystem } from './interaction/index.js';\n" +
-      "import { createTokenElevationSystem } from './elevation/index.js';\n" +
-      "import { createHealthSystem } from './health/index.js';\n" +
-      "import { createChatSystem } from './chat/index.js';\n" +
-      "import { createDamageSystem } from './damage/index.js';\n" +
-      "import { createHealingSystem } from './healing/index.js';\n" +
-      "import { createCombatSystem } from './combat/index.js';\n" +
-      "import { createMultiplayerSystem } from './multiplayer/index.js';\n" +
-      "import { createMultiplayerHostBootstrapSystem } from './multiplayer/host-bootstrap.js';\n" +
-      "import { createStatusSystem, createStatusUiSystem } from './status/index.js';\n" +
-      'import {\n' +
-      '  listRulesets,\n' +
-      '  resolveRulesetReference,\n' +
-      '  setActiveRuleset,\n' +
-      "} from './ruleset/index.js';\n" +
-      "import { chooseRulesetBeforeMap } from './ruleset/setup.js';\n" +
-      'import {\n' +
-      '  createWorldCatalogManager,\n' +
-      '  chooseWorldBeforeMap,\n' +
-      '  createWorldSystem,\n' +
-      "} from './world/index.js';\n" +
-      "import { readServerWorldBootstrap, readWorldBootstrap } from './world/bootstrap.js';\n" +
-      'import {\n' +
-      '  DEFAULT_REFERENCE_MAP_ID,\n' +
-      '  mapPackageRegistry,\n' +
-      '  registerBuiltInMapPackages,\n' +
-      "} from './map-package/index.js';\n" +
-      'import {\n' +
-      '  createTokenRuntimeSystem,\n' +
-      '  createTokenStatusBridgeSystem,\n' +
-      "} from './token/index.js';\n" +
-      "import { createTokenRendererSystem } from './render/token-layer.js';\n" +
-      "import { createSceneAreaSystem } from './scene/areas.js';\n" +
-      "import { createSceneManagerSystem } from './scene/manager.js';\n" +
-      "import { detectRpgMapServer, readRpgMapServerBootstrap } from './multiplayer/server-bootstrap.js';\n" +
-      '\n' +
-      "export { detectRpgMapServer, readRpgMapServerBootstrap } from './multiplayer/server-bootstrap.js';\n" +
-      '\n' +
-      'function setBootStatus(message, { error = false } = {}) {\n' +
-      "  const node = document.querySelector('[data-rpgmap-boot-status]');\n" +
-      '  if (!node) return;\n' +
-      '  node.textContent = message;\n' +
-      "  node.dataset.error = error ? 'true' : 'false';\n" +
-      '}\n' +
-      '\n' +
-      'async function yieldForFirstPaint() {\n' +
-      "  if (typeof globalThis.requestAnimationFrame !== 'function') return;\n" +
-      '  await new Promise(resolve => requestAnimationFrame(() => resolve()));\n' +
-      '}\n' +
-      '\n' +
-      'function firstRegisteredRuleset() {\n' +
-      '  const rulesets = listRulesets();\n' +
-      "  if (!rulesets.length) throw new Error('没有可用的 RPGmap Ruleset');\n" +
-      '  return rulesets[0];\n' +
-      '}\n' +
-      '\n' +
-      'function defaultMapReference() {\n' +
-      '  const maps = mapPackageRegistry.list();\n' +
-      '  const preferred = maps.find(item => item.id === DEFAULT_REFERENCE_MAP_ID) || maps[0];\n' +
-      "  if (!preferred) throw new Error('没有可用的 RPGmap MapPackage');\n" +
-      '  return { id: preferred.id, version: preferred.version || null };\n' +
-      '}\n' +
-      '\n' +
-      'async function chooseLocalWorld(appContainer, storageAdapter, defaultRuleset) {\n' +
-      '  const manager = createWorldCatalogManager(storageAdapter);\n' +
-      '  manager.adoptLegacyMapWorld({\n' +
-      '    mapPackage: defaultMapReference(),\n' +
-      '    fallbackRuleset: { id: defaultRuleset.id, version: defaultRuleset.version },\n' +
-      '  });\n' +
-      '  while (true) {\n' +
-      '    const choice = await chooseWorldBeforeMap({\n' +
-      '      container: appContainer,\n' +
-      '      manager,\n' +
-      '      rulesets: listRulesets(),\n' +
-      '      mapPackages: mapPackageRegistry.list(),\n' +
-      '    });\n' +
-      '    if (choice?.restart) continue;\n' +
-      '    return { manager, ...choice };\n' +
-      '  }\n' +
-      '}\n' +
-      '\n' +
-      'export async function startRpgMap() {\n' +
-      "  const appContainer = document.getElementById('app');\n" +
-      "  if (!appContainer) throw new Error('缺少 RPGmap 应用容器');\n" +
-      '\n' +
-      '  registerBuiltInMapPackages(mapPackageRegistry);\n' +
-      '  const bootstrapStorage = createBrowserStorage();\n' +
-      '  const defaultRuleset = firstRegisteredRuleset();\n' +
-      "  setBootStatus('正在检查 Windows RPGmap Server 与 World…');\n" +
-      '  const serverBootstrap = await readRpgMapServerBootstrap();\n' +
-      '  const { serverRuntime } = serverBootstrap;\n' +
-      '\n' +
-      '  let worldManager = null;\n' +
-      '  let worldDescriptor = null;\n' +
-      '  let raw = null;\n' +
-      '  let worldBootstrap;\n' +
-      '  let ruleset;\n' +
-      '  let worldId;\n' +
-      '  let worldName;\n' +
-      '\n' +
-      '  if (serverRuntime) {\n' +
-      '    worldBootstrap = readServerWorldBootstrap(serverBootstrap.world, { defaultRuleset });\n' +
-      "    ruleset = worldBootstrap.kind === 'empty'\n" +
-      '      ? await chooseRulesetBeforeMap({\n' +
-      '        container: appContainer,\n' +
-      '        storageAdapter: createMemoryStorage(),\n' +
-      '        forcePrompt: true,\n' +
-      '      })\n' +
-      '      : resolveRulesetReference(worldBootstrap.ruleset);\n' +
-      "    worldId = worldBootstrap.worldId || serverBootstrap.world?.worldId || 'world-default';\n" +
-      "    worldName = worldBootstrap.worldName || 'RPGmap Server World';\n" +
-      '  } else {\n' +
-      '    const choice = await chooseLocalWorld(appContainer, bootstrapStorage, defaultRuleset);\n' +
-      '    worldManager = choice.manager;\n' +
-      '    worldDescriptor = choice.descriptor;\n' +
-      '    raw = choice.raw;\n' +
-      '    worldBootstrap = readWorldBootstrap(raw, { defaultRuleset: worldDescriptor.ruleset });\n' +
-      '    ruleset = resolveRulesetReference(worldBootstrap.ruleset);\n' +
-      '    worldId = worldDescriptor.id;\n' +
-      '    worldName = worldBootstrap.worldName || worldDescriptor.name;\n' +
-      '  }\n' +
-      '\n' +
-      '  const mapReference = worldBootstrap.mapPackage\n' +
-      '    || worldDescriptor?.mapPackage\n' +
-      '    || defaultMapReference();\n' +
-      '  const mapPackage = await mapPackageRegistry.load(mapReference);\n' +
-      '  const storageAdapter = serverRuntime ? createMemoryStorage() : bootstrapStorage;\n' +
-      '  const initialLoad = prepareStoredWorldState({\n' +
-      '    worldId,\n' +
-      '    worldName,\n' +
-      '    mapPackage,\n' +
-      '    ruleset,\n' +
-      '    storageAdapter,\n' +
-      '    raw: serverRuntime ? null : raw,\n' +
-      '  });\n' +
-      '  setActiveRuleset(ruleset.id);\n' +
-      '\n' +
-      '  setBootStatus(serverRuntime\n' +
-      '    ? `World：${worldName} · ${ruleset.title} · 正在连接服务器…`\n' +
-      '    : `World：${worldName} · ${ruleset.title} · 正在载入 ${mapPackage.title || mapPackage.id}…`);\n' +
-      '  await yieldForFirstPaint();\n' +
-      '\n' +
-      '  const selectionSystem = createSelectionSystem();\n' +
-      '  const runtime = createRpgMapRuntime({\n' +
-      '    container: appContainer,\n' +
-      '    worldId,\n' +
-      '    worldName,\n' +
-      '    mapPackage,\n' +
-      '    ruleset,\n' +
-      '    storageAdapter,\n' +
-      '    initialLoad,\n' +
-      '    tools: [\n' +
-      '      createAppLifecycleSystem(),\n' +
-      '      createWorldSystem({ worldId, worldName }),\n' +
-      '      createSceneManagerSystem({\n' +
-      '        mapPackages: mapPackageRegistry,\n' +
-      '        worldCatalogManager: worldManager,\n' +
-      '        worldId,\n' +
-      '      }),\n' +
-      '      createTokenRuntimeSystem(),\n' +
-      '      selectionSystem,\n' +
-      '      createMovementSystem({ defaultStep: 5, autoStep: true }),\n' +
-      '      createEntitySystem({ dropLegacyMarkers: false }),\n' +
-      '      createStatusSystem(),\n' +
-      '      createTokenStatusBridgeSystem(),\n' +
-      '      createStatusUiSystem(),\n' +
-      '      createTokenRendererSystem(),\n' +
-      '      createFeatureInteractionSystem(),\n' +
-      '      createTokenElevationSystem(),\n' +
-      '      createSceneAreaSystem(),\n' +
-      '      createAppShellUi(),\n' +
-      '      createMeasurementSystem(),\n' +
-      '      createHealthSystem(),\n' +
-      '      createChatSystem({ selection: selectionSystem }),\n' +
-      '      createDamageSystem({ selection: selectionSystem }),\n' +
-      '      createHealingSystem({ selection: selectionSystem }),\n' +
-      '      createCombatSystem({ selection: selectionSystem }),\n' +
-      '      createMultiplayerSystem(),\n' +
-      '      createMultiplayerHostBootstrapSystem(),\n' +
-      '    ],\n' +
-      '  });\n' +
-      '\n' +
-      '  if (worldManager && worldId) {\n' +
-      '    const refreshCatalog = () => worldManager.updateFromSave(worldId, runtime.exportState());\n' +
-      '    refreshCatalog();\n' +
-      "    runtime.on?.('state:saved', refreshCatalog);\n" +
-      '  }\n' +
-      '  return runtime;\n' +
-      '}\n' +
-      '\n' +
-      'startRpgMap().catch(error => {\n' +
-      "  console.error('[RPGmap] startup failed', error);\n" +
-      '  const detail = error?.message || String(error);\n' +
-      '  setBootStatus(`启动失败：${detail}`, { error: true });\n' +
-      '});\n'
-    
-  code: 'ERR_ASSERTION'
-  name: 'AssertionError'
-  expected:
-  actual: |-
-    import 'leaflet/dist/leaflet.css';
-    import './styles.css';
-    import { createRpgMapRuntime } from './engine/runtime.js';
-    import { createBrowserStorage, createMemoryStorage } from './app/storage.js';
-    import { prepareStoredWorldState } from './app/world-storage.js';
-    import { createAppLifecycleSystem } from './engine/lifecycle.js';
-    import { createMovementSystem } from './movement/index.js';
-    import { createMeasurementSystem } from './measurement/index.js';
-    import { createEntitySystem } from './entities/index.js';
-    import { createAppShellUi } from './ui/index.js';
-    import { createSelectionSystem } from './selection/index.js';
-    import { createFeatureInteractionSystem } from './interaction/index.js';
-    import { createTokenElevationSystem } from './elevation/index.js';
-    import { createHealthSystem } from './health/index.js';
-    import { createChatSystem } from './chat/index.js';
-    import { createDamageSystem } from './damage/index.js';
-    import { createHealingSystem } from './healing/index.js';
-    import { createCombatSystem } from './combat/index.js';
-    import { createMultiplayerSystem } from './multiplayer/index.js';
-    import { createMultiplayerHostBootstrapSystem } from './multiplayer/host-bootstrap.js';
-    import { createStatusSystem, createStatusUiSystem } from './status/index.js';
-    import {
-      listRulesets,
-      resolveRulesetReference,
-      setActiveRuleset,
-    } from './ruleset/index.js';
-    import { chooseRulesetBeforeMap } from './ruleset/setup.js';
-    import {
-      createWorldCatalogManager,
-      chooseWorldBeforeMap,
-      createWorldSystem,
-    } from './world/index.js';
-    import { readServerWorldBootstrap, readWorldBootstrap } from './world/bootstrap.js';
-    import {
-      DEFAULT_REFERENCE_MAP_ID,
-      mapPackageRegistry,
-      registerBuiltInMapPackages,
-    } from './map-package/index.js';
-    import {
-      createTokenRuntimeSystem,
-      createTokenStatusBridgeSystem,
-    } from './token/index.js';
-    import { createTokenRendererSystem } from './render/token-layer.js';
-    import { createSceneAreaSystem } from './scene/areas.js';
-    import { createSceneManagerSystem } from './scene/manager.js';
-    import { detectRpgMapServer, readRpgMapServerBootstrap } from './multiplayer/server-bootstrap.js';
-    
-    export { detectRpgMapServer, readRpgMapServerBootstrap } from './multiplayer/server-bootstrap.js';
-    
-    function setBootStatus(message, { error = false } = {}) {
-      const node = document.querySelector('[data-rpgmap-boot-status]');
-      if (!node) return;
-      node.textContent = message;
-      node.dataset.error = error ? 'true' : 'false';
-    }
-    
-    async function yieldForFirstPaint() {
-      if (typeof globalThis.requestAnimationFrame !== 'function') return;
-      await new Promise(resolve => requestAnimationFrame(() => resolve()));
-    }
-    
-    function firstRegisteredRuleset() {
-      const rulesets = listRulesets();
-      if (!rulesets.length) throw new Error('没有可用的 RPGmap Ruleset');
-      return rulesets[0];
-    }
-    
-    function defaultMapReference() {
-      const maps = mapPackageRegistry.list();
-      const preferred = maps.find(item => item.id === DEFAULT_REFERENCE_MAP_ID) || maps[0];
-      if (!preferred) throw new Error('没有可用的 RPGmap MapPackage');
-      return { id: preferred.id, version: preferred.version || null };
-    }
-    
-    async function chooseLocalWorld(appContainer, storageAdapter, defaultRuleset) {
-      const manager = createWorldCatalogManager(storageAdapter);
-      manager.adoptLegacyMapWorld({
-        mapPackage: defaultMapReference(),
-        fallbackRuleset: { id: defaultRuleset.id, version: defaultRuleset.version },
-      });
-      while (true) {
-        const choice = await chooseWorldBeforeMap({
-          container: appContainer,
-          manager,
-          rulesets: listRulesets(),
-          mapPackages: mapPackageRegistry.list(),
-        });
-        if (choice?.restart) continue;
-        return { manager, ...choice };
-      }
-    }
-    
-    export async function startRpgMap() {
-      const appContainer = document.getElementById('app');
-      if (!appContainer) throw new Error('缺少 RPGmap 应用容器');
-    
-      registerBuiltInMapPackages(mapPackageRegistry);
-      const bootstrapStorage = createBrowserStorage();
-      const defaultRuleset = firstRegisteredRuleset();
-      setBootStatus('正在检查 Windows RPGmap Server 与 World…');
-      const serverBootstrap = await readRpgMapServerBootstrap();
-      const { serverRuntime } = serverBootstrap;
-    
-      let worldManager = null;
-      let worldDescriptor = null;
-      let raw = null;
-      let worldBootstrap;
-      let ruleset;
-      let worldId;
-      let worldName;
-    
-      if (serverRuntime) {
-        worldBootstrap = readServerWorldBootstrap(serverBootstrap.world, { defaultRuleset });
-        ruleset = worldBootstrap.kind === 'empty'
-          ? await chooseRulesetBeforeMap({
-            container: appContainer,
-            storageAdapter: createMemoryStorage(),
-            forcePrompt: true,
-          })
-          : resolveRulesetReference(worldBootstrap.ruleset);
-        worldId = worldBootstrap.worldId || serverBootstrap.world?.worldId || 'world-default';
-        worldName = worldBootstrap.worldName || 'RPGmap Server World';
-      } else {
-        const choice = await chooseLocalWorld(appContainer, bootstrapStorage, defaultRuleset);
-        worldManager = choice.manager;
-        worldDescriptor = choice.descriptor;
-        raw = choice.raw;
-        worldBootstrap = readWorldBootstrap(raw, { defaultRuleset: worldDescriptor.ruleset });
-        ruleset = resolveRulesetReference(worldBootstrap.ruleset);
-        worldId = worldDescriptor.id;
-        worldName = worldBootstrap.worldName || worldDescriptor.name;
-      }
-    
-      const mapReference = worldBootstrap.mapPackage
-        || worldDescriptor?.mapPackage
-        || defaultMapReference();
-      const mapPackage = await mapPackageRegistry.load(mapReference);
-      const storageAdapter = serverRuntime ? createMemoryStorage() : bootstrapStorage;
-      const initialLoad = prepareStoredWorldState({
-        worldId,
-        worldName,
-        mapPackage,
-        ruleset,
-        storageAdapter,
-        raw: serverRuntime ? null : raw,
-      });
-      setActiveRuleset(ruleset.id);
-    
-      setBootStatus(serverRuntime
-        ? `World：${worldName} · ${ruleset.title} · 正在连接服务器…`
-        : `World：${worldName} · ${ruleset.title} · 正在载入 ${mapPackage.title || mapPackage.id}…`);
-      await yieldForFirstPaint();
-    
-      const selectionSystem = createSelectionSystem();
-      const runtime = createRpgMapRuntime({
-        container: appContainer,
-        worldId,
-        worldName,
-        mapPackage,
-        ruleset,
-        storageAdapter,
-        initialLoad,
-        tools: [
-          createAppLifecycleSystem(),
-          createWorldSystem({ worldId, worldName }),
-          createSceneManagerSystem({
-            mapPackages: mapPackageRegistry,
-            worldCatalogManager: worldManager,
-            worldId,
-          }),
-          createTokenRuntimeSystem(),
-          selectionSystem,
-          createMovementSystem({ defaultStep: 5, autoStep: true }),
-          createEntitySystem({ dropLegacyMarkers: false }),
-          createStatusSystem(),
-          createTokenStatusBridgeSystem(),
-          createStatusUiSystem(),
-          createTokenRendererSystem(),
-          createFeatureInteractionSystem(),
-          createTokenElevationSystem(),
-          createSceneAreaSystem(),
-          createAppShellUi(),
-          createMeasurementSystem(),
-          createHealthSystem(),
-          createChatSystem({ selection: selectionSystem }),
-          createDamageSystem({ selection: selectionSystem }),
-          createHealingSystem({ selection: selectionSystem }),
-          createCombatSystem({ selection: selectionSystem }),
-          createMultiplayerSystem(),
-          createMultiplayerHostBootstrapSystem(),
-        ],
-      });
-    
-      if (worldManager && worldId) {
-        const refreshCatalog = () => worldManager.updateFromSave(worldId, runtime.exportState());
-        refreshCatalog();
-        runtime.on?.('state:saved', refreshCatalog);
-      }
-      return runtime;
-    }
-    
-    startRpgMap().catch(error => {
-      console.error('[RPGmap] startup failed', error);
-      const detail = error?.message || String(error);
-      setBootStatus(`启动失败：${detail}`, { error: true });
-    });
-    
-  operator: 'match'
-  stack: |-
-    TestContext.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/map-package-framework.test.js:77:10)
-    async Test.run (node:internal/test_runner/test:935:9)
-    async Test.processPendingSubtests (node:internal/test_runner/test:633:7)
+  duration_ms: 4.906524
   ...
 # Subtest: invalid maps are rejected before they enter the Engine
 ok 4 - invalid maps are rejected before they enter the Engine
   ---
-  duration_ms: 1.3995
+  duration_ms: 0.46903
   ...
 1..4
 # tests 4
 # suites 0
-# pass 3
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 107.743824
+===== tests/map-package-registry.test.js =====
+TAP version 13
+# node:internal/modules/esm/get_format:218
+#   throw new ERR_UNKNOWN_FILE_EXTENSION(ext, filepath);
+#         ^
+# TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension ".webp" for /home/runner/work/RPGmap/RPGmap/reference/maps/lanzhou/assets/barracks-02.webp
+#     at Object.getFileProtocolModuleFormat [as file:] (node:internal/modules/esm/get_format:218:9)
+#     at defaultGetFormat (node:internal/modules/esm/get_format:244:36)
+#     at defaultLoad (node:internal/modules/esm/load:122:22)
+#     at async ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:483:32) {
+#   code: 'ERR_UNKNOWN_FILE_EXTENSION'
+# }
+# Node.js v22.12.0
+# Subtest: tests/map-package-registry.test.js
+not ok 1 - tests/map-package-registry.test.js
+  ---
+  duration_ms: 53.783847
+  location: '/home/runner/work/RPGmap/RPGmap/tests/map-package-registry.test.js:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
 # fail 1
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 96.806667
-FAILED_OR_TIMED_OUT=1 FILE=tests/map-package-framework.test.js
+# duration_ms 61.613915
+FAILED_OR_TIMED_OUT=1 FILE=tests/map-package-registry.test.js
