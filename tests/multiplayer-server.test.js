@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -256,6 +256,30 @@ test('health identifies a persisted pre-World SaveV2 as an explicit LAN legacy b
   }
 });
 
+test('LAN startup migrates global Feature State once and backs up the original World', async () => {
+  const mapDir = await mkdtemp(path.join(tmpdir(), 'rpgmap-feature-state-migration-'));
+  const state = initialWorldV2();
+  state.preferences.worldV2.scenes[0].featureStates = { gate: { open: true, custom: { source: 'scene' } } };
+  state.preferences.featureStates = { gate: { open: true, custom: { source: 'scene', extension: 4 } } };
+  await writeFile(path.join(mapDir, 'world.json'), JSON.stringify({
+    schemaVersion: 1,
+    worldId: 'default',
+    revision: 1,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    state,
+  }), 'utf8');
+  const runtime = await startServer({}, mapDir);
+  try {
+    const durable = JSON.parse(await readFile(path.join(mapDir, 'world.json'), 'utf8'));
+    assert.equal(Object.hasOwn(durable.state.preferences, 'featureStates'), false);
+    assert.equal(durable.state.preferences.worldV2.scenes[0].featureStates.gate.custom.extension, 4);
+    const backups = await readdir(path.join(mapDir, 'backups'));
+    assert.ok(backups.some(name => name.startsWith('world.backup.')));
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
 async function sendStatusAndWait(ws, message) {
   const operationId = message.operationId;
   const snapshotPromise = waitForMessage(ws, value => value.type === 'world.snapshot' && value.operationId === operationId);
@@ -453,6 +477,19 @@ test('generic World operations reuse Player ownership and status permission chec
     const deniedStatus = await statusPromise;
     assert.equal(deniedStatus.code, 'status_gm_only');
     assert.equal(deniedStatus.revision, 3);
+
+    const featureStatePromise = waitForMessage(player.ws, message =>
+      message.type === 'world.operation.denied' && message.operationId === 'player-feature-state-1');
+    player.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'player-feature-state-1', baseRevision: 3,
+      operations: [{
+        type: 'scene.featureState.patch',
+        payload: { sceneId: 'scene-test', featureId: 'gate-a', patch: { open: true } },
+      }],
+    }));
+    const deniedFeatureState = await featureStatePromise;
+    assert.equal(deniedFeatureState.code, 'scene_feature_state_gm_only');
+    assert.equal(deniedFeatureState.revision, 3);
 
     player.ws.close();
     gm.ws.close();
