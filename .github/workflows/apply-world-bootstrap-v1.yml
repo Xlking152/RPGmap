@@ -27,11 +27,13 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - name: Apply integration patch
-        run: python .github/world-bootstrap-patch.py
+        run: |
+          python .github/world-bootstrap-patch.py
+          python .github/world-bootstrap-health-fix.py
       - name: Diagnose tests file by file
         shell: bash
         run: |
-          # Iteration 3: preserve Health authority while completing World Bootstrap integration.
+          # Iteration 4: Health Runtime is authoritative over stale Resource mirrors.
           set +e
           : > /tmp/world-bootstrap-test.log
           CODE=0
