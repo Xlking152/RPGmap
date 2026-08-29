@@ -33,6 +33,7 @@ jobs:
       - name: Diagnose LAN World operation boundary
         shell: bash
         run: |
+          # Iteration 10: server bootstrap replacement now preserves sendWelcome().
           set +e
           node --test tests/multiplayer-server.test.js > /tmp/world-bootstrap-test.log 2>&1
           CODE=$?
