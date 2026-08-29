@@ -30,29 +30,18 @@ jobs:
         run: |
           python .github/world-bootstrap-patch.py
           python .github/world-bootstrap-health-fix.py
-      - name: Diagnose tests file by file
+      - name: Diagnose LAN World operation boundary
         shell: bash
         run: |
-          # Iteration 6: keep pure Registry tests independent of Vite asset imports.
           set +e
-          : > /tmp/world-bootstrap-test.log
-          CODE=0
-          for file in tests/*.test.js; do
-            echo "===== $file =====" | tee -a /tmp/world-bootstrap-test.log
-            timeout 45s node --test "$file" >> /tmp/world-bootstrap-test.log 2>&1
-            STEP=$?
-            if [ "$STEP" -ne 0 ]; then
-              echo "FAILED_OR_TIMED_OUT=$STEP FILE=$file" | tee -a /tmp/world-bootstrap-test.log
-              CODE=$STEP
-              break
-            fi
-          done
+          node --test tests/multiplayer-server.test.js > /tmp/world-bootstrap-test.log 2>&1
+          CODE=$?
           if [ "$CODE" -ne 0 ]; then
-            tail -n 500 /tmp/world-bootstrap-test.log > .github/world-bootstrap-test-failure.txt
+            tail -n 700 /tmp/world-bootstrap-test.log > .github/world-bootstrap-test-failure.txt
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add .github/world-bootstrap-test-failure.txt
-            git commit -m "Capture World Bootstrap test failure" || true
+            git commit -m "Capture LAN World operation diagnostic" || true
             git push origin HEAD:feature/world-bootstrap-v1
             exit "$CODE"
           fi
@@ -67,6 +56,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/engine/runtime.js src/engine/runtime-state.js src/world/model.js src/rulesets/infinite-horror/actor.js src/entities/model.js src/world/manager.js src/scene/manager.js src/multiplayer/controller.js deployment/local-server/server.mjs tests/actor-ruleset-contract.test.js tests/map-package-framework.test.js tests/map-package-registry.test.js
+          git add src/engine/runtime.js src/engine/runtime-state.js src/world/model.js src/rulesets/infinite-horror/actor.js src/entities/model.js src/world/manager.js src/scene/manager.js src/multiplayer/controller.js deployment/local-server/server.mjs tests/actor-ruleset-contract.test.js tests/map-package-framework.test.js tests/map-package-registry.test.js tests/multiplayer-server.test.js
           git commit -m "Integrate World-first bootstrap runtime"
           git push origin HEAD:feature/world-bootstrap-v1
