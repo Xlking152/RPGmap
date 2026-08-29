@@ -144,21 +144,23 @@ export function createMovementGhostRendererV2() {
       });
       if (selectionOff) off.push(selectionOff);
 
-      api.map.on('layeradd', event => {
+      const handleLayerAdd = event => {
         if (destroyed || !isMovementEndpointLayer(event.layer?.options)) return;
         show(event.layer);
-      });
-      api.map.on('layerremove', event => {
+      };
+      const handleLayerRemove = event => {
         if (event.layer === endpointLayer) scheduleHide();
-      });
+      };
+      api.map.on('layeradd', handleLayerAdd);
+      api.map.on('layerremove', handleLayerRemove);
       for (const eventName of ['token:delete', 'state:import', 'scene:activate']) {
         off.push(api.on?.(eventName, hide));
       }
       off.push(api.on?.('app:destroy', () => {
         destroyed = true;
         hide();
-        api.map.off('layeradd');
-        api.map.off('layerremove');
+        api.map.off('layeradd', handleLayerAdd);
+        api.map.off('layerremove', handleLayerRemove);
         layer.clearLayers();
         api.map.removeLayer?.(layer);
         off.splice(0).forEach(dispose => dispose?.());
