@@ -27,6 +27,7 @@ import {
 } from '../token/index.js';
 import { createTokenRendererSystem } from '../render/token-layer.js';
 import { createSceneAreaSystem } from '../scene/areas.js';
+import { createSceneAreaHandleSystem } from '../scene/area-handles.js';
 import { createSceneManagerSystem } from '../scene/manager.js';
 
 export async function startMapRuntime({
@@ -86,6 +87,7 @@ export async function startMapRuntime({
       createFeatureInteractionSystem(),
       createTokenElevationSystem(),
       createSceneAreaSystem(),
+      createSceneAreaHandleSystem(),
       createAppShellUi(),
       createMeasurementSystem(),
       createHealthSystem(),
