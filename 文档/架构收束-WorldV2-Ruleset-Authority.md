@@ -10,6 +10,7 @@
 - **EffectInstance**：只保存 definitionId、stacks、enabled、source、note、时间戳等运行态数据。
 - **Token.actorDelta**：Unlinked Token / Synthetic Actor 的实例差异唯一持久化位置。
 - **World Operation**：普通 Actor / Token / Health 业务修改的持久化与联机提交入口。
+- **Scene Feature State**：`Scene.featureStates` 是门、机关、阻挡高度和地图扩展状态的持久化唯一权威。
 - **EntityStore**：只读 projection / Ruleset context / 显式 legacy migration 适配器，不是普通业务写入权威。
 
 ## 2. Health 边界
@@ -76,7 +77,17 @@ EntityStore.state
 
 只有显式 legacy migration / repair 边界允许持久化 Entity projection。
 
-## 6. 后续架构方向
+## 6. Scene Feature State 边界
+
+- 每个 Scene 固定拥有 `featureStates: Record<featureId, object>`；相同 MapPackage 的不同 Scene 互不共享状态。
+- `sceneEvents` 继续独立保存破坏、恢复和撤销历史；破坏派生状态不得复制进 `featureStates`。
+- `preferences.featureStates` 只是在活动 Scene 上生成的只读兼容投影，生产写入统一提交 `scene.featureState.patch`。
+- `scene.featureState.patch` 使用递归 JSON Merge Patch：`null` 删除字段或整条 Feature 状态，未知扩展字段保持不变。
+- Feature State 与 Status 副作用使用同一个 World Operation batch；当前版本仅 GM 可以修改，服务端稳定返回 `scene_feature_state_gm_only`。
+- 旧 `preferences.featureStates` 和 `preferences.featureInteractions` 只在完整存档迁移入口读取，并迁入存档指定的活动 Scene。真实冲突以 `feature_state_migration_conflict` 停止，不覆盖原始存档。
+- 浏览器导出和 Local/LAN Server 落盘只保存 Scene 权威数据；兼容投影不会形成第二份持久化权威。
+
+## 7. 后续架构方向
 
 本轮 authority 收束完成后，不再继续无目的重构 Health / Status / EntityStore。下一阶段按以下方向发展：
 
