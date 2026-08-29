@@ -61,6 +61,14 @@ function normalizeDelta(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? clone(value) : null;
 }
 
+function normalizeTexture(value) {
+  const source = typeof value === 'string' ? { src: value } : object(value);
+  return {
+    ...clone(source),
+    src: text(source.src) || null,
+  };
+}
+
 function normalizeToken(raw, { actorId, tokenId } = {}) {
   const source = object(raw);
   const placement = source.placement === 'feature' || source.featureId != null ? 'feature' : 'map';
@@ -73,6 +81,8 @@ function normalizeToken(raw, { actorId, tokenId } = {}) {
     x: placement === 'map' ? finite(source.x, 0) : null,
     y: placement === 'map' ? finite(source.y, 0) : null,
     featureId: placement === 'feature' ? text(source.featureId).slice(0, 160) || null : null,
+    texture: normalizeTexture(source.texture),
+    color: text(source.color) || null,
     diameterMeters: Math.max(0.1, finite(source.diameterMeters ?? source.size, 1)),
     rotation: finite(source.rotation, 0),
     elevationFt: finite(source.elevationFt, 0),
@@ -120,6 +130,8 @@ export function createSceneToken(world, {
   featureId = null,
   actorLink = true,
   actorDelta = null,
+  texture = null,
+  color = null,
   diameterMeters = 1,
   rotation = 0,
   elevationFt = 0,
@@ -145,6 +157,8 @@ export function createSceneToken(world, {
       x,
       y,
       featureId,
+      texture,
+      color,
       diameterMeters,
       rotation,
       elevationFt,

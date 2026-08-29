@@ -294,6 +294,19 @@ export function createMultiplayerController() {
         const task = remoteApplyChain.catch(() => {}).then(async () => {
           if (epoch !== remoteEpoch) return false;
           try {
+            const requestedWorld = requestedState?.preferences?.worldV2;
+            const requestedScenes = Array.isArray(requestedWorld?.scenes) ? requestedWorld.scenes : [];
+            const requestedScene = requestedScenes.find(scene => String(scene?.id || '') === String(requestedWorld?.activeSceneId || '')) || requestedScenes[0] || null;
+            const requestedMapId = String(requestedScene?.mapPackage?.id || '');
+            const loadedMapId = String(api.mapPackage?.id || api.mapPackage?.mapId || '');
+            if (requestedMapId && loadedMapId && requestedMapId !== loadedMapId) {
+              revision = requestedRevision;
+              lastServerState = structuredClone(serverState);
+              lastObservedLocalState = structuredClone(requestedState);
+              setMapStatus(`Scene 已切换到 ${requestedMapId}，正在重新载入地图…`);
+              queueMicrotask(() => documentNode.defaultView?.location?.reload?.());
+              return true;
+            }
             await api.importState(requestedState, false);
             if (epoch !== remoteEpoch) return false;
             revision = requestedRevision;

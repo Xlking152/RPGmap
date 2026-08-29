@@ -1,4 +1,5 @@
 import { WORLD_SCHEMA_VERSION } from './model.js';
+import { assertFeatureStatePatch, isPlainObject } from './feature-states.js';
 
 function fail(message, code = 'invalid_world') {
   const error = new Error(message);
@@ -78,6 +79,14 @@ export function assertPersistedWorldV2(rawWorld) {
     identifier(mapPackage.id, `worldV2.scenes[${sceneIndex}].mapPackage.id`);
     if (typeof mapPackage.version !== 'string' || !mapPackage.version.trim()) {
       fail(`worldV2.scenes[${sceneIndex}].mapPackage.version is required`);
+    }
+    if (scene.featureStates !== undefined) {
+      if (!isPlainObject(scene.featureStates)) fail(`worldV2.scenes[${sceneIndex}].featureStates must be an object`);
+      for (const [featureId, state] of Object.entries(scene.featureStates)) {
+        identifier(featureId, `worldV2.scenes[${sceneIndex}].featureStates key`);
+        if (!isPlainObject(state)) fail(`worldV2.scenes[${sceneIndex}].featureStates.${featureId} must be an object`);
+        assertFeatureStatePatch(state);
+      }
     }
     uniqueIds(scene.tokens, `worldV2.scenes[${sceneIndex}].tokens`);
     for (const [tokenIndex, rawToken] of scene.tokens.entries()) {

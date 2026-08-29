@@ -47,6 +47,8 @@ export function createTokenForActor(actorId, tokenId, overrides = {}) {
   return {
     id: String(tokenId),
     actorId: String(actorId),
+    texture: overrides.texture && typeof overrides.texture === 'object' ? clone(overrides.texture) : { src: null },
+    color: typeof overrides.color === 'string' ? overrides.color : null,
     diameterMeters: normalizeTokenDiameterMeters(overrides.diameterMeters ?? overrides.size, 1),
     rotation: finite(overrides.rotation, 0),
     elevationFt: normalizeElevationFt(overrides.elevationFt, 0),

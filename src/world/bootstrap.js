@@ -23,10 +23,30 @@ function defaultReference(value = {}) {
   return Object.freeze({ id, version });
 }
 
+function mapReference(value = null) {
+  const id = typeof value?.id === 'string' ? value.id.trim() : '';
+  const version = typeof value?.version === 'string' ? value.version.trim() : '';
+  return id ? Object.freeze({ id, version: version || null }) : null;
+}
+
+function worldBootstrapMetadata(world) {
+  const scenes = Array.isArray(world?.scenes) ? world.scenes : [];
+  const active = scenes.find(scene => String(scene?.id) === String(world?.activeSceneId)) || scenes[0] || null;
+  return {
+    worldId: typeof world?.id === 'string' ? world.id : null,
+    worldName: typeof world?.name === 'string' ? world.name : null,
+    activeSceneId: active?.id ? String(active.id) : null,
+    mapPackage: mapReference(active?.mapPackage),
+  };
+}
+
 export function readWorldBootstrap(raw, { defaultRuleset } = {}) {
   const state = parseState(raw);
   if (!state) {
-    return Object.freeze({ kind: 'empty', raw: null, ruleset: defaultReference(defaultRuleset) });
+    return Object.freeze({
+      kind: 'empty', raw: null, ruleset: defaultReference(defaultRuleset),
+      worldId: null, worldName: null, activeSceneId: null, mapPackage: null,
+    });
   }
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
     const error = new TypeError('save root must be an object');
@@ -35,13 +55,17 @@ export function readWorldBootstrap(raw, { defaultRuleset } = {}) {
   }
   const world = state.preferences?.[WORLD_STATE_KEY];
   if (!world) {
-    return Object.freeze({ kind: 'legacy', raw: state, ruleset: defaultReference(defaultRuleset) });
+    return Object.freeze({
+      kind: 'legacy', raw: state, ruleset: defaultReference(defaultRuleset),
+      worldId: null, worldName: null, activeSceneId: null, mapPackage: null,
+    });
   }
   assertPersistedWorldV2(world);
   return Object.freeze({
     kind: 'world-v2',
     raw: state,
     ruleset: worldRulesetReference(world),
+    ...worldBootstrapMetadata(world),
   });
 }
 
@@ -51,7 +75,16 @@ export function readServerWorldBootstrap(metadata, { defaultRuleset } = {}) {
     ? source.kind
     : (source.initialized ? 'legacy' : 'empty');
   if (kind !== 'world-v2') {
-    return Object.freeze({ kind, raw: null, remote: true, ruleset: defaultReference(defaultRuleset) });
+    return Object.freeze({
+      kind,
+      raw: null,
+      remote: true,
+      ruleset: defaultReference(defaultRuleset),
+      worldId: typeof source.worldId === 'string' ? source.worldId : null,
+      worldName: typeof source.name === 'string' ? source.name : null,
+      activeSceneId: null,
+      mapPackage: null,
+    });
   }
   if (Number(source.schemaVersion) !== 2) {
     const error = new Error('Server World schema is incompatible');
@@ -63,5 +96,9 @@ export function readServerWorldBootstrap(metadata, { defaultRuleset } = {}) {
     raw: null,
     remote: true,
     ruleset: defaultReference(source.ruleset),
+    worldId: typeof source.worldId === 'string' ? source.worldId : null,
+    worldName: typeof source.name === 'string' ? source.name : null,
+    activeSceneId: typeof source.activeSceneId === 'string' ? source.activeSceneId : null,
+    mapPackage: mapReference(source.mapPackage),
   });
 }

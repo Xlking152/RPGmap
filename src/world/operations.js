@@ -1,3 +1,9 @@
+import {
+  applyFeatureStateMergePatch,
+  assertFeatureStatePatch,
+  isPlainObject as isFeatureStateObject,
+} from './feature-states.js';
+
 export const WORLD_OPERATION_SCHEMA_VERSION = 1;
 export const WORLD_OPERATION_BATCH_LIMIT = 64;
 export const WORLD_OPERATION_CACHE_LIMIT = 512;
@@ -14,6 +20,7 @@ const OPERATION_TYPES = new Set([
   'scene.activate',
   'scene.delete',
   'scene.content.replace',
+  'scene.featureState.patch',
   'combat.replace',
   'status.apply',
   'status.remove',
@@ -166,6 +173,8 @@ export function projectWorldOperationState(rawState) {
   state.markers = clone(scene.markers || []);
   state.attackAreas = clone(scene.attackAreas || []);
   state.sceneEvents = clone(scene.sceneEvents || []);
+  state.preferences.featureStates = clone(scene.featureStates || {});
+  delete state.preferences.featureInteractions;
   if (plainObject(scene.settings) && scene.settings.gridVisible !== undefined) {
     state.preferences.gridVisible = scene.settings.gridVisible !== false;
   }
@@ -318,6 +327,18 @@ function applyCanonicalOperation(state, operation) {
     return { action: type, sceneId: String(scene.id) };
   }
 
+  if (type === 'scene.featureState.patch') {
+    const scene = sceneById(world, payload.sceneId);
+    const featureId = identifier(payload.featureId, 'featureId');
+    const patch = payload.patch === null ? null : object(payload.patch, 'scene.featureState.patch.patch');
+    assertFeatureStatePatch(patch);
+    scene.featureStates = plainObject(scene.featureStates) ? scene.featureStates : {};
+    const next = applyFeatureStateMergePatch(scene.featureStates[featureId], patch);
+    if (next === null || Object.keys(next).length === 0) delete scene.featureStates[featureId];
+    else scene.featureStates[featureId] = next;
+    return { action: type, sceneId: String(scene.id), featureId, removed: next === null };
+  }
+
   if (type === 'combat.replace') {
     state.preferences.combatSystem = clone(object(payload.combatSystem, 'combatSystem'));
     return { action: type };
@@ -373,6 +394,7 @@ function sceneMetadata(scene) {
   delete value.markers;
   delete value.attackAreas;
   delete value.sceneEvents;
+  delete value.featureStates;
   delete value.settings;
   return value;
 }
@@ -402,7 +424,7 @@ export function createWorldOperationPatch(beforeState, afterState) {
   }
   const beforeScenes = mapById(beforeWorld.scenes);
   const afterScenes = mapById(afterWorld.scenes);
-  const scenes = { upsert: [], remove: [], tokens: [], content: [] };
+  const scenes = { upsert: [], remove: [], tokens: [], content: [], featureStates: [] };
   for (const [sceneId, scene] of afterScenes) {
     const previous = beforeScenes.get(sceneId);
     if (!previous || !same(sceneMetadata(previous), sceneMetadata(scene))) {
@@ -412,9 +434,16 @@ export function createWorldOperationPatch(beforeState, afterState) {
     const tokens = diffById(previous.tokens, scene.tokens);
     if (tokens.upsert.length || tokens.remove.length) scenes.tokens.push({ sceneId, ...tokens });
     if (!same(sceneContent(previous), sceneContent(scene))) scenes.content.push({ sceneId, ...sceneContent(scene) });
+    const featureStates = diffById(
+      Object.entries(previous.featureStates || {}).map(([id, state]) => ({ id, state })),
+      Object.entries(scene.featureStates || {}).map(([id, state]) => ({ id, state })),
+    );
+    if (featureStates.upsert.length || featureStates.remove.length) scenes.featureStates.push({ sceneId, ...featureStates });
   }
   for (const sceneId of beforeScenes.keys()) if (!afterScenes.has(sceneId)) scenes.remove.push(sceneId);
-  if (scenes.upsert.length || scenes.remove.length || scenes.tokens.length || scenes.content.length) patch.world.scenes = scenes;
+  if (scenes.upsert.length || scenes.remove.length || scenes.tokens.length || scenes.content.length || scenes.featureStates.length) {
+    patch.world.scenes = scenes;
+  }
   if (!same(beforeState?.preferences?.combatSystem, afterState?.preferences?.combatSystem)) {
     patch.combatSystem = clone(afterState?.preferences?.combatSystem || { schemaVersion: 1, combat: null });
   }
@@ -458,6 +487,18 @@ export function applyWorldOperationPatch(rawState, rawPatch) {
       scene.sceneEvents = clone(content.sceneEvents || []);
       scene.settings = clone(content.settings || {});
     }
+    for (const featurePatch of worldPatch.scenes.featureStates || []) {
+      const scene = scenes.get(identifier(featurePatch.sceneId, 'sceneId'));
+      if (!scene) fail(`Patch references missing Scene: ${featurePatch.sceneId}`, 'invalid_reference');
+      scene.featureStates = plainObject(scene.featureStates) ? scene.featureStates : {};
+      for (const featureId of featurePatch.remove || []) delete scene.featureStates[identifier(featureId, 'featureId')];
+      for (const item of featurePatch.upsert || []) {
+        const featureId = identifier(item?.id, 'featureId');
+        const value = object(item?.state, 'featureState');
+        assertFeatureStatePatch(value);
+        scene.featureStates[featureId] = clone(value);
+      }
+    }
   }
   if (patch.combatSystem !== undefined) state.preferences.combatSystem = clone(patch.combatSystem);
   return projectWorldOperationState(state);
@@ -480,6 +521,8 @@ function unsupportedProjection(state) {
     delete copy.preferences.combatSystem;
     delete copy.preferences.chatSystem;
     delete copy.preferences.gridVisible;
+    delete copy.preferences.featureStates;
+    delete copy.preferences.featureInteractions;
   }
   return copy;
 }
@@ -560,6 +603,21 @@ export function deriveWorldOperations(beforeState, afterState) {
     if (!same(sceneContent(previous), sceneContent(scene))) {
       operations.push({ type: 'scene.content.replace', payload: { sceneId, ...sceneContent(scene) } });
     }
+    const beforeFeatureStates = plainObject(previous.featureStates) ? previous.featureStates : {};
+    const afterFeatureStates = plainObject(scene.featureStates) ? scene.featureStates : {};
+    for (const [featureId, value] of Object.entries(afterFeatureStates)) {
+      if (!same(beforeFeatureStates[featureId], value)) {
+        operations.push({
+          type: 'scene.featureState.patch',
+          payload: { sceneId, featureId, patch: createMergePatch(beforeFeatureStates[featureId], value) },
+        });
+      }
+    }
+    for (const featureId of Object.keys(beforeFeatureStates)) {
+      if (!Object.prototype.hasOwnProperty.call(afterFeatureStates, featureId)) {
+        operations.push({ type: 'scene.featureState.patch', payload: { sceneId, featureId, patch: null } });
+      }
+    }
   }
   if (String(beforeWorld.activeSceneId) !== String(afterWorld.activeSceneId)) {
     operations.push({ type: 'scene.activate', payload: { sceneId: afterWorld.activeSceneId } });
@@ -578,4 +636,16 @@ export function deriveWorldOperations(beforeState, afterState) {
 
 export function isStatusWorldOperation(operation) {
   return STATUS_TYPES.has(String(operation?.type || ''));
+}
+
+function createMergePatch(before, after) {
+  if (!isFeatureStateObject(before) || !isFeatureStateObject(after)) return clone(after);
+  const patch = {};
+  for (const [key, value] of Object.entries(after)) {
+    if (!same(before[key], value)) patch[key] = createMergePatch(before[key], value);
+  }
+  for (const key of Object.keys(before)) {
+    if (!Object.prototype.hasOwnProperty.call(after, key)) patch[key] = null;
+  }
+  return patch;
 }

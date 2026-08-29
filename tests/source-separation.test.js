@@ -23,10 +23,12 @@ function relativeSourcePath(file) {
 
 test('only explicit build/compatibility adapters may import Lanzhou reference sources', async () => {
   // These are intentionally outside generic Core semantics:
-  // - default-map.js bundles the selected built-in map at build time;
+  // - builtins.js lazily registers the selected built-in map;
+  // - default-map.js adapts the Lanzhou reference package to the generic contract;
   // - the two src/maps files are legacy import shims kept for old callers/tests.
   // Runtime packages are separately verified after deleting reference/ entirely.
   const allowed = new Set([
+    'map-package/builtins.js',
     'map-package/default-map.js',
     'maps/lanzhou.js',
     'maps/presentation-cleanup.js',

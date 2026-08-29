@@ -10,3 +10,12 @@ export {
   synchronizeWorldV2FromRuntimeState,
 } from './model.js';
 export { createWorldSystem } from './system.js';
+export {
+  WORLD_CATALOG_SCHEMA_VERSION,
+  WORLD_CATALOG_STORAGE_KEY,
+  canonicalWorldStorageKey,
+  legacyMapWorldStorageKey,
+  inspectWorldSave,
+  createWorldCatalogManager,
+} from './manager.js';
+export { renderWorldManager, chooseWorldBeforeMap } from './setup.js';

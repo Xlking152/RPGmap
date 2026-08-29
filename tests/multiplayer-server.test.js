@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -197,7 +197,14 @@ test('health exposes only World bootstrap metadata for empty and initialized LAN
   try {
     const empty = await (await fetch(`${runtime.httpUrl}/api/health`)).json();
     assert.deepEqual(empty.world, {
-      initialized: false, kind: 'empty', schemaVersion: null, ruleset: null,
+      initialized: false,
+      kind: 'empty',
+      schemaVersion: null,
+      worldId: 'default',
+      name: null,
+      activeSceneId: null,
+      mapPackage: null,
+      ruleset: null,
     });
 
     const gm = await openAndHello(runtime.url, { name: 'Bootstrap GM', requestedRole: 'gm' });
@@ -209,6 +216,10 @@ test('health exposes only World bootstrap metadata for empty and initialized LAN
       initialized: true,
       kind: 'world-v2',
       schemaVersion: 2,
+      worldId: 'world-test',
+      name: 'Test World',
+      activeSceneId: 'scene-test',
+      mapPackage: { id: 'test', version: '1' },
       ruleset: { id: 'infinite-horror', version: '1.0.0' },
     });
     assert.equal(Object.hasOwn(health.world, 'state'), false);
@@ -231,8 +242,39 @@ test('health identifies a persisted pre-World SaveV2 as an explicit LAN legacy b
   try {
     const health = await (await fetch(`${runtime.httpUrl}/api/health`)).json();
     assert.deepEqual(health.world, {
-      initialized: true, kind: 'legacy', schemaVersion: null, ruleset: null,
+      initialized: true,
+      kind: 'legacy',
+      schemaVersion: null,
+      worldId: 'default',
+      name: null,
+      activeSceneId: null,
+      mapPackage: null,
+      ruleset: null,
     });
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('LAN startup migrates global Feature State once and backs up the original World', async () => {
+  const mapDir = await mkdtemp(path.join(tmpdir(), 'rpgmap-feature-state-migration-'));
+  const state = initialWorldV2();
+  state.preferences.worldV2.scenes[0].featureStates = { gate: { open: true, custom: { source: 'scene' } } };
+  state.preferences.featureStates = { gate: { open: true, custom: { source: 'scene', extension: 4 } } };
+  await writeFile(path.join(mapDir, 'world.json'), JSON.stringify({
+    schemaVersion: 1,
+    worldId: 'default',
+    revision: 1,
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    state,
+  }), 'utf8');
+  const runtime = await startServer({}, mapDir);
+  try {
+    const durable = JSON.parse(await readFile(path.join(mapDir, 'world.json'), 'utf8'));
+    assert.equal(Object.hasOwn(durable.state.preferences, 'featureStates'), false);
+    assert.equal(durable.state.preferences.worldV2.scenes[0].featureStates.gate.custom.extension, 4);
+    const backups = await readdir(path.join(mapDir, 'backups'));
+    assert.ok(backups.some(name => name.startsWith('world.backup.')));
   } finally {
     await stopServer(runtime);
   }
@@ -435,6 +477,19 @@ test('generic World operations reuse Player ownership and status permission chec
     const deniedStatus = await statusPromise;
     assert.equal(deniedStatus.code, 'status_gm_only');
     assert.equal(deniedStatus.revision, 3);
+
+    const featureStatePromise = waitForMessage(player.ws, message =>
+      message.type === 'world.operation.denied' && message.operationId === 'player-feature-state-1');
+    player.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'player-feature-state-1', baseRevision: 3,
+      operations: [{
+        type: 'scene.featureState.patch',
+        payload: { sceneId: 'scene-test', featureId: 'gate-a', patch: { open: true } },
+      }],
+    }));
+    const deniedFeatureState = await featureStatePromise;
+    assert.equal(deniedFeatureState.code, 'scene_feature_state_gm_only');
+    assert.equal(deniedFeatureState.revision, 3);
 
     player.ws.close();
     gm.ws.close();

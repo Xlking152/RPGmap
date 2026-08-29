@@ -5,6 +5,7 @@ import {
 import { createActorFromImport, createTokenForActor, normalizeEntityState } from '../entities/model.js';
 import { canonicalAttackAreas } from '../world/attack-anchors.js';
 import { normalizeWorldV2, projectWorldV2ToRuntimeState, WORLD_STATE_KEY } from '../world/model.js';
+import { migrateLegacySceneFeatureStates } from '../world/feature-states.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -182,12 +183,14 @@ export function migrateLegacySaveV2(raw, {
   };
   seed.preferences.entitySystem = clone(entity);
   seed.preferences[WORLD_STATE_KEY] = clone(world);
-  const state = projectWorldV2ToRuntimeState(seed, world, { mapPackage, ruleset });
+  const migratedSeed = migrateLegacySceneFeatureStates(seed).state;
+  const migratedWorld = migratedSeed.preferences[WORLD_STATE_KEY];
+  const state = projectWorldV2ToRuntimeState(migratedSeed, migratedWorld, { mapPackage, ruleset });
   delete state.characters;
 
   return Object.freeze({
     state,
-    world: clone(world),
+    world: clone(migratedWorld),
     migrated: true,
     migratedCharacters: entityMigration.migrated,
     fromVersion: schemaMigration.fromVersion,

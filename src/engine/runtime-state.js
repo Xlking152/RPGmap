@@ -8,6 +8,12 @@ import {
 } from '../world/model.js';
 import { isLegacySaveV2Payload, migrateLegacySaveV2 } from '../legacy/save-v2.js';
 import { assertPersistedWorldV2, assertWorldRuleset } from '../world/validation.js';
+import {
+  FEATURE_STATE_KEY,
+  LEGACY_FEATURE_INTERACTION_STATE_KEY,
+  migrateLegacySceneFeatureStates,
+  stripLegacyFeatureStateProjection,
+} from '../world/feature-states.js';
 
 export const RUNTIME_SAVE_VERSION = 2;
 
@@ -107,10 +113,15 @@ export function createInitialRuntimeState(mapPackage, { ruleset } = {}) {
 }
 
 export function validateRuntimeState(raw, { mapPackage, ruleset } = {}) {
-  const source = object(raw, 'state');
+  let source = object(raw, 'state');
   const metadata = mapMetadata(mapPackage);
-  const mapId = String(source.mapId ?? metadata.id).trim();
-  const mapVersion = String(source.mapVersion ?? metadata.version).trim();
+  const hasCanonicalWorld = Boolean(source.preferences?.[WORLD_STATE_KEY]);
+  if (hasCanonicalWorld) {
+    assertPersistedWorldV2(source.preferences[WORLD_STATE_KEY]);
+    source = migrateLegacySceneFeatureStates(source).state;
+  }
+  const mapId = hasCanonicalWorld ? metadata.id : String(source.mapId ?? metadata.id).trim();
+  const mapVersion = hasCanonicalWorld ? metadata.version : String(source.mapVersion ?? metadata.version).trim();
   if (mapId !== metadata.id) throw new TypeError('state.mapId does not match MapPackage');
   if (mapVersion !== metadata.version) throw new TypeError('state.mapVersion does not match MapPackage');
 
@@ -128,7 +139,6 @@ export function validateRuntimeState(raw, { mapPackage, ruleset } = {}) {
 
   const rawWorld = next.preferences?.[WORLD_STATE_KEY];
   if (rawWorld) {
-    assertPersistedWorldV2(rawWorld);
     assertWorldRuleset(rawWorld, ruleset);
     const world = normalizeWorldV2(rawWorld, { mapPackage, ruleset });
     next = projectWorldV2ToRuntimeState(next, world, { mapPackage, ruleset });
@@ -149,11 +159,15 @@ export function prepareRuntimeState(raw, { mapPackage, ruleset } = {}) {
   if (isLegacySaveV2Payload(parsed)) {
     return migrateLegacySaveV2(parsed, { mapPackage, ruleset });
   }
+  const migratedFeatureState = Boolean(parsed?.preferences
+    && (Object.prototype.hasOwnProperty.call(parsed.preferences, FEATURE_STATE_KEY)
+      || Object.prototype.hasOwnProperty.call(parsed.preferences, LEGACY_FEATURE_INTERACTION_STATE_KEY)));
+  const migratedCharacters = Object.prototype.hasOwnProperty.call(parsed, 'characters');
   const state = validateRuntimeState(parsed, { mapPackage, ruleset });
   return Object.freeze({
     state,
     world: clone(state.preferences?.[WORLD_STATE_KEY] || null),
-    migrated: Object.prototype.hasOwnProperty.call(parsed, 'characters'),
+    migrated: migratedCharacters || migratedFeatureState,
     migratedCharacters: 0,
     fromVersion: String(parsed.mapVersion ?? state.mapVersion),
     toVersion: state.mapVersion,
@@ -164,7 +178,7 @@ export function prepareRuntimeState(raw, { mapPackage, ruleset } = {}) {
 }
 
 export function exportRuntimeState(state, { mapPackage, ruleset } = {}) {
-  const next = validateRuntimeState(state, { mapPackage, ruleset });
+  const next = stripLegacyFeatureStateProjection(validateRuntimeState(state, { mapPackage, ruleset }));
   delete next.characters;
   for (const token of next.preferences?.entitySystem?.tokens || []) delete token.characterId;
   return next;

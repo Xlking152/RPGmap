@@ -113,6 +113,7 @@ export function createFeatureInteractionSystem() {
         mapPackage: api.mapPackage,
         getState: () => api.getState(),
         replaceState: replaceRuntimeState,
+        performOperations: (worldOperations, options = {}) => api.world.performOperations(worldOperations, options),
         selectFeature: (featureId, options = {}) => api.selectFeature?.(featureId, {
           switchTab: true,
           focus: options.focus === true,

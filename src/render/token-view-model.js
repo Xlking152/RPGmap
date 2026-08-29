@@ -24,7 +24,8 @@ export function actorDisplayForm(actor, { ruleset } = {}) {
 /**
  * Build the map-facing display model from a canonical Scene Token plus its
  * resolved Actor (Base Actor for linked Tokens; Synthetic Actor for unlinked
- * Tokens). Reducer projections are intentionally not accepted.
+ * Tokens). Appearance precedence is explicit Token override -> current Ruleset
+ * presentation override -> Core Actor prototype/img fallback.
  */
 export function createTokenViewModel({ token, actor, selected = false, ruleset } = {}) {
   if (!token || !actor || token.hidden === true || token.placement !== 'map') return null;
@@ -35,11 +36,17 @@ export function createTokenViewModel({ token, actor, selected = false, ruleset }
   const presentation = describeActor(actor, ruleset ? { ruleset } : {}) || {};
   const name = text(presentation.name, text(actor.name, text(token.name, String(token.id || 'Token'))));
   const avatarDataUrl = text(
-    presentation.avatarDataUrl ?? actor?.avatarDataUrl ?? actor?.img,
+    token?.texture?.src
+      ?? presentation.avatarDataUrl
+      ?? actor?.prototypeToken?.texture?.src
+      ?? actor?.img
+      ?? actor?.avatarDataUrl,
     '',
   ) || null;
   const color = safeColor(
-    presentation.color ?? actor?.prototypeToken?.color ?? token?.color,
+    token?.color
+      ?? presentation.color
+      ?? actor?.prototypeToken?.color,
   );
 
   return Object.freeze({
