@@ -26,7 +26,9 @@ $env:RPGMAP_WORLD_ID = "ci-$([Guid]::NewGuid().ToString('N'))"
 $logRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
 $stdout = Join-Path $logRoot "rpgmap-smoke-$PID.stdout.log"
 $stderr = Join-Path $logRoot "rpgmap-smoke-$PID.stderr.log"
-Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+$serverPidFile = Join-Path $logRoot "rpgmap-smoke-$PID.server.pid"
+$env:RPGMAP_SMOKE_PID_FILE = $serverPidFile
+Remove-Item -LiteralPath $stdout, $stderr, $serverPidFile -Force -ErrorAction SilentlyContinue
 
 Write-Host "[smoke] root: $rootPath"
 Write-Host "[smoke] port: $port"
@@ -54,6 +56,7 @@ function Show-RpgMapSmokeLogs {
 try {
   $health = $null
   $lastRequestError = $null
+  $browserAttempted = $false
   $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(5, $TimeoutSeconds))
   while ([DateTime]::UtcNow -lt $deadline) {
     if ($launcher.HasExited) { break }
@@ -66,9 +69,15 @@ try {
         $health.multiplayer.publicMode -eq $false
       ) {
         Write-Host "[smoke] /api/health passed on port $port"
+        Write-Host '[smoke] opening World Manager and Lanzhou Runtime in Edge'
+        $browserAttempted = $true
+        & node (Join-Path $PSScriptRoot 'browser-smoke.mjs') "http://127.0.0.1:$port/" ($TimeoutSeconds * 1000)
+        if ($LASTEXITCODE -ne 0) { throw 'Packaged Edge browser smoke failed.' }
+        Write-Host '[smoke] World Manager and Lanzhou Runtime passed'
         return
       }
     } catch {
+      if ($browserAttempted) { throw }
       $lastRequestError = $_.Exception.Message
     }
     Start-Sleep -Milliseconds 250
@@ -81,7 +90,16 @@ try {
   $detail = if ($lastRequestError) { " Last health error: $lastRequestError" } else { '' }
   throw "Packaged server did not pass /api/health within $TimeoutSeconds seconds on port $port.$detail"
 } finally {
-  if ($launcher -and -not $launcher.HasExited) {
-    & taskkill.exe /PID $launcher.Id /T /F | Out-Null
+  if (Test-Path -LiteralPath $serverPidFile) {
+    $serverPid = 0
+    if ([int]::TryParse((Get-Content -LiteralPath $serverPidFile -Raw).Trim(), [ref]$serverPid)) {
+      Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
+    }
   }
+  if ($launcher -and -not $launcher.HasExited) {
+    Wait-Process -Id $launcher.Id -Timeout 5 -ErrorAction SilentlyContinue
+    $launcher.Refresh()
+    if (-not $launcher.HasExited) { Stop-Process -Id $launcher.Id -Force -ErrorAction SilentlyContinue }
+  }
+  Remove-Item -LiteralPath $stdout, $stderr, $serverPidFile -Force -ErrorAction SilentlyContinue
 }

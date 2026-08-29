@@ -1,5 +1,5 @@
 import { assertStatusState } from './status-operations.mjs';
-import { assertFeatureStatePatch, isPlainObject } from './feature-states.js';
+import { assertFeatureStatePatch, isPlainObject } from './world-operations.mjs';
 
 export const WORLD_V2_SCHEMA_VERSION = 2;
 export const WORLD_V2_STATE_KEY = 'worldV2';

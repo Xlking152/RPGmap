@@ -10,6 +10,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "check:bundle": "node scripts/check-bundle-budget.mjs",
+    "check:package": "node scripts/verify-package.mjs",
     "benchmark": "node scripts/performance-benchmark.mjs",
     "test": "node --test tests/*.test.js",
     "package:local-server": "node scripts/package-local-server.mjs"
