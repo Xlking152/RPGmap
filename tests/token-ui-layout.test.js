@@ -18,11 +18,24 @@ test('HealthSystem keeps the single canonical Token health bar below the scaled 
   assert.match(healthBarSource, /tokenDiameterMeters\(token\)/);
   assert.match(healthBarSource, /iconAnchor: \[barWidth \/ 2, -\(tokenPixels \/ 2 \+ 6\)\]/);
   assert.match(healthBarSource, /rpgmap-token-healthbar/);
+  assert.match(healthBarSource, /token:visual-move-start/);
+  assert.match(healthBarSource, /token:visual-move-end/);
 });
 
-test('Token Renderer V2 owns the visible name and elevation labels', () => {
+test('Token Renderer V2 places elevation immediately left of the visible name', () => {
   assert.match(rendererSource, /token-v2-tooltip/);
-  assert.match(rendererSource, /token-elevation-label/);
+  assert.match(rendererSource, /token-v2-label-row/);
+  assert.match(rendererSource, /token-v2-elevation-label/);
+  assert.match(rendererSource, /row\.append\(elevation, name\)/);
+  assert.doesNotMatch(rendererSource, /class="token-elevation-label"/);
   assert.match(rendererSource, /data-token-id/);
   assert.doesNotMatch(rendererSource, /api\.selectCharacter/);
+});
+
+test('Token Renderer V2 visually interpolates canonical movement without intermediate World writes', () => {
+  assert.match(rendererSource, /requestAnimationFrame/);
+  assert.match(rendererSource, /interpolateTokenPoint/);
+  assert.match(rendererSource, /token:visual-move-start/);
+  assert.match(rendererSource, /token:visual-move-end/);
+  assert.doesNotMatch(rendererSource, /api\.world\.commit|api\.commitState/);
 });
