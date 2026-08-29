@@ -110,6 +110,12 @@ try {
       responses.push(String(message.params.response.url || ''));
     }
     if (message.method === 'Runtime.exceptionThrown') exceptions.push(message.params?.exceptionDetails?.text || 'runtime exception');
+    if (message.method === 'Runtime.consoleAPICalled' && message.params?.type === 'error') {
+      const rendered = (message.params.args || []).map(argument => (
+        argument.value ?? argument.unserializableValue ?? argument.description ?? ''
+      )).filter(Boolean).join(' ');
+      exceptions.push(rendered || 'browser console error');
+    }
     if (message.method === 'Log.entryAdded' && message.params?.entry?.level === 'error') {
       exceptions.push(message.params.entry.text || 'browser log error');
     }
@@ -144,10 +150,34 @@ try {
   let runtime;
   try {
     runtime = await retry(
-      () => evaluate(`({
-        leaflet: Boolean(document.querySelector('.leaflet-container')),
-        title: document.querySelector('[data-role="app-title"]')?.textContent || '',
-      })`).then(value => value?.leaflet && value.title.includes('北宋兰州城') ? value : null),
+      () => evaluate(`(() => {
+        const api = document.querySelector('#app')?.rpgMapApp;
+        const baseSvg = document.querySelector('.leaflet-base-pane svg.leaflet-image-layer');
+        const bounds = baseSvg?.getBoundingClientRect();
+        let center = null;
+        let zoom = null;
+        try {
+          center = api?.map?.getCenter?.() || null;
+          zoom = api?.map?.getZoom?.();
+        } catch {}
+        return {
+          leaflet: Boolean(document.querySelector('.leaflet-container')),
+          title: document.querySelector('[data-role="app-title"]')?.textContent || '',
+          mapReady: Boolean(center) && Number.isFinite(zoom),
+          baseSvg: Boolean(baseSvg),
+          baseSvgWidth: bounds?.width || 0,
+          baseSvgHeight: bounds?.height || 0,
+          mapImages: baseSvg?.querySelectorAll('image').length || 0,
+        };
+      })()`).then(value => value?.leaflet
+        && value.title.includes('北宋兰州城')
+        && value.mapReady
+        && value.baseSvg
+        && value.baseSvgWidth > 0
+        && value.baseSvgHeight > 0
+        && value.mapImages > 0
+        ? value
+        : null),
       'Lanzhou Leaflet Runtime',
       deadline,
     );
@@ -182,11 +212,14 @@ try {
   })()`);
   await new Promise(resolve => setTimeout(resolve, 750));
   const visualState = await evaluate(`({
-    svgCount: document.querySelectorAll('svg').length,
-    imageCount: document.querySelectorAll('image').length,
+    baseSvgCount: document.querySelectorAll('.leaflet-base-pane svg.leaflet-image-layer').length,
+    mapImageCount: document.querySelectorAll('.leaflet-base-pane svg.leaflet-image-layer image').length,
     overlayChildren: document.querySelector('.leaflet-overlay-pane')?.childElementCount ?? -1,
     imageHrefs: [...document.querySelectorAll('image')].slice(0, 3).map(node => node.getAttribute('href')),
   })`);
+  if (visualState.baseSvgCount !== 1 || visualState.mapImageCount < 1) {
+    throw new Error(`Lanzhou base SVG was not rendered: ${JSON.stringify(visualState)}`);
+  }
   if (failures.length) throw new Error(`Browser requests failed: ${failures.join('; ')}`);
   if (exceptions.length) throw new Error(`Browser runtime errors: ${exceptions.join('; ')}`);
   for (const pattern of [/\/assets\/map-runtime-[^/]+\.js$/, /\/assets\/default-map-[^/]+\.js$/, /\.webp$/]) {

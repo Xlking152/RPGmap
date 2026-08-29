@@ -443,8 +443,8 @@ export function createRpgMapRuntime({
   };
 
   container.rpgMapApp = api;
-  for (const tool of tools) tool?.register?.(api);
   fitInitialView(false);
+  for (const tool of tools) tool?.register?.(api);
   renderScene();
   if (loaded.notice) showToast(loaded.notice.message, loaded.notice.type);
   emit('runtime:ready', { worldAuthority: 'World.scenes[].tokens[]' });
