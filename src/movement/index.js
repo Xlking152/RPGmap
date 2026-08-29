@@ -1,5 +1,6 @@
 import { MovementSettings } from './settings.js';
 import { createMovementControllerV3 } from './controller-v3.js';
+import { createMovementGhostRendererV2 } from './ghost-renderer-v2.js';
 import { createMovementTokenRuntimeSystem } from './token-runtime.js';
 
 export { MovementSession } from './session.js';
@@ -11,6 +12,7 @@ export { MovementSettings } from './settings.js';
 export { applyMovementStatusMutations, createMovementTokenRuntimeSystem } from './token-runtime.js';
 export { createMovementControllerV2 } from './controller-v2.js';
 export { createMovementControllerV3 } from './controller-v3.js';
+export { createMovementGhostRendererV2 } from './ghost-renderer-v2.js';
 export { createMovementRouteInspector } from './route-inspector.js';
 
 export function createMovementSystem(options = {}) {
@@ -21,6 +23,7 @@ export function createMovementSystem(options = {}) {
       settings.attach(api);
       createMovementTokenRuntimeSystem().register(api);
       createMovementControllerV3({ settings }).register(api);
+      createMovementGhostRendererV2().register(api);
     },
   };
 }
