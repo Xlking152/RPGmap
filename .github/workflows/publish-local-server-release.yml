@@ -3,6 +3,7 @@ name: Publish RPGmap Windows Release
 on:
   push:
     tags: ['v*']
+    branches: ['release-v*']
 
 permissions:
   contents: write
@@ -33,7 +34,11 @@ jobs:
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
-          test "${GITHUB_REF_NAME}" = "v${VERSION}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            test "${GITHUB_REF_NAME}" = "v${VERSION}"
+          else
+            test "${GITHUB_REF_NAME}" = "release-v${VERSION}"
+          fi
           node -e "const v='${VERSION}'.split('.').map(Number); if (v.length !== 3 || v.some(n => !Number.isInteger(n)) || v[0] < 1 || (v[0] === 1 && (v[1] < 5 || (v[1] === 5 && v[2] < 6)))) process.exit(1)"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
