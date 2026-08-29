@@ -18,6 +18,9 @@ import { createLanzhouMapPackage } from '../reference/maps/lanzhou/package.js';
 import { cleanMapPackagePresentation } from '../reference/maps/lanzhou/presentation.js';
 import { LANZHOU_LAYER_PLAN } from '../reference/maps/lanzhou/manifest.js';
 import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { registerBuiltInMapPackages } from '../src/map-package/builtins.js';
+import { BUILT_IN_LANZHOU_MAP } from '../src/map-package/constants.js';
+import { MapPackageRegistry } from '../src/map-package/registry.js';
 
 function logicalRoles(mapPackage) {
   return new Set(mapPackage.layerPlan.map((layer) => layer.role));
@@ -72,13 +75,24 @@ test('minimal reference map uses the same Core destruction and Scene State logic
 
 test('application entry resolves MapPackages through the registry without implementation coupling', async () => {
   const mainSource = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
+  const mapRuntimeSource = await readFile(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
   const compatibilityShim = await readFile(new URL('../src/maps/lanzhou.js', import.meta.url), 'utf8');
 
   assert.match(mainSource, /registerBuiltInMapPackages/);
-  assert.match(mainSource, /mapPackageRegistry\.load/);
+  assert.match(mainSource, /await import\('\.\/runtime\/map-runtime\.js'\)/);
+  assert.match(mapRuntimeSource, /mapPackageRegistry\.load/);
   assert.doesNotMatch(mainSource, /createDefaultMapPackage/);
   assert.doesNotMatch(mainSource, /Lanzhou|lanzhou|assets\/generated/);
   assert.match(compatibilityShim, /reference\/maps\/lanzhou\/package\.js/);
+});
+
+test('built-in Registry lists Lanzhou metadata before loading its Runtime package', () => {
+  const registry = registerBuiltInMapPackages(new MapPackageRegistry());
+  assert.deepEqual(registry.list(), [{
+    ...BUILT_IN_LANZHOU_MAP,
+    source: 'reference/maps/lanzhou',
+    loaded: false,
+  }]);
 });
 
 test('invalid maps are rejected before they enter the Engine', () => {

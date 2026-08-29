@@ -13,6 +13,9 @@ const retiredFiles = [
   'src/movement/ghost-renderer.js',
   'src/movement/distance-renderer.js',
   'src/measurement/controller.js',
+  'src/tools/fvtt-segment-distance.js',
+  'src/tools/fvtt-token-ghost.js',
+  'src/tools/fvtt-waypoint-movement.js',
 ];
 const liveRuntimeFiles = [
   'src/main.js',

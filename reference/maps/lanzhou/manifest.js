@@ -1,4 +1,6 @@
-export const LANZHOU_REFERENCE_ID = 'northern-song-lanzhou-1104';
+import { DEFAULT_REFERENCE_MAP_ID } from '../../../src/map-package/constants.js';
+
+export const LANZHOU_REFERENCE_ID = DEFAULT_REFERENCE_MAP_ID;
 
 export const LANZHOU_LAYER_PLAN = Object.freeze([
   { id: 'base', role: 'base', sourceLayers: ['base'], description: '纸张、基础背景与不可交互底图父层' },

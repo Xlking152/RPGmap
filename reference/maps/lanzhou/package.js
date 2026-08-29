@@ -1,3 +1,5 @@
+import { BUILT_IN_LANZHOU_MAP } from '../../../src/map-package/constants.js';
+
 export const MAP_WIDTH = 6000;
 export const MAP_HEIGHT = 5000;
 export const ROAD_RULES = Object.freeze({
@@ -1273,10 +1275,10 @@ export function createLanzhouMapPackage(artAssets = {}) {
   const normalizedArtAssets = normalizeArtAssets(artAssets);
   const createSvg = () => createLanzhouSvg(normalizedArtAssets);
   return Object.freeze({
-    id: 'northern-song-lanzhou-1104',
-    title: '北宋兰州城 · RPG 战术地图',
+    id: BUILT_IN_LANZHOU_MAP.id,
+    title: BUILT_IN_LANZHOU_MAP.title,
     name: '北宋兰州城（1104）',
-    version: '1.0.5',
+    version: BUILT_IN_LANZHOU_MAP.version,
     compatibleMapVersions: Object.freeze(['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4']),
     period: '北宋·崇宁三年（1104）',
     width: MAP_WIDTH,
