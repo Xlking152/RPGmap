@@ -1,480 +1,35 @@
-  duration_ms: 1.118312
-  ...
-# Subtest: MapPackage Registry rejects unknown ids and incompatible versions
-ok 2 - MapPackage Registry rejects unknown ids and incompatible versions
-  ---
-  duration_ms: 0.551732
-  ...
-1..2
-# tests 2
-# suites 0
-# pass 2
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 35.973967
-===== tests/map-package.test.js =====
-TAP version 13
-# Subtest: Lanzhou map package keeps the 6000 x 5000 contract and the layered SVG structure
-ok 1 - Lanzhou map package keeps the 6000 x 5000 contract and the layered SVG structure
-  ---
-  duration_ms: 3.650334
-  ...
-# Subtest: all buildings expose historical details and stable entrances
-ok 2 - all buildings expose historical details and stable entrances
-  ---
-  duration_ms: 0.270111
-  ...
-# Subtest: feature IDs are unique and every visible feature owns one SVG group inside the destructible layer
-ok 3 - feature IDs are unique and every visible feature owns one SVG group inside the destructible layer
-  ---
-  duration_ms: 14.660251
-  ...
-# Subtest: four city wall towers are independent wall features with their own SVG groups
-ok 4 - four city wall towers are independent wall features with their own SVG groups
-  ---
-  duration_ms: 7.706252
-  ...
-# Subtest: Chenghuang temple is a distinct destructible compound with no duplicate shop
-ok 5 - Chenghuang temple is a distinct destructible compound with no duplicate shop
-  ---
-  duration_ms: 0.901365
-  ...
-# Subtest: liquid bodies are valid map polygons for flood backfill
-ok 6 - liquid bodies are valid map polygons for flood backfill
-  ---
-  duration_ms: 0.135601
-  ...
-# Subtest: protected map layers cannot be selected as destructible categories
-ok 7 - protected map layers cannot be selected as destructible categories
-  ---
-  duration_ms: 0.159863
-  ...
-# Subtest: building polygons have zero positive-area overlap
-ok 8 - building polygons have zero positive-area overlap
-  ---
-  duration_ms: 19.495652
-  ...
-# Subtest: building polygons do not enter declared road buffers
-ok 9 - building polygons do not enter declared road buffers
-  ---
-  duration_ms: 25.978478
-  ...
-# Subtest: SVG is self-contained vector markup without raster or external references
-ok 10 - SVG is self-contained vector markup without raster or external references
-  ---
-  duration_ms: 0.990406
-  ...
-# Subtest: optional generated art stays isolated from the default vector map package
-ok 11 - optional generated art stays isolated from the default vector map package
-  ---
-  duration_ms: 4.376511
-  ...
-# Subtest: generated building sprites cover all 50 ordinary buildings with stable isolated variants
-ok 12 - generated building sprites cover all 50 ordinary buildings with stable isolated variants
-  ---
-  duration_ms: 4.786187
-  ...
-# Subtest: all nine generated building prototypes preserve partial, destroyed, restore and undo semantics
-ok 13 - all nine generated building prototypes preserve partial, destroyed, restore and undo semantics
-  ---
-  duration_ms: 15.585306
-  ...
-# Subtest: generated landmarks stay inside their independently destructible feature groups
-ok 14 - generated landmarks stay inside their independently destructible feature groups
-  ---
-  duration_ms: 2.596007
-  ...
-# Subtest: map presentation metadata supports zoom hierarchy and automatic label avoidance
-ok 15 - map presentation metadata supports zoom hierarchy and automatic label avoidance
-  ---
-  duration_ms: 0.612866
-  ...
-1..15
-# tests 15
-# suites 0
-# pass 15
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 156.27595
-===== tests/map-presentation.test.js =====
-TAP version 13
-# Subtest: zoom presentation uses stable overview, mid and detail thresholds
-ok 1 - zoom presentation uses stable overview, mid and detail thresholds
-  ---
-  duration_ms: 0.434974
-  ...
-# Subtest: label placement selects the first collision-free candidate
-ok 2 - label placement selects the first collision-free candidate
-  ---
-  duration_ms: 0.524473
-  ...
-# Subtest: label overlap treats configured padding as protected breathing room
-ok 3 - label overlap treats configured padding as protected breathing room
-  ---
-  duration_ms: 0.078142
-  ...
-# Subtest: label placement reports unavoidable viewport overflow separately from collisions
-ok 4 - label placement reports unavoidable viewport overflow separately from collisions
-  ---
-  duration_ms: 0.151017
-  ...
-1..4
-# tests 4
-# suites 0
-# pass 4
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 35.237428
-===== tests/measurement-ruler.test.js =====
-TAP version 13
-# Subtest: ruler session supports one ruler with chained waypoints
-ok 1 - ruler session supports one ruler with chained waypoints
-  ---
-  duration_ms: 1.013035
-  ...
-# Subtest: right-click style removal keeps ruler origin and removes latest waypoint
-ok 2 - right-click style removal keeps ruler origin and removes latest waypoint
-  ---
-  duration_ms: 0.17233
-  ...
-# Subtest: ruler formatting preserves useful precision for short distances
-ok 3 - ruler formatting preserves useful precision for short distances
-  ---
-  duration_ms: 0.099127
-  ...
-1..3
-# tests 3
-# suites 0
-# pass 3
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 44.552963
-===== tests/movement-distance.test.js =====
-TAP version 13
-# Subtest: movement distance steps normalize and round upward without changing actual distance
-ok 1 - movement distance steps normalize and round upward without changing actual distance
-  ---
-  duration_ms: 0.751154
-  ...
-# Subtest: route is split at waypoint legs and produces per-leg plus total display costs
-ok 2 - route is split at waypoint legs and produces per-leg plus total display costs
-  ---
-  duration_ms: 0.386863
-  ...
-1..2
-# tests 2
-# suites 0
-# pass 2
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 34.850907
-===== tests/movement-drag.test.js =====
-TAP version 13
-# Subtest: ctrl drag release enters planning without creating the first waypoint
-ok 1 - ctrl drag release enters planning without creating the first waypoint
-  ---
-  duration_ms: 0.827795
-  ...
-1..1
-# tests 1
-# suites 0
-# pass 1
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 34.203197
-===== tests/movement-path.test.js =====
-TAP version 13
-# Subtest: MovementSession manages FVTT-style waypoints
-ok 1 - MovementSession manages FVTT-style waypoints
-  ---
-  duration_ms: 0.861763
-  ...
-# Subtest: calculateWaypointRoute sums routed segments and reports the blocked leg
-ok 2 - calculateWaypointRoute sums routed segments and reports the blocked leg
-  ---
-  duration_ms: 0.376859
-  ...
-# Subtest: manual waypoints and the final destination use the same strict direct planner
-ok 3 - manual waypoints and the final destination use the same strict direct planner
-  ---
-  duration_ms: 0.759533
-  ...
-1..3
-# tests 3
-# suites 0
-# pass 3
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 35.253051
-===== tests/movement-server-authority.test.js =====
-TAP version 13
-# Subtest: canonical Scene Token placement survives server normalization
-ok 1 - canonical Scene Token placement survives server normalization
-  ---
-  duration_ms: 1.162522
-  ...
-# Subtest: owned canonical Scene Token movement survives authorization without Character mirror
-ok 2 - owned canonical Scene Token movement survives authorization without Character mirror
-  ---
-  duration_ms: 2.621007
-  ...
-1..2
-# tests 2
-# suites 0
-# pass 2
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 40.465339
-===== tests/movement-snap.test.js =====
-TAP version 13
-# Subtest: movement snap steps cycle through 1/5/10/20/50/100 metres
-ok 1 - movement snap steps cycle through 1/5/10/20/50/100 metres
-  ---
-  duration_ms: 0.728174
-  ...
-# Subtest: movement snapping affects only the live control point and preserves placed waypoints
-ok 2 - movement snapping affects only the live control point and preserves placed waypoints
-  ---
-  duration_ms: 0.286971
-  ...
-# Subtest: automatic movement step follows map scale bands
-ok 3 - automatic movement step follows map scale bands
-  ---
-  duration_ms: 0.125186
-  ...
-1..3
-# tests 3
-# suites 0
-# pass 3
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 33.765559
-===== tests/movement-token-runtime.test.js =====
-TAP version 13
-# Subtest: Movement Runtime commits map movement to Scene.tokens without mutating Character location directly
-ok 1 - Movement Runtime commits map movement to Scene.tokens without mutating Character location directly
-  ---
-  duration_ms: 4.446504
-  ...
-# Subtest: Movement Runtime enters and exits a Feature by changing canonical Token placement
-ok 2 - Movement Runtime enters and exits a Feature by changing canonical Token placement
-  ---
-  duration_ms: 1.488023
-  ...
-# Subtest: Feature Actor-status side effects on an unlinked Token write Synthetic Actor actorDelta only
-ok 3 - Feature Actor-status side effects on an unlinked Token write Synthetic Actor actorDelta only
-  ---
-  duration_ms: 2.263409
-  ...
-1..3
-# tests 3
-# suites 0
-# pass 3
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 63.263681
-===== tests/multiplayer-permissions.test.js =====
-TAP version 13
-# Subtest: client maps canonical Token to Actor ownership
-ok 1 - client maps canonical Token to Actor ownership
-  ---
-  duration_ms: 0.724372
-  ...
-# Subtest: client preflight allows owned Token movement and blocks unowned Token movement
-ok 2 - client preflight allows owned Token movement and blocks unowned Token movement
-  ---
-  duration_ms: 1.62923
-  ...
-# Subtest: client canControlActor follows active Combat turn
-ok 3 - client canControlActor follows active Combat turn
-  ---
-  duration_ms: 0.301794
-  ...
-# Subtest: client resolves a combatant without actorId through canonical Token binding
-ok 4 - client resolves a combatant without actorId through canonical Token binding
-  ---
-  duration_ms: 0.348999
-  ...
-# Subtest: GM wildcard bypasses local ownership preflight
-ok 5 - GM wildcard bypasses local ownership preflight
-  ---
-  duration_ms: 0.136589
-  ...
-# Subtest: Player cannot change an owned Token diameter
-ok 6 - Player cannot change an owned Token diameter
-  ---
-  duration_ms: 0.165029
-  ...
-# Subtest: Player cannot forge Actor, Token, or definition status changes through World push
-ok 7 - Player cannot forge Actor, Token, or definition status changes through World push
-  ---
-  duration_ms: 0.323925
-  ...
-# Subtest: World V2 mirror allows owned movement but keeps World structure GM-only
-ok 8 - World V2 mirror allows owned movement but keeps World structure GM-only
-  ---
-  duration_ms: 1.116349
-  ...
-# Subtest: client preflight rejects Character-era identity fields
-ok 9 - client preflight rejects Character-era identity fields
-  ---
-  duration_ms: 0.281437
-  ...
-1..9
-# tests 9
-# suites 0
-# pass 9
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 39.535847
-===== tests/multiplayer-protocol.test.js =====
-TAP version 13
-# Subtest: multiplayer socket URL follows current HTTP/HTTPS host
-ok 1 - multiplayer socket URL follows current HTTP/HTTPS host
-  ---
-  duration_ms: 0.445569
-  ...
-# Subtest: local host detection and role normalization
-ok 2 - local host detection and role normalization
-  ---
-  duration_ms: 0.095269
-  ...
-# Subtest: multiplayer name is bounded and sanitized
-ok 3 - multiplayer name is bounded and sanitized
-  ---
-  duration_ms: 0.149105
-  ...
-1..3
-# tests 3
-# suites 0
-# pass 3
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 32.985747
-===== tests/multiplayer-server.test.js =====
 TAP version 13
 # Subtest: health exposes only World bootstrap metadata for empty and initialized LAN state
 not ok 1 - health exposes only World bootstrap metadata for empty and initialized LAN state
   ---
-  duration_ms: 85.164522
+  duration_ms: 15124.581988
   location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:195:1'
-  failureType: 'testCodeFailure'
-  error: |-
-    Expected values to be strictly deep-equal:
-    + actual - expected
-    
-      {
-    +   activeSceneId: null,
-        initialized: false,
-        kind: 'empty',
-    +   mapPackage: null,
-    +   name: null,
-        ruleset: null,
-        schemaVersion: null,
-    +   worldId: 'default'
-      }
-    
-  code: 'ERR_ASSERTION'
-  name: 'AssertionError'
-  expected:
-    initialized: false
-    kind: 'empty'
-    schemaVersion: ~
-    ruleset: ~
-  actual:
-    initialized: false
-    kind: 'empty'
-    schemaVersion: ~
-    worldId: 'default'
-    name: ~
-    activeSceneId: ~
-    mapPackage: ~
-    ruleset: ~
-  operator: 'deepStrictEqual'
-  stack: |-
-    TestContext.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:199:12)
-    process.processTicksAndRejections (node:internal/process/task_queues:105:5)
-    async Test.run (node:internal/test_runner/test:935:9)
-    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
-  ...
-# Subtest: health identifies a persisted pre-World SaveV2 as an explicit LAN legacy bootstrap
-not ok 2 - health identifies a persisted pre-World SaveV2 as an explicit LAN legacy bootstrap
-  ---
-  duration_ms: 54.018425
-  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:221:1'
-  failureType: 'testCodeFailure'
-  error: |-
-    Expected values to be strictly deep-equal:
-    + actual - expected
-    
-      {
-    +   activeSceneId: null,
-        initialized: true,
-        kind: 'legacy',
-    +   mapPackage: null,
-    +   name: null,
-        ruleset: null,
-        schemaVersion: null,
-    +   worldId: 'default'
-      }
-    
-  code: 'ERR_ASSERTION'
-  name: 'AssertionError'
-  expected:
-    initialized: true
-    kind: 'legacy'
-    schemaVersion: ~
-    ruleset: ~
-  actual:
-    initialized: true
-    kind: 'legacy'
-    schemaVersion: ~
-    worldId: 'default'
-    name: ~
-    activeSceneId: ~
-    mapPackage: ~
-    ruleset: ~
-  operator: 'deepStrictEqual'
-  stack: |-
-    TestContext.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:233:12)
-    process.processTicksAndRejections (node:internal/process/task_queues:105:5)
-    async Test.run (node:internal/test_runner/test:935:9)
-    async Test.processPendingSubtests (node:internal/test_runner/test:633:7)
-  ...
-# Subtest: generic World operations commit atomically, broadcast patches, and recover idempotently
-not ok 3 - generic World operations commit atomically, broadcast patches, and recover idempotently
-  ---
-  duration_ms: 15058.642646
-  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:261:1'
   failureType: 'testCodeFailure'
   error: |-
     matching WebSocket message timeout after 15000ms
     Recent messages:
-    {"type":"error","code":"request_failed","message":"请求未完成，服务器保持运行。"}
+    {"type":"error","code":"request_failed","message":"请求失败：sendWelcome is not defined"}
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
+    listOnTimeout (node:internal/timers:594:17)
+    process.processTimers (node:internal/timers:529:7)
+  ...
+# Subtest: health identifies a persisted pre-World SaveV2 as an explicit LAN legacy bootstrap
+ok 2 - health identifies a persisted pre-World SaveV2 as an explicit LAN legacy bootstrap
+  ---
+  duration_ms: 81.979076
+  ...
+# Subtest: generic World operations commit atomically, broadcast patches, and recover idempotently
+not ok 3 - generic World operations commit atomically, broadcast patches, and recover idempotently
+  ---
+  duration_ms: 15086.794736
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:279:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching WebSocket message timeout after 15000ms
+    Recent messages:
+    {"type":"error","code":"request_failed","message":"请求失败：sendWelcome is not defined"}
   code: 'ERR_TEST_FAILURE'
   stack: |-
     Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
@@ -484,17 +39,153 @@ not ok 3 - generic World operations commit atomically, broadcast patches, and re
 # Subtest: generic World operations reuse Player ownership and status permission checks
 not ok 4 - generic World operations reuse Player ownership and status permission checks
   ---
-  duration_ms: 15057.618423
-  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:359:1'
+  duration_ms: 15084.54613
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:377:1'
   failureType: 'testCodeFailure'
   error: |-
     matching WebSocket message timeout after 15000ms
     Recent messages:
-    {"type":"error","code":"request_failed","message":"请求未完成，服务器保持运行。"}
+    {"type":"error","code":"request_failed","message":"请求失败：sendWelcome is not defined"}
   code: 'ERR_TEST_FAILURE'
   stack: |-
     Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
     listOnTimeout (node:internal/timers:594:17)
     process.processTimers (node:internal/timers:529:7)
   ...
-FAILED_OR_TIMED_OUT=124 FILE=tests/multiplayer-server.test.js
+# Subtest: generic World operation idempotency survives a LAN server restart
+not ok 5 - generic World operation idempotency survives a LAN server restart
+  ---
+  duration_ms: 15079.346976
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:464:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching WebSocket message timeout after 15000ms
+    Recent messages:
+    {"type":"error","code":"request_failed","message":"请求失败：sendWelcome is not defined"}
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
+    listOnTimeout (node:internal/timers:594:17)
+    process.processTimers (node:internal/timers:529:7)
+  ...
+# Subtest: clearing shared chat preserves active combat and actor health in LAN World
+not ok 6 - clearing shared chat preserves active combat and actor health in LAN World
+  ---
+  duration_ms: 15080.693582
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:503:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching WebSocket message timeout after 15000ms
+    Recent messages:
+    {"type":"error","code":"request_failed","message":"请求失败：sendWelcome is not defined"}
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
+    listOnTimeout (node:internal/timers:594:17)
+    process.processTimers (node:internal/timers:529:7)
+  ...
+# Subtest: GM status protocol is authoritative, revisioned, durable, and idempotent
+not ok 7 - GM status protocol is authoritative, revisioned, durable, and idempotent
+  ---
+  duration_ms: 15078.328403
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:533:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching WebSocket message timeout after 15000ms
+    Recent messages:
+    {"type":"error","code":"request_failed","message":"请求失败：sendWelcome is not defined"}
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
+    listOnTimeout (node:internal/timers:594:17)
+    process.processTimers (node:internal/timers:529:7)
+  ...
+# Subtest: failed status persistence does not advance revision, broadcast, or consume idempotency key
+not ok 8 - failed status persistence does not advance revision, broadcast, or consume idempotency key
+  ---
+  duration_ms: 15077.072776
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:681:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching WebSocket message timeout after 15000ms
+    Recent messages:
+    {"type":"error","code":"request_failed","message":"请求失败：sendWelcome is not defined"}
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
+    listOnTimeout (node:internal/timers:594:17)
+    process.processTimers (node:internal/timers:529:7)
+  ...
+# Subtest: status operation idempotency survives a LAN server restart
+not ok 9 - status operation idempotency survives a LAN server restart
+  ---
+  duration_ms: 15080.66523
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:723:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching WebSocket message timeout after 15000ms
+    Recent messages:
+    {"type":"error","code":"request_failed","message":"请求失败：sendWelcome is not defined"}
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
+    listOnTimeout (node:internal/timers:594:17)
+    process.processTimers (node:internal/timers:529:7)
+  ...
+# Subtest: GM approves Player identity; OWNER writes succeed while unowned and combat-locked writes fail
+not ok 10 - GM approves Player identity; OWNER writes succeed while unowned and combat-locked writes fail
+  ---
+  duration_ms: 15082.686845
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:758:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching WebSocket message timeout after 15000ms
+    Recent messages:
+    {"type":"error","code":"request_failed","message":"请求失败：sendWelcome is not defined"}
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
+    listOnTimeout (node:internal/timers:594:17)
+    process.processTimers (node:internal/timers:529:7)
+  ...
+# Subtest: GM can pre-create a User and Player can bind it with a reusable Player Key
+not ok 11 - GM can pre-create a User and Player can bind it with a reusable Player Key
+  ---
+  duration_ms: 15077.261908
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:873:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching WebSocket message timeout after 15000ms
+    Recent messages:
+    {"type":"error","code":"request_failed","message":"请求失败：sendWelcome is not defined"}
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
+    listOnTimeout (node:internal/timers:594:17)
+    process.processTimers (node:internal/timers:529:7)
+  ...
+# Subtest: GM Secret is mandatory; duplicate World IDs and client-forged system chat are rejected
+not ok 12 - GM Secret is mandatory; duplicate World IDs and client-forged system chat are rejected
+  ---
+  duration_ms: 15086.640752
+  location: '/home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:898:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    matching WebSocket message timeout after 15000ms
+    Recent messages:
+    {"type":"error","code":"request_failed","message":"请求失败：sendWelcome is not defined"}
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Timeout.<anonymous> (file:///home/runner/work/RPGmap/RPGmap/tests/multiplayer-server.test.js:20:14)
+    listOnTimeout (node:internal/timers:594:17)
+    process.processTimers (node:internal/timers:529:7)
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 1
+# fail 11
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 171076.377488
