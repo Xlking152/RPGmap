@@ -4,25 +4,32 @@ import {
   prepareRuntimeState,
 } from '../engine/runtime-state.js';
 import { createWorldV2FromRuntimeState, projectWorldV2ToRuntimeState } from '../world/model.js';
+import { canonicalWorldStorageKey, legacyMapWorldStorageKey } from '../world/manager.js';
 
-export function worldStateStorageKey(mapPackage) {
-  if (!mapPackage?.id) throw new Error('World persistence requires MapPackage id');
-  return `rpg-map:${mapPackage.id}:v1`;
+export function worldStateStorageKey(target) {
+  if (typeof target === 'string') return canonicalWorldStorageKey(target);
+  if (target?.worldId) return canonicalWorldStorageKey(target.worldId);
+  if (!target?.id) throw new Error('World persistence requires World id or MapPackage id');
+  // Compatibility for tests and explicit legacy migration callers. Modern
+  // startup always supplies worldId and therefore never uses this map key.
+  return legacyMapWorldStorageKey(target.id);
 }
 
-export function readStoredWorldState({ mapPackage, storageAdapter } = {}) {
+export function readStoredWorldState({ worldId = null, mapPackage, storageAdapter } = {}) {
   if (!storageAdapter?.get) throw new Error('World persistence requires storage adapter');
-  const storageKey = worldStateStorageKey(mapPackage);
+  const storageKey = worldId ? canonicalWorldStorageKey(worldId) : worldStateStorageKey(mapPackage);
   return Object.freeze({ storageKey, raw: storageAdapter.get(storageKey) });
 }
 
-function initialWorldState(mapPackage, ruleset) {
+function initialWorldState(mapPackage, ruleset, { worldId = 'world-default', worldName = '' } = {}) {
   const seed = createInitialRuntimeState(mapPackage, { ruleset });
-  const world = createWorldV2FromRuntimeState(seed, { mapPackage, ruleset });
+  const world = createWorldV2FromRuntimeState(seed, { mapPackage, ruleset, worldId, worldName });
   return projectWorldV2ToRuntimeState(seed, world, { mapPackage, ruleset });
 }
 
 export function createWorldStatePersistence({
+  worldId = null,
+  worldName = '',
   mapPackage,
   ruleset,
   storageAdapter,
@@ -37,7 +44,7 @@ export function createWorldStatePersistence({
   if (!storageAdapter?.get || !storageAdapter?.set) throw new Error('World persistence requires storage adapter');
   if (typeof getState !== 'function') throw new Error('World persistence requires getState()');
 
-  const storageKey = worldStateStorageKey(mapPackage);
+  const storageKey = worldId ? canonicalWorldStorageKey(worldId) : worldStateStorageKey(mapPackage);
   let saveTimer = null;
   let blocked = initialLoad?.blocked === true;
   let pendingInitialLoad = initialLoad;
@@ -57,7 +64,7 @@ export function createWorldStatePersistence({
     let raw = null;
     try {
       raw = Object.prototype.hasOwnProperty.call(options, 'raw') ? options.raw : storageAdapter.get(storageKey);
-      if (!raw) return { state: initialWorldState(mapPackage, ruleset), notice: null };
+      if (!raw) return { state: initialWorldState(mapPackage, ruleset, { worldId: worldId || 'world-default', worldName }), notice: null };
       const prepared = prepareRuntimeState(raw, { mapPackage, ruleset });
       if (!prepared.migrated) return { state: prepared.state, notice: null };
       try {
@@ -92,7 +99,7 @@ export function createWorldStatePersistence({
           notice = { message: '原存档无法读取且无法备份；自动保存已暂停', type: 'error' };
         }
       }
-      return { state: initialWorldState(mapPackage, ruleset), notice };
+      return { state: initialWorldState(mapPackage, ruleset, { worldId: worldId || 'world-default', worldName }), notice };
     }
   }
 
@@ -154,8 +161,10 @@ export function createWorldStatePersistence({
   };
 }
 
-export function prepareStoredWorldState({ mapPackage, ruleset, storageAdapter, raw } = {}) {
+export function prepareStoredWorldState({ worldId = null, worldName = '', mapPackage, ruleset, storageAdapter, raw } = {}) {
   const persistence = createWorldStatePersistence({
+    worldId,
+    worldName,
     mapPackage,
     ruleset,
     storageAdapter,
