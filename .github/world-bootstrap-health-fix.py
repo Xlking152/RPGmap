@@ -99,13 +99,3 @@ mp_source = mp_source.replace(
     });""",
 1)
 mp_test.write_text(mp_source)
-
-# TEMPORARY DIAGNOSTIC ONLY: expose the actual outer-catch exception in test
-# mode so a request_failed cannot hide the failing server boundary.
-server = Path('deployment/local-server/server.mjs')
-server_source = server.read_text()
-old_catch = "if (!socket.destroyed) sendSocket(socket, { type: 'error', code: 'request_failed', message: '请求未完成，服务器保持运行。' });"
-new_catch = "if (!socket.destroyed) sendSocket(socket, { type: 'error', code: 'request_failed', message: process.env.NODE_ENV === 'test' ? `请求失败：${error?.message || error}` : '请求未完成，服务器保持运行。' });"
-if old_catch not in server_source:
-    raise RuntimeError('Pattern not found: server request_failed catch')
-server.write_text(server_source.replace(old_catch, new_catch, 1))
