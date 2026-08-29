@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { prepareRuleset } from '../src/ruleset/contract.js';
 import { RulesetRegistry } from '../src/ruleset/registry.js';
 import { getActiveRuleset, rulesetRegistry, setActiveRuleset } from '../src/ruleset/index.js';
-import { hasWorldOperationRevisionGap, isWorldOperationChannelBusy } from '../src/multiplayer/controller.js';
+import { hasWorldOperationRevisionGap, isWorldOperationChannelBusy, shouldApplyOwnServerSnapshot } from '../src/multiplayer/controller.js';
 import { actorUiCapabilities } from '../src/entities/ui.js';
 import { renderActorHealthPanel } from '../src/health/sheet-extension.js';
 import { synchronizeWorldV2FromRuntimeState } from '../src/world/model.js';
@@ -51,6 +51,14 @@ test('operation commits require the next contiguous World revision', () => {
   assert.equal(hasWorldOperationRevisionGap({ baseRevision: 4, revision: 6 }, 4), true);
   assert.equal(hasWorldOperationRevisionGap({ baseRevision: '4', revision: 5 }, 4), true);
   assert.equal(hasWorldOperationRevisionGap({ baseRevision: 4, revision: null }, 4), true);
+});
+
+test('server-only chat snapshots are reapplied even when they originate from the sender', () => {
+  assert.equal(shouldApplyOwnServerSnapshot({ reason: 'chat.append' }), true);
+  assert.equal(shouldApplyOwnServerSnapshot({ reason: 'chat.clear' }), true);
+  assert.equal(shouldApplyOwnServerSnapshot({ reason: 'client-state' }), false);
+  assert.equal(shouldApplyOwnServerSnapshot({ reason: 'world.operation' }), false);
+  assert.equal(shouldApplyOwnServerSnapshot({}), false);
 });
 
 test('Ruleset references reject missing, unknown, and incompatible versions explicitly', () => {
