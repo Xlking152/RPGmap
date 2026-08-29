@@ -10,6 +10,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: world-bootstrap-v1
+  cancel-in-progress: true
+
 jobs:
   patch-and-test:
     runs-on: ubuntu-latest
@@ -24,12 +28,22 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - name: Apply integration patch
         run: python .github/world-bootstrap-patch.py
-      - name: Run tests with diagnostic capture
+      - name: Diagnose tests file by file
         shell: bash
         run: |
           set +e
-          npm test > /tmp/world-bootstrap-test.log 2>&1
-          CODE=$?
+          : > /tmp/world-bootstrap-test.log
+          CODE=0
+          for file in tests/*.test.js; do
+            echo "===== $file =====" | tee -a /tmp/world-bootstrap-test.log
+            timeout 45s node --test "$file" >> /tmp/world-bootstrap-test.log 2>&1
+            STEP=$?
+            if [ "$STEP" -ne 0 ]; then
+              echo "FAILED_OR_TIMED_OUT=$STEP FILE=$file" | tee -a /tmp/world-bootstrap-test.log
+              CODE=$STEP
+              break
+            fi
+          done
           if [ "$CODE" -ne 0 ]; then
             tail -n 500 /tmp/world-bootstrap-test.log > .github/world-bootstrap-test-failure.txt
             git config user.name "github-actions[bot]"
@@ -39,6 +53,7 @@ jobs:
             git push origin HEAD:feature/world-bootstrap-v1
             exit "$CODE"
           fi
+      - run: npm test
       - name: Check JavaScript syntax
         shell: bash
         run: find src deployment scripts tests -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check
