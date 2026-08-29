@@ -1,4 +1,4 @@
-# Minimal Reference MapPackage
+# 最小 Reference MapPackage
 
 这是 RPGmap 的最小参考地图，不追求美术效果，只用于验证 **MapPackage / Generic Feature UI / Core** 的边界。
 

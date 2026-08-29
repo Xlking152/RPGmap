@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.1.0
+
+- `Scene.featureStates` 成为门、机关、阻挡高度与扩展状态的唯一持久化权威；旧全局 Feature State 只在迁移入口读取，冲突会停止迁移而不覆盖原存档。
+- World Manager 首屏与地图 Runtime 分离；Leaflet、地图 CSS、兰州逻辑和 29 张 WebP 在选择 World/Scene 后动态加载，首屏静态 JS gzip 相对 PR #21 基线降低 78.75%。
+- Built-in Registry 在地图未加载时即可列出兰州城的 id、version 与 title；MapPackage 数据版本仍为 `1.0.5`。
+- Windows 发布包改为严格白名单，不再复制 raw `reference/`，统一 verifier 校验目录、版本、commit、Vite manifest、兰州资源、ZIP SHA-256 与 30% 体积门槛。
+- Windows smoke 现在验证 BAT、`/api/health`、World Manager、创建 World、动态 Runtime 与全部兰州 WebP；candidate/release 统一运行 audit、tracked syntax、bundle budget 和 package verifier。
+- 应用版本提升到 `2.1.0`；World schema 2、operation schema 1、Infinite Horror Ruleset `1.0.0` 和现有存档语义保持不变。
+
 ## v2.0.0
 
 - World schema 2 成为唯一持久化权威，Actor、Scene、Token、Combat、Effect 与状态通过通用 World operation schema 1 原子提交；完整 World 只保留在初始化、显式导入和恢复边界。
