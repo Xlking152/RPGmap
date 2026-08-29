@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.1.1
+
+- 修复地图 Runtime 在 Leaflet 设置中心和缩放前注册 Feature 控件，导致启动抛出 `Set map center and zoom first.` 并显示空白地图的问题。
+- Feature 控件现在只在地图 ready 后计算屏幕坐标；Runtime 在注册任何工具前先建立初始视野。
+- Windows packaged-server smoke 现在要求地图已有中心/缩放、兰州基础 SVG 已挂载且具有非零尺寸和地图图片，并捕获浏览器 `console.error`。
+- 新增地图初始化顺序与 Feature 控件 ready 边界测试；World schema 2、operation schema 1、Infinite Horror Ruleset `1.0.0` 与 MapPackage 数据版本 `1.0.5` 均保持不变。
+
 ## v2.1.0
 
 - `Scene.featureStates` 成为门、机关、阻挡高度与扩展状态的唯一持久化权威；旧全局 Feature State 只在迁移入口读取，冲突会停止迁移而不覆盖原存档。

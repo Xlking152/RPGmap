@@ -33,9 +33,9 @@ test('application chrome keeps the restrained neutral, river and brick palette',
   assert.match(styles, /\.section \{[\s\S]*?border-bottom: 1px solid var\(--line\);/);
   assert.doesNotMatch(styles, /linear-gradient/i);
   assert.equal(packageJson.dependencies.lucide, '1.30.0');
-  assert.equal(packageJson.version, '2.1.0');
-  assert.match(indexSource, /application-version" content="2\.1\.0"/);
-  assert.match(indexSource, /RPGmap 2\.1\.0/);
+  assert.equal(packageJson.version, '2.1.1');
+  assert.match(indexSource, /application-version" content="2\.1\.1"/);
+  assert.match(indexSource, /RPGmap 2\.1\.1/);
 });
 
 test('production registry splits the built-in map and large vendors without suppressing chunk warnings', () => {

@@ -102,6 +102,27 @@ function canOperateFeatureControl(api) {
   return status.permissions?.interactFeatures === true;
 }
 
+export function canProjectMapCoordinates(map) {
+  if (!map || typeof map.latLngToContainerPoint !== 'function') return false;
+  try {
+    return Boolean(map.getCenter?.()) && Number.isFinite(map.getZoom?.());
+  } catch {
+    return false;
+  }
+}
+
+export function positionFeatureControls(map, controls, mapHeight) {
+  if (!canProjectMapCoordinates(map)) return false;
+  for (const { descriptor, button } of controls.values()) {
+    const point = map.latLngToContainerPoint(
+      worldToLatLng({ x: descriptor.anchor[0], y: descriptor.anchor[1] }, mapHeight),
+    );
+    button.style.left = `${Math.round(point.x)}px`;
+    button.style.top = `${Math.round(point.y)}px`;
+  }
+  return true;
+}
+
 export function createFeatureControlLayer() {
   return {
     register(api) {
@@ -160,15 +181,7 @@ export function createFeatureControlLayer() {
         controls.set(String(feature.id), { feature, descriptor, button });
       }
 
-      const positionControls = () => {
-        for (const { descriptor, button } of controls.values()) {
-          const point = api.map.latLngToContainerPoint(
-            worldToLatLng({ x: descriptor.anchor[0], y: descriptor.anchor[1] }, api.mapPackage.height),
-          );
-          button.style.left = `${Math.round(point.x)}px`;
-          button.style.top = `${Math.round(point.y)}px`;
-        }
-      };
+      const positionControls = () => positionFeatureControls(api.map, controls, api.mapPackage.height);
 
       function syncControls() {
         const allowed = canOperateFeatureControl(api);
@@ -197,6 +210,7 @@ export function createFeatureControlLayer() {
         api.on?.('state:import', syncControls),
       ].filter(Boolean);
 
+      api.map.whenReady?.(positionControls);
       syncControls();
 
       api.featureControls = Object.freeze({
