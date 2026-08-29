@@ -24,7 +24,7 @@ function definition(changes) {
   };
 }
 
-test('server definition edits refresh Actor projections and status metadata atomically', () => {
+test('server definition edits keep Effect instances runtime-only and update canonical rules atomically', () => {
   let state = applyStatusMessage(world(), {
     type: 'status.definition.upsert', definition: definition([
       { target: 'resources.hp.max', mode: 'add', value: 1 },
@@ -33,7 +33,10 @@ test('server definition edits refresh Actor projections and status metadata atom
   state = applyStatusMessage(state, {
     type: 'status.apply', scope: 'actor', targetId: 'actor-a', statusId: 'status-ward', stacks: 2,
   }, { now: '2026-08-27T00:00:00.000Z' }).state;
-  assert.deepEqual(state.preferences.entitySystem.actors[0].effects[0].changes, [
+  const effectBeforeDefinitionEdit = structuredClone(state.preferences.entitySystem.actors[0].effects[0]);
+  assert.equal(Object.hasOwn(effectBeforeDefinitionEdit, 'changes'), false);
+  assert.deepEqual(state.preferences.entitySystem.statusDefinitions
+    .find(item => item.id === 'status-ward').changes, [
     { target: 'resources.hp.max', mode: 'add', value: 1 },
   ]);
 
@@ -42,7 +45,10 @@ test('server definition edits refresh Actor projections and status metadata atom
       { target: 'resources.hp.max', mode: 'add', value: 3 },
     ]),
   }).state;
-  assert.deepEqual(state.preferences.entitySystem.actors[0].effects[0].changes, [
+  assert.deepEqual(state.preferences.entitySystem.actors[0].effects[0], effectBeforeDefinitionEdit);
+  assert.equal(Object.hasOwn(state.preferences.entitySystem.actors[0].effects[0], 'changes'), false);
+  assert.deepEqual(state.preferences.entitySystem.statusDefinitions
+    .find(item => item.id === 'status-ward').changes, [
     { target: 'resources.hp.max', mode: 'add', value: 3 },
   ]);
 
@@ -54,6 +60,7 @@ test('server definition edits refresh Actor projections and status metadata atom
   assert.deepEqual({ stacks: effect.stacks, enabled: effect.enabled, note: effect.note }, {
     stacks: 4, enabled: false, note: '由场景压制',
   });
+  assert.equal(Object.hasOwn(effect, 'changes'), false);
   assert.doesNotThrow(() => assertStatusState(state.preferences.entitySystem));
 });
 
@@ -81,4 +88,24 @@ test('server reads built-ins from World and strips forged builtIn flags from cus
     definition: { ...definition([]), id: 'status-forged', builtIn: true },
   }).state;
   assert.equal(state.preferences.entitySystem.statusDefinitions.find(item => item.id === 'status-forged').builtIn, false);
+});
+
+
+test('modern server schema rejects Definition-owned fields on Effect instances', () => {
+  const forgedValues = {
+    name: '伪造状态名', label: '伪造标签', description: '伪造描述', icon: 'shield',
+    color: '#225588', category: 'buff', scope: 'actor', scopes: ['actor'], maxStacks: 2,
+    capabilities: {}, statusId: 'status-rooted', changes: [],
+  };
+  for (const [key, value] of Object.entries(forgedValues)) {
+    const initial = world();
+    initial.preferences.entitySystem.actors[0].effects.push({
+      id: `effect-forged-${key}`, definitionId: 'status-rooted', stacks: 1, enabled: true, [key]: value,
+    });
+    assert.throws(
+      () => assertStatusState(initial.preferences.entitySystem),
+      error => error?.code === 'status_instance_rule_data_forbidden',
+      `modern EffectInstance should reject Definition-owned field: ${key}`,
+    );
+  }
 });

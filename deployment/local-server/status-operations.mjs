@@ -23,6 +23,10 @@ const SCOPES = new Set(['actor', 'token']);
 const CHANGE_MODES = new Set(['add', 'set', 'multiply', 'min', 'max']);
 const CAPABILITY_KEYS = new Set(['canMove', 'canInteract', 'canActInCombat', 'collisionBypassGroups']);
 const CATEGORIES = new Set(['buff', 'debuff', 'trait', 'status']);
+const DEFINITION_OWNED_EFFECT_KEYS = Object.freeze([
+  'name', 'label', 'description', 'icon', 'color', 'category', 'scope', 'scopes',
+  'maxStacks', 'capabilities', 'statusId', 'changes',
+]);
 const STATUS_ICON_NAMES = new Set([
   'activity', 'anchor', 'ban', 'bomb', 'building', 'building-2', 'circle-alert',
   'circle-dot', 'circle-slash', 'door-closed', 'droplet', 'eye', 'eye-off',
@@ -163,6 +167,13 @@ export function assertStatusInstance(value, label, { definitions, scope, legacy 
     if (legacy && typeof effect.name === 'string' && Array.isArray(effect.changes)) return effect;
     fail(`${label}.definitionId is required`, 'invalid_status_reference');
   }
+  if (!legacy) {
+    for (const key of DEFINITION_OWNED_EFFECT_KEYS) {
+      if (Object.hasOwn(effect, key)) {
+        fail(`${label}.${key} belongs to StatusDefinition, not EffectInstance`, 'status_instance_rule_data_forbidden');
+      }
+    }
+  }
   const definition = definitions.get(definitionId) || null;
   if (!definition) fail(`${label} references missing definition: ${definitionId}`, 'invalid_status_reference');
   if (!definition.scopes.includes(scope)) fail(`${label} cannot be applied to ${scope}`, 'status_scope_forbidden');
@@ -269,17 +280,6 @@ function applyOne(state, message, context) {
         .filter(effect => String(effect.definitionId) === definition.id).map(effect => Number(effect.stacks) || 1)));
       if (definition.maxStacks < maxInUse) fail('maxStacks is lower than an applied stack count', 'status_definition_in_use');
       entities.statusDefinitions[index] = definition;
-      // Legacy Entity resolution still reads a projected `changes` array from
-      // Actor effects. Keep that projection synchronized with the canonical
-      // World definition so an edited definition takes effect immediately on
-      // every LAN client.
-      for (const actor of entities.actors) {
-        for (const effect of actor.effects || []) {
-          if (String(effect.definitionId) !== definition.id) continue;
-          if (definition.changes.length) effect.changes = structuredClone(definition.changes);
-          else delete effect.changes;
-        }
-      }
     }
     return { action: 'definition.upsert', definitionId: definition.id };
   }
@@ -323,7 +323,6 @@ function applyOne(state, message, context) {
         source: sourceFor(message, context),
         createdAt: context.now,
       };
-      if (scope === 'actor' && definition.changes?.length) effect.changes = structuredClone(definition.changes);
       effects.push(effect);
     }
     return { action: 'apply', scope, targetId, definitionId };

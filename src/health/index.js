@@ -3,7 +3,6 @@ import { createHealthSheetExtension } from './sheet-extension.js';
 import { createHealthTokenBars } from './token-bars.js';
 
 export * from './model.js';
-export * from './actor.js';
 
 export function createHealthSystem() {
   const controller = createHealthController();

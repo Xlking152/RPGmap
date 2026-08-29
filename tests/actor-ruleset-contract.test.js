@@ -1,19 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readdir, readFile } from 'node:fs/promises';
+import { access, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   describeActor,
   describeActorSheet,
   listActorAttributePaths,
-  normalizeActorDocument,
   performActorOperation,
   resolveActorAttribute,
   validateActorDocument,
 } from '../src/actor/index.js';
-import { addEffect, resolveActor } from '../src/entities/resolver.js';
+import { resolveActor } from '../src/entities/resolver.js';
 import { normalizeEntityState } from '../src/entities/model.js';
+import { resolveActorEffects } from '../src/status/model.js';
 import { normalizeWorldV2 } from '../src/world/model.js';
 import { resolveTokenActor } from '../src/token/actor.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
@@ -64,13 +64,21 @@ function legacyActor() {
   };
 }
 
-test('Infinite Horror migrates the legacy Actor payload into a stable generic shell without data loss', () => {
-  const state = normalizeEntityState({
+function normalizedLegacyState() {
+  return normalizeEntityState({
     schemaVersion: 3,
     statusDefinitions: [{ id: 'custom-status', name: '自定义状态', scopes: ['actor'], changes: [], builtIn: false }],
     actors: [legacyActor()],
     tokens: [{ id: 'token-legacy', actorId: 'actor-legacy', actorLink: true, effects: [] }],
   });
+}
+
+function actorContext(state, actor) {
+  return { effects: resolveActorEffects(actor, state.statusDefinitions) };
+}
+
+test('Infinite Horror migrates legacy HP base/runtime into independent Health data', () => {
+  const state = normalizedLegacyState();
   const actor = state.actors[0];
   assert.deepEqual(Object.keys(actor).sort(), [
     'createdAt', 'effects', 'id', 'name', 'notes', 'system', 'updatedAt',
@@ -80,46 +88,59 @@ test('Infinite Horror migrates the legacy Actor payload into a stable generic sh
   assert.equal(actor.system.currentFormId, 'form-legacy');
   assert.equal(actor.system.runtime.customResources[0].id, 'focus');
   assert.equal(actor.system.runtime.badStatuses['bad-status-32'], 3);
+  assert.equal(actor.system.runtime.resources.hp, undefined);
+  assert.equal(actor.system.forms[0].resourceBases.hp, undefined);
+  assert.equal(actor.system.forms[0].healthBase.baseMax, 12);
   assert.equal(actor.effects[0].id, 'effect-old');
+  assert.equal('changes' in actor.effects[0], false);
   assert.equal(state.statusDefinitions[0].id, 'custom-status');
   assert.equal(state.tokens[0].actorId, actor.id);
 
-  const derived = resolveActor(actor);
+  const derived = resolveActor(actor, actorContext(state, actor));
   assert.equal(derived.health.bashing, 2);
   assert.equal(derived.health.lethal, 2);
   assert.equal(derived.health.aggravated, 1);
-  assert.equal(derived.resources.find(item => item.id === 'hp').max, 14);
+  assert.equal(derived.health.max, 14);
+  assert.equal(derived.resources.some(item => item.id === 'hp'), false);
   assert.equal(derived.attributes.find(item => item.id === 'strength').value, 6);
   assert.equal(derived.badStatuses[0].current, 3);
   assert.deepEqual(validateActorDocument(actor), []);
 });
 
-test('Actor presentation, attribute paths, and generic runtime operations are ruleset-owned', () => {
-  const actor = normalizeActorDocument(legacyActor());
-  const presentation = describeActor(actor);
-  const sheet = describeActorSheet(actor);
+test('Actor presentation exposes canonical Health paths and Resource operations cannot mutate HP', () => {
+  const state = normalizedLegacyState();
+  const actor = state.actors[0];
+  const context = actorContext(state, actor);
+  const presentation = describeActor(actor, context);
+  const sheet = describeActorSheet(actor, context);
+  const paths = listActorAttributePaths(actor, context).map(item => item.path);
+  const resourceSection = sheet.tabs.find(tab => tab.id === 'overview')?.sections.find(section => section.id === 'resources');
   assert.equal(presentation.variantLabel, '旧形态');
   assert.equal(presentation.color, '#123456');
   assert.ok(sheet.tabs.some(tab => tab.id === 'bad-status'));
-  assert.ok(listActorAttributePaths(actor).some(item => item.path === 'system.resources.hp.current'));
-  assert.equal(resolveActorAttribute(actor, 'system.attributes.strength'), 6);
+  assert.ok(paths.includes('system.health.max'));
+  assert.equal(paths.some(item => item.startsWith('system.resources.hp.')), false);
+  assert.equal(resourceSection.items.some(item => item.id === 'hp'), false);
+  assert.equal(resolveActorAttribute(actor, 'system.attributes.strength', context), 6);
+  assert.equal(resolveActorAttribute(actor, 'system.health.max', context), 14);
 
+  performActorOperation(actor, { type: 'health.set-mode', mode: 'simple' }, context);
   const operation = performActorOperation(actor, {
-    type: 'resource.set-current',
-    resourceId: 'hp',
-    value: 4,
-  });
+    type: 'health.runtime',
+    operation: { type: 'set-current', value: 4 },
+  }, context);
   assert.equal(operation.changed, true);
-  assert.equal(resolveActorAttribute(actor, 'system.resources.hp.current'), 4);
+  assert.equal(resolveActorAttribute(actor, 'system.health.current', context), 4);
+  assert.equal(actor.system.runtime.health.current, 4);
+  assert.equal(actor.system.runtime.resources.hp, undefined);
 
-  const effect = addEffect(actor, {
-    changes: [{ target: 'resources.hp.max', mode: 'add', value: 3 }],
-  });
-  assert.equal(effect.changes[0].target, 'system.resources.hp.max');
-  assert.equal(resolveActorAttribute(actor, 'system.resources.hp.max'), 17);
+  const rejected = performActorOperation(actor, { type: 'resource.set-current', resourceId: 'hp', value: 2 }, context);
+  assert.equal(rejected.changed, false);
+  assert.equal(rejected.blocked, 'resource_not_found');
+  assert.equal(actor.system.runtime.health.current, 4);
 });
 
-test('legacy Synthetic Actor deltas migrate into system-relative deltas without changing the template', () => {
+test('legacy wound Health wins over a stale resource-only Synthetic Actor HP mirror', () => {
   const world = normalizeWorldV2({
     schemaVersion: 2,
     id: 'world-test',
@@ -146,10 +167,20 @@ test('legacy Synthetic Actor deltas migrate into system-relative deltas without 
   });
   const token = world.scenes[0].tokens[0];
   assert.equal(Object.hasOwn(token.actorDelta, 'runtime'), false);
-  assert.equal(token.actorDelta.system.runtime.resources.hp.current, 3);
+  assert.equal(token.actorDelta.system?.runtime?.resources?.hp, undefined);
   const resolved = resolveTokenActor(world, token.id);
-  assert.equal(resolveActor(resolved.actor).resources.find(item => item.id === 'hp').current, 3);
-  assert.equal(resolveActor(resolved.baseActor).resources.find(item => item.id === 'hp').current, 7);
+  assert.equal(resolveActor(resolved.actor).health.current, 9);
+  assert.equal(resolveActor(resolved.baseActor).health.current, 9);
+});
+
+test('retired Health/Resource bridges are physically absent from live source', async () => {
+  await assert.rejects(access(path.join(repositoryRoot, 'src', 'health', 'actor.js')));
+  const healthModel = await readFile(path.join(repositoryRoot, 'src', 'health', 'model.js'), 'utf8');
+  const healthSheet = await readFile(path.join(repositoryRoot, 'src', 'health', 'sheet-extension.js'), 'utf8');
+  const rulesetActor = await readFile(path.join(repositoryRoot, 'src', 'rulesets', 'infinite-horror', 'actor.js'), 'utf8');
+  assert.doesNotMatch(healthModel, /active-compat|hideBaseResource/);
+  assert.doesNotMatch(healthSheet, /health-base|hideBaseResource|ui-resource-mini/);
+  assert.doesNotMatch(rulesetActor, /resourceId\) === 'hp'|resource\.id === 'hp'|resources\.find\([^\n]*'hp'/);
 });
 
 test('Core Actor consumers do not read Infinite Horror legacy storage fields', async () => {

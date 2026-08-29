@@ -48,7 +48,7 @@ test('damage to one unlinked Token writes actorDelta and leaves its Base Actor a
   await api.tokens.create({ actorId: 'actor-template', id: 'npc-a', actorLink: false, x: 1, y: 1 });
   await api.tokens.create({ actorId: 'actor-template', id: 'npc-b', actorLink: false, x: 2, y: 2 });
 
-  const results = api.health.applyDamageToTokenIds(['npc-a'], { amount: 3, type: 'L' });
+  const results = await api.health.applyDamageToTokenIds(['npc-a'], { amount: 3, type: 'L' });
   assert.equal(results.length, 1);
   assert.equal(results[0].synthetic, true);
   assert.equal(api.health.resolveToken('npc-a').current, 7);
@@ -57,7 +57,8 @@ test('damage to one unlinked Token writes actorDelta and leaves its Base Actor a
 
   const damagedToken = api.tokens.get('npc-a');
   assert.equal(damagedToken.actorLink, false);
-  assert.equal(damagedToken.actorDelta.system.runtime.resources.hp.current, 7);
+  assert.equal(damagedToken.actorDelta.system.runtime.health.current, 7);
+  assert.equal(damagedToken.actorDelta.system.runtime.resources?.hp, undefined);
 });
 
 test('two unlinked Tokens sharing one template take damage independently', async () => {
@@ -65,7 +66,7 @@ test('two unlinked Tokens sharing one template take damage independently', async
   await api.tokens.create({ actorId: 'actor-template', id: 'npc-a', actorLink: false });
   await api.tokens.create({ actorId: 'actor-template', id: 'npc-b', actorLink: false });
 
-  const results = api.health.applyDamageToTokenIds(['npc-a', 'npc-b'], { amount: 2 });
+  const results = await api.health.applyDamageToTokenIds(['npc-a', 'npc-b'], { amount: 2 });
   assert.equal(results.length, 2);
   assert.equal(api.health.resolveToken('npc-a').current, 8);
   assert.equal(api.health.resolveToken('npc-b').current, 8);
@@ -77,7 +78,7 @@ test('linked Tokens still share the World Actor and selected duplicates only app
   await api.tokens.create({ actorId: 'actor-template', id: 'pc-a', actorLink: true });
   await api.tokens.create({ actorId: 'actor-template', id: 'pc-b', actorLink: true });
 
-  const results = api.health.applyDamageToTokenIds(['pc-a', 'pc-b'], { amount: 2 });
+  const results = await api.health.applyDamageToTokenIds(['pc-a', 'pc-b'], { amount: 2 });
   assert.equal(results.length, 1);
   assert.equal(results[0].synthetic, false);
   assert.equal(api.health.resolveActor('actor-template').current, 8);
@@ -90,18 +91,65 @@ test('healing an unlinked Token updates only that Token delta', async () => {
   await api.tokens.create({
     actorId: 'actor-template', id: 'npc-a', actorLink: false,
     actorDelta: {
-      runtime: {
-        resources: { hp: { current: 4 } },
-        health: { mode: 'simple' },
+      system: {
+        runtime: {
+          health: { mode: 'simple', current: 4 },
+        },
       },
     },
   });
   await api.tokens.create({ actorId: 'actor-template', id: 'npc-b', actorLink: false });
 
-  const results = api.health.applyHealingToTokenIds(['npc-a'], { amount: 3 });
+  const results = await api.health.applyHealingToTokenIds(['npc-a'], { amount: 3 });
   assert.equal(results.length, 1);
   assert.equal(results[0].synthetic, true);
   assert.equal(api.health.resolveToken('npc-a').current, 7);
   assert.equal(api.health.resolveToken('npc-b').current, 10);
   assert.equal(api.health.resolveActor('actor-template').current, 10);
+});
+
+test('mixed linked and Synthetic health changes commit as one atomic World batch', async () => {
+  const { api } = fixture();
+  await api.tokens.create({ actorId: 'actor-template', id: 'pc-a', actorLink: true });
+  await api.tokens.create({ actorId: 'actor-template', id: 'npc-a', actorLink: false });
+
+  const calls = [];
+  const original = api.world.performOperations.bind(api.world);
+  api.world.performOperations = async (operations, options) => {
+    calls.push({ operations: structuredClone(operations), options: structuredClone(options) });
+    return original(operations, options);
+  };
+
+  const results = await api.health.applyDamageToTokenIds(['pc-a', 'npc-a'], { amount: 2 });
+  assert.equal(results.length, 2);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].operations.map(operation => operation.type).sort(), [
+    'actor.upsert',
+    'token.actorDelta.replace',
+  ]);
+  assert.equal(calls[0].options.kind, 'health');
+  assert.equal(api.health.resolveActor('actor-template').current, 8);
+  assert.equal(api.health.resolveToken('npc-a').current, 8);
+});
+
+
+test('rejected Health World batch leaves canonical Actor and Token state untouched', async () => {
+  const { api } = fixture();
+  await api.tokens.create({ actorId: 'actor-template', id: 'pc-a', actorLink: true });
+  await api.tokens.create({ actorId: 'actor-template', id: 'npc-a', actorLink: false });
+
+  const emitted = [];
+  api.emit = (type, detail) => emitted.push({ type, detail });
+  api.world.performOperations = async () => {
+    throw Object.assign(new Error('conflict'), { code: 'world_state_stale' });
+  };
+
+  await assert.rejects(
+    api.health.applyDamageToTokenIds(['pc-a', 'npc-a'], { amount: 3 }),
+    error => error?.code === 'world_state_stale',
+  );
+  assert.equal(api.health.resolveActor('actor-template').current, 10);
+  assert.equal(api.health.resolveToken('pc-a').current, 10);
+  assert.equal(api.health.resolveToken('npc-a').current, 10);
+  assert.equal(emitted.some(event => event.type === 'health:change'), false);
 });

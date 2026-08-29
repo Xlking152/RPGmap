@@ -1,15 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  listActorAttributePaths,
   normalizeActorDocument,
   performActorOperation,
+  resolveActorAttribute,
 } from '../src/actor/index.js';
-import { addEffect } from '../src/entities/resolver.js';
 import { parseActorSheets } from '../src/entities/xlsx-importer.js';
 import { describeHealth } from '../src/health/model.js';
 import { prepareRuleset } from '../src/ruleset/contract.js';
 import { setActiveRuleset } from '../src/ruleset/index.js';
-import { resolveStatuses } from '../src/status/model.js';
+import { resolveActorEffects, resolveStatuses } from '../src/status/model.js';
 
 function contextualRuleset(id) {
   return prepareRuleset({
@@ -23,10 +24,11 @@ function contextualRuleset(id) {
         system: actor?.system || { value: 0 },
       }),
       normalizeSystem: system => ({ ...structuredClone(system || {}), normalizedBy: id }),
-      derive: actor => ({
+      derive: (actor, context = {}) => ({
         id: actor.id,
         name: actor.name,
         health: { current: Number(actor.system.value) || 0, max: 10, status: id },
+        effects: context.effects || [],
       }),
       attributePaths: () => [{ path: 'system.value', label: id, kind: 'number' }],
       resolveAttribute: (actor, path) => path === 'system.value' ? actor.system.value : null,
@@ -88,7 +90,7 @@ test('explicit Ruleset contexts stay isolated when two runtimes interleave', () 
   assert.deepEqual(parseActorSheets({}, { ruleset: second }), { parsedBy: 'context-second' });
 });
 
-test('Ruleset Contract keeps private data behind operations and reports unknown boundaries', () => {
+test('Ruleset Contract keeps private data behind operations and StatusDefinition effects stay external to Actor instances', () => {
   const ruleset = contextualRuleset('contract-errors');
   assert.equal(Object.hasOwn(ruleset.actor, 'badStatusDefinitions'), false);
   const actor = normalizeActorDocument({ id: 'actor-a', name: 'A', system: { value: 4 } }, { ruleset });
@@ -97,13 +99,25 @@ test('Ruleset Contract keeps private data behind operations and reports unknown 
   assert.deepEqual(result, { changed: false, blocked: 'unknown_actor_operation' });
   assert.deepEqual(actor.system, before);
 
-  const effect = addEffect(actor, {
-    changes: [{ target: 'value', mode: 'add', value: 2 }],
-  }, { ruleset });
-  assert.equal(effect.changes[0].target, 'system.value');
-  assert.throws(() => addEffect(actor, {
-    changes: [{ target: 'system.secret', mode: 'add', value: 1 }],
-  }, { ruleset }), error => error.code === 'unknown_actor_attribute_path');
+  actor.effects = [{
+    id: 'effect-value',
+    definitionId: 'status-value',
+    stacks: 1,
+    enabled: true,
+  }];
+  const effects = resolveActorEffects(actor, [{
+    id: 'status-value',
+    name: 'Value Bonus',
+    scopes: ['actor'],
+    maxStacks: 1,
+    changes: [{ target: 'system.value', mode: 'add', value: 2 }],
+    capabilities: {},
+  }]);
+  assert.equal('changes' in actor.effects[0], false);
+  assert.deepEqual(effects[0].changes, [{ target: 'system.value', mode: 'add', value: 2 }]);
+  assert.deepEqual(listActorAttributePaths(actor, { ruleset }).map(item => item.path), ['system.value']);
+  assert.equal(resolveActorAttribute(actor, 'system.value', { ruleset }), 4);
+  assert.equal(resolveActorAttribute(actor, 'system.secret', { ruleset }), null);
 
   const noImporter = prepareRuleset({
     apiVersion: 1,

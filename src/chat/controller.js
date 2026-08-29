@@ -191,7 +191,7 @@ export function createChatController({ selection } = {}) {
         }
       });
 
-      panel.addEventListener('submit', event => {
+      panel.addEventListener('submit', async event => {
         if (event.target.matches('[data-chat-message-form]')) {
           event.preventDefault();
           const input = event.target.querySelector('[data-chat-message-input]');
@@ -208,7 +208,18 @@ export function createChatController({ selection } = {}) {
           if (!Number.isFinite(amount) || amount <= 0) { status('应用伤害：请输入大于 0 的伤害点数'); return; }
           const ids = selectedIds();
           if (!ids.length) { status('应用伤害：请先选择一个或多个 Token'); return; }
-          const results = api.damage?.applyToSelected?.({ amount, type }) || api.health?.applyDamageToTokenIds?.(ids, { amount, type }) || [];
+          let results;
+          try {
+            results = api.damage?.applyToSelected
+              ? await api.damage.applyToSelected({ amount, type })
+              : api.health?.applyDamageToTokenIds
+                ? await api.health.applyDamageToTokenIds(ids, { amount, type })
+                : [];
+          } catch (error) {
+            console.error('[RPGmap Chat] damage operation failed', error);
+            status(`应用伤害失败：${error?.message || error}`);
+            return;
+          }
           if (!results.length) { status('应用伤害：当前选择中没有可用 Actor'); return; }
           const targets = results.map(result => ({
             actorId: result.actorId,
@@ -233,7 +244,18 @@ export function createChatController({ selection } = {}) {
           if (!Number.isFinite(amount) || amount <= 0) { status('恢复生命：请输入大于 0 的恢复数值'); return; }
           const ids = selectedIds();
           if (!ids.length) { status('恢复生命：请先选择一个或多个 Token'); return; }
-          const results = api.healing?.applyToSelected?.({ amount, type }) || api.health?.applyHealingToTokenIds?.(ids, { amount, type }) || [];
+          let results;
+          try {
+            results = api.healing?.applyToSelected
+              ? await api.healing.applyToSelected({ amount, type })
+              : api.health?.applyHealingToTokenIds
+                ? await api.health.applyHealingToTokenIds(ids, { amount, type })
+                : [];
+          } catch (error) {
+            console.error('[RPGmap Chat] healing operation failed', error);
+            status(`恢复生命失败：${error?.message || error}`);
+            return;
+          }
           if (!results.length) { status('恢复生命：没有可操作的角色；Player 只能恢复自己的当前回合角色'); return; }
           const applied = results.reduce((total, result) => total + Number(result.applied || 0), 0);
           if (!applied) {

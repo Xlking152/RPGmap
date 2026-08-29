@@ -5,6 +5,7 @@ import {
   resolveStatuses,
   statusStateFingerprint,
 } from './model.js';
+import { validateStatusDefinitionForActors } from './target-validation.js';
 
 const ENTITY_PREFERENCE_KEY = 'entitySystem';
 
@@ -85,6 +86,50 @@ export function createStatusController() {
 
       function definitions() {
         return getStatusDefinitions(currentEntityState());
+      }
+
+      function definitionById(state, definitionId) {
+        return getStatusDefinitions(state).find(definition =>
+          String(definition.id) === String(definitionId || '')) || null;
+      }
+
+      function affectedActors(state, definitionId, actorId = null) {
+        const result = new Map();
+        const add = (key, actor) => { if (actor) result.set(String(key), actor); };
+        if (actorId != null) {
+          add(`actor:${actorId}`, (state.actors || []).find(actor => String(actor?.id) === String(actorId)));
+        }
+        for (const actor of state.actors || []) {
+          if ((actor.effects || []).some(effect => String(effect?.definitionId) === String(definitionId))) {
+            add(`actor:${actor.id}`, actor);
+          }
+        }
+        if (typeof api.tokens?.resolveActor === 'function') {
+          for (const token of state.tokens || []) {
+            if (token?.actorLink !== false) continue;
+            let resolved = null;
+            try { resolved = api.tokens.resolveActor(token.id); } catch { resolved = null; }
+            if (!resolved?.synthetic || !resolved.actor) continue;
+            if ((resolved.actor.effects || []).some(effect => String(effect?.definitionId) === String(definitionId))) {
+              add(`synthetic:${token.id}`, resolved.actor);
+            }
+          }
+        }
+        return [...result.values()];
+      }
+
+      function canonicalDefinition(definition, options = {}) {
+        const state = currentEntityState();
+        const actors = affectedActors(state, definition?.id, options?.actorId);
+        return validateStatusDefinitionForActors(definition, actors, api.ruleset);
+      }
+
+      function validateApplyPayload(payload) {
+        if (payload?.scope !== 'actor') return;
+        const state = currentEntityState();
+        const actor = (state.actors || []).find(item => String(item?.id) === String(payload.targetId));
+        const definition = definitionById(state, payload.definitionId ?? payload.statusId);
+        if (actor && definition) validateStatusDefinitionForActors(definition, [actor], api.ruleset);
       }
 
       function resolve(context = {}, tokenId = null) {
@@ -172,8 +217,10 @@ export function createStatusController() {
         }
       }
 
-      function apply(input, targetId, definitionId, options) {
-        return perform('status.apply', targetPayload(input, targetId, definitionId, options));
+      async function apply(input, targetId, definitionId, options) {
+        const payload = targetPayload(input, targetId, definitionId, options);
+        validateApplyPayload(payload);
+        return perform('status.apply', payload);
       }
 
       function remove(input, targetId, definitionId, options) {
@@ -215,13 +262,17 @@ export function createStatusController() {
         return perform('status.setStacks', payload);
       }
 
-      function applyBatch(operations = []) {
+      async function applyBatch(operations = []) {
         const values = Array.isArray(operations) ? operations.map(operation => clone(operation)) : [];
+        for (const operation of values) {
+          if (operation?.type === 'status.apply') validateApplyPayload(operation);
+        }
         return perform('status.batch', { operations: values });
       }
 
-      function upsertDefinition(definition) {
-        return perform('status.definition.upsert', { definition: clone(definition) });
+      async function upsertDefinition(definition, options = {}) {
+        const canonical = canonicalDefinition(definition, options);
+        return perform('status.definition.upsert', { definition: canonical });
       }
 
       function deleteDefinition(definitionId) {

@@ -113,6 +113,7 @@ export function prepareRuleset(raw = {}) {
     statuses: Object.freeze({
       definitions: frozenArray(statuses.definitions),
       derive: optionalFunction(statuses.derive),
+      canonicalizeChangeTarget: optionalFunction(statuses.canonicalizeChangeTarget),
     }),
     importers: Object.freeze({ ...importers }),
     metadata: Object.freeze({ ...(raw.metadata || {}) }),

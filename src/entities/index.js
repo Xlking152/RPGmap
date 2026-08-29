@@ -1,7 +1,7 @@
 import { createEntityUiTool } from './ui.js';
 
 export { createEmptyEntityState, createActorFromImport, createFormFromImport, createTokenForActor, normalizeEntityState, actorForToken, currentForm, addFormToActor } from './model.js';
-export { resolveActor, resolveAttribute, resolveResource, setResourceCurrent, setResourceMaxOverride, setAttributeAdjustment, addCustomResource, removeCustomResource, setActorForm, cycleActorForm, addEffect } from './resolver.js';
+export { resolveActor, resolveAttribute, resolveResource, setResourceCurrent, setResourceMaxOverride, setAttributeAdjustment, addCustomResource, removeCustomResource, setActorForm, cycleActorForm } from './resolver.js';
 export { parseSharedStrings, parseWorksheetCells, parseRelationships, parseWorkbookSheets, resolveZipPath, readXlsxCachedWorkbook } from './xlsx-lite.js';
 export { guessFormName, parseActorSheets, importActorXlsx } from './xlsx-importer.js';
 export { imageToAvatarDataUrl } from './avatar.js';

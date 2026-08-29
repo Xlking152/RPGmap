@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createActorFromImport, createTokenForActor, addFormToActor, normalizeEntityState } from '../src/entities/model.js';
 import { migrateLegacyCharacters } from '../src/legacy/save-v2.js';
-import { addCustomResource, addEffect, cycleActorForm, resolveActor, setAttributeAdjustment, setResourceCurrent } from '../src/entities/resolver.js';
+import { addCustomResource, cycleActorForm, resolveActor, setAttributeAdjustment } from '../src/entities/resolver.js';
 import { performActorOperation } from '../src/actor/index.js';
+import { resolveActorEffects } from '../src/status/model.js';
 
 function imported(name, formName, hp, strength, statusLight = 4) {
   return {
@@ -14,33 +15,53 @@ function imported(name, formName, hp, strength, statusLight = 4) {
   };
 }
 
-test('actor keeps runtime resources and bad-status points while cycling forms', () => {
+test('actor keeps Health runtime, generic resources and bad-status points while cycling forms', () => {
   const actor = createActorFromImport(imported('银', '变身前', 41, 2, 4));
   const first = actor.system.currentFormId;
   addFormToActor(actor, imported('银', '变身后', 80, 24, 22), { name: '变身后' });
   actor.system.currentFormId = first;
-  setResourceCurrent(actor, 'hp', 27);
+  performActorOperation(actor, {
+    type: 'health.runtime',
+    operation: { type: 'set-current', value: 27 },
+  });
   performActorOperation(actor, { type: 'bad-status.set-current', statusId: 'bad-status-32', value: 10 });
   cycleActorForm(actor);
   const resolved = resolveActor(actor);
   assert.equal(resolved.form.name, '变身后');
-  assert.equal(resolved.resources.find(item => item.id === 'hp').current, 27);
-  assert.equal(resolved.resources.find(item => item.id === 'hp').max, 80);
+  assert.equal(resolved.health.current, 27);
+  assert.equal(resolved.health.max, 80);
+  assert.equal(resolved.resources.some(item => item.id === 'hp'), false);
   assert.equal(resolved.attributes.find(item => item.id === 'strength').value, 24);
   assert.equal(resolved.badStatuses[0].current, 10);
   assert.equal(resolved.badStatuses[0].light, 22);
 });
 
-test('runtime adjustments, custom resources and effects resolve without changing form base', () => {
+test('runtime adjustments, custom resources and resolved StatusDefinition effects do not change form Health base', () => {
   const actor = createActorFromImport(imported('银', '变身前', 41, 2));
   setAttributeAdjustment(actor, 'strength', 3);
   addCustomResource(actor, { id: 'spiral', name: '螺旋力', current: 2, max: 3 });
-  addEffect(actor, { name: '生命强化', changes: [{ target: 'resources.hp.max', mode: 'add', value: 10 }] });
-  const resolved = resolveActor(actor);
+  actor.effects = [{
+    id: 'effect-health-boost',
+    definitionId: 'status-health-boost',
+    stacks: 1,
+    enabled: true,
+  }];
+  const definitions = [{
+    id: 'status-health-boost',
+    name: '生命强化',
+    scopes: ['actor'],
+    maxStacks: 1,
+    changes: [{ target: 'health.max', mode: 'add', value: 10 }],
+    capabilities: {},
+  }];
+  const effects = resolveActorEffects(actor, definitions);
+  const resolved = resolveActor(actor, { effects });
+  assert.equal('changes' in actor.effects[0], false);
+  assert.equal(effects[0].changes[0].value, 10);
   assert.equal(resolved.attributes[0].base, 2);
   assert.equal(resolved.attributes[0].value, 5);
-  assert.equal(resolved.resources.find(item => item.id === 'hp').baseMax, 41);
-  assert.equal(resolved.resources.find(item => item.id === 'hp').max, 51);
+  assert.equal(resolved.form.healthBase.baseMax, 41);
+  assert.equal(resolved.health.max, 51);
   assert.equal(resolved.resources.find(item => item.id === 'spiral').current, 2);
 });
 
@@ -80,7 +101,8 @@ test('empty or malformed character cards normalize before actor creation and pro
   const emptyActor = createActorFromImport();
   assert.equal(emptyActor.name, '未命名角色');
   assert.equal(emptyActor.system.forms[0].name, '默认形态');
-  assert.equal(emptyActor.system.forms[0].resourceBases.hp.baseMax, 0);
+  assert.equal(emptyActor.system.forms[0].healthBase.baseMax, 0);
+  assert.equal(emptyActor.system.forms[0].resourceBases.hp, undefined);
   const token = createTokenForActor(emptyActor.id, 'empty-token');
   assert.equal(token.actorId, emptyActor.id);
   assert.equal(token.id, 'empty-token');
@@ -98,5 +120,6 @@ test('empty or malformed character cards normalize before actor creation and pro
   });
   assert.equal(malformedActor.name, '未命名角色');
   assert.equal(malformedActor.system.forms[0].tokenAppearance.color, '#3d9b63');
+  assert.equal(malformedActor.system.forms[0].healthBase.baseMax, 0);
   assert.equal(malformedActor.system.forms[0].resourceBases.willpower.baseMax, 0);
 });

@@ -15,6 +15,12 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function optionalNonNegativeInt(value, fallback = null) {
+  if (value === null || value === undefined || value === '') return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.floor(number)) : fallback;
+}
+
 export function defaultHealthMode(sourceType) {
   return sourceType === 'xlsx' ? HEALTH_MODE_WOUND_TRACK : HEALTH_MODE_SIMPLE;
 }
@@ -28,31 +34,59 @@ export function normalizeWounds(raw, max) {
   return { ...source, bashing, lethal, aggravated };
 }
 
-export function createHealthRuntime({ mode = HEALTH_MODE_SIMPLE, max = 0, simpleCurrent = max } = {}) {
+export function createHealthRuntime({
+  mode = HEALTH_MODE_SIMPLE,
+  max = 0,
+  simpleCurrent = max,
+  maxOverride = null,
+} = {}) {
   const normalizedMode = mode === HEALTH_MODE_WOUND_TRACK ? HEALTH_MODE_WOUND_TRACK : HEALTH_MODE_SIMPLE;
   const limit = nonNegativeInt(max);
   const current = clamp(nonNegativeInt(simpleCurrent, limit), 0, limit);
-  return {
+  const runtime = {
     mode: normalizedMode,
+    maxOverride: optionalNonNegativeInt(maxOverride),
     wounds: normalizedMode === HEALTH_MODE_WOUND_TRACK
       ? { bashing: limit - current, lethal: 0, aggravated: 0 }
       : { bashing: 0, lethal: 0, aggravated: 0 },
   };
+  if (normalizedMode === HEALTH_MODE_SIMPLE) runtime.current = current;
+  return runtime;
 }
 
-export function normalizeHealthRuntime(raw, { defaultMode = HEALTH_MODE_SIMPLE, max = 0, simpleCurrent = max } = {}) {
+export function normalizeHealthRuntime(raw, {
+  defaultMode = HEALTH_MODE_SIMPLE,
+  max = 0,
+  simpleCurrent = max,
+  legacyMaxOverride = null,
+} = {}) {
   const mode = raw?.mode === HEALTH_MODE_WOUND_TRACK || raw?.mode === HEALTH_MODE_SIMPLE
     ? raw.mode
     : defaultMode;
-  if (!raw || typeof raw !== 'object') return createHealthRuntime({ mode, max, simpleCurrent });
-  return { ...structuredClone(raw), mode, wounds: normalizeWounds(raw.wounds, max) };
+  const maxOverride = optionalNonNegativeInt(raw?.maxOverride, optionalNonNegativeInt(legacyMaxOverride));
+  if (!raw || typeof raw !== 'object') {
+    return createHealthRuntime({ mode, max, simpleCurrent, maxOverride });
+  }
+  const limit = nonNegativeInt(max);
+  const next = {
+    ...structuredClone(raw),
+    mode,
+    maxOverride,
+    wounds: normalizeWounds(raw.wounds, limit),
+  };
+  if (mode === HEALTH_MODE_SIMPLE) {
+    next.current = clamp(nonNegativeInt(raw.current, simpleCurrent), 0, limit);
+  } else {
+    delete next.current;
+  }
+  return next;
 }
 
-export function resolveHealth(runtime, { max = 0, simpleCurrent = max } = {}) {
+export function resolveHealth(runtime, { max = 0 } = {}) {
   const limit = nonNegativeInt(max);
   const mode = runtime?.mode === HEALTH_MODE_WOUND_TRACK ? HEALTH_MODE_WOUND_TRACK : HEALTH_MODE_SIMPLE;
   if (mode === HEALTH_MODE_SIMPLE) {
-    const current = clamp(nonNegativeInt(simpleCurrent, limit), 0, limit);
+    const current = clamp(nonNegativeInt(runtime?.current, limit), 0, limit);
     return {
       mode, max: limit, current, healthy: current, bashing: 0, lethal: 0, aggravated: 0,
       status: current > 0 ? 'normal' : 'depleted', deteriorating: false,
@@ -107,6 +141,7 @@ export function applyWoundDamage(runtime, damage, { max = 0 } = {}) {
   const limit = nonNegativeInt(max);
   const next = normalizeHealthRuntime(runtime, { defaultMode: HEALTH_MODE_WOUND_TRACK, max: limit });
   next.mode = HEALTH_MODE_WOUND_TRACK;
+  delete next.current;
   const wounds = { ...next.wounds };
   const amounts = {
     [DAMAGE_BASHING]: nonNegativeInt(damage?.bashing ?? (damage?.type === DAMAGE_BASHING ? damage?.amount : 0)),
@@ -137,6 +172,7 @@ export function applyWoundHealing(runtime, healing, { max = 0 } = {}) {
   const limit = nonNegativeInt(max);
   const next = normalizeHealthRuntime(runtime, { defaultMode: HEALTH_MODE_WOUND_TRACK, max: limit });
   next.mode = HEALTH_MODE_WOUND_TRACK;
+  delete next.current;
   const wounds = { ...next.wounds };
   const type = [DAMAGE_BASHING, DAMAGE_LETHAL, DAMAGE_AGGRAVATED].includes(healing?.type)
     ? healing.type : DAMAGE_LETHAL;
@@ -156,22 +192,27 @@ export function applySimpleHealing(current, amount, max) {
   return { current: after, applied: after - before, overflow: Math.max(0, requested - (after - before)) };
 }
 
-export function switchHealthMode(runtime, nextMode, { max = 0, simpleCurrent = max } = {}) {
+export function switchHealthMode(runtime, nextMode, { max = 0 } = {}) {
   const limit = nonNegativeInt(max);
-  const currentState = resolveHealth(runtime, { max: limit, simpleCurrent });
+  const currentState = resolveHealth(runtime, { max: limit });
+  const maxOverride = optionalNonNegativeInt(runtime?.maxOverride);
   if (nextMode === HEALTH_MODE_WOUND_TRACK) {
     const healthy = currentState.mode === HEALTH_MODE_WOUND_TRACK ? currentState.healthy : currentState.current;
     return {
-      runtime: { mode: HEALTH_MODE_WOUND_TRACK, wounds: { bashing: Math.max(0, limit - healthy), lethal: 0, aggravated: 0 } },
-      simpleCurrent: healthy,
+      runtime: {
+        mode: HEALTH_MODE_WOUND_TRACK,
+        maxOverride,
+        wounds: { bashing: Math.max(0, limit - healthy), lethal: 0, aggravated: 0 },
+      },
     };
   }
   return {
     runtime: {
       mode: HEALTH_MODE_SIMPLE,
+      maxOverride,
+      current: currentState.healthy,
       wounds: { bashing: currentState.bashing || 0, lethal: currentState.lethal || 0, aggravated: currentState.aggravated || 0 },
     },
-    simpleCurrent: currentState.healthy,
   };
 }
 
@@ -199,33 +240,52 @@ function formatHealthSummary(state) {
   return `${state.healthy}完好 · ${state.bashing}B · ${state.lethal}L · ${state.aggravated}A`;
 }
 
+function healthField(id, label, value, operation, options = {}) {
+  return {
+    id,
+    label,
+    value,
+    min: options.min ?? 0,
+    ...(options.max === undefined ? {} : { max: options.max }),
+    operation,
+  };
+}
+
 function describeHealth(state) {
   const summary = formatHealthSummary(state);
   const status = healthStatusLabel(state);
   if (!state || state.mode === HEALTH_MODE_SIMPLE) {
     return {
-      summary, status, danger: Boolean(state?.dead || state?.unconscious), hideBaseResource: false,
-      title: '生命系统', help: '普通 HP 模式沿用原有“当前 / 最大”生命值。',
-      segments: state ? [{ id: 'current', label: '当前', value: state.current, color: '#4b9f69' }] : [], fields: [],
+      summary,
+      status,
+      danger: Boolean(state?.dead || state?.unconscious),
+      title: '生命值',
+      help: '当前生命与生命上限均由 Ruleset Health Runtime 管理，不再经过 Resource 系统。',
+      segments: state ? [{ id: 'current', label: '当前生命', value: state.current, color: '#4b9f69' }] : [],
+      fields: state ? [
+        healthField('current', '当前生命', state.current, value => ({ type: 'set-current', value }), { max: state.max }),
+        healthField('max', '生命上限', state.max, value => ({ type: 'set-max', value })),
+      ] : [],
     };
   }
-  const field = (id, label, value) => ({
-    id, label, value, min: 0, max: state.max,
-    operation: nextValue => ({ type: 'set-wounds', wounds: { [id]: nextValue } }),
-  });
   return {
     summary,
     status: `${status}${state.deteriorating ? ' · 每轮伤势恶化规则请由操作者确认后处理' : ''}`,
-    danger: Boolean(state.dead || state.unconscious), hideBaseResource: true,
-    title: `生命值 · 上限 ${state.max}`,
-    help: '伤害由右侧“聊天 → 伤害”应用。这里显示生命槽结果；盔甲、硬度、DR、临时生命等前置步骤由具体效果处理。',
+    danger: Boolean(state.dead || state.unconscious),
+    title: '生命值 · B/L/A 伤势槽',
+    help: '伤害由右侧“聊天 → 伤害”应用。生命上限与 B/L/A 伤势均由 Ruleset Health Runtime 保存；盔甲、硬度、DR、临时生命等前置步骤由具体效果处理。',
     segments: [
       { id: 'healthy', label: '完好', value: state.healthy, color: '#4b9f69' },
       { id: 'bashing', label: '冲击 B', value: state.bashing, color: '#d9b84a' },
       { id: 'lethal', label: '严重 L', value: state.lethal, color: '#d77c42' },
       { id: 'aggravated', label: '恶性 A', value: state.aggravated, color: '#a94442' },
     ],
-    fields: [field('bashing', '冲击 B', state.bashing), field('lethal', '严重 L', state.lethal), field('aggravated', '恶性 A', state.aggravated)],
+    fields: [
+      healthField('bashing', '冲击 B', state.bashing, value => ({ type: 'set-wounds', wounds: { bashing: value } }), { max: state.max }),
+      healthField('lethal', '严重 L', state.lethal, value => ({ type: 'set-wounds', wounds: { lethal: value } }), { max: state.max }),
+      healthField('aggravated', '恶性 A', state.aggravated, value => ({ type: 'set-wounds', wounds: { aggravated: value } }), { max: state.max }),
+      healthField('max', '生命上限', state.max, value => ({ type: 'set-max', value })),
+    ],
   };
 }
 
@@ -249,8 +309,33 @@ export const INFINITE_HORROR_HEALTH = Object.freeze({
   resolve: resolveHealth,
   switchMode: switchHealthMode,
 
-  applyRuntimeOperation(runtime, operation = {}, { max = 0, simpleCurrent = max } = {}) {
-    const before = resolveHealth(runtime, { max, simpleCurrent });
+  applyRuntimeOperation(runtime, operation = {}, { max = 0 } = {}) {
+    const before = resolveHealth(runtime, { max });
+    if (operation?.type === 'set-current') {
+      if (before.mode !== HEALTH_MODE_SIMPLE) {
+        return { runtime, current: before.current, state: before, changed: false, blocked: 'wound_track_mode' };
+      }
+      const next = normalizeHealthRuntime({
+        ...runtime,
+        mode: HEALTH_MODE_SIMPLE,
+        current: clamp(nonNegativeInt(operation.value, before.current), 0, before.max),
+      }, { defaultMode: HEALTH_MODE_SIMPLE, max: before.max });
+      const state = resolveHealth(next, { max: before.max });
+      return { runtime: next, current: state.current, state, changed: state.current !== before.current, blocked: null };
+    }
+    if (operation?.type === 'set-max') {
+      const nextMax = nonNegativeInt(operation.value, before.max);
+      const next = normalizeHealthRuntime({
+        ...runtime,
+        maxOverride: nextMax,
+      }, {
+        defaultMode: before.mode,
+        max: nextMax,
+        simpleCurrent: before.current,
+      });
+      const state = resolveHealth(next, { max: nextMax });
+      return { runtime: next, current: state.current, state, changed: nextMax !== before.max, blocked: null };
+    }
     if (operation?.type !== 'set-wounds') {
       return { runtime, current: before.current, state: before, changed: false, blocked: 'unsupported' };
     }
@@ -260,27 +345,31 @@ export const INFINITE_HORROR_HEALTH = Object.freeze({
     const next = normalizeHealthRuntime({
       ...runtime, mode: HEALTH_MODE_WOUND_TRACK,
       wounds: { ...(runtime?.wounds || {}), ...(operation.wounds || {}) },
-    }, { defaultMode: HEALTH_MODE_WOUND_TRACK, max, simpleCurrent });
-    const state = resolveHealth(next, { max, simpleCurrent });
+    }, { defaultMode: HEALTH_MODE_WOUND_TRACK, max });
+    const state = resolveHealth(next, { max });
     return { runtime: next, current: state.healthy, state, changed: true, blocked: null };
   },
 
-  applyDamage({ runtime, current = 0, max = 0, amount = 0, type = DAMAGE_LETHAL } = {}) {
-    const before = resolveHealth(runtime, { max, simpleCurrent: current });
+  applyDamage({ runtime, max = 0, amount = 0, type = DAMAGE_LETHAL } = {}) {
+    const before = resolveHealth(runtime, { max });
     if (before.mode === HEALTH_MODE_WOUND_TRACK) {
       const result = applyWoundDamage(runtime, { amount, type }, { max });
       return { runtime: result.runtime, current: result.state.healthy, state: result.state,
         applied: result.applied, overflow: result.overflow, blocked: null };
     }
     const result = applySimpleDamage(before.current, amount, before.max);
-    const nextRuntime = createHealthRuntime({ mode: HEALTH_MODE_SIMPLE, max: before.max, simpleCurrent: result.current });
+    const nextRuntime = normalizeHealthRuntime({
+      ...runtime,
+      mode: HEALTH_MODE_SIMPLE,
+      current: result.current,
+    }, { defaultMode: HEALTH_MODE_SIMPLE, max: before.max });
     return { runtime: nextRuntime, current: result.current,
-      state: resolveHealth(nextRuntime, { max: before.max, simpleCurrent: result.current }),
+      state: resolveHealth(nextRuntime, { max: before.max }),
       applied: result.applied, overflow: result.overflow, blocked: null };
   },
 
-  applyHealing({ runtime, current = 0, max = 0, amount = 0, type = DAMAGE_LETHAL } = {}) {
-    const before = resolveHealth(runtime, { max, simpleCurrent: current });
+  applyHealing({ runtime, max = 0, amount = 0, type = DAMAGE_LETHAL } = {}) {
+    const before = resolveHealth(runtime, { max });
     if (before.mode === HEALTH_MODE_WOUND_TRACK) {
       if (before.dead) {
         return { runtime, current: before.healthy, state: before, applied: 0,
@@ -291,9 +380,13 @@ export const INFINITE_HORROR_HEALTH = Object.freeze({
         applied: result.applied, overflow: result.overflow, blocked: null };
     }
     const result = applySimpleHealing(before.current, amount, before.max);
-    const nextRuntime = createHealthRuntime({ mode: HEALTH_MODE_SIMPLE, max: before.max, simpleCurrent: result.current });
+    const nextRuntime = normalizeHealthRuntime({
+      ...runtime,
+      mode: HEALTH_MODE_SIMPLE,
+      current: result.current,
+    }, { defaultMode: HEALTH_MODE_SIMPLE, max: before.max });
     return { runtime: nextRuntime, current: result.current,
-      state: resolveHealth(nextRuntime, { max: before.max, simpleCurrent: result.current }),
+      state: resolveHealth(nextRuntime, { max: before.max }),
       applied: result.applied, overflow: result.overflow, blocked: null };
   },
 

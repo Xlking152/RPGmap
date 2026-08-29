@@ -139,7 +139,7 @@ function ensureUniqueInstanceId(candidate, targetId, definitionId, index, usedId
   usedIds.add(id);
   return id;
 }
-function normalizeInstance(effect, { definition, scope, targetId, index, usedIds }) {
+function normalizeInstance(effect, { definition, targetId, index, usedIds }) {
   const instance = {
     ...clone(effect),
     id: ensureUniqueInstanceId(effect?.id, targetId, definition.id, index, usedIds),
@@ -148,12 +148,12 @@ function normalizeInstance(effect, { definition, scope, targetId, index, usedIds
     enabled: effect?.enabled !== false,
     note: cleanText(effect?.note),
   };
-  for (const key of ['name', 'label', 'description', 'icon', 'color', 'category', 'scope', 'scopes', 'maxStacks', 'capabilities', 'statusId']) {
-    delete instance[key];
-  }
+  for (const key of [
+    'name', 'label', 'description', 'icon', 'color', 'category', 'scope', 'scopes',
+    'maxStacks', 'capabilities', 'statusId', 'changes',
+  ]) delete instance[key];
   if (plainObject(effect?.source)) instance.source = clone(effect.source);
   if (cleanText(effect?.createdAt)) instance.createdAt = cleanText(effect.createdAt);
-  if (scope === 'actor' && definition.changes?.length) instance.changes = clone(definition.changes);
   return instance;
 }
 
@@ -197,7 +197,7 @@ export function normalizeEntityStatusState(raw) {
         }
       }
       if (scope === 'token' && (definition.changes || []).length) continue;
-      const normalized = normalizeInstance(effect, { definition, scope, targetId, index, usedIds });
+      const normalized = normalizeInstance(effect, { definition, targetId, index, usedIds });
       const duplicate = byDefinition.get(definitionId);
       if (duplicate) {
         duplicate.stacks = Math.min(Number(definition.maxStacks) || 1, duplicate.stacks + normalized.stacks);
@@ -246,6 +246,21 @@ function resolveTargetEffects(target, scope, definitionsById) {
     if (!definition || !definition.scopes?.includes(scope)) return [];
     return [resolvedInstance(instance, definition, scope, target.id)];
   });
+}
+
+function definitionsMap(source) {
+  const definitions = Array.isArray(source)
+    ? source.map(definition => normalizeStatusDefinition(definition)).filter(Boolean).map(definitionView)
+    : getStatusDefinitions(source);
+  return new Map(definitions.map(definition => [definition.id, definition]));
+}
+
+export function resolveActorEffects(actor, definitionsOrState = []) {
+  return resolveTargetEffects(actor, 'actor', definitionsMap(definitionsOrState));
+}
+
+export function resolveTokenEffects(token, definitionsOrState = []) {
+  return resolveTargetEffects(token, 'token', definitionsMap(definitionsOrState));
 }
 
 export function deriveActorStatuses(actor, actorStatuses = [], { ruleset = getCompatibilityRuleset() } = {}) {
@@ -345,9 +360,6 @@ function applySingleOperation(entityState, message, context) {
       if (usedByToken && definition.changes.length) throw statusError('Token statuses cannot gain Actor numeric changes', 'status_scope_forbidden');
       if (Math.max(1, ...inUse.map(effect => Number(effect.stacks) || 1)) > definition.maxStacks) throw statusError('maxStacks is lower than an applied stack count', 'status_definition_in_use');
       entityState.statusDefinitions[index] = definition;
-      for (const actor of entityState.actors) for (const effect of actor.effects || []) if (String(effect.definitionId) === definition.id) {
-        if (definition.changes.length) effect.changes = clone(definition.changes); else delete effect.changes;
-      }
     }
     return { action: 'definition.upsert', definitionId: definition.id };
   }
@@ -382,7 +394,6 @@ function applySingleOperation(entityState, message, context) {
         source: plainObject(message.source) ? clone(message.source) : clone(context.source || { role: 'offline' }),
         createdAt: cleanText(context.now) || new Date().toISOString(),
       };
-      if (scope === 'actor' && definition.changes.length) instance.changes = clone(definition.changes);
       target.effects.push(instance);
     }
     return { action: 'apply', scope, targetId, definitionId };

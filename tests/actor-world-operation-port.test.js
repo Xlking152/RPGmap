@@ -1,0 +1,51 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { upsertCanonicalActor } from '../src/entities/actor-operations.js';
+
+test('canonical Actor upsert writes only through World operations', async () => {
+  const calls = [];
+  const emitted = [];
+  const api = {
+    world: {
+      async performOperations(operations, options) {
+        calls.push({ operations, options });
+        return { offline: true };
+      },
+    },
+    persistNow() { throw new Error('Actor port must not persist outside World operations'); },
+    emit(type, detail) { emitted.push({ type, detail }); },
+  };
+  const actor = { id: 'actor-1', name: 'A', system: { value: 3 }, effects: [] };
+  await upsertCanonicalActor(api, actor, { source: 'test:actor' });
+
+  assert.deepEqual(calls, [{
+    operations: [{ type: 'actor.upsert', payload: { actor } }],
+    options: { source: 'test:actor', render: false, kind: 'actor' },
+  }]);
+  assert.deepEqual(emitted, [{
+    type: 'actor:change',
+    detail: { actorId: 'actor-1', source: 'test:actor', canonical: true },
+  }]);
+});
+
+test('canonical Actor upsert refuses projection-only runtimes', async () => {
+  await assert.rejects(
+    upsertCanonicalActor({}, { id: 'actor-1' }),
+    error => error?.code === 'world_operation_required',
+  );
+  await assert.rejects(
+    upsertCanonicalActor({ world: { performOperations: async () => ({}) } }, {}),
+    error => error?.code === 'actor_id_required',
+  );
+});
+
+
+test('canonical Actor upsert does not emit success when World rejects the write', async () => {
+  const emitted = [];
+  const api = {
+    world: { async performOperations() { throw Object.assign(new Error('conflict'), { code: 'world_state_stale' }); } },
+    emit(type, detail) { emitted.push({ type, detail }); },
+  };
+  await assert.rejects(upsertCanonicalActor(api, { id: 'actor-1', system: {}, effects: [] }), error => error?.code === 'world_state_stale');
+  assert.deepEqual(emitted, []);
+});

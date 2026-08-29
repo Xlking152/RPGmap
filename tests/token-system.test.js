@@ -9,9 +9,40 @@ const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图' };
 
 function actor() {
   return {
-    id: 'actor-1', name: '角色', currentFormId: 'form-1',
-    forms: [{ id: 'form-1', tokenAppearance: { color: '#3d9b63' }, avatarDataUrl: null }],
-    runtime: {}, effects: [],
+    id: 'actor-1',
+    name: '角色',
+    system: {
+      schemaVersion: 3,
+      currentFormId: 'form-1',
+      forms: [{
+        id: 'form-1',
+        name: '默认形态',
+        avatarDataUrl: null,
+        identity: { name: '角色' },
+        description: {},
+        healthBase: { baseMax: 10 },
+        resourceBases: {},
+        attributes: [],
+        checks: { skills: [], saves: [] },
+        badStatuses: [],
+        combat: { attacks: [], defenses: [] },
+        tokenAppearance: { color: '#3d9b63', scale: 1 },
+        source: { type: 'manual' },
+      }],
+      runtime: {
+        resources: {},
+        customResources: [],
+        attributeAdjustments: {},
+        badStatuses: {},
+        health: {
+          mode: 'simple',
+          maxOverride: null,
+          current: 10,
+          wounds: { bashing: 0, lethal: 0, aggravated: 0 },
+        },
+      },
+    },
+    effects: [],
   };
 }
 
@@ -86,11 +117,17 @@ test('TokenSystem move and feature placement update canonical World placement', 
 
 test('TokenSystem preserves actorLink/actorDelta and deletes canonical state only', async () => {
   const fixture = apiFixture();
-  await fixture.api.tokens.create({ actorId: 'actor-1', id: 'npc-one', actorLink: false, actorDelta: { runtime: { resources: { hp: { current: 5 } } } } });
+  await fixture.api.tokens.create({
+    actorId: 'actor-1',
+    id: 'npc-one',
+    actorLink: false,
+    actorDelta: { system: { runtime: { health: { current: 5 } } } },
+  });
   await fixture.api.tokens.update('npc-one', { hidden: true, elevationFt: 15 });
   const token = fixture.api.tokens.get('npc-one');
   assert.equal(token.actorLink, false);
-  assert.equal(token.actorDelta.system.runtime.resources.hp.current, 5);
+  assert.equal(token.actorDelta.system.runtime.health.current, 5);
+  assert.equal(token.actorDelta.system.runtime.resources?.hp, undefined);
   assert.equal(Object.hasOwn(token.actorDelta, 'runtime'), false);
   assert.equal(token.hidden, true);
   assert.equal(token.elevationFt, 15);
