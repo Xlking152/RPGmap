@@ -11,13 +11,9 @@ export {
   addCombatants,
   removeCombatant,
   moveCombatant,
-  setCombatTurnOrigin,
-  combatTurnOriginMoved,
   startCombat,
   nextTurn,
 } from './model.js';
-export { captureCurrentTurnOrigin } from './controller.js';
-export { createCombatTurnOriginRenderer } from './turn-origin-renderer.js';
 export { CombatStore } from './store.js';
 
 export function createCombatSystem(options = {}) {
