@@ -40,14 +40,19 @@ const allJs = allFiles.filter(file => file.endsWith('.js'));
 const allCss = allFiles.filter(file => file.endsWith('.css'));
 const sum = async files => (await Promise.all(files.map(gzipSize))).reduce((total, value) => total + value, 0);
 
+// v2.1.5 is the released post-splitting baseline. The earlier 0.90 initial-JS
+// multiplier was a one-time chunking target; once achieved, keep that initial
+// payload from regressing while allowing at most 5% growth in total JS/CSS
+// between formal release baselines.
 const baseline = Object.freeze({
-  commit: '6750302afde6c45bc2c029edc5400ea80ee08588',
-  initialJsGzip: 221174,
-  totalJsGzip: 221511,
-  totalCssGzip: 7083,
+  commit: 'd31840247fba4d850f6f47054588686d747c60dd',
+  version: '2.1.5',
+  initialJsGzip: 47001,
+  totalJsGzip: 232385,
+  totalCssGzip: 7076,
 });
 const limits = Object.freeze({
-  initialJsGzip: Math.floor(baseline.initialJsGzip * 0.9),
+  initialJsGzip: baseline.initialJsGzip,
   totalJsGzip: Math.floor(baseline.totalJsGzip * 1.05),
   totalCssGzip: Math.floor(baseline.totalCssGzip * 1.05),
 });
@@ -61,7 +66,8 @@ const report = {
   baseline,
   limits,
   measured,
-  reduction: 1 - measured.initialJsGzip / baseline.initialJsGzip,
+  initialChange: measured.initialJsGzip / baseline.initialJsGzip - 1,
+  totalJsChange: measured.totalJsGzip / baseline.totalJsGzip - 1,
   initialFiles: [...staticFiles].sort(),
 };
 console.log(JSON.stringify(report, null, 2));
