@@ -33,6 +33,10 @@ function finitePoint(value) {
   return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
 }
 
+function samePoint(a, b) {
+  return Boolean(a && b && Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y));
+}
+
 function activeSceneIndex(world) {
   const scenes = array(world?.scenes);
   const activeId = String(world?.activeSceneId ?? '');
@@ -153,6 +157,7 @@ export function createMovementTokenRuntimeSystem() {
       let navigationGrid = null;
       let navigationRevision = null;
       let pendingPlan = null;
+      let pendingGroupPlan = null;
 
       function navigation(token) {
         const state = api.getState?.() || {};
@@ -290,6 +295,97 @@ export function createMovementTokenRuntimeSystem() {
         return true;
       }
 
+      function groupMemberPath(origin, leaderStart, leaderPoints) {
+        return leaderPoints.map(point => ({
+          x: origin.x + point.x - leaderStart.x,
+          y: origin.y + point.y - leaderStart.y,
+        }));
+      }
+
+      async function validateGroupPlan(plan) {
+        for (const member of plan.members) {
+          const token = api.tokens.get(member.tokenId);
+          const current = tokenMapPoint(token);
+          if (!token || !current || !samePoint(current, member.origin)) throw new Error('群组位置已变化，请重新规划移动');
+          const capability = movementCapability(api, token);
+          if (capability.canMove === false) throw new Error(capability.reasons?.[0] || `Token ${member.tokenId} 当前禁止移动`);
+          const points = groupMemberPath(member.origin, plan.leaderStart, plan.leaderPoints);
+          for (let index = 0; index < points.length - 1; index += 1) {
+            if (!await findDirectNavigationPath(navigation(token), points[index], points[index + 1])) {
+              throw new Error(`Token ${member.tokenId} 的第 ${index + 1} 段路径已不可通行`);
+            }
+          }
+        }
+      }
+
+      async function planTokenGroupMove(tokenIds, leaderId, rawPoints) {
+        pendingGroupPlan = null;
+        const ids = [...new Set(array(tokenIds).map(String).filter(Boolean))];
+        if (ids.length < 2 || ids.length > 64 || !ids.includes(String(leaderId))) return null;
+        const leader = api.tokens.get(leaderId);
+        const leaderStart = tokenMapPoint(leader);
+        if (!leaderStart) return null;
+        let leaderPoints = array(rawPoints).map(finitePoint).filter(Boolean);
+        if (!leaderPoints.length) return null;
+        if (!samePoint(leaderPoints[0], leaderStart)) leaderPoints = [leaderStart, ...leaderPoints];
+        if (leaderPoints.length < 2) return null;
+        const members = ids.map(tokenId => {
+          const token = api.tokens.get(tokenId);
+          const origin = tokenMapPoint(token);
+          return token && origin ? { tokenId: String(token.id), actorId: String(token.actorId), origin } : null;
+        });
+        if (members.some(member => !member)) return null;
+        const plan = { leaderId: String(leaderId), leaderStart, leaderPoints, members };
+        try {
+          await validateGroupPlan(plan);
+        } catch {
+          return null;
+        }
+        pendingGroupPlan = clone(plan);
+        return { valid: true, tokenIds: ids, destination: clone(leaderPoints.at(-1)) };
+      }
+
+      async function executeGroupPlan(plan) {
+        await validateGroupPlan(plan);
+        let world = api.world.get();
+        const moves = [];
+        for (const member of plan.members) {
+          const points = groupMemberPath(member.origin, plan.leaderStart, plan.leaderPoints);
+          const target = points.at(-1);
+          moves.push({ ...member, points, target });
+          api.renderer?.prepareTokenVisualRoute?.(member.tokenId, points.slice(1));
+          world = moveSceneToken(world, member.tokenId, target).world;
+          world = updateAnchoredAreas(world, member.tokenId, target);
+        }
+        try {
+          await api.world.commit(world, { source: 'movement:group', reason: 'token.group-move', render: true });
+        } catch (error) {
+          moves.forEach(move => api.renderer?.prepareTokenVisualRoute?.(move.tokenId, []));
+          throw error;
+        }
+        invalidateNavigation();
+        for (const move of moves) {
+          const committed = api.tokens.get(move.tokenId);
+          emitMoved(committed, { from: move.origin, to: move.target, reason: 'token.group-move' });
+        }
+        api.emit?.('token:group-move', { leaderId: plan.leaderId, tokenIds: moves.map(move => move.tokenId) });
+        return moves.map(move => api.tokens.get(move.tokenId));
+      }
+
+      function commitTokenGroupMove() {
+        if (!pendingGroupPlan) return false;
+        const plan = pendingGroupPlan;
+        pendingGroupPlan = null;
+        void executeGroupPlan(plan).catch(error => {
+          api.emit?.('token:group-move-cancelled', {
+            leaderId: plan.leaderId,
+            tokenIds: plan.members.map(member => member.tokenId),
+            reason: error?.message || String(error || 'group movement cancelled'),
+          });
+        });
+        return true;
+      }
+
       async function exitFeature(tokenId, options = {}) {
         const token = api.tokens.get(tokenId);
         if (!token || token.placement !== 'feature' || !token.featureId) return false;
@@ -344,11 +440,13 @@ export function createMovementTokenRuntimeSystem() {
         canonicalSceneTokens: true,
         planTokenMove,
         commitTokenMove,
+        planTokenGroupMove,
+        commitTokenGroupMove,
         inspectTokenMove,
         exitFeature,
-        cancelPending() { pendingPlan = null; },
+        cancelPending() { pendingPlan = null; pendingGroupPlan = null; },
         invalidateNavigation,
-        getPendingPlan() { return clone(pendingPlan); },
+        getPendingPlan() { return clone(pendingGroupPlan || pendingPlan); },
       });
 
       for (const eventName of ['scene:damage', 'scene:restore', 'scene:undo', 'state:import', 'status:change', 'token:size-change', 'elevation:token-change']) {
