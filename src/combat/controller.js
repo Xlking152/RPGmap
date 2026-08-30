@@ -8,6 +8,7 @@ import {
   nextTurn,
   removeCombatant,
   setCombatantInitiative,
+  setCombatTurnOrigin,
   startCombat,
 } from './model.js';
 import { CombatStore } from './store.js';
@@ -52,6 +53,18 @@ function tokenMapPoint(api, tokenId) {
     return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
   }
   return null;
+}
+
+export function captureCurrentTurnOrigin(api, combat) {
+  const current = combat?.state === 'active' ? currentCombatant(combat) : null;
+  const view = current ? runtimeTokenView(api, current.tokenId) : null;
+  const point = current ? tokenMapPoint(api, current.tokenId) : null;
+  if (!current || !view?.token || !point) return setCombatTurnOrigin(combat, null);
+  const elevation = Number(view.token.elevationFt);
+  return setCombatTurnOrigin(combat, {
+    ...point,
+    elevationFt: Number.isFinite(elevation) && elevation >= 0 ? elevation : 0,
+  });
 }
 
 function ensureCombatPane(map) {
@@ -212,6 +225,7 @@ export function createCombatController({ selection } = {}) {
         }
         if (!startCombat(combat)) return false;
         const current = currentCombatant(combat);
+        captureCurrentTurnOrigin(api, combat);
         persist(`战斗开始 · 第 1 轮${current ? ` · 当前 ${current.tokenId}` : ''}`);
         combatLog(`战斗开始 · 第 1 轮${current ? ` · ${tokenName(current.tokenId)} 的回合` : ''}`, { event: 'start', round: 1, tokenId: current?.tokenId || null });
         focusCurrent(false);
@@ -223,6 +237,7 @@ export function createCombatController({ selection } = {}) {
         const combat = store.state.combat;
         const current = nextTurn(combat);
         if (!current) return false;
+        captureCurrentTurnOrigin(api, combat);
         persist(`第 ${combat.round} 轮 · 下一回合`);
         combatLog(`第 ${combat.round} 轮 · ${tokenName(current.tokenId)} 的回合`, { event: 'turn', round: combat.round, tokenId: current.tokenId });
         focusCurrent(false);
@@ -272,7 +287,10 @@ export function createCombatController({ selection } = {}) {
         }
         if (!changed) return false;
         if (!combat.combatants.length) store.clear();
-        else store.persist();
+        else {
+          if (combat.state === 'active' && !combat.turnOrigin) captureCurrentTurnOrigin(api, combat);
+          store.persist();
+        }
         return true;
       }
 
@@ -301,6 +319,7 @@ export function createCombatController({ selection } = {}) {
               render();
               status('先攻表已清空');
             } else {
+              if (combat.state === 'active' && !combat.turnOrigin) captureCurrentTurnOrigin(api, combat);
               persist('已将 Token 移出战斗');
             }
             if (removed) combatLog(`移出战斗：${tokenName(removed.tokenId)}`, { event: 'remove', tokenId: removed.tokenId });
@@ -373,7 +392,10 @@ export function createCombatController({ selection } = {}) {
         if (!item) return;
         removeCombatant(combat, item.id);
         if (!combat.combatants.length) store.clear();
-        else store.persist();
+        else {
+          if (combat.state === 'active' && !combat.turnOrigin) captureCurrentTurnOrigin(api, combat);
+          store.persist();
+        }
         render();
       });
       api.on('state:import', () => {
