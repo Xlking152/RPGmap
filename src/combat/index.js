@@ -12,7 +12,6 @@ export {
   removeCombatant,
   moveCombatant,
   setCombatTurnOrigin,
-  clearCombatTurnOrigin,
   combatTurnOriginMoved,
   startCombat,
   nextTurn,
