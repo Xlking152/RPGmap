@@ -25,7 +25,9 @@ const liveRuntimeFiles = [
   'src/world/system.js',
   'src/world/operations.js',
   'src/world/references.js',
+  'src/combat/model.js',
   'src/combat/controller.js',
+  'src/combat/turn-origin-renderer.js',
   'src/health/sheet-extension.js',
   'src/engine/navigation.js',
   'src/movement/session.js',
@@ -87,7 +89,7 @@ test('SaveV2 migration is isolated to the import/persistence boundary', () => {
 
 test('World V2 server authority rejects Character fields after migration', () => {
   const server = source('deployment/local-server/world-schema.mjs');
-  const statusOperations = source('deployment/local-server/status-operations.mjs');
+  const statusOperations = source('src/status/model.js');
   assert.match(server, /World V2 state must not contain state\.characters/);
   assert.match(server, /characterId is forbidden in World V2/);
   assert.match(server, /legacy_character_forbidden/);
