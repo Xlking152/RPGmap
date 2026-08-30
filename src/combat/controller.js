@@ -57,14 +57,9 @@ function tokenMapPoint(api, tokenId) {
 
 export function captureCurrentTurnOrigin(api, combat) {
   const current = combat?.state === 'active' ? currentCombatant(combat) : null;
-  const view = current ? runtimeTokenView(api, current.tokenId) : null;
-  const point = current ? tokenMapPoint(api, current.tokenId) : null;
-  if (!current || !view?.token || !point) return setCombatTurnOrigin(combat, null);
-  const elevation = Number(view.token.elevationFt);
-  return setCombatTurnOrigin(combat, {
-    ...point,
-    elevationFt: Number.isFinite(elevation) && elevation >= 0 ? elevation : 0,
-  });
+  const token = current ? api.tokens?.get?.(current.tokenId) : null;
+  if (!token || token.hidden === true || token.placement !== 'map') return setCombatTurnOrigin(combat, null);
+  return setCombatTurnOrigin(combat, token);
 }
 
 function ensureCombatPane(map) {
