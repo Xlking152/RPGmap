@@ -1,17 +1,14 @@
+function finite(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function finiteInitiative(value) {
-  if (value === '' || value == null) return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+  return value === '' || value == null ? null : finite(value);
 }
 
-function finiteCoordinate(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function finiteElevation(value) {
-  const number = Number(value);
-  return Number.isFinite(number) && number >= 0 ? number : 0;
+function elevation(value) {
+  return Math.max(0, finite(value) ?? 0);
 }
 
 function uid(prefix) {
@@ -25,11 +22,9 @@ export function createEmptyCombatState() {
 
 function normalizeTurnOrigin(raw, combat) {
   if (combat?.state !== 'active' || !combat.combatants.length || !raw || typeof raw !== 'object') return null;
-  const x = finiteCoordinate(raw.x);
-  const y = finiteCoordinate(raw.y);
-  const round = Math.max(1, Number(raw.round) || combat.round || 1);
-  if (round !== combat.round || x === null || y === null) return null;
-  return { round: combat.round, x, y, elevationFt: finiteElevation(raw.elevationFt) };
+  const x = finite(raw.x);
+  const y = finite(raw.y);
+  return x === null || y === null ? null : { x, y, elevationFt: elevation(raw.elevationFt) };
 }
 
 export function normalizeCombatState(raw) {
@@ -82,29 +77,10 @@ export function currentCombatant(combat) {
 
 export function setCombatTurnOrigin(combat, point) {
   if (combat?.state !== 'active' || !currentCombatant(combat)) return null;
-  const x = finiteCoordinate(point?.x);
-  const y = finiteCoordinate(point?.y);
-  if (x === null || y === null) {
-    combat.turnOrigin = null;
-    return null;
-  }
-  combat.turnOrigin = {
-    round: Math.max(1, Number(combat.round) || 1),
-    x,
-    y,
-    elevationFt: finiteElevation(point?.elevationFt),
-  };
-  return combat.turnOrigin;
-}
-
-export function combatTurnOriginMoved(combat, token, epsilon = 1e-6) {
-  const origin = combat?.turnOrigin;
-  const current = currentCombatant(combat);
-  if (combat?.state !== 'active' || !origin || !current || !token || String(token.id) !== String(current.tokenId)) return false;
-  const x = finiteCoordinate(token.x);
-  const y = finiteCoordinate(token.y);
-  if (x === null || y === null) return false;
-  return Math.abs(x - origin.x) > epsilon || Math.abs(y - origin.y) > epsilon;
+  const x = finite(point?.x);
+  const y = finite(point?.y);
+  if (x === null || y === null) return combat.turnOrigin = null;
+  return combat.turnOrigin = { x, y, elevationFt: elevation(point?.elevationFt) };
 }
 
 function preserveCurrent(combat, mutate) {
