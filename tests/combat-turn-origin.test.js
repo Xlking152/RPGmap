@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  combatTurnOriginMoved,
   createCombat,
   nextTurn,
   normalizeCombatState,
@@ -31,14 +30,14 @@ test('legacy Combat schema normalizes forward to schema 2 without inventing an o
   assert.equal(normalized.combat.turnOrigin, null);
 });
 
-test('active combat stores minimal shared origin geometry for the current turn', () => {
+test('active combat stores only shared turn-origin coordinates and elevation', () => {
   const combat = createCombat(refs());
   assert.equal(startCombat(combat), true);
-  const origin = setCombatTurnOrigin(combat, { x: 120, y: 80, elevationFt: 15 });
-  assert.deepEqual(origin, { round: 1, x: 120, y: 80, elevationFt: 15 });
-  assert.equal(combatTurnOriginMoved(combat, { id: 'token-a', x: 120, y: 80 }), false);
-  assert.equal(combatTurnOriginMoved(combat, { id: 'token-a', x: 125, y: 80 }), true);
-  assert.equal(combatTurnOriginMoved(combat, { id: 'token-b', x: 125, y: 80 }), false);
+  assert.deepEqual(setCombatTurnOrigin(combat, { x: 120, y: 80, elevationFt: 15 }), {
+    x: 120, y: 80, elevationFt: 15,
+  });
+  assert.equal(setCombatTurnOrigin(combat, { x: 'bad', y: 80 }), null);
+  assert.equal(combat.turnOrigin, null);
 });
 
 test('next turn clears the previous origin before the controller captures the next one', () => {
@@ -49,7 +48,7 @@ test('next turn clears the previous origin before the controller captures the ne
   assert.equal(next.tokenId, 'token-b');
   assert.equal(combat.turnOrigin, null);
   setCombatTurnOrigin(combat, { x: 9, y: 10, elevationFt: 30 });
-  assert.deepEqual(combat.turnOrigin, { round: 1, x: 9, y: 10, elevationFt: 30 });
+  assert.deepEqual(combat.turnOrigin, { x: 9, y: 10, elevationFt: 30 });
 });
 
 test('removing the active combatant invalidates its origin', () => {
@@ -61,16 +60,16 @@ test('removing the active combatant invalidates its origin', () => {
   assert.equal(combat.combatants[combat.turnIndex].tokenId, 'token-b');
 });
 
-test('shared origin survives normalization only for the active round', () => {
+test('shared origin survives active Combat normalization and is rejected outside active combat', () => {
   const raw = {
     schemaVersion: 2,
     combat: {
       id: 'combat-shared', state: 'active', round: 2, turnIndex: 0,
       combatants: refs().map((item, order) => ({ ...item, id: `combatant-${item.tokenId}`, order })),
-      turnOrigin: { round: 2, x: 44, y: 55, elevationFt: 10 },
+      turnOrigin: { x: 44, y: 55, elevationFt: 10 },
     },
   };
   assert.deepEqual(normalizeCombatState(raw).combat.turnOrigin, raw.combat.turnOrigin);
-  raw.combat.turnOrigin.round = 1;
+  raw.combat.state = 'setup';
   assert.equal(normalizeCombatState(raw).combat.turnOrigin, null);
 });
