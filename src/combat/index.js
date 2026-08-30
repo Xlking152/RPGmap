@@ -1,4 +1,5 @@
 import { createCombatController } from './controller.js';
+import { createCombatTurnOriginRenderer } from './turn-origin-renderer.js';
 
 export {
   createEmptyCombatState,
@@ -16,5 +17,10 @@ export {
 export { CombatStore } from './store.js';
 
 export function createCombatSystem(options = {}) {
-  return createCombatController(options);
+  return {
+    register(api) {
+      createCombatController(options).register(api);
+      createCombatTurnOriginRenderer().register(api);
+    },
+  };
 }
