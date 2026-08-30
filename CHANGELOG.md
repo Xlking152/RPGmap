@@ -1,5 +1,30 @@
 # Changelog
 
+## v2.1.6
+
+- 新增 FVTT 风格的 Group Token Movement：拖动多选集合中的任意已选 Token 时保留 selection，并将被拖 Token 作为 leader；其他成员按开始规划时的相对 `dx/dy` 保持队形。
+- 群组规划只绘制 leader 路线，但终点为每个成员显示独立 Token 幻影；确认后 Renderer 为每个成员使用平移后的 waypoint 队列进行同步平滑移动，不产生中间 World 坐标写入。
+- 每个成员都使用自己的直径、高度和 Status collision context 独立校验整条路线；任意成员受阻、越界、被锁定或失去移动能力时，整个 formation 都视为无效。
+- 最终提交前重新读取 canonical Scene Token 并重新校验全部成员；全部通过后只执行一次 `movement:group` canonical World commit，同时更新全部最终 `x/y` 和 Token-bound AoE anchor，保证全有或全无。
+- Group Movement 只是一次 transient movement context，不新增 `TokenGroup` / Formation 文档或第二套持久化权威；World schema 仍为 `2`，operation schema 仍为 `1`。
+- 非战斗 Player 可群移自己拥有 OWNER 权限的 Token；Active Combat 中普通 Player 一次只能移动一个 Scene Token，即使多个 Token 共享当前 Actor 也不能借群移绕过 Combat Turn Lock；GM 保持完整权限。
+- bundle budget 基线滚动到正式 v2.1.5 release commit `d31840247fba4d850f6f47054588686d747c60dd`：已达成的首屏 JS 体积不允许回退，总 JS/CSS 相对正式基线最多增长 5%。
+- 应用版本提升到 `2.1.6`；Infinite Horror Ruleset 继续为 `1.0.0`，Lanzhou MapPackage 数据版本继续为 `1.0.5`，Character Runtime 继续保持退役。
+
+## v2.1.5
+
+- 新增 Combat Turn Origin Ghost：每回合开始时把当前 combatant 的 canonical Scene Token `x/y/elevationFt` 存入共享 Combat State；Token 离开起点后 Renderer 在原位显示半透明不可交互的起点幻影。
+- 起点幻影不是第二个 Scene Token，不进入 Selection、碰撞、AoE、伤害或 World 写入；刷新和 Local/LAN 重连后可由共享 Combat State 重建。
+- 下一回合会替换旧起点，结束战斗会清除；Token 回到完全相同的起点时幻影隐藏，再次离开仍使用本回合同一 origin。
+- Combat preference schema 从 `1` 提升到 `2` 并自动向前归一化；World schema `2`、operation schema `1`、Ruleset 和 MapPackage 数据版本不变。
+
+## v2.1.4
+
+- 恢复更接近 v1.6.3 的 Token 移动观感：规划时显示终点 Token 幻影，确认后 canonical World 仍只提交最终位置，Renderer 再沿已确认路径执行平滑插值。
+- 多 waypoint 会按路径段顺序显示，视觉动画不会产生中间 World 写入；`prefers-reduced-motion` 继续受支持。
+- Token 移动期间临时隐藏独立 Health/Status overlay，避免覆盖层先跳到服务器终点，动画结束后恢复。
+- Token 上方标签改为“高度 → 名称”，生命条继续位于 Token 下方。
+
 ## v2.1.3
 
 - 修复 Local/LAN 普通聊天发送者看不到自己消息的问题：`chat.append` / `chat.clear` 属于服务器独占写入，即使快照来自当前 Session 也会重新载入权威 World；普通自己发出的 World operation 仍避免重复 import。

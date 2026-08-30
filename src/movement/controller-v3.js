@@ -38,6 +38,12 @@ function tokenIdFromTarget(target) {
   return root?.querySelector?.('[data-token-id]')?.dataset?.tokenId || null;
 }
 
+function sameIds(left, right) {
+  const a = [...left].map(String).sort();
+  const b = [...right].map(String).sort();
+  return a.length === b.length && a.every((id, index) => id === b[index]);
+}
+
 export function createMovementControllerV3({ settings } = {}) {
   return Object.freeze({
     register(api) {
@@ -53,6 +59,8 @@ export function createMovementControllerV3({ settings } = {}) {
       const routeInspector = createMovementRouteInspector(api);
       const drag = new TokenDragPlan();
       let selectedTokenId = api.selection.getPrimaryTokenId?.() || null;
+      let groupMembers = [];
+      let blockedMemberId = null;
       let moving = false;
       let routeRequest = 0;
       let routeTimer = null;
@@ -78,6 +86,47 @@ export function createMovementControllerV3({ settings } = {}) {
           y: Math.max(0, Math.min(api.mapPackage.height, snapped.y)),
         };
       };
+      const groupCount = () => Math.max(1, groupMembers.length);
+      const groupLabel = () => groupCount() > 1 ? `群组 ${groupCount()} Token` : 'Token';
+      const translated = (member, point) => ({ x: point.x + member.dx, y: point.y + member.dy });
+
+      function selectMovementGroup(current) {
+        const selected = (api.selection.getSelectedTokenIds?.() || []).map(String);
+        const useGroup = selected.length > 1 && selected.includes(String(current.id));
+        const members = (useGroup ? selected : [current.id]).map(mapToken).filter(Boolean);
+        groupMembers = members.map(item => ({
+          tokenId: String(item.id),
+          dx: Number(item.x) - Number(current.x),
+          dy: Number(item.y) - Number(current.y),
+        }));
+        if (!groupMembers.some(member => member.tokenId === String(current.id))) {
+          groupMembers = [{ tokenId: String(current.id), dx: 0, dy: 0 }];
+        }
+        selectedTokenId = String(current.id);
+        api.selection.replace?.(groupMembers.map(member => member.tokenId), current.id);
+      }
+
+      async function findGroupSegment(from, to) {
+        blockedMemberId = null;
+        let leaderRoute = null;
+        for (const member of groupMembers) {
+          const route = await routeInspector.findSegment(member.tokenId, translated(member, from), translated(member, to));
+          if (!route) {
+            blockedMemberId = member.tokenId;
+            return null;
+          }
+          if (member.tokenId === String(drag.tokenId)) leaderRoute = route;
+        }
+        return leaderRoute;
+      }
+
+      function inspectGroupSegment(from, to) {
+        const member = groupMembers.find(item => item.tokenId === blockedMemberId)
+          || groupMembers.find(item => item.tokenId === String(drag.tokenId))
+          || groupMembers[0];
+        if (!member) return { valid: false, reason: '无效群组移动' };
+        return { ...routeInspector.inspectSegment(member.tokenId, translated(member, from), translated(member, to)), tokenId: member.tokenId };
+      }
 
       function clearRouteTimer() {
         if (routeTimer) clearTimeout(routeTimer);
@@ -132,8 +181,8 @@ export function createMovementControllerV3({ settings } = {}) {
             L.tooltip({ permanent: true, direction: 'top', className: 'marker-tooltip', pane: 'measurePane' })
               .setLatLng(worldToLatLng(endpoint, api.mapPackage.height))
               .setContent(route.valid
-                ? `${formatDistance(Number(route.distance) || 0)}${drag.session.waypoints.length ? ` · ${drag.session.waypoints.length} 拐点` : ''}`
-                : `第 ${Number(route.failedSegmentIndex || 0) + 1} 段受阻`)
+                ? `${groupCount() > 1 ? `${groupCount()} Token · ` : ''}${formatDistance(Number(route.distance) || 0)}${drag.session.waypoints.length ? ` · ${drag.session.waypoints.length} 拐点` : ''}`
+                : `第 ${Number(route.failedSegmentIndex || 0) + 1} 段受阻${blockedMemberId ? ` · ${blockedMemberId}` : ''}`)
               .addTo(routeLayer);
           }
         }
@@ -145,6 +194,8 @@ export function createMovementControllerV3({ settings } = {}) {
         clearRouteTimer();
         api.movement.cancelPending?.();
         moving = false;
+        blockedMemberId = null;
+        groupMembers = [];
         drag.reset();
         routeLayer.clearLayers();
         showControls(false);
@@ -179,12 +230,12 @@ export function createMovementControllerV3({ settings } = {}) {
         const route = await calculateWaypointRoute({
           session: drag.session,
           destination: point,
-          findPath: (from, to) => routeInspector.findSegment(drag.tokenId, from, to),
+          findPath: findGroupSegment,
         });
         if (!route.valid) {
           const from = route.controls?.[route.failedSegmentIndex];
           const to = route.controls?.[route.failedSegmentIndex + 1];
-          if (from && to) route.inspection = routeInspector.inspectSegment(drag.tokenId, from, to);
+          if (from && to) route.inspection = inspectGroupSegment(from, to);
         }
         if (request !== routeRequest || !drag.session) return null;
         drag.setRoute(route);
@@ -196,9 +247,9 @@ export function createMovementControllerV3({ settings } = {}) {
             : drag.nextClickCreatesWaypoint
               ? ' · 左键设置第 1 个拐点'
               : ' · Ctrl/Cmd+点击或 F 添加拐点';
-          status(`直线路线 ${formatDistance(Number(route.distance) || 0)} · 吸附 ${settings.step} m · ${drag.session.waypoints.length} 个拐点${action}`);
+          status(`${groupLabel()}直线路线 ${formatDistance(Number(route.distance) || 0)} · 吸附 ${settings.step} m · ${drag.session.waypoints.length} 个拐点${action}`);
         } else {
-          status('直线路径受阻 · Ctrl/Cmd+点击添加可通行拐点，右键或 Alt+F 撤销');
+          status(`${groupLabel()}路径受阻${blockedMemberId ? ` · ${blockedMemberId}` : ''} · Ctrl/Cmd+点击添加可通行拐点，右键或 Alt+F 撤销`);
         }
         showControls(drag.phase === TokenDragPhase.READY && route.valid);
         return route;
@@ -231,19 +282,19 @@ export function createMovementControllerV3({ settings } = {}) {
           failedSegmentIndex: drag.session.waypoints.length,
           distance: Math.hypot(candidate.x - start.x, candidate.y - start.y),
           destination: candidate,
-          inspection: routeInspector.inspectSegment(drag.tokenId, start, candidate),
+          inspection: inspectGroupSegment(start, candidate),
         };
         drag.setRoute(route);
         draw(route);
         showControls(false);
-        status('拐点直线路径受阻 · 请换一个位置，或右键 / Alt+F 撤销上一个拐点');
+        status(`${groupLabel()}拐点路径受阻 · 请换一个位置，或右键 / Alt+F 撤销上一个拐点`);
       }
 
       async function addWaypointAt(rawPoint) {
         if (!drag.session || moving) return false;
         const candidate = snapPoint(rawPoint);
         const start = waypointStart();
-        const directLeg = start && await routeInspector.findSegment(drag.tokenId, start, candidate);
+        const directLeg = start && await findGroupSegment(start, candidate);
         if (!directLeg) {
           showBlockedWaypoint(candidate);
           return false;
@@ -292,14 +343,50 @@ export function createMovementControllerV3({ settings } = {}) {
         });
       }
 
+      function waitForGroupMove() {
+        return new Promise(resolve => {
+          let offMoved = null;
+          let offCancelled = null;
+          const done = value => {
+            offMoved?.(); offCancelled?.(); resolve(value);
+          };
+          offMoved = api.on?.('token:group-move', () => done(true));
+          offCancelled = api.on?.('token:group-move-cancelled', () => done(false));
+        });
+      }
+
       async function commit() {
         if (moving || drag.phase !== TokenDragPhase.READY || !drag.route?.valid) return false;
-        const tokenId = drag.tokenId;
-        const targets = drag.movementTargets();
-        if (!targets.length || !drag.startMoving()) return false;
+        if (!drag.startMoving()) return false;
         moving = true;
         showControls(false);
         routeLayer.clearLayers();
+        if (groupCount() > 1) {
+          status(`正在移动 ${groupCount()} 个 Token…`);
+          const planned = await api.movement.planTokenGroupMove(
+            groupMembers.map(member => member.tokenId), drag.tokenId, drag.route.points,
+          );
+          if (!planned) {
+            reset('群组移动中止：执行时至少一个 Token 路径已不可通行');
+            return false;
+          }
+          const moved = waitForGroupMove();
+          if (!api.movement.commitTokenGroupMove()) {
+            reset('群组移动中止：当前路线无法原子提交');
+            return false;
+          }
+          if (!await moved) {
+            reset('群组移动未获服务器确认，已恢复服务器状态');
+            return false;
+          }
+          const count = groupCount();
+          const waypointCount = drag.session?.waypoints.length || 0;
+          reset(`${count} 个 Token 群组移动完成 · ${waypointCount} 个拐点`);
+          return true;
+        }
+
+        const tokenId = drag.tokenId;
+        const targets = drag.movementTargets();
         status('正在沿规划路径移动…');
         for (const target of targets) {
           const route = await api.movement.planTokenMove(tokenId, target);
@@ -329,12 +416,11 @@ export function createMovementControllerV3({ settings } = {}) {
           return false;
         }
         if (drag.active || moving) reset();
-        selectedTokenId = String(current.id);
-        api.selection.replace?.([current.id], current.id);
+        selectMovementGroup(current);
         previousTool = api.getTool?.() || 'pan';
         api.setTool?.('token-move');
         if (!beginSession(current, { phase: TokenDragPhase.PLANNING })) return false;
-        status(`移动 Token：移动鼠标规划终点 · Ctrl/Cmd+点击或 F 添加拐点 · 当前吸附 ${settings.step} m`);
+        status(`移动${groupLabel()}：移动鼠标规划终点 · Ctrl/Cmd+点击或 F 添加拐点 · 当前吸附 ${settings.step} m`);
         return true;
       }
 
@@ -352,8 +438,7 @@ export function createMovementControllerV3({ settings } = {}) {
         if (!current) return;
         event.preventDefault();
         event.stopImmediatePropagation();
-        selectedTokenId = String(current.id);
-        api.selection.replace?.([current.id], current.id);
+        selectMovementGroup(current);
         previousTool = api.getTool?.() || 'pan';
         api.setTool?.('token-move');
         if (!beginSession(current, {
@@ -366,7 +451,7 @@ export function createMovementControllerV3({ settings } = {}) {
         mapElement.setPointerCapture?.(event.pointerId);
         mapElement.classList.add('fvtt-token-dragging');
         mapElement.style.cursor = 'grabbing';
-        status('拖动 Token 规划路线 · Ctrl/Cmd+松开进入拐点规划 · F 添加拐点 · Esc 取消');
+        status(`拖动${groupLabel()}规划路线 · Ctrl/Cmd+松开进入拐点规划 · F 添加拐点 · Esc 取消`);
       }
 
       function moveTokenDrag(event) {
@@ -395,7 +480,7 @@ export function createMovementControllerV3({ settings } = {}) {
         suppressClickUntil = performance.now() + 250;
         const dragged = drag.draggedPixels({ x: event.clientX, y: event.clientY });
         if (dragged < DRAG_THRESHOLD_PX) {
-          reset('已选择 Token · 直接拖动 Token 可规划移动');
+          reset(`已选择${groupLabel()} · 直接拖动已选 Token 可规划移动`);
           return;
         }
         const waypointPlanning = event.ctrlKey || event.metaKey;
@@ -404,8 +489,8 @@ export function createMovementControllerV3({ settings } = {}) {
         if (!route?.valid) {
           drag.continuePlanning({ nextClickCreatesWaypoint: waypointPlanning });
           status(waypointPlanning
-            ? '已进入拐点规划 · 松开位置不计为拐点；移动到可通行位置后左键设置第 1 个拐点'
-            : '当前位置不可通行 · 移动鼠标重选终点，Esc 取消');
+            ? '已进入拐点规划 · 松开位置不计为拐点；移动到整组可通行位置后左键设置第 1 个拐点'
+            : '当前位置至少有一个 Token 不可通行 · 移动鼠标重选终点，Esc 取消');
           return;
         }
         if (waypointPlanning) {
@@ -419,7 +504,7 @@ export function createMovementControllerV3({ settings } = {}) {
         drag.ready(route);
         draw(route);
         showControls(true);
-        status(`路线已就绪 · ${formatDistance(Number(route.distance) || 0)} · 确认移动 / Enter，Esc 取消`);
+        status(`${groupLabel()}路线已就绪 · ${formatDistance(Number(route.distance) || 0)} · 确认移动 / Enter，Esc 取消`);
       }
 
       async function planningClick(event) {
@@ -435,6 +520,7 @@ export function createMovementControllerV3({ settings } = {}) {
           const current = mapToken(selectedTokenId);
           if (!current) return;
           previousTool = 'pan';
+          selectMovementGroup(current);
           if (!beginSession(current, { phase: TokenDragPhase.PLANNING })) return;
         }
         if (![TokenDragPhase.PLANNING, TokenDragPhase.READY].includes(drag.phase)) return;
@@ -491,34 +577,22 @@ export function createMovementControllerV3({ settings } = {}) {
         if (!drag.active || moving) return;
         if (event.defaultPrevented || event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
         if (event.key === 'Escape') {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          reset('已取消 Token 移动规划');
-          return;
+          event.preventDefault(); event.stopImmediatePropagation(); reset('已取消 Token 移动规划'); return;
         }
         if (event.key === 'Enter' && drag.phase === TokenDragPhase.READY) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          await commit();
-          return;
+          event.preventDefault(); event.stopImmediatePropagation(); await commit(); return;
         }
         if (event.key.toLowerCase() === 'f') {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          if (event.altKey) await removeWaypoint();
-          else await addWaypointAtCurrent();
+          event.preventDefault(); event.stopImmediatePropagation();
+          if (event.altKey) await removeWaypoint(); else await addWaypointAtCurrent();
         }
       }
 
       controls.confirm.addEventListener('click', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        void commit();
+        event.preventDefault(); event.stopPropagation(); void commit();
       });
       controls.cancel.addEventListener('click', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        reset('已取消 Token 移动规划');
+        event.preventDefault(); event.stopPropagation(); reset('已取消 Token 移动规划');
       });
       mapElement.addEventListener('pointerdown', beginTokenDrag, true);
       mapElement.addEventListener('pointermove', moveTokenDrag, true);
@@ -531,8 +605,11 @@ export function createMovementControllerV3({ settings } = {}) {
 
       const selectionOff = api.selection.subscribe?.(snapshot => {
         const next = snapshot?.primaryId || null;
-        if (drag.active && next && String(next) !== String(drag.tokenId) && !moving) {
-          reset('已切换 Token，移动规划取消');
+        if (drag.active && !moving) {
+          const ids = snapshot?.ids || [];
+          if (String(next || '') !== String(drag.tokenId) || !sameIds(ids, groupMembers.map(member => member.tokenId))) {
+            reset('Token 选择已变化，移动规划取消');
+          }
         }
         selectedTokenId = next;
       });
@@ -566,6 +643,7 @@ export function createMovementControllerV3({ settings } = {}) {
       api.movementUi = Object.freeze({
         tokenFirst: true,
         v163Interaction: true,
+        groupMovement: true,
         begin,
         plan,
         commit,
@@ -574,8 +652,9 @@ export function createMovementControllerV3({ settings } = {}) {
         removeWaypoint,
         get activeTokenId() { return drag.tokenId || null; },
         get phase() { return drag.phase; },
+        getGroupPreviewMembers() { return groupMembers.map(member => ({ ...member })); },
       });
-      status('浏览模式：拖动地图；直接拖动 Token 可规划移动，规划中滚轮切换吸附档位');
+      status('浏览模式：框选多个 Token 后拖动任一已选 Token 可保持队形群组移动');
     },
   });
 }

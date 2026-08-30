@@ -1,6 +1,6 @@
 # RPGmap
 
-RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.1.5**，提供 World/Scene 管理、Actor/Token、地图移动与测距、生命/伤势、状态、战斗、聊天，以及 Windows 本机/局域网多人运行包。
+RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.1.6**，提供 World/Scene 管理、Actor/Token、地图移动与测距、生命/伤势、状态、战斗、聊天，以及 Windows 本机/局域网多人运行包。
 
 内置的“北宋兰州城”是复杂 Reference MapPackage，用于验证建筑、城墙、城门、桥梁、水体、破坏、洪水、导航和 29 张 WebP 美术资源能够通过通用 Core 运行。
 
@@ -9,7 +9,7 @@ RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前�
 正式 Windows Release：
 
 1. 安装 Node.js `20.19+` 或 `22.12+`。
-2. 下载并解压 `RPGmap-v2.1.5.zip`。
+2. 下载并解压 `RPGmap-v2.1.6.zip`。
 3. 双击 `start-rpgmap.bat`。
 4. GM 使用启动窗口中的 Local URL 与 GM Secret；同一局域网的 Player 使用 LAN URL 与 Join Code。
 
@@ -22,9 +22,9 @@ RPGmap 仅面向本机和可信局域网，不应直接暴露到公网。World�
 - World Manager：先选择或创建 World，再按其 Ruleset 与 Active Scene 加载地图。
 - Scene/MapPackage：同一地图可建立多个 Scene，Feature State 与 Token 相互隔离。
 - Actor/Token：Linked Token 使用 Base Actor；Unlinked Token 通过 `actorDelta` 保存独立状态。
-- 地图工具：选择、拖动、直线 waypoint、碰撞、测距、高度，以及选择模式下的 Feature 检查/开关；移动规划带 Token 终点预览，确认后 Token 会平滑经过已提交的路径段。
+- 地图工具：选择、框选、拖动、严格直线 waypoint、碰撞、测距、高度，以及选择模式下的 Feature 检查/开关；移动规划带 Token 终点预览，确认后 Token 会平滑经过已确认的路径段。v2.1.6 起可框选多个 Token，拖动任一已选 Token 作为 leader，整组保持相对队形移动；每个成员按自身直径、高度和状态独立校验碰撞，任一受阻则整组拒绝。
 - 规则系统：Infinite Horror Actor、Health、B/L/A 伤势、Status/Effect、Damage/Healing。
-- 战斗与聊天：先攻、回合权限、共享聊天与系统日志；当前战斗者离开本回合起点后，会保留不可交互的回合起点幻影直到下一回合。
+- 战斗与聊天：先攻、回合权限、共享聊天与系统日志；当前战斗者离开本回合起点后，会保留不可交互的回合起点幻影直到下一回合。普通 Player 在战斗中仍只能移动当前回合的一个 Token，群移不能绕过 Combat Turn Lock；GM 可按需要调整多个 Token。
 - Local/LAN：服务器权威 operation、revision、幂等、Actor Ownership、Combat Turn Lock 与滚动备份。
 - 发布验证：audit、全量测试、tracked syntax、bundle budget、严格包清单、SHA-256 和 Windows Edge smoke。
 
@@ -59,6 +59,8 @@ v2.1.3 修复 Local/LAN 聊天发送者看不到自己消息、合并“选择/�
 v2.1.4 恢复更接近 v1.6.3 的移动观感：规划时显示随终点移动的 Token 幽灵，权威移动提交后只在渲染层平滑插值，不产生中间 World 写入；Token 高度移到名称左侧，血条继续位于 Token 下方。详细说明见 [v2.1.4 Movement Visuals](reference/V2.1.4-MOVEMENT-VISUALS.md)。
 
 v2.1.5 增加 FVTT 风格的 Combat Turn Origin Ghost：每个回合开始时在共享 Combat State 捕获当前 Scene Token 的起始坐标和高度；Token 真正离开起点后，Renderer 在原位显示半透明“起点”幻影，下一回合或战斗结束自动替换/清除。幻影不是第二个 Token，不参与选择、碰撞、范围、伤害或任何 World 写入。详细说明见 [v2.1.5 Combat Turn Origin](reference/V2.1.5-COMBAT-TURN-ORIGIN.md)。
+
+v2.1.6 增加 Group Token Movement：多选 Token 只作为一次临时移动上下文，不创建 `TokenGroup` 或 Formation 文档。拖动已选 Token 时由该 Token 作为 leader，其他成员保持固定 `dx/dy`；路线只显示 leader，但每个成员沿平移后的同一 waypoint 路径独立校验，全部通过后才以一次 World commit 原子写入最终位置。Renderer 使用预置的只读视觉 waypoint 队列同步播放每个 Token 的平滑移动，并在规划阶段显示整组终点幻影。详细说明见 [v2.1.6 Group Token Movement](reference/V2.1.6-GROUP-TOKEN-MOVEMENT.md)。
 
 启动入口 `src/main.js` 只包含 World Manager bootstrap。选择 World/Scene 后才动态导入 `src/runtime/map-runtime.js`、Leaflet、地图 CSS、兰州逻辑与资源。
 

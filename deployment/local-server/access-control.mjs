@@ -281,6 +281,10 @@ export function validatePlayerWorldPush({ before, next, user } = {}) {
   for (const [id, token] of beforeTokens) {
     if (!same(tokenSizeFields(token), tokenSizeFields(nextTokens.get(id)))) return { ok: false, code: 'token_size_gm_only', message: 'Token 直径只能由 GM 修改' };
   }
+  const movedTokenIds = movedWorldTokenIds(before, next);
+  if (combatState(before)?.state === 'active' && movedTokenIds.length > 1) {
+    return { ok: false, code: 'combat_group_move_gm_only', message: '战斗中 Player 只能移动当前回合的一个 Token' };
+  }
   const changed = changedActorIds(before, next);
   for (const actorId of changed) {
     if (ownershipLevel(user, actorId) !== OWNERSHIP.OWNER) return { ok: false, code: 'actor_not_owned', message: `你没有 Actor ${actorId} 的 OWNER 权限`, actorId };
@@ -290,7 +294,7 @@ export function validatePlayerWorldPush({ before, next, user } = {}) {
     return { ok: false, code: 'combat_turn_locked', message: '当前处于战斗中，只能操控先攻顺序中正在行动的 Actor', activeActorId };
   }
   const sceneTokens = tokenMapFromScene(before);
-  for (const tokenId of movedWorldTokenIds(before, next)) {
+  for (const tokenId of movedTokenIds) {
     const token = sceneTokens.get(String(tokenId));
     const actorId = cleanActorId(token?.actorId);
     if (!actorId || ownershipLevel(user, actorId) !== OWNERSHIP.OWNER) return { ok: false, code: 'actor_not_owned', message: '你没有该 Token 所属 Actor 的 OWNER 权限', tokenId, actorId };

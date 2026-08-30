@@ -72,7 +72,7 @@ export function createMovementGhostRendererV2() {
       ensurePane(api.map);
       const layer = L.layerGroup().addTo(api.map);
       let selectedTokenId = api.selection.getPrimaryTokenId?.() || null;
-      let ghostMarker = null;
+      const ghostMarkers = new Map();
       let endpointLayer = null;
       let hideTimer = null;
       let destroyed = false;
@@ -85,16 +85,16 @@ export function createMovementGhostRendererV2() {
       const hide = () => {
         cancelHide();
         endpointLayer = null;
-        if (ghostMarker) layer.removeLayer(ghostMarker);
-        ghostMarker = null;
+        ghostMarkers.forEach(marker => layer.removeLayer(marker));
+        ghostMarkers.clear();
       };
       const scheduleHide = () => {
         cancelHide();
         hideTimer = setTimeout(hide, HIDE_DELAY_MS);
       };
 
-      function selectedModel() {
-        const token = selectedTokenId ? api.tokens.get(selectedTokenId) : null;
+      function tokenModel(tokenId) {
+        const token = tokenId ? api.tokens.get(tokenId) : null;
         if (!token || token.placement !== 'map') return null;
         try {
           const resolved = api.tokens.resolveActor(token.id);
@@ -110,30 +110,50 @@ export function createMovementGhostRendererV2() {
         return Math.hypot(unit.x - origin.x, unit.y - origin.y) || 1;
       }
 
+      function previewMembers() {
+        const group = api.movementUi?.getGroupPreviewMembers?.() || [];
+        return group.length ? group : selectedTokenId ? [{ tokenId: selectedTokenId, dx: 0, dy: 0 }] : [];
+      }
+
       function show(endpoint) {
-        const model = selectedModel();
-        if (!model || typeof endpoint?.getLatLng !== 'function') return;
+        if (typeof endpoint?.getLatLng !== 'function') return;
+        const members = previewMembers();
+        if (!members.length) return;
         cancelHide();
         endpointLayer = endpoint;
-        const sizePixels = Math.max(18, Math.min(144, model.diameterMeters * pixelsPerMeter()));
-        const descriptor = createTokenGhostDescriptor(
-          model,
-          latLngToWorld(endpoint.getLatLng(), api.mapPackage.height),
-          { blocked: sameColor(endpoint.options?.color, BLOCKED_ROUTE_COLOR), sizePixels },
-        );
-        if (!descriptor) return;
-        if (!ghostMarker) {
-          ghostMarker = L.marker(endpoint.getLatLng(), {
-            pane: PANE,
-            icon: ghostIcon(descriptor),
-            interactive: false,
-            keyboard: false,
-            bubblingMouseEvents: false,
-            zIndexOffset: 900,
-          }).addTo(layer);
-        } else {
-          ghostMarker.setLatLng(endpoint.getLatLng());
-          ghostMarker.setIcon(ghostIcon(descriptor));
+        const leaderPoint = latLngToWorld(endpoint.getLatLng(), api.mapPackage.height);
+        const blocked = sameColor(endpoint.options?.color, BLOCKED_ROUTE_COLOR);
+        const activeIds = new Set();
+        for (const member of members) {
+          const model = tokenModel(member.tokenId);
+          if (!model) continue;
+          const id = String(model.id);
+          activeIds.add(id);
+          const point = { x: leaderPoint.x + Number(member.dx || 0), y: leaderPoint.y + Number(member.dy || 0) };
+          const latLng = worldToLatLng(point, api.mapPackage.height);
+          const sizePixels = Math.max(18, Math.min(144, model.diameterMeters * pixelsPerMeter()));
+          const descriptor = createTokenGhostDescriptor(model, point, { blocked, sizePixels });
+          if (!descriptor) continue;
+          let marker = ghostMarkers.get(id);
+          if (!marker) {
+            marker = L.marker(latLng, {
+              pane: PANE,
+              icon: ghostIcon(descriptor),
+              interactive: false,
+              keyboard: false,
+              bubblingMouseEvents: false,
+              zIndexOffset: 900,
+            }).addTo(layer);
+            ghostMarkers.set(id, marker);
+          } else {
+            marker.setLatLng(latLng);
+            marker.setIcon(ghostIcon(descriptor));
+          }
+        }
+        for (const [id, marker] of ghostMarkers) {
+          if (activeIds.has(id)) continue;
+          layer.removeLayer(marker);
+          ghostMarkers.delete(id);
         }
       }
 

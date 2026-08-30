@@ -116,6 +116,7 @@ export function createTokenRendererSystem() {
       const views = new Map();
       const visualPoints = new Map();
       const animations = new Map();
+      const preparedRoutes = new Map();
       let selectedIds = new Set(api.selection?.getSelectedTokenIds?.() || []);
       let destroyed = false;
       const off = [];
@@ -217,14 +218,24 @@ export function createTokenRendererSystem() {
           return;
         }
         if (sameTokenPoint(current, target) || reducedMotion) {
+          preparedRoutes.delete(id);
           visualPoints.set(id, target);
           view.setLatLng(worldToLatLng(target, api.mapPackage.height));
           return;
         }
-        const motion = { id, view, from: current, target, queue: [], frame: null, startedAt: null, duration: 0 };
+        let path = preparedRoutes.get(id) || [];
+        preparedRoutes.delete(id);
+        if (!path.length || !sameTokenPoint(path.at(-1), target)) path = [target];
+        path = path.map(normalizeTokenPoint).filter(Boolean).filter((point, index, values) => {
+          const previous = index ? values[index - 1] : current;
+          return !sameTokenPoint(previous, point);
+        });
+        if (!path.length) path = [target];
+        const [first, ...queue] = path;
+        const motion = { id, view, from: current, target: first, queue, frame: null, startedAt: null, duration: 0 };
         animations.set(id, motion);
         api.emit?.('token:visual-move-start', { id, tokenId: id, from: current, to: target });
-        beginSegment(motion, target);
+        beginSegment(motion, first);
       }
 
       function render() {
@@ -240,6 +251,7 @@ export function createTokenRendererSystem() {
           tokenLayer.removeLayer(view);
           views.delete(id);
           visualPoints.delete(id);
+          preparedRoutes.delete(id);
         }
 
         for (const model of models) {
@@ -290,6 +302,7 @@ export function createTokenRendererSystem() {
         api.map.off('zoomend', render);
         api.map.off('resize', render);
         for (const id of [...animations.keys()]) cancelMotion(id);
+        preparedRoutes.clear();
         tokenLayer.clearLayers();
         statusLayer.clearLayers();
         api.map.removeLayer?.(tokenLayer);
@@ -303,6 +316,14 @@ export function createTokenRendererSystem() {
         getVisibleTokenIds() { return [...views.keys()]; },
         getVisualTokenPoint(tokenId) { return normalizeTokenPoint(visualPoints.get(String(tokenId))); },
         isTokenMoving(tokenId) { return animations.has(String(tokenId)); },
+        prepareTokenVisualRoute(tokenId, points = []) {
+          const id = String(tokenId || '');
+          if (!id) return false;
+          const route = points.map(normalizeTokenPoint).filter(Boolean);
+          if (route.length) preparedRoutes.set(id, route);
+          else preparedRoutes.delete(id);
+          return true;
+        },
       });
       render();
       api.emit?.('renderer:ready', { canonicalSceneTokens: true, count: views.size });
