@@ -75,7 +75,7 @@
 - “灵体”只绕过 `structure` 碰撞组，仍受水域、弹坑、地图边界、Token 尺寸和高度规则约束；定身、失能、昏迷和死亡会在规划与提交两个阶段阻止移动或交互。
 - Feature Capability 支持结构化状态前置条件和成功副作用；Feature 状态、角色位置与状态变化在同一次 World 提交中原子完成，失败或取消不会留下部分结果。
 - 局域网新增服务器权威 `status.apply/remove/setStacks/batch/definition.*` 操作；使用 `operationId` 去重，批量操作全成全败，并在 schema 校验、备份和原子写盘成功后才确认及广播。
-- Player 无法通过伪造状态消息或 `world.push` 改写状态定义及 Actor / Token effects；断线、权限下降或写盘失败会清理待提交操作及移动预览，并以服务器 World 恢复界面。
+- Player 无法通过伪造状态消息或 `world.push` 改写状态定义及 Actor / Token effects；断线、权限下降或写盘失败会清理待提交状态和移动预览，并以服务器 World 恢复界面。
 
 ## v1.6.3
 
@@ -110,11 +110,11 @@ V1.5.5 将服务器 World 设为本地启动时的唯一状态来源，并完成
 
 ## 1.5.4 — Candidate · 2026-08-22
 
-V1.5.4 继续收口单入口 Launcher 的主机体验，不改变 MapPackage / Feature Interaction / Elevation / Navigation 数据模型。
+V1.5.4 继续收口单入口 Launcher 的主机体验，不改变 MapPackage / Feature / Elevation / Navigation 数据模型。
 
 ### Startup / Multiplayer UX
 
-- Local/LAN 与 Internet/Public 两种模式都会生成并显示 Join Code（房间号）与 GM Secret。
+- Local/LAN 与 Internet/Public 两种模式都会生成并显示 Join Code（房间号）与 GM Secret（GM 密码）。
 - READY 信息集中显示本机地址、可用 LAN 地址、Internet 模式的 Cloudflare Public URL、Join Code 与 GM Secret。
 - Internet 模式下主机不再通过 Public URL 访问自己的地图，而是直接打开 `127.0.0.1`，减少 Tunnel 往返和公网波动对主机加载的影响。
 - Launcher 打开的 localhost URL 使用 hash 携带一次性 GM bootstrap；Client 读取后立即清除 hash，并自动以 GM 身份连接。
