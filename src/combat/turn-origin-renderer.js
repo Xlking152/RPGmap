@@ -1,7 +1,7 @@
 import L from 'leaflet';
 import { worldToLatLng } from '../engine/geometry.js';
 import { createTokenViewModel } from '../render/token-view-model.js';
-import { combatTurnOriginMoved, currentCombatant } from './model.js';
+import { currentCombatant } from './model.js';
 
 const PANE = 'combatTurnOriginPane';
 
@@ -20,7 +20,6 @@ function originIcon(api, model) {
 export function createCombatTurnOriginRenderer() {
   return Object.freeze({
     register(api) {
-      if (!api.tokens?.get || !api.tokens?.resolveActor) throw new Error('Combat Turn Origin Renderer requires canonical Token Runtime');
       let pane = api.map.getPane?.(PANE);
       if (!pane) pane = api.map.createPane(PANE);
       pane.style.zIndex = '505';
@@ -33,14 +32,17 @@ export function createCombatTurnOriginRenderer() {
         const origin = combat?.turnOrigin;
         const current = origin ? currentCombatant(combat) : null;
         const token = current ? api.tokens.get(current.tokenId) : null;
-        if (!origin || combat?.state !== 'active' || !token || token.hidden === true || token.placement !== 'map' || !combatTurnOriginMoved(combat, token)) return;
+        const x = Number(token?.x);
+        const y = Number(token?.y);
+        if (!origin || combat?.state !== 'active' || !token || token.hidden === true || token.placement !== 'map'
+          || !Number.isFinite(x) || !Number.isFinite(y)
+          || (Math.abs(x - origin.x) <= 1e-6 && Math.abs(y - origin.y) <= 1e-6)) return;
         let actor = null;
         try { actor = api.tokens.resolveActor(token.id)?.actor || null; } catch {}
         const model = actor ? createTokenViewModel({ token, actor, ruleset: api.ruleset }) : null;
         if (!model) return;
         L.marker(worldToLatLng(origin, api.mapPackage.height), {
-          pane: PANE, icon: originIcon(api, model), opacity: 0.32,
-          interactive: false, keyboard: false, bubblingMouseEvents: false, zIndexOffset: -50,
+          pane: PANE, icon: originIcon(api, model), opacity: 0.32, interactive: false, keyboard: false,
         }).bindTooltip(`起点 · ${origin.elevationFt} ft`, {
           permanent: true, direction: 'top', className: 'marker-tooltip',
         }).addTo(layer);
