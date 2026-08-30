@@ -5,14 +5,10 @@ import { combatTurnOriginMoved, currentCombatant } from './model.js';
 
 const PANE = 'combatTurnOriginPane';
 
-function pixelsPerMeter(api) {
+function originIcon(api, model) {
   const a = api.map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, api.mapPackage.height));
   const b = api.map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 0 }, api.mapPackage.height));
-  return Math.hypot(b.x - a.x, b.y - a.y) || 1;
-}
-
-function originIcon(api, model) {
-  const size = Math.max(18, Math.min(144, model.diameterMeters * pixelsPerMeter(api)));
+  const size = Math.max(18, Math.min(144, model.diameterMeters * (Math.hypot(b.x - a.x, b.y - a.y) || 1)));
   const face = model.avatarDataUrl ? `<img src="${model.avatarDataUrl}" alt="">` : '?';
   return L.divIcon({
     className: 'rpg-token-v2',
@@ -30,18 +26,9 @@ export function createCombatTurnOriginRenderer() {
       pane.style.zIndex = '505';
       pane.style.pointerEvents = 'none';
       const layer = L.layerGroup().addTo(api.map);
-      let marker = null;
-      let destroyed = false;
-      const off = [];
-
-      function hide() {
-        if (marker) layer.removeLayer(marker);
-        marker = null;
-      }
 
       function render() {
-        if (destroyed) return;
-        hide();
+        layer.clearLayers();
         const combat = api.getState?.()?.preferences?.combatSystem?.combat;
         const origin = combat?.turnOrigin;
         const current = origin ? currentCombatant(combat) : null;
@@ -51,29 +38,22 @@ export function createCombatTurnOriginRenderer() {
         try { actor = api.tokens.resolveActor(token.id)?.actor || null; } catch {}
         const model = actor ? createTokenViewModel({ token, actor, ruleset: api.ruleset }) : null;
         if (!model) return;
-        marker = L.marker(worldToLatLng(origin, api.mapPackage.height), {
-          pane: PANE,
-          icon: originIcon(api, model),
-          opacity: 0.32,
-          interactive: false,
-          keyboard: false,
-          bubblingMouseEvents: false,
-          zIndexOffset: -50,
+        L.marker(worldToLatLng(origin, api.mapPackage.height), {
+          pane: PANE, icon: originIcon(api, model), opacity: 0.32,
+          interactive: false, keyboard: false, bubblingMouseEvents: false, zIndexOffset: -50,
         }).bindTooltip(`起点 · ${origin.elevationFt} ft`, {
           permanent: true, direction: 'top', className: 'marker-tooltip',
         }).addTo(layer);
       }
 
-      for (const eventName of ['token:visual-move-start', 'token:visual-move-end', 'state:import', 'state:commit']) off.push(api.on?.(eventName, render));
+      const off = ['state:import', 'state:commit'].map(eventName => api.on?.(eventName, render));
       api.map.on('zoomend', render);
-      off.push(api.on?.('app:destroy', () => {
-        destroyed = true;
-        hide();
+      api.on?.('app:destroy', () => {
         api.map.off('zoomend', render);
         layer.clearLayers();
         api.map.removeLayer?.(layer);
-        off.splice(0).forEach(dispose => dispose?.());
-      }));
+        off.forEach(dispose => dispose?.());
+      });
       render();
     },
   });
