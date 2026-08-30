@@ -1,7 +1,7 @@
 import L from 'leaflet';
 import { worldToLatLng } from '../engine/geometry.js';
 import { createTokenViewModel } from '../render/token-view-model.js';
-import { combatTurnOriginMoved } from './model.js';
+import { combatTurnOriginMoved, currentCombatant } from './model.js';
 
 const PANE = 'combatTurnOriginPane';
 
@@ -44,7 +44,8 @@ export function createCombatTurnOriginRenderer() {
         hide();
         const combat = api.getState?.()?.preferences?.combatSystem?.combat;
         const origin = combat?.turnOrigin;
-        const token = origin ? api.tokens.get(origin.tokenId) : null;
+        const current = origin ? currentCombatant(combat) : null;
+        const token = current ? api.tokens.get(current.tokenId) : null;
         if (!origin || combat?.state !== 'active' || !token || token.hidden === true || token.placement !== 'map' || !combatTurnOriginMoved(combat, token)) return;
         let actor = null;
         try { actor = api.tokens.resolveActor(token.id)?.actor || null; } catch {}
