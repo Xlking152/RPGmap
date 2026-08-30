@@ -4,20 +4,52 @@ function finiteInitiative(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function finiteCoordinate(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function finiteElevation(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+
 function uid(prefix) {
   const value = globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2) + Date.now().toString(36);
   return `${prefix}-${value}`;
 }
 
 export function createEmptyCombatState() {
-  return { schemaVersion: 1, combat: null };
+  return { schemaVersion: 2, combat: null };
+}
+
+function normalizeTurnOrigin(raw, combat) {
+  if (combat?.state !== 'active' || !raw || typeof raw !== 'object') return null;
+  const current = combat.combatants[Math.max(0, Math.min(combat.combatants.length - 1, combat.turnIndex || 0))] || null;
+  if (!current) return null;
+  const tokenId = raw.tokenId == null ? '' : String(raw.tokenId);
+  const combatantId = raw.combatantId == null ? '' : String(raw.combatantId);
+  const x = finiteCoordinate(raw.x);
+  const y = finiteCoordinate(raw.y);
+  const round = Math.max(1, Number(raw.round) || combat.round || 1);
+  if (!tokenId || tokenId !== String(current.tokenId)) return null;
+  if (combatantId && combatantId !== String(current.id)) return null;
+  if (round !== combat.round || x === null || y === null) return null;
+  return {
+    combatantId: String(current.id),
+    tokenId: String(current.tokenId),
+    round: combat.round,
+    x,
+    y,
+    elevationFt: finiteElevation(raw.elevationFt),
+  };
 }
 
 export function normalizeCombatState(raw) {
   if (!raw || typeof raw !== 'object' || !raw.combat) return createEmptyCombatState();
-  const combat = raw.combat;
-  const combatants = Array.isArray(combat.combatants)
-    ? combat.combatants.filter(item => item?.tokenId).map((item, index) => ({
+  const source = raw.combat;
+  const combatants = Array.isArray(source.combatants)
+    ? source.combatants.filter(item => item?.tokenId).map((item, index) => ({
         id: String(item.id || `combatant-${item.tokenId}`),
         tokenId: String(item.tokenId),
         actorId: item.actorId == null ? null : String(item.actorId),
@@ -25,18 +57,18 @@ export function normalizeCombatState(raw) {
         order: Number.isFinite(Number(item.order)) ? Number(item.order) : index,
       }))
     : [];
-  const state = combat.state === 'active' ? 'active' : 'setup';
-  const turnIndex = Math.max(0, Math.min(combatants.length ? combatants.length - 1 : 0, Number(combat.turnIndex) || 0));
-  return {
-    schemaVersion: 1,
-    combat: {
-      id: String(combat.id || uid('combat')),
-      state,
-      round: state === 'active' ? Math.max(1, Number(combat.round) || 1) : 0,
-      turnIndex,
-      combatants,
-    },
+  const state = source.state === 'active' ? 'active' : 'setup';
+  const turnIndex = Math.max(0, Math.min(combatants.length ? combatants.length - 1 : 0, Number(source.turnIndex) || 0));
+  const combat = {
+    id: String(source.id || uid('combat')),
+    state,
+    round: state === 'active' ? Math.max(1, Number(source.round) || 1) : 0,
+    turnIndex,
+    combatants,
+    turnOrigin: null,
   };
+  combat.turnOrigin = normalizeTurnOrigin(source.turnOrigin, combat);
+  return { schemaVersion: 2, combat };
 }
 
 export function createCombat(tokenRefs = []) {
@@ -52,6 +84,7 @@ export function createCombat(tokenRefs = []) {
       initiative: null,
       order: index,
     })),
+    turnOrigin: null,
   };
 }
 
@@ -60,12 +93,51 @@ export function currentCombatant(combat) {
   return combat.combatants[Math.max(0, Math.min(combat.combatants.length - 1, combat.turnIndex || 0))] || null;
 }
 
+export function setCombatTurnOrigin(combat, point) {
+  if (combat?.state !== 'active') return null;
+  const current = currentCombatant(combat);
+  const x = finiteCoordinate(point?.x);
+  const y = finiteCoordinate(point?.y);
+  if (!current || x === null || y === null) {
+    combat.turnOrigin = null;
+    return null;
+  }
+  combat.turnOrigin = {
+    combatantId: String(current.id),
+    tokenId: String(current.tokenId),
+    round: Math.max(1, Number(combat.round) || 1),
+    x,
+    y,
+    elevationFt: finiteElevation(point?.elevationFt),
+  };
+  return combat.turnOrigin;
+}
+
+export function clearCombatTurnOrigin(combat) {
+  if (!combat) return false;
+  const changed = combat.turnOrigin != null;
+  combat.turnOrigin = null;
+  return changed;
+}
+
+export function combatTurnOriginMoved(combat, token, epsilon = 1e-6) {
+  const origin = combat?.turnOrigin;
+  const current = currentCombatant(combat);
+  if (combat?.state !== 'active' || !origin || !current || !token) return false;
+  if (String(origin.tokenId) !== String(current.tokenId) || String(token.id) !== String(origin.tokenId)) return false;
+  const x = finiteCoordinate(token.x);
+  const y = finiteCoordinate(token.y);
+  if (x === null || y === null) return false;
+  return Math.abs(x - origin.x) > epsilon || Math.abs(y - origin.y) > epsilon;
+}
+
 function preserveCurrent(combat, mutate) {
   const currentId = combat?.state === 'active' ? currentCombatant(combat)?.id : null;
   mutate();
   if (currentId) {
     const index = combat.combatants.findIndex(item => item.id === currentId);
     combat.turnIndex = index >= 0 ? index : Math.min(combat.turnIndex || 0, Math.max(0, combat.combatants.length - 1));
+    if (index < 0) combat.turnOrigin = null;
   } else {
     combat.turnIndex = 0;
   }
@@ -125,11 +197,13 @@ export function removeCombatant(combat, combatantId) {
   combat.combatants.forEach((item, order) => { item.order = order; });
   if (!combat.combatants.length) {
     combat.turnIndex = 0;
+    combat.turnOrigin = null;
     return true;
   }
   if (currentId) {
     const nextIndex = combat.combatants.findIndex(item => item.id === currentId);
     combat.turnIndex = nextIndex >= 0 ? nextIndex : Math.min(index, combat.combatants.length - 1);
+    if (nextIndex < 0) combat.turnOrigin = null;
   } else {
     combat.turnIndex = 0;
   }
@@ -154,6 +228,7 @@ export function startCombat(combat) {
   combat.state = 'active';
   combat.round = 1;
   combat.turnIndex = 0;
+  combat.turnOrigin = null;
   return true;
 }
 
@@ -164,5 +239,6 @@ export function nextTurn(combat) {
     combat.turnIndex = 0;
     combat.round = Math.max(1, Number(combat.round) || 1) + 1;
   }
+  combat.turnOrigin = null;
   return currentCombatant(combat);
 }
