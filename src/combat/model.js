@@ -24,25 +24,12 @@ export function createEmptyCombatState() {
 }
 
 function normalizeTurnOrigin(raw, combat) {
-  if (combat?.state !== 'active' || !raw || typeof raw !== 'object') return null;
-  const current = combat.combatants[Math.max(0, Math.min(combat.combatants.length - 1, combat.turnIndex || 0))] || null;
-  if (!current) return null;
-  const tokenId = raw.tokenId == null ? '' : String(raw.tokenId);
-  const combatantId = raw.combatantId == null ? '' : String(raw.combatantId);
+  if (combat?.state !== 'active' || !combat.combatants.length || !raw || typeof raw !== 'object') return null;
   const x = finiteCoordinate(raw.x);
   const y = finiteCoordinate(raw.y);
   const round = Math.max(1, Number(raw.round) || combat.round || 1);
-  if (!tokenId || tokenId !== String(current.tokenId)) return null;
-  if (combatantId && combatantId !== String(current.id)) return null;
   if (round !== combat.round || x === null || y === null) return null;
-  return {
-    combatantId: String(current.id),
-    tokenId: String(current.tokenId),
-    round: combat.round,
-    x,
-    y,
-    elevationFt: finiteElevation(raw.elevationFt),
-  };
+  return { round: combat.round, x, y, elevationFt: finiteElevation(raw.elevationFt) };
 }
 
 export function normalizeCombatState(raw) {
@@ -94,17 +81,14 @@ export function currentCombatant(combat) {
 }
 
 export function setCombatTurnOrigin(combat, point) {
-  if (combat?.state !== 'active') return null;
-  const current = currentCombatant(combat);
+  if (combat?.state !== 'active' || !currentCombatant(combat)) return null;
   const x = finiteCoordinate(point?.x);
   const y = finiteCoordinate(point?.y);
-  if (!current || x === null || y === null) {
+  if (x === null || y === null) {
     combat.turnOrigin = null;
     return null;
   }
   combat.turnOrigin = {
-    combatantId: String(current.id),
-    tokenId: String(current.tokenId),
     round: Math.max(1, Number(combat.round) || 1),
     x,
     y,
@@ -113,18 +97,10 @@ export function setCombatTurnOrigin(combat, point) {
   return combat.turnOrigin;
 }
 
-export function clearCombatTurnOrigin(combat) {
-  if (!combat) return false;
-  const changed = combat.turnOrigin != null;
-  combat.turnOrigin = null;
-  return changed;
-}
-
 export function combatTurnOriginMoved(combat, token, epsilon = 1e-6) {
   const origin = combat?.turnOrigin;
   const current = currentCombatant(combat);
-  if (combat?.state !== 'active' || !origin || !current || !token) return false;
-  if (String(origin.tokenId) !== String(current.tokenId) || String(token.id) !== String(origin.tokenId)) return false;
+  if (combat?.state !== 'active' || !origin || !current || !token || String(token.id) !== String(current.tokenId)) return false;
   const x = finiteCoordinate(token.x);
   const y = finiteCoordinate(token.y);
   if (x === null || y === null) return false;
