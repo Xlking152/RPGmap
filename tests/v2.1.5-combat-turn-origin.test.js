@@ -10,8 +10,10 @@ const combatModel = await readFile(new URL('../src/combat/model.js', import.meta
 test('Combat system registers an independent turn-origin renderer', () => {
   assert.match(combatIndex, /createCombatTurnOriginRenderer\(\)\.register\(api\)/);
   assert.match(combatRenderer, /combatTurnOriginPane/);
-  assert.match(combatRenderer, /createTokenGhostDescriptor/);
+  assert.match(combatRenderer, /createTokenViewModel/);
+  assert.match(combatRenderer, /rpg-token-v2-core/);
   assert.match(combatRenderer, /起点 ·/);
+  assert.match(combatRenderer, /opacity: 0\.32/);
   assert.match(combatRenderer, /interactive: false/);
   assert.doesNotMatch(combatRenderer, /api\.world\.commit|api\.commitState|moveSceneToken/);
 });
@@ -31,8 +33,8 @@ test('Combat schema 2 persists only generic Token turn-origin geometry', () => {
 });
 
 test('origin ghost is visible only after canonical current Token leaves the stored origin', () => {
+  assert.match(combatRenderer, /preferences\?\.combatSystem\?\.combat/);
   assert.match(combatRenderer, /combatTurnOriginMoved\(combat, token\)/);
-  assert.match(combatRenderer, /normalizeCombatState\(api\.getState/);
   assert.match(combatRenderer, /state:import/);
   assert.match(combatRenderer, /state:commit/);
   assert.match(combatRenderer, /token:visual-move-start/);
