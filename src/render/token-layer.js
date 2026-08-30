@@ -54,7 +54,7 @@ function renderSize(api, model) {
   return base * (model.selected ? 1.16 : 1);
 }
 
-function tokenIcon(api, model) {
+export function tokenIcon(api, model) {
   const size = renderSize(api, model);
   const portrait = model.avatarDataUrl
     ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="">`
