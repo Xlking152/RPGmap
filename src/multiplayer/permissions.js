@@ -189,11 +189,16 @@ export function validateLocalPlayerChange({ before, next, permissions = {} } = {
   if (!same(globalProjection(before), globalProjection(next))) return { ok: false, code: 'world_scope_forbidden', message: 'Player 只能修改自己拥有的 Actor、Token 与聊天内容' };
   if (!same(chatMessages(before), chatMessages(next))) return { ok: false, code: 'chat_server_only', message: '聊天记录只能通过服务器提交' };
 
+  const movedTokenIds = changedSceneTokenIds(before, next);
+  if (combatState(before)?.state === 'active' && movedTokenIds.length > 1) {
+    return { ok: false, code: 'combat_group_move_gm_only', message: '战斗中 Player 只能移动当前回合的一个 Token' };
+  }
+
   const changed = new Set();
   for (const [id, actor] of beforeActors) if (!same(actor, nextActors.get(id))) changed.add(id);
   for (const [id, token] of beforeTokens) if (!same(token, nextTokens.get(id))) changed.add(String(token.actorId));
   const actorByToken = tokenActors(before);
-  for (const tokenId of changedSceneTokenIds(before, next)) {
+  for (const tokenId of movedTokenIds) {
     const actorId = actorByToken.get(String(tokenId));
     if (!actorId) return { ok: false, code: 'unbound_token_forbidden', message: '未绑定 Actor 的 Token 只能由 GM 修改' };
     changed.add(actorId);
