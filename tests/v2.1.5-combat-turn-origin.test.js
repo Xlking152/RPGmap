@@ -26,14 +26,15 @@ test('turn origin is captured at combat start and every explicit turn advance', 
 
 test('Combat schema 2 persists only minimal generic turn-origin geometry', () => {
   assert.match(combatModel, /schemaVersion: 2/);
-  assert.match(combatModel, /combat\.turnOrigin = \{\s*round:[\s\S]*?x,[\s\S]*?y,[\s\S]*?elevationFt:[\s\S]*?\};/);
+  assert.match(combatModel, /combat\.turnOrigin = \{ x, y, elevationFt:/);
   assert.doesNotMatch(combatModel, /characterId|state\.characters|Character/);
 });
 
 test('origin ghost is visible only after canonical current Token leaves the stored origin', () => {
   assert.match(combatRenderer, /preferences\?\.combatSystem\?\.combat/);
   assert.match(combatRenderer, /currentCombatant\(combat\)/);
-  assert.match(combatRenderer, /combatTurnOriginMoved\(combat, token\)/);
+  assert.match(combatRenderer, /Math\.abs\(x - origin\.x\)/);
+  assert.match(combatRenderer, /Math\.abs\(y - origin\.y\)/);
   assert.match(combatRenderer, /state:import/);
   assert.match(combatRenderer, /state:commit/);
 });
