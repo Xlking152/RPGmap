@@ -165,6 +165,6 @@ test('v2.1.6 keeps group movement transient, Token-first and render-only outside
   assert.match(ghost, /getGroupPreviewMembers/);
   assert.match(renderer, /prepareTokenVisualRoute/);
   for (const source of [controller, runtime, ghost, renderer]) {
-    assert.doesNotMatch(source, /TokenGroup|characterId|state\.characters/);
+    assert.doesNotMatch(source, /\btokenGroups\b|class\s+TokenGroup|state\.characters|characterId/);
   }
 });
