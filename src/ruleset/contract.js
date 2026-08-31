@@ -57,7 +57,13 @@ function prepareActorInstances(raw = {}) {
 
 function prepareVision(raw = {}) {
   return Object.freeze({
-    describe: actorFunction(raw.describe, () => ({ enabled: false, rangeMeters: 0 })),
+    describe: actorFunction(raw.describe, () => ({
+      enabled: false,
+      rangeMeters: 0,
+      preciseRangeMeters: 0,
+      vagueRangeMeters: 0,
+      senses: {},
+    })),
   });
 }
 

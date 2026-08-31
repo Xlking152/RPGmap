@@ -2,6 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseWorksheetCells, parseSharedStrings, parseRelationships, parseWorkbookSheets, resolveZipPath } from '../src/entities/xlsx-lite.js';
 import { guessFormName, parseActorSheets } from '../src/entities/xlsx-importer.js';
+import {
+  normalizeInfiniteHorrorSheetLabel,
+  parseDetectionBoolean,
+  parseDetectionRangeValue,
+  parseInfiniteHorrorDetectionSheet,
+  resolveInfiniteHorrorWorkbookSheets,
+} from '../src/rulesets/infinite-horror/importers/xlsx.js';
 
 function sheet(values) { return { cells: new Map(Object.entries(values)), images: [] }; }
 
@@ -19,6 +26,19 @@ test('workbook relationship helpers resolve requested sheets', () => {
   const rels = parseRelationships('<Relationships><Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>');
   assert.equal(sheets[1].name, '具体数值表');
   assert.equal(resolveZipPath('xl/workbook.xml', rels.get('rId2')), 'xl/worksheets/sheet2.xml');
+});
+
+test('workbook sheet lookup accepts harmless spacing and reports missing sheets explicitly', () => {
+  const normalized = resolveInfiniteHorrorWorkbookSheets({ sheets: new Map([
+    ['overview', { name: ' 角色 概览 ' }],
+    ['details', { name: '具体数值表：' }],
+  ]) });
+  assert.equal(normalized.overview.name, ' 角色 概览 ');
+  assert.equal(normalized.detailed.name, '具体数值表：');
+  assert.deepEqual(normalized.warnings, []);
+  const missing = resolveInfiniteHorrorWorkbookSheets({ sheets: new Map([['only', { name: '角色概览' }]]) });
+  assert.equal(missing.detailed, null);
+  assert.deepEqual(missing.warnings, [{ code: 'sheet_missing', sheet: '具体数值表' }]);
 });
 
 test('character card parser imports final resources, attributes, skills, saves and bad-status thresholds', () => {
@@ -43,6 +63,8 @@ test('character card parser imports final resources, attributes, skills, saves a
     W46:'沮丧点数', AB46:5, AC46:33, AD46:44,
     W47:'亢奋点数', W48:'恐惧点数', W49:'仇恨点数', W50:'欲眠点数', W51:'精神束缚',
     W52:'魅惑点数', AB52:7, AC52:42, AD52:56,
+    X62:30, X63:'300 米', S64:'真实\n视觉', U64:'×', S65:'透视', U65:'否',
+    S66:'灵视', U66:0, S67:'昏暗视觉', U67:'√', S68:'黑暗视觉', U68:'启用',
   });
   const parsed = parseActorSheets({ overview: sheet({ I1:'#NAME?' }), detailed, fileName:'银（变身后）(1).xlsx' });
   assert.equal(parsed.formName, '变身后');
@@ -61,6 +83,34 @@ test('character card parser imports final resources, attributes, skills, saves a
   });
   assert.equal(parsed.description.overview, '');
   assert.equal(parsed.combat.attacks.length, 0);
+  assert.equal(parsed.detection.preciseRangeMeters, 30);
+  assert.equal(parsed.detection.vagueRangeMeters, 300);
+  assert.deepEqual(parsed.detection.senses, {
+    trueSight: false, xrayVision: false, spiritSight: false,
+    lowLightVision: true, darkvision: true,
+  });
+  assert.equal(parsed.detection.diagnostics.senses.lowLightVision.address, 'U67');
+});
+
+test('detection import normalizes labels, units and boolean marks without hardcoded value columns', () => {
+  assert.equal(normalizeInfiniteHorrorSheetLabel(' 真 实\n视 觉：'), '真实视觉');
+  assert.deepEqual(parseDetectionRangeValue(' 45ｍ '), { meters: 45, valid: true, empty: false, raw: ' 45ｍ ' });
+  assert.equal(parseDetectionBoolean('✔').value, true);
+  assert.equal(parseDetectionBoolean('未启用').value, false);
+
+  const result = parseInfiniteHorrorDetectionSheet(sheet({
+    X62:'50m', X63:20,
+    T64:'真实视觉', W64:'是', S65:'透视', U65:'?', S66:'灵视', V66:1,
+    S67:'低光视觉', U67:true, S68:'暗视', U68:'0', Y68:'黑暗视觉', AA68:'√',
+  }));
+  assert.equal(result.detection.preciseRangeMeters, 50);
+  assert.equal(result.detection.vagueRangeMeters, 20);
+  assert.equal(result.detection.senses.trueSight, true);
+  assert.equal(result.detection.senses.spiritSight, true);
+  assert.equal(result.detection.diagnostics.senses.trueSight.address, 'W64');
+  assert.ok(result.warnings.some(item => item.code === 'detection_vague_below_precise'));
+  assert.ok(result.warnings.some(item => item.code === 'detection_boolean_unparseable' && item.sense === 'xrayVision'));
+  assert.ok(result.warnings.some(item => item.code === 'detection_label_duplicate' && item.sense === 'darkvision'));
 });
 
 test('form name is inferred from file name', () => {

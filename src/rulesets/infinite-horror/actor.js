@@ -1,5 +1,11 @@
 import { INFINITE_HORROR_BAD_STATUS_DEFS, INFINITE_HORROR_RESOURCE_DEFS } from './definitions.js';
 import { INFINITE_HORROR_HEALTH } from './health.js';
+import {
+  INFINITE_HORROR_DETECTION_SENSES,
+  normalizeInfiniteHorrorDetection,
+  normalizeInfiniteHorrorDetectionOverride,
+  resolveInfiniteHorrorDetection,
+} from './detection.js';
 
 export const INFINITE_HORROR_ACTOR_SYSTEM_VERSION = 3;
 
@@ -58,6 +64,7 @@ function normalizeImportedCard(input = {}) {
       attacks: Array.isArray(source.combat?.attacks) ? clone(source.combat.attacks) : [],
       defenses: Array.isArray(source.combat?.defenses) ? clone(source.combat.defenses) : [],
     },
+    detection: normalizeInfiniteHorrorDetection(source.detection, { configured: source.detection?.configured === true }),
     tokenAppearance: {
       ...clone(object(source.tokenAppearance)),
       color: text(source.tokenAppearance?.color, '#3d9b63'),
@@ -124,6 +131,9 @@ function normalizeForm(raw = {}) {
     saves: savesWereThresholds ? [] : saves,
   };
   form.badStatuses = migratedBadStatuses(raw);
+  form.detection = normalizeInfiniteHorrorDetection(form.detection, {
+    configured: raw.detection?.configured === true,
+  });
   form.combat = {
     ...clone(object(form.combat)),
     attacks: Array.isArray(form.combat?.attacks) ? clone(form.combat.attacks) : [],
@@ -163,6 +173,7 @@ function formFromImport(imported, { variantId, variantName, idFactory = defaultI
     checks: card.checks,
     badStatuses: card.badStatuses.length ? card.badStatuses : emptyBadStatuses(),
     combat: card.combat,
+    detection: { ...card.detection, configured: card.detection.configured === true },
     tokenAppearance: card.tokenAppearance,
     source: card.source,
   });
@@ -180,6 +191,7 @@ function initialRuntime(form) {
     resources,
     customResources: [],
     attributeAdjustments: {},
+    detectionOverrides: {},
     badStatuses,
     health: INFINITE_HORROR_HEALTH.createRuntime({
       mode: INFINITE_HORROR_HEALTH.defaultModeForSource(form.source?.type),
@@ -315,6 +327,7 @@ export function normalizeInfiniteHorrorSystem(rawSystem = {}) {
       resources,
       customResources: Array.isArray(runtimeSource.customResources) ? clone(runtimeSource.customResources) : [],
       attributeAdjustments: clone(object(runtimeSource.attributeAdjustments)),
+      detectionOverrides: normalizeInfiniteHorrorDetectionOverride(runtimeSource.detectionOverrides),
       badStatuses,
       health: INFINITE_HORROR_HEALTH.normalizeRuntime(rawHealth, {
         defaultMode: INFINITE_HORROR_HEALTH.defaultModeForSource(current?.source?.type),
@@ -547,6 +560,7 @@ export function deriveInfiniteHorrorActor(actor, context = {}) {
       checks: { skills: [], saves: [] },
       badStatuses: [],
       combat: { attacks: [], defenses: [] },
+      detection: resolveInfiniteHorrorDetection(),
       health: null,
     };
   }
@@ -554,6 +568,9 @@ export function deriveInfiniteHorrorActor(actor, context = {}) {
     ...Object.keys(form.resourceBases || {}),
     ...(system.runtime?.customResources || []).map(item => String(item.id)),
   ])];
+  const attributes = (form.attributes || [])
+    .map(item => resolveAttributeValue(normalizedActor, form, item.id, context)).filter(Boolean);
+  const perception = attributes.find(attribute => String(attribute.id) === 'perception')?.value ?? null;
   return {
     id: actor.id,
     name: actor.name,
@@ -562,7 +579,13 @@ export function deriveInfiniteHorrorActor(actor, context = {}) {
     currentVariantId: form.id,
     resources: resourceIds.map(id => resolveResourceValue(normalizedActor, form, id, context)).filter(Boolean),
     health: resolveHealthValue(normalizedActor, form, context),
-    attributes: (form.attributes || []).map(item => resolveAttributeValue(normalizedActor, form, item.id, context)).filter(Boolean),
+    attributes,
+    detection: resolveInfiniteHorrorDetection({
+      form,
+      runtime: system.runtime,
+      perception,
+      lighting: context.lighting || context.scene?.settings?.lighting || 'normal',
+    }),
     checks: clone(form.checks || { skills: [], saves: [] }),
     badStatuses: (form.badStatuses || []).map(item => resolveBadStatus(normalizedActor, form, item.id)).filter(Boolean),
     combat: clone(form.combat || { attacks: [], defenses: [] }),
@@ -766,6 +789,25 @@ export function applyInfiniteHorrorActorOperation(actor, operation = {}, context
     else actor.system.runtime.attributeAdjustments[operation.attributeId] = value;
     return { changed: true, value };
   }
+  if (type === 'detection.set-override') {
+    const field = String(operation.field || '');
+    if (field === 'preciseRangeMeters' || field === 'vagueRangeMeters') {
+      if (operation.value === '' || operation.value === null || operation.value === undefined) {
+        delete actor.system.runtime.detectionOverrides[field];
+      } else actor.system.runtime.detectionOverrides[field] = Math.max(0, finite(operation.value));
+      actor.system.runtime.detectionOverrides = normalizeInfiniteHorrorDetectionOverride(
+        actor.system.runtime.detectionOverrides,
+      );
+      return { changed: true, value: deriveInfiniteHorrorActor(actor, context).detection };
+    }
+    if (field === 'sense' && INFINITE_HORROR_DETECTION_SENSES.includes(String(operation.sense))) {
+      actor.system.runtime.detectionOverrides.senses ||= {};
+      actor.system.runtime.detectionOverrides.senses[String(operation.sense)] = operation.value === true
+        || operation.value === 'true' || operation.value === '1';
+      return { changed: true, value: deriveInfiniteHorrorActor(actor, context).detection };
+    }
+    return { changed: false, blocked: 'unknown_detection_field' };
+  }
   if (type === 'bad-status.set-current') {
     const value = Math.max(0, finite(operation.value));
     actor.system.runtime.badStatuses[operation.statusId] = value;
@@ -801,6 +843,11 @@ export function describeInfiniteHorrorActor(actor, context = {}) {
 export function describeInfiniteHorrorActorSheet(actor, context = {}) {
   const derived = deriveInfiniteHorrorActor(actor, context);
   const form = derived?.form;
+  const detectionLabels = {
+    trueSight: '真实视觉', xrayVision: '透视', spiritSight: '灵视',
+    lowLightVision: '昏暗视觉', darkvision: '黑暗视觉',
+  };
+  const detection = derived?.detection || resolveInfiniteHorrorDetection();
   const resources = (derived?.resources || []).map(resource => ({
     id: resource.id,
     label: resource.name,
@@ -844,6 +891,29 @@ export function describeInfiniteHorrorActorSheet(actor, context = {}) {
               ],
               operation: { type: 'resource.add-custom' },
             }],
+          },
+          {
+            id: 'detection', type: 'detection', title: '侦测',
+            ranges: [
+              {
+                id: 'preciseRangeMeters', label: '敏感范围', value: detection.preciseRangeMeters,
+                base: form?.detection?.preciseRangeMeters ?? 0,
+                operation: { type: 'detection.set-override', field: 'preciseRangeMeters' },
+              },
+              {
+                id: 'vagueRangeMeters', label: '模糊范围', value: detection.vagueRangeMeters,
+                base: form?.detection?.vagueRangeMeters ?? 0,
+                operation: { type: 'detection.set-override', field: 'vagueRangeMeters' },
+              },
+            ],
+            senses: INFINITE_HORROR_DETECTION_SENSES.map(id => ({
+              id,
+              label: detectionLabels[id],
+              value: detection.senses?.[id] === true,
+              base: form?.detection?.senses?.[id] === true,
+              operation: { type: 'detection.set-override', field: 'sense', sense: id },
+            })),
+            help: 'Excel 值保存在当前形态；此处编辑的是运行时覆盖。昏暗与黑暗会按视觉能力降低侦测等级。',
           },
           {
             id: 'identity', type: 'text', title: '角色信息',
