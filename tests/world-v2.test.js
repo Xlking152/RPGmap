@@ -51,13 +51,14 @@ test('World V2 projects canonical Scene Tokens into Entity reducer state without
   const state = modernState();
   const world = createWorldV2FromRuntimeState(state, { mapPackage, ruleset });
   const scene = activeWorldScene(world);
-  scene.tokens[0].x = 44.5; scene.tokens[0].y = 55.5; scene.tokens[0].hidden = true;
+  scene.tokens[0].x = 44.5; scene.tokens[0].y = 55.5;
+  scene.tokens[0].visibility = { mode: 'gm', userIds: [] };
   const projected = projectWorldV2ToRuntimeState(state, world, { mapPackage, ruleset });
   assert.equal(Object.hasOwn(projected, 'characters'), false);
   assert.equal(projected.preferences.entitySystem.tokens[0].x, 44.5);
   assert.equal(projected.preferences.entitySystem.tokens[0].actorId, 'actor-1');
   assert.equal(projected.preferences.entitySystem.tokens[0].characterId, undefined);
-  assert.equal(projected.preferences[WORLD_STATE_KEY].schemaVersion, 2);
+  assert.equal(projected.preferences[WORLD_STATE_KEY].schemaVersion, 3);
 });
 
 test('runtime projection synchronization is read-only and preserves canonical World data', () => {

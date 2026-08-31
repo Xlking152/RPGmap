@@ -326,6 +326,68 @@ export function normalizeInfiniteHorrorSystem(rawSystem = {}) {
   };
 }
 
+function explicitInstanceDelta(baseActor, resolvedActor, context = {}) {
+  const prior = clone(object(context.currentDelta));
+  const system = normalizeInfiniteHorrorSystem(resolvedActor?.system || baseActor?.system);
+  const delta = { ...prior };
+  delete delta.id;
+  delete delta.name;
+  delete delta.img;
+  delete delta.prototypeToken;
+  delete delta.type;
+  delete delta.partyId;
+  delta.system = {
+    ...clone(object(prior.system)),
+    currentFormId: system.currentFormId,
+    runtime: clone(system.runtime),
+  };
+  delete delta.system.forms;
+  delete delta.system.schemaVersion;
+  delta.effects = clone(Array.isArray(resolvedActor?.effects) ? resolvedActor.effects : []);
+  return delta;
+}
+
+function resolvedInstanceActor(baseActor, delta) {
+  const actor = mergeValue(baseActor, object(delta));
+  actor.id = baseActor.id;
+  actor.system = normalizeInfiniteHorrorSystem(actor.system);
+  const derived = deriveInfiniteHorrorActor(actor, { effects: actor.effects });
+  const max = Math.max(0, finite(derived?.health?.max));
+  actor.system.runtime.health = INFINITE_HORROR_HEALTH.normalizeRuntime(actor.system.runtime.health, {
+    defaultMode: INFINITE_HORROR_HEALTH.defaultModeForSource(derived?.form?.source?.type),
+    max,
+    simpleCurrent: max,
+  });
+  return actor;
+}
+
+export function createInfiniteHorrorInstanceDelta(baseActor) {
+  return explicitInstanceDelta(baseActor, baseActor);
+}
+
+export function normalizeInfiniteHorrorInstanceDelta(baseActor, delta, context = {}) {
+  const actor = resolvedInstanceActor(baseActor, delta);
+  return explicitInstanceDelta(baseActor, actor, { ...context, currentDelta: delta });
+}
+
+export function infiniteHorrorInstanceDeltaFromResolved(baseActor, resolvedActor, context = {}) {
+  return normalizeInfiniteHorrorInstanceDelta(
+    baseActor,
+    explicitInstanceDelta(baseActor, resolvedActor, context),
+    context,
+  );
+}
+
+export function infiniteHorrorTemplateFingerprint(actor) {
+  const value = clone(object(actor));
+  const system = clone(object(value.system));
+  delete system.currentFormId;
+  delete system.runtime;
+  value.system = system;
+  delete value.effects;
+  return value;
+}
+
 export function validateInfiniteHorrorSystem(system) {
   const errors = [];
   if (Number(system?.schemaVersion) !== INFINITE_HORROR_ACTOR_SYSTEM_VERSION) {
@@ -854,6 +916,15 @@ export const INFINITE_HORROR_ACTOR = Object.freeze({
   attributePaths: infiniteHorrorAttributePaths,
   resolveAttribute: resolveInfiniteHorrorAttribute,
   applyRuntimeOperation: applyInfiniteHorrorActorOperation,
+  instances: Object.freeze({
+    createDelta: createInfiniteHorrorInstanceDelta,
+    normalizeDelta: normalizeInfiniteHorrorInstanceDelta,
+    fromResolved: infiniteHorrorInstanceDeltaFromResolved,
+    rebaseDelta: (_previousBase, nextBase, delta, context = {}) => (
+      normalizeInfiniteHorrorInstanceDelta(nextBase, delta, context)
+    ),
+    templateFingerprint: infiniteHorrorTemplateFingerprint,
+  }),
   presentation: Object.freeze({
     describe: describeInfiniteHorrorActor,
     describeSheet: describeInfiniteHorrorActorSheet,

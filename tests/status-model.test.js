@@ -48,7 +48,7 @@ function emptyState() {
 
 test('built-in definitions use the server IDs and spirit bypasses only structures', () => {
   assert.deepEqual(BUILTIN_STATUS_DEFINITIONS.map(definition => definition.id), [
-    'status-spirit', 'status-rooted', 'status-incapacitated',
+    'status-invisible', 'status-spirit', 'status-rooted', 'status-incapacitated',
   ]);
   const spirit = BUILTIN_STATUS_DEFINITIONS.find(definition => definition.id === 'status-spirit');
   assert.deepEqual(spirit.capabilities.collisionBypassGroups, ['structure']);

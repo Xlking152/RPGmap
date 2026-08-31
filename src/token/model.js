@@ -1,3 +1,6 @@
+import { createInitialActorDelta, normalizeActorDelta } from './actor.js';
+import { normalizeTokenAccess } from './access.js';
+
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
 }
@@ -38,6 +41,10 @@ function actorExists(world, actorId) {
   return array(world?.actors).some(actor => String(actor?.id ?? '') === String(actorId));
 }
 
+function actorById(world, actorId) {
+  return array(world?.actors).find(actor => String(actor?.id ?? '') === String(actorId)) || null;
+}
+
 function tokenIndex(scene, tokenId) {
   return array(scene?.tokens).findIndex(token => String(token?.id ?? '') === String(tokenId));
 }
@@ -69,14 +76,23 @@ function normalizeTexture(value) {
   };
 }
 
-function normalizeToken(raw, { actorId, tokenId } = {}) {
+export function normalizeSceneToken(raw, { actorId, tokenId, actor = null, ruleset = null } = {}) {
   const source = object(raw);
   const placement = source.placement === 'feature' || source.featureId != null ? 'feature' : 'map';
+  const access = normalizeTokenAccess(source, { actor });
+  const actorLink = access.actorLink === false ? false : source.actorLink !== false;
+  const extension = clone(source);
+  delete extension.hidden;
   return {
+    ...extension,
     id: text(tokenId ?? source.id, newTokenId()).slice(0, 160),
     actorId: text(actorId ?? source.actorId).slice(0, 160),
-    actorLink: source.actorLink !== false,
-    actorDelta: normalizeDelta(source.actorDelta),
+    actorLink,
+    actorDelta: actorLink
+      ? null
+      : source.actorDelta
+        ? normalizeActorDelta(actor, source.actorDelta, { ruleset })
+        : createInitialActorDelta(actor, { ruleset }),
     placement,
     x: placement === 'map' ? finite(source.x, 0) : null,
     y: placement === 'map' ? finite(source.y, 0) : null,
@@ -86,7 +102,9 @@ function normalizeToken(raw, { actorId, tokenId } = {}) {
     diameterMeters: Math.max(0.1, finite(source.diameterMeters ?? source.size, 1)),
     rotation: finite(source.rotation, 0),
     elevationFt: finite(source.elevationFt, 0),
-    hidden: source.hidden === true,
+    controllerUserIds: access.controllerUserIds,
+    visibility: access.visibility,
+    vision: access.vision,
     locked: source.locked === true,
     showName: source.showName !== false,
     effects: clone(array(source.effects)),
@@ -136,19 +154,23 @@ export function createSceneToken(world, {
   rotation = 0,
   elevationFt = 0,
   hidden = false,
+  controllerUserIds = [],
+  visibility = null,
+  vision = null,
   locked = false,
   showName = true,
   effects = [],
-} = {}) {
+} = {}, { ruleset = null } = {}) {
   const targetActorId = text(actorId).slice(0, 160);
   if (!targetActorId || !actorExists(world, targetActorId)) throw new Error(`Unknown Actor: ${actorId || '(missing)'}`);
   const candidateId = text(tokenId, newTokenId()).slice(0, 160);
+  const actor = actorById(world, targetActorId);
   if (!candidateId) throw new Error('Token requires an id');
 
   let created = null;
   const next = withActiveScene(world, scene => {
     if (tokenIndex(scene, candidateId) >= 0) throw new Error(`Token already exists: ${candidateId}`);
-    created = normalizeToken({
+    created = normalizeSceneToken({
       id: candidateId,
       actorId: targetActorId,
       actorLink,
@@ -163,41 +185,48 @@ export function createSceneToken(world, {
       rotation,
       elevationFt,
       hidden,
+      controllerUserIds,
+      visibility,
+      vision,
       locked,
       showName,
       effects,
-    });
+    }, { actor, ruleset });
     scene.tokens = [...array(scene.tokens), created];
     return scene;
   });
   return { world: next, token: clone(created) };
 }
 
-export function moveSceneToken(world, tokenId, { x, y } = {}) {
+export function moveSceneToken(world, tokenId, { x, y } = {}, { ruleset = null } = {}) {
   let moved = null;
   const next = withActiveScene(world, scene => {
     const { index, token } = requireToken(scene, tokenId);
-    moved = normalizeToken({ ...token, placement: 'map', x: finite(x, token.x ?? 0), y: finite(y, token.y ?? 0), featureId: null });
+    moved = normalizeSceneToken({ ...token, placement: 'map', x: finite(x, token.x ?? 0), y: finite(y, token.y ?? 0), featureId: null }, {
+      actor: actorById(world, token.actorId), ruleset,
+    });
     scene.tokens[index] = moved;
     return scene;
   });
   return { world: next, token: clone(moved) };
 }
 
-export function placeSceneTokenInFeature(world, tokenId, featureId) {
+export function placeSceneTokenInFeature(world, tokenId, featureId, { ruleset = null } = {}) {
   const targetFeatureId = text(featureId).slice(0, 160);
   if (!targetFeatureId) throw new Error('Feature placement requires featureId');
   let placed = null;
   const next = withActiveScene(world, scene => {
     const { index, token } = requireToken(scene, tokenId);
-    placed = normalizeToken({ ...token, placement: 'feature', featureId: targetFeatureId, x: null, y: null });
+    placed = normalizeSceneToken({ ...token, placement: 'feature', featureId: targetFeatureId, x: null, y: null }, {
+      actor: actorById(world, token.actorId), ruleset,
+    });
     scene.tokens[index] = placed;
     return scene;
   });
   return { world: next, token: clone(placed) };
 }
 
-export function updateSceneToken(world, tokenId, changes = {}) {
+export function updateSceneToken(world, tokenId, changes = {}, { ruleset = null } = {}) {
   let updated = null;
   const next = withActiveScene(world, scene => {
     const { index, token } = requireToken(scene, tokenId);
@@ -213,7 +242,12 @@ export function updateSceneToken(world, tokenId, changes = {}) {
       actorDelta: changes.actorDelta === undefined ? token.actorDelta : normalizeDelta(changes.actorDelta),
       effects: changes.effects === undefined ? token.effects : clone(array(changes.effects)),
     };
-    updated = normalizeToken(merged, { tokenId: token.id, actorId: merged.actorId });
+    updated = normalizeSceneToken(merged, {
+      tokenId: token.id,
+      actorId: merged.actorId,
+      actor: actorById(world, merged.actorId),
+      ruleset,
+    });
     scene.tokens[index] = updated;
     return scene;
   });

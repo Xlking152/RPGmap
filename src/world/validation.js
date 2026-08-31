@@ -1,5 +1,8 @@
-import { WORLD_SCHEMA_VERSION } from './model.js';
+import { WORLD_SCHEMA_VERSION } from './constants.js';
 import { assertFeatureStatePatch, isPlainObject } from './feature-states.js';
+
+const ACTOR_TYPES = new Set(['pc', 'npc', 'summon', 'other']);
+const VISIBILITY_MODES = new Set(['public', 'party', 'gm', 'users']);
 
 function fail(message, code = 'invalid_world') {
   const error = new Error(message);
@@ -33,6 +36,69 @@ function uniqueIds(items, label) {
   return seen;
 }
 
+function stringIds(value, label) {
+  const seen = new Set();
+  for (const [index, item] of array(value, label).entries()) {
+    const id = identifier(item, `${label}[${index}]`);
+    if (seen.has(id)) fail(`${label} contains duplicate id: ${id}`, 'duplicate_id');
+    seen.add(id);
+  }
+}
+
+function assertFog(value, label) {
+  const fog = object(value, label);
+  if (Number(fog.schemaVersion) !== 1 || Number(fog.cellSizeMeters) !== 5) fail(`${label} schema is incompatible`, 'fog_schema_incompatible');
+  const parties = object(fog.exploredByParty, `${label}.exploredByParty`);
+  for (const [partyId, record] of Object.entries(parties)) {
+    identifier(partyId, `${label}.partyId`);
+    const rows = object(object(record, `${label}.${partyId}`).rows, `${label}.${partyId}.rows`);
+    for (const [rowId, spans] of Object.entries(rows)) {
+      if (!/^\d+$/.test(rowId)) fail(`${label}.${partyId}.rows contains an invalid row`);
+      let previousEnd = -2;
+      for (const span of array(spans, `${label}.${partyId}.rows.${rowId}`)) {
+        if (!Array.isArray(span) || span.length !== 2) fail(`${label} contains an invalid span`);
+        const [start, end] = span.map(Number);
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start <= previousEnd + 1) {
+          fail(`${label} contains a non-canonical span`);
+        }
+        previousEnd = end;
+      }
+    }
+  }
+}
+
+function assertSchema3Actor(actor, label) {
+  if (!ACTOR_TYPES.has(String(actor.type))) fail(`${label}.type is invalid`);
+  if (actor.partyId !== null && typeof actor.partyId !== 'string') fail(`${label}.partyId must be a string or null`);
+}
+
+function assertSchema3Token(token, actor, label) {
+  if (typeof token.actorLink !== 'boolean') fail(`${label}.actorLink must be boolean`);
+  if ((actor.type === 'npc' || actor.type === 'summon') && token.actorLink !== false) fail(`${label} cannot link an independent Actor`, 'instance_link_forbidden');
+  stringIds(token.controllerUserIds, `${label}.controllerUserIds`);
+  const visibility = object(token.visibility, `${label}.visibility`);
+  if (!VISIBILITY_MODES.has(String(visibility.mode))) fail(`${label}.visibility.mode is invalid`);
+  stringIds(visibility.userIds, `${label}.visibility.userIds`);
+  const vision = object(token.vision, `${label}.vision`);
+  if (typeof vision.enabled !== 'boolean') fail(`${label}.vision.enabled must be boolean`);
+  if (vision.rangeOverrideMeters !== null && (!Number.isFinite(Number(vision.rangeOverrideMeters))
+    || Number(vision.rangeOverrideMeters) < 0 || Number(vision.rangeOverrideMeters) > 120)) {
+    fail(`${label}.vision.rangeOverrideMeters is invalid`);
+  }
+  stringIds(vision.overrideUserIds, `${label}.vision.overrideUserIds`);
+  if (Object.hasOwn(token, 'hidden')) fail(`${label}.hidden is legacy-only`, 'legacy_token_hidden_forbidden');
+}
+
+function assertMarker(marker, label) {
+  if (!['trap', 'target', 'area', 'note'].includes(String(marker.kind))) fail(`${label}.kind is invalid`);
+  if (!Number.isFinite(Number(marker.x)) || !Number.isFinite(Number(marker.y))) fail(`${label} requires finite x/y`);
+  stringIds(marker.controllerUserIds, `${label}.controllerUserIds`);
+  const visibility = object(marker.visibility, `${label}.visibility`);
+  if (!VISIBILITY_MODES.has(String(visibility.mode))) fail(`${label}.visibility.mode is invalid`);
+  stringIds(visibility.userIds, `${label}.visibility.userIds`);
+  if (marker.partyId !== null && typeof marker.partyId !== 'string') fail(`${label}.partyId must be a string or null`);
+}
+
 export function worldRulesetReference(rawWorld) {
   const world = object(rawWorld, 'worldV2');
   if (!world.ruleset || typeof world.ruleset !== 'object' || Array.isArray(world.ruleset)) {
@@ -59,14 +125,19 @@ export function assertWorldRuleset(rawWorld, ruleset) {
   return reference;
 }
 
-export function assertPersistedWorldV2(rawWorld) {
+export function assertPersistedWorldV2(rawWorld, { acceptedSchemaVersions = [2, WORLD_SCHEMA_VERSION] } = {}) {
   const world = object(rawWorld, 'worldV2');
-  if (Number(world.schemaVersion) !== WORLD_SCHEMA_VERSION) {
-    fail(`worldV2.schemaVersion must be ${WORLD_SCHEMA_VERSION}`, 'world_schema_incompatible');
+  const accepted = new Set(acceptedSchemaVersions.map(Number));
+  if (!accepted.has(Number(world.schemaVersion))) {
+    fail(`worldV2.schemaVersion must be one of: ${[...accepted].join(', ')}`, 'world_schema_incompatible');
   }
   identifier(world.id, 'worldV2.id');
   worldRulesetReference(world);
   const actorIds = uniqueIds(world.actors, 'worldV2.actors');
+  const actorsById = new Map(world.actors.map(actor => [String(actor.id), actor]));
+  if (Number(world.schemaVersion) === WORLD_SCHEMA_VERSION) {
+    world.actors.forEach((actor, index) => assertSchema3Actor(actor, `worldV2.actors[${index}]`));
+  }
   const sceneIds = uniqueIds(world.scenes, 'worldV2.scenes');
   const activeSceneId = identifier(world.activeSceneId, 'worldV2.activeSceneId');
   if (!sceneIds.has(activeSceneId)) {
@@ -95,6 +166,14 @@ export function assertPersistedWorldV2(rawWorld) {
       if (!actorIds.has(actorId)) {
         fail(`World V2 Token references missing Actor: ${actorId}`, 'invalid_reference');
       }
+      if (Number(world.schemaVersion) === WORLD_SCHEMA_VERSION) {
+        assertSchema3Token(token, actorsById.get(actorId), `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}]`);
+      }
+    }
+    if (Number(world.schemaVersion) === WORLD_SCHEMA_VERSION) assertFog(scene.fog, `worldV2.scenes[${sceneIndex}].fog`);
+    if (Number(world.schemaVersion) === WORLD_SCHEMA_VERSION) {
+      uniqueIds(scene.markers, `worldV2.scenes[${sceneIndex}].markers`);
+      scene.markers.forEach((marker, markerIndex) => assertMarker(marker, `worldV2.scenes[${sceneIndex}].markers[${markerIndex}]`));
     }
   }
   return world;

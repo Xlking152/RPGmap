@@ -7,7 +7,7 @@ import { createBoundUser, validatePlayerWorldPush } from '../deployment/local-se
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 
 function actor() {
-  return { id: 'actor-a', name: 'A', system: {}, effects: [] };
+  return { id: 'actor-a', name: 'A', type: 'pc', partyId: 'party-default', system: {}, effects: [] };
 }
 
 function token(id, x, y, elevationFt = 0) {
@@ -15,13 +15,16 @@ function token(id, x, y, elevationFt = 0) {
     id, actorId: 'actor-a', actorLink: true, actorDelta: null,
     placement: 'map', x, y, featureId: null,
     diameterMeters: 1, rotation: 0, elevationFt,
-    hidden: false, locked: false, showName: true, effects: [],
+    controllerUserIds: [],
+    visibility: { mode: 'party', userIds: [] },
+    vision: { enabled: true, rangeOverrideMeters: null, overrideUserIds: [] },
+    locked: false, showName: true, effects: [],
   };
 }
 
 function world(tokens) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     id: 'world-test', name: 'World',
     ruleset: { id: 'infinite-horror', version: '1.0.0' },
     actors: [actor()],
@@ -29,7 +32,8 @@ function world(tokens) {
     activeSceneId: 'scene-a',
     scenes: [{
       id: 'scene-a', name: 'Scene', mapPackage: { id: 'map', version: '1' },
-      tokens: structuredClone(tokens), markers: [], attackAreas: [], sceneEvents: [], settings: {},
+      tokens: structuredClone(tokens), markers: [], attackAreas: [], sceneEvents: [],
+      featureStates: {}, fog: { schemaVersion: 1, cellSizeMeters: 5, exploredByParty: {} }, settings: {},
     }],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',

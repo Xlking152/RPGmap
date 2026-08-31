@@ -1,4 +1,5 @@
 import { getCompatibilityRuleset } from '../ruleset/active-compat.js';
+import { normalizeActorClassification } from './classification.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -73,12 +74,17 @@ function shell(raw = {}, {
   const now = new Date().toISOString();
   const actorImg = image(img === undefined ? source.img : img);
   const prototype = prototypeToken === undefined ? source.prototypeToken : prototypeToken;
+  const classification = normalizeActorClassification(source, {
+    legacy: source.type === undefined && source.partyId === undefined,
+  });
   const document = {
     ...clone(source),
     id: text(source.id == null ? '' : String(source.id), uid('actor')),
     name: text(name, text(source.name, '未命名角色')).slice(0, 80),
     img: actorImg,
     prototypeToken: normalizePrototypeToken(prototype, actorImg),
+    type: classification.type,
+    partyId: classification.partyId,
     system: clone(object(system)),
     effects: Array.isArray(source.effects) ? clone(source.effects) : [],
     notes: typeof source.notes === 'string' ? source.notes : '',
@@ -103,10 +109,10 @@ export function createActorDocument(raw = {}, { ruleset = getCompatibilityRulese
   });
 }
 
-export function createDefaultActor({ id, name, ruleset = getCompatibilityRuleset() } = {}) {
+export function createDefaultActor({ id, name, type = 'pc', partyId = undefined, ruleset = getCompatibilityRuleset() } = {}) {
   const rules = actorRules(ruleset);
   const created = object(rules.createDefault({ id, name, ruleset }));
-  const raw = { id, name: name || created.name };
+  const raw = { id, name: name || created.name, type, partyId };
   return shell(raw, {
     name: name || created.name,
     img: created.img,
@@ -118,6 +124,8 @@ export function createDefaultActor({ id, name, ruleset = getCompatibilityRuleset
 export function createActorFromRulesetImport(imported, {
   id,
   name,
+  type = 'pc',
+  partyId = undefined,
   variantId,
   variantName,
   ruleset = getCompatibilityRuleset(),
@@ -131,7 +139,7 @@ export function createActorFromRulesetImport(imported, {
     idFactory: uid,
     ruleset,
   }));
-  const raw = { id, name: name || created.name };
+  const raw = { id, name: name || created.name, type, partyId };
   return shell(raw, {
     name: name || created.name,
     img: created.img,

@@ -133,6 +133,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       function reduceOperations(state, operations, { source = 'world.operation', now = new Date().toISOString() } = {}) {
         return applyWorldOperations(state, operations, {
           now,
+          ruleset: runtimeRuleset,
           source: { role: 'offline', source },
           applyStatus(statusState, message, context) {
             const next = clone(statusState);
@@ -168,7 +169,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       }
 
       api.world = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         get: snapshot,
         getActiveScene() { return clone(activeWorldScene(snapshot())); },
         listScenes() { return clone(snapshot().scenes); },

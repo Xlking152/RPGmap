@@ -63,7 +63,7 @@ test('new offline state owns World V2 before Runtime systems register', () => {
   const storage = createMemoryStorage();
   const loaded = prepareStoredWorldState({ mapPackage, ruleset, storageAdapter: storage, raw: null });
   const world = loaded.state.preferences[WORLD_STATE_KEY];
-  assert.equal(world.schemaVersion, 2);
+  assert.equal(world.schemaVersion, 3);
   assert.equal(world.ruleset.id, 'infinite-horror');
   assert.equal(world.activeSceneId, activeWorldScene(world).id);
   assert.equal(loaded.blocked, false);
@@ -118,7 +118,7 @@ test('prepared modern World preserves Actor system, Synthetic Delta, Effects, de
   const initial = prepareStoredWorldState({ mapPackage, ruleset, storageAdapter: storage, raw: null }).state;
   const world = initial.preferences[WORLD_STATE_KEY];
   world.actors = [{
-    id: 'actor-a', name: 'Actor', notes: 'notes', effects: [{
+    id: 'actor-a', name: 'Actor', type: 'pc', partyId: 'party-default', notes: 'notes', effects: [{
       id: 'effect-a', definitionId: 'custom-focus', stacks: 1, enabled: true,
     }],
     system: {
@@ -140,7 +140,10 @@ test('prepared modern World preserves Actor system, Synthetic Delta, Effects, de
     actorDelta: { system: { runtime: { resources: { custom: { current: 1 } } } } },
     placement: 'map', x: 12, y: 18, featureId: null,
     diameterMeters: 1, rotation: 0, elevationFt: 0,
-    hidden: false, locked: false, showName: true, effects: [],
+    controllerUserIds: [],
+    visibility: { mode: 'public', userIds: [] },
+    vision: { enabled: true, rangeOverrideMeters: null, overrideUserIds: [] },
+    locked: false, showName: true, effects: [],
   }];
   const prepared = prepareStoredWorldState({
     mapPackage, ruleset, storageAdapter: storage, raw: JSON.stringify(initial),
@@ -156,7 +159,7 @@ test('server bootstrap metadata resolves before the authenticated World snapshot
   const metadata = {
     initialized: true,
     kind: 'world-v2',
-    schemaVersion: 2,
+    schemaVersion: 3,
     ruleset: { id: 'infinite-horror', version: '1.0.0' },
   };
   assert.deepEqual(readServerWorldBootstrap(metadata, { defaultRuleset: ruleset }).ruleset, metadata.ruleset);

@@ -1,10 +1,13 @@
 import { canonicalAttackAreas } from './attack-anchors.js';
 import { normalizeActorDocument } from '../actor/index.js';
-import { createActorDelta, mergeActorDelta } from '../token/actor.js';
+import { createInitialActorDelta, normalizeActorDelta } from '../token/actor.js';
+import { normalizeTokenAccess } from '../token/access.js';
+import { normalizeFogState } from '../vision/fog.js';
+import { normalizeLightweightMarker } from '../marker/model.js';
 import { normalizeFeatureStateRecords } from './feature-states.js';
+import { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 
-export const WORLD_SCHEMA_VERSION = 2;
-export const WORLD_STATE_KEY = 'worldV2';
+export { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -65,23 +68,22 @@ function normalizeWorldToken(raw, actorIds, { rawActorsById = new Map(), actorsB
   const actorId = id(token.actorId);
   if (!tokenId || !actorId || !actorIds.has(actorId)) return null;
   const placement = token.placement === 'feature' || token.featureId != null ? 'feature' : 'map';
+  const actor = actorsById.get(actorId) || rawActorsById.get(actorId) || null;
+  const access = normalizeTokenAccess(token, { actor });
+  const actorLink = access.actorLink === false ? false : token.actorLink !== false;
   let actorDelta = null;
-  if (token.actorDelta && typeof token.actorDelta === 'object' && !Array.isArray(token.actorDelta)) {
-    const rawBaseActor = rawActorsById.get(actorId) || actorsById.get(actorId);
-    const baseActor = actorsById.get(actorId);
-    if (rawBaseActor && baseActor) {
-      const resolved = normalizeActorDocument(
-        mergeActorDelta(rawBaseActor, token.actorDelta),
-        ruleset ? { ruleset } : {},
-      );
-      actorDelta = createActorDelta(baseActor, resolved);
-    } else actorDelta = clone(token.actorDelta);
+  if (!actorLink && actor) {
+    actorDelta = token.actorDelta && typeof token.actorDelta === 'object' && !Array.isArray(token.actorDelta)
+      ? normalizeActorDelta(actor, token.actorDelta, { ruleset })
+      : createInitialActorDelta(actor, { ruleset });
   }
+  const extension = clone(token);
+  delete extension.hidden;
   return {
-    ...clone(token),
+    ...extension,
     id: tokenId,
     actorId,
-    actorLink: token.actorLink !== false,
+    actorLink,
     actorDelta,
     placement,
     x: placement === 'map' ? finite(token.x, 0) : null,
@@ -90,7 +92,9 @@ function normalizeWorldToken(raw, actorIds, { rawActorsById = new Map(), actorsB
     diameterMeters: Math.max(0.1, finite(token.diameterMeters ?? token.size, 1)),
     rotation: finite(token.rotation, 0),
     elevationFt: finite(token.elevationFt, 0),
-    hidden: token.hidden === true,
+    controllerUserIds: access.controllerUserIds,
+    visibility: access.visibility,
+    vision: access.vision,
     locked: token.locked === true,
     showName: token.showName !== false,
     effects: clone(array(token.effects)),
@@ -123,10 +127,11 @@ function normalizeScene(raw, {
     name: text(source.name, text(mapPackage?.title ?? mapPackage?.name, mapId)),
     mapPackage: { ...clone(mapRef), id: mapId, version: mapVersion },
     tokens,
-    markers: clone(array(source.markers)),
+    markers: array(source.markers).map(marker => normalizeLightweightMarker(marker)).filter(marker => marker.id),
     attackAreas: canonicalAttackAreas(source.attackAreas),
     sceneEvents: clone(array(source.sceneEvents)),
     featureStates: normalizeFeatureStateRecords(source.featureStates),
+    fog: normalizeFogState(source.fog),
     settings: { ...clone(object(source.settings)), gridVisible: source.settings?.gridVisible !== false },
   };
 }
@@ -215,6 +220,7 @@ export function createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worl
       attackAreas: canonicalAttackAreas(state?.attackAreas),
       sceneEvents: clone(array(state?.sceneEvents)),
       featureStates: {},
+      fog: normalizeFogState(),
       settings: { gridVisible: state?.preferences?.gridVisible !== false },
     }],
     createdAt: now,
@@ -244,7 +250,9 @@ function runtimeTokenFromWorld(token) {
     diameterMeters: token.diameterMeters,
     rotation: token.rotation,
     elevationFt: token.elevationFt,
-    hidden: token.hidden,
+    controllerUserIds: clone(token.controllerUserIds || []),
+    visibility: clone(token.visibility || {}),
+    vision: clone(token.vision || {}),
     locked: token.locked,
     showName: token.showName,
     effects: clone(array(token.effects)),
@@ -302,7 +310,7 @@ export function createEmptyWorldScene(world, { mapPackage, id: sceneId, name = '
     id: candidate,
     name: name || `Scene ${normalized.scenes.length + 1}`,
     mapPackage: mapRef,
-    tokens: [], markers: [], attackAreas: [], sceneEvents: [], featureStates: {},
+    tokens: [], markers: [], attackAreas: [], sceneEvents: [], featureStates: {}, fog: normalizeFogState(),
     settings: { gridVisible: true },
   }, { mapPackage, actorIds: new Set(normalized.actors.map(actor => String(actor.id))) });
   return normalizeWorldV2({ ...normalized, scenes: [...normalized.scenes, scene], updatedAt: new Date().toISOString() }, { mapPackage });

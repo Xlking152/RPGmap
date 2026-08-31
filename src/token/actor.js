@@ -51,13 +51,48 @@ export function mergeActorDelta(baseActor, actorDelta) {
   return merged;
 }
 
-export function createActorDelta(baseActor, resolvedActor) {
+export function createActorDelta(baseActor, resolvedActor, { ruleset = null, currentDelta = null } = {}) {
   if (!baseActor || typeof baseActor !== 'object') throw new Error('ActorDelta requires a Base Actor');
   if (!resolvedActor || typeof resolvedActor !== 'object') throw new Error('ActorDelta requires a resolved Actor');
+  if (ruleset?.actor?.instances?.supported) {
+    return clone(ruleset.actor.instances.fromResolved(baseActor, resolvedActor, {
+      ruleset,
+      currentDelta,
+    }));
+  }
   const delta = object(diffValue(baseActor, resolvedActor));
   // Never persist identity rebinding in a Token delta.
   delete delta.id;
   return delta;
+}
+
+export function createInitialActorDelta(baseActor, { ruleset = null } = {}) {
+  if (!baseActor || typeof baseActor !== 'object') throw new Error('ActorDelta requires a Base Actor');
+  if (ruleset?.actor?.instances?.supported) {
+    return clone(ruleset.actor.instances.createDelta(baseActor, { ruleset }));
+  }
+  return {};
+}
+
+export function normalizeActorDelta(baseActor, actorDelta, { ruleset = null } = {}) {
+  if (!baseActor || typeof baseActor !== 'object') throw new Error('ActorDelta requires a Base Actor');
+  if (ruleset?.actor?.instances?.supported) {
+    return clone(ruleset.actor.instances.normalizeDelta(baseActor, actorDelta, { ruleset }));
+  }
+  return clone(object(actorDelta));
+}
+
+export function rebaseActorDelta(previousBaseActor, nextBaseActor, actorDelta, { ruleset = null } = {}) {
+  if (ruleset?.actor?.instances?.supported) {
+    return clone(ruleset.actor.instances.rebaseDelta(
+      previousBaseActor,
+      nextBaseActor,
+      actorDelta,
+      { ruleset },
+    ));
+  }
+  const resolved = mergeActorDelta(previousBaseActor, actorDelta);
+  return createActorDelta(nextBaseActor, resolved);
 }
 
 export function resolveTokenActor(world, tokenId, { ruleset } = {}) {
@@ -73,7 +108,7 @@ export function resolveTokenActor(world, tokenId, { ruleset } = {}) {
   const actorOptions = ruleset ? { ruleset } : {};
   const baseActor = normalizeActorDocument(rawBaseActor, actorOptions);
   const actor = synthetic
-    ? normalizeActorDocument(mergeActorDelta(rawBaseActor, token.actorDelta), actorOptions)
+    ? normalizeActorDocument(mergeActorDelta(rawBaseActor, normalizeActorDelta(rawBaseActor, token.actorDelta, { ruleset })), actorOptions)
     : baseActor;
   return {
     token: clone(token),

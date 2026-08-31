@@ -1,4 +1,4 @@
-import { WORLD_STATE_KEY } from './model.js';
+import { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 import { assertPersistedWorldV2, worldRulesetReference } from './validation.js';
 
 function parseState(raw) {
@@ -60,7 +60,7 @@ export function readWorldBootstrap(raw, { defaultRuleset } = {}) {
       worldId: null, worldName: null, activeSceneId: null, mapPackage: null,
     });
   }
-  assertPersistedWorldV2(world);
+  assertPersistedWorldV2(world, { acceptedSchemaVersions: [2, WORLD_SCHEMA_VERSION] });
   return Object.freeze({
     kind: 'world-v2',
     raw: state,
@@ -86,7 +86,7 @@ export function readServerWorldBootstrap(metadata, { defaultRuleset } = {}) {
       mapPackage: null,
     });
   }
-  if (Number(source.schemaVersion) !== 2) {
+  if (![2, WORLD_SCHEMA_VERSION].includes(Number(source.schemaVersion))) {
     const error = new Error('Server World schema is incompatible');
     error.code = 'world_schema_incompatible';
     throw error;
