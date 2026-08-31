@@ -66,7 +66,10 @@ export function applySyntheticActorStatusOperation(rawWorld, rawOperation, conte
   const updatedActor = reduced.state.actors.find(actor => String(actor?.id) === String(resolved.actor.id));
   if (!updatedActor) throw new Error('Synthetic Actor status reducer did not return its Actor target');
 
-  const actorDelta = createActorDelta(resolved.baseActor, updatedActor);
+  const actorDelta = createActorDelta(resolved.baseActor, updatedActor, {
+    ruleset: context.ruleset,
+    currentDelta: resolved.token.actorDelta,
+  });
   const updated = updateSceneToken(rawWorld, operation.targetId, { actorDelta });
   return {
     world: updated.world,

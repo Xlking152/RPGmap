@@ -87,8 +87,10 @@ test('unlinked Token actorDelta survives movement and ordinary Token updates', (
   assert.equal(moved.token.actorLink, false);
   assert.equal(moved.token.actorDelta.runtime.health.current, 7);
 
-  const hidden = updateSceneToken(moved.world, 'npc-1', { hidden: true, rotation: 90 });
-  assert.equal(hidden.token.hidden, true);
+  const hidden = updateSceneToken(moved.world, 'npc-1', {
+    visibility: { mode: 'gm', userIds: [] }, rotation: 90,
+  });
+  assert.equal(hidden.token.visibility.mode, 'gm');
   assert.equal(hidden.token.rotation, 90);
   assert.equal(hidden.token.actorDelta.runtime.health.current, 7);
 });

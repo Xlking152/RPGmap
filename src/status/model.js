@@ -4,6 +4,7 @@ export const STATUS_SCHEMA_VERSION = 3;
 export const MAX_STACKS = 99;
 
 const STATUS_SCOPES = new Set(['actor', 'token']);
+const STATUS_TARGET_SCOPES = new Set(['actor', 'token', 'syntheticActor']);
 const STATUS_CATEGORIES = new Set(['buff', 'debuff', 'trait', 'status']);
 const STATUS_CHANGE_MODES = new Set(['add', 'set', 'multiply', 'min', 'max']);
 const BOOLEAN_CAPABILITIES = Object.freeze(['canMove', 'canInteract', 'canActInCombat']);
@@ -53,6 +54,7 @@ function normalizeCapabilities(value) {
   const source = plainObject(value) ? value : {};
   const capabilities = {};
   for (const key of BOOLEAN_CAPABILITIES) if (typeof source[key] === 'boolean') capabilities[key] = source[key];
+  if (source.visibility === 'invisible') capabilities.visibility = 'invisible';
   if (Array.isArray(source.collisionBypassGroups) && source.collisionBypassGroups.includes('structure')) capabilities.collisionBypassGroups = ['structure'];
   return capabilities;
 }
@@ -319,10 +321,11 @@ function strictDefinition(value) {
   if (rawScopes.includes('token') && rawChanges.length) throw statusError('Definitions usable by Token cannot modify Actor numeric values', 'status_scope_forbidden');
   const requestedMax = integer(value.maxStacks, 1);
   if (requestedMax > 1 && rawChanges.some(change => String(change.mode || 'add') !== 'add')) throw statusError('Stacking definitions may only use additive changes', 'status_stacking_invalid');
-  const allowedCapabilityKeys = new Set([...BOOLEAN_CAPABILITIES, 'collisionBypassGroups']);
+  const allowedCapabilityKeys = new Set([...BOOLEAN_CAPABILITIES, 'collisionBypassGroups', 'visibility']);
   if (plainObject(value.capabilities)) {
     for (const key of Object.keys(value.capabilities)) if (!allowedCapabilityKeys.has(key)) throw statusError(`definition.capabilities.${key} is not allowed`);
     for (const key of BOOLEAN_CAPABILITIES) if (value.capabilities[key] !== undefined && typeof value.capabilities[key] !== 'boolean') throw statusError(`definition.capabilities.${key} must be boolean`);
+    if (value.capabilities.visibility !== undefined && value.capabilities.visibility !== 'invisible') throw statusError('definition.capabilities.visibility must be invisible');
     const bypass = value.capabilities.collisionBypassGroups;
     if (bypass !== undefined && (!Array.isArray(bypass) || bypass.some(group => group !== 'structure'))) throw statusError('collisionBypassGroups may only contain structure');
   }
@@ -331,11 +334,20 @@ function strictDefinition(value) {
 function targetForOperation(entityState, message) {
   const target = plainObject(message?.target) ? message.target : message;
   const scope = String(target?.scope || '');
-  if (!STATUS_SCOPES.has(scope)) throw statusError('status scope must be actor or token');
+  if (!STATUS_TARGET_SCOPES.has(scope)) throw statusError('status scope must be actor, token, or syntheticActor');
   const targetId = requiredId(target?.targetId ?? target?.id, 'targetId');
   const collection = scope === 'actor' ? entityState.actors : entityState.tokens;
   const entry = collection.find(item => String(item?.id) === targetId);
   if (!entry) throw statusError(`${scope} target does not exist: ${targetId}`, 'status_target_not_found');
+  if (scope === 'actor' && ['npc', 'summon'].includes(String(entry.type))) {
+    throw statusError('NPC and summon statuses require a Synthetic Actor Token target', 'instance_target_required');
+  }
+  if (scope === 'syntheticActor') {
+    if (entry.actorLink !== false) throw statusError('syntheticActor requires an unlinked Token', 'synthetic_actor_required');
+    if (!plainObject(entry.actorDelta)) entry.actorDelta = {};
+    if (!Array.isArray(entry.actorDelta.effects)) entry.actorDelta.effects = [];
+    return { scope, targetId: String(entry.id), target: entry.actorDelta };
+  }
   entry.effects ||= [];
   return { scope, targetId: String(entry.id), target: entry };
 }
@@ -355,7 +367,10 @@ function applySingleOperation(entityState, message, context) {
       if (entityState.statusDefinitions.length >= MAX_DEFINITIONS) throw statusError('Too many status definitions', 'status_limit');
       entityState.statusDefinitions.push(definition);
     } else {
-      const inUse = [...entityState.actors, ...entityState.tokens].flatMap(target => target.effects || []).filter(effect => String(effect.definitionId) === definition.id);
+      const inUse = [...entityState.actors, ...entityState.tokens].flatMap(target => [
+        ...(target.effects || []),
+        ...(target.actorDelta?.effects || []),
+      ]).filter(effect => String(effect.definitionId) === definition.id);
       const usedByToken = entityState.tokens.some(token => (token.effects || []).some(effect => String(effect.definitionId) === definition.id));
       if (usedByToken && definition.changes.length) throw statusError('Token statuses cannot gain Actor numeric changes', 'status_scope_forbidden');
       if (Math.max(1, ...inUse.map(effect => Number(effect.stacks) || 1)) > definition.maxStacks) throw statusError('maxStacks is lower than an applied stack count', 'status_definition_in_use');
@@ -368,7 +383,10 @@ function applySingleOperation(entityState, message, context) {
     const index = entityState.statusDefinitions.findIndex(item => String(item?.id) === definitionId);
     if (index < 0) throw statusError(`Status definition does not exist: ${definitionId}`, 'status_definition_not_found');
     if (entityState.statusDefinitions[index]?.builtIn === true) throw statusError('Built-in status definitions are read-only', 'status_builtin_readonly');
-    const referenced = [...entityState.actors, ...entityState.tokens].some(target => (target.effects || []).some(effect => String(effect.definitionId) === definitionId));
+    const referenced = [...entityState.actors, ...entityState.tokens].some(target => [
+      ...(target.effects || []),
+      ...(target.actorDelta?.effects || []),
+    ].some(effect => String(effect.definitionId) === definitionId));
     if (referenced) throw statusError('Status definition is still in use', 'status_definition_in_use');
     entityState.statusDefinitions.splice(index, 1);
     return { action: 'definition.delete', definitionId };
@@ -377,7 +395,8 @@ function applySingleOperation(entityState, message, context) {
   const definitionId = requiredId(message.statusId ?? message.definitionId, 'statusId');
   const definition = new Map(getStatusDefinitions(entityState).map(item => [item.id, item])).get(definitionId);
   if (!definition) throw statusError(`Status definition does not exist: ${definitionId}`, 'status_definition_not_found');
-  if (!definition.scopes.includes(scope)) throw statusError(`Status cannot be applied to ${scope}`, 'status_scope_forbidden');
+  const definitionScope = scope === 'syntheticActor' ? 'actor' : scope;
+  if (!definition.scopes.includes(definitionScope)) throw statusError(`Status cannot be applied to ${scope}`, 'status_scope_forbidden');
   if (scope === 'token' && definition.changes.length) throw statusError('Token statuses cannot modify Actor numeric values', 'status_scope_forbidden');
   const index = target.effects.findIndex(effect => String(effect?.definitionId) === definitionId);
   if (type === 'status.apply') {

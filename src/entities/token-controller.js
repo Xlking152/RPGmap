@@ -243,7 +243,7 @@ export function createEntityTokenController({
       if (property === 'diameterMeters') {
         api.emit?.('token:size-change', { tokenId: token.id, diameterMeters: token.diameterMeters });
       }
-      if (property === 'hidden') api.emit?.('token:visibility-change', { tokenId: token.id, hidden: token.hidden });
+      if (property === 'hidden') api.emit?.('token:visibility-change', { tokenId: token.id, hidden: token.visibility?.mode === 'gm' });
       if (property === 'rotation') api.emit?.('token:rotation-change', { tokenId: token.id, rotation: token.rotation });
       renderPanel();
       renderSheet();
@@ -251,6 +251,21 @@ export function createEntityTokenController({
     } finally {
       propertyBusy = false;
     }
+  }
+
+  async function changeAccess(tokenId, patch) {
+    const target = id(tokenId);
+    const token = api.tokens.get(target);
+    if (!token) return null;
+    await api.world.performOperations([{ type: 'token.access.patch', payload: {
+      sceneId: api.world.get().activeSceneId,
+      tokenId: target,
+      patch,
+    } }], { source: 'entities:token.access', kind: 'token' });
+    api.emit?.('token:property-change', { tokenId: target, actorId: token.actorId, property: 'access' });
+    renderPanel();
+    renderSheet();
+    return api.tokens.get(target);
   }
 
   async function editElevation(tokenId) {
@@ -327,15 +342,20 @@ export function createEntityTokenController({
     const structureAllowed = canManageStructure();
     const cards = list.map(token => {
       const elevationAllowed = api.elevation?.canSetTokenElevation?.(token.id) !== false;
+      const userId = api.multiplayer?.getStatus?.()?.session?.userId || '';
+      const visionAllowed = structureAllowed || (token.vision?.overrideUserIds || []).map(String).includes(String(userId));
       const diameter = Number(token.diameterMeters) || 1;
       const rotation = normalizeTokenRotation(token.rotation);
       const sizeControl = structureAllowed
         ? `<label>直径 <select data-token-diameter data-token-id="${escapeHtml(token.id)}">${TOKEN_DIAMETERS_METERS.map(value => `<option value="${value}" ${Number(value) === diameter ? 'selected' : ''}>${value} m</option>`).join('')}</select></label>`
         : `<small>直径：${diameter} m（仅 GM 可修改）</small>`;
       const displayControls = structureAllowed
-        ? `<label>显示 <input type="checkbox" data-token-visible data-token-id="${escapeHtml(token.id)}" ${token.hidden ? '' : 'checked'}></label><label>旋转 <input type="number" min="0" max="359" step="15" value="${rotation}" data-token-rotation data-token-id="${escapeHtml(token.id)}">°</label>`
-        : `<small>${token.hidden ? '已隐藏' : '显示'} · 旋转 ${rotation}°</small>`;
-      return `<div class="entity-card" data-token-id="${escapeHtml(token.id)}"><strong>Token ${escapeHtml(token.id)}</strong><small>位置：${escapeHtml(positionLabel(token))} · 高度：${escapeHtml(Number(token.elevationFt) || 0)} ft</small><div class="entity-card-actions">${sizeControl}${displayControls}${structureAllowed ? `<button type="button" class="small-button" data-sheet-action="reposition-token" data-token-id="${escapeHtml(token.id)}">重新放置</button>` : ''}<button type="button" class="small-button" data-sheet-action="edit-token-elevation" data-token-id="${escapeHtml(token.id)}" ${elevationAllowed ? '' : 'disabled title="当前没有该 Actor 的控制权限或不在可行动回合"'}>调整高度</button>${structureAllowed ? `<button type="button" class="small-button danger" data-sheet-action="delete-token" data-token-id="${escapeHtml(token.id)}">删除 Token</button>` : ''}</div></div>`;
+        ? `<label>可见性 <select data-token-visibility data-token-id="${escapeHtml(token.id)}"><option value="public" ${token.visibility?.mode === 'public' ? 'selected' : ''}>公开</option><option value="party" ${token.visibility?.mode === 'party' ? 'selected' : ''}>队伍</option><option value="gm" ${token.visibility?.mode === 'gm' ? 'selected' : ''}>仅 GM</option><option value="users" ${token.visibility?.mode === 'users' ? 'selected' : ''}>指定用户</option></select></label><label>指定用户 <input data-token-visibility-users data-token-id="${escapeHtml(token.id)}" value="${escapeHtml((token.visibility?.userIds || []).join(','))}"></label><label>控制者 <input data-token-controllers data-token-id="${escapeHtml(token.id)}" value="${escapeHtml((token.controllerUserIds || []).join(','))}"></label><label>视野用户 <input data-token-vision-users data-token-id="${escapeHtml(token.id)}" value="${escapeHtml((token.vision?.overrideUserIds || []).join(','))}"></label><label>旋转 <input type="number" min="0" max="359" step="15" value="${rotation}" data-token-rotation data-token-id="${escapeHtml(token.id)}">°</label>`
+        : `<small>${token.visibility?.mode === 'gm' ? '仅 GM' : token.visibility?.mode === 'party' ? '队伍可见' : '公开'} · 旋转 ${rotation}°</small>`;
+      const visionControls = visionAllowed
+        ? `<label>视野 <input type="checkbox" data-token-vision-enabled data-token-id="${escapeHtml(token.id)}" ${token.vision?.enabled === false ? '' : 'checked'} ${structureAllowed ? '' : 'disabled'}></label><label>视野半径 <input type="number" min="0" max="120" step="5" data-token-vision-range data-token-id="${escapeHtml(token.id)}" value="${token.vision?.rangeOverrideMeters ?? ''}" placeholder="规则包"></label>`
+        : '';
+      return `<div class="entity-card" data-token-id="${escapeHtml(token.id)}"><strong>Token ${escapeHtml(token.id)}</strong><small>位置：${escapeHtml(positionLabel(token))} · 高度：${escapeHtml(Number(token.elevationFt) || 0)} ft</small><div class="entity-card-actions">${sizeControl}${displayControls}${visionControls}${structureAllowed ? `<button type="button" class="small-button" data-sheet-action="reposition-token" data-token-id="${escapeHtml(token.id)}">重新放置</button>` : ''}<button type="button" class="small-button" data-sheet-action="edit-token-elevation" data-token-id="${escapeHtml(token.id)}" ${elevationAllowed ? '' : 'disabled title="当前没有该 Actor 的控制权限或不在可行动回合"'}>调整高度</button>${structureAllowed ? `<button type="button" class="small-button danger" data-sheet-action="delete-token" data-token-id="${escapeHtml(token.id)}">删除 Token</button>` : ''}</div></div>`;
     }).join('');
     return `<section class="entity-section"><h3>Token</h3>${cards || '<div class="entity-empty">当前角色尚未放置 Token。</div>'}<button type="button" class="small-button" data-sheet-action="place-token">放置 Token</button></section>`;
   }
@@ -355,9 +375,30 @@ export function createEntityTokenController({
       if (token) setStatus(`Token 直径已设为 ${token.diameterMeters} m`);
       return true;
     }
-    if (target?.matches?.('[data-token-visible]')) {
-      const token = await changeProperty(target.dataset.tokenId, 'hidden', !target.checked);
-      if (token) setStatus(token.hidden ? 'Token 已隐藏' : 'Token 已显示');
+    if (target?.matches?.('[data-token-visibility]')) {
+      const token = api.tokens.get(target.dataset.tokenId);
+      await changeAccess(target.dataset.tokenId, { visibility: { ...token.visibility, mode: target.value } });
+      return true;
+    }
+    if (target?.matches?.('[data-token-visibility-users]')) {
+      const token = api.tokens.get(target.dataset.tokenId);
+      await changeAccess(target.dataset.tokenId, { visibility: { ...token.visibility, userIds: target.value.split(',').map(value => value.trim()).filter(Boolean) } });
+      return true;
+    }
+    if (target?.matches?.('[data-token-controllers]')) {
+      await changeAccess(target.dataset.tokenId, { controllerUserIds: target.value.split(',').map(value => value.trim()).filter(Boolean) });
+      return true;
+    }
+    if (target?.matches?.('[data-token-vision-users]')) {
+      await changeAccess(target.dataset.tokenId, { vision: { overrideUserIds: target.value.split(',').map(value => value.trim()).filter(Boolean) } });
+      return true;
+    }
+    if (target?.matches?.('[data-token-vision-enabled]')) {
+      await changeAccess(target.dataset.tokenId, { vision: { enabled: target.checked } });
+      return true;
+    }
+    if (target?.matches?.('[data-token-vision-range]')) {
+      await changeAccess(target.dataset.tokenId, { vision: { rangeOverrideMeters: target.value === '' ? null : Number(target.value) } });
       return true;
     }
     if (target?.matches?.('[data-token-rotation]')) {

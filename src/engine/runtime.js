@@ -60,6 +60,7 @@ function shellMarkup() {
             <section class="panel" data-panel="inspect" data-canonical-panel-owner="true"></section>
             <section class="panel" data-panel="areas" data-canonical-panel-owner="true"></section>
             <section class="panel" data-panel="layers" data-canonical-panel-owner="true"></section>
+            <section class="panel" data-panel="markers" data-canonical-panel-owner="true"></section>
           </div>
         </aside>
       </main>

@@ -35,7 +35,8 @@ export function tokenPropertySnapshot(api, value) {
   return Object.freeze({
     id,
     actorId: String(token.actorId),
-    hidden: token.hidden === true,
+    hidden: token.visibility?.mode === 'gm',
+    visibility: structuredClone(token.visibility || { mode: 'public', userIds: [] }),
     diameterMeters: normalizeTokenDiameterMeters(token.diameterMeters, 1),
     rotation: normalizeTokenRotation(token.rotation, 0),
     elevationFt: normalizeElevationFt(token.elevationFt, 0),
@@ -45,7 +46,16 @@ export function tokenPropertySnapshot(api, value) {
 }
 
 export async function setTokenHidden(api, value, hidden, options = {}) {
-  return update(api, value, { hidden: hidden === true }, options);
+  const { id } = requireToken(api, value);
+  await api.world.performOperations([{
+    type: 'token.access.patch',
+    payload: {
+      sceneId: api.world.get().activeSceneId,
+      tokenId: id,
+      patch: { visibility: { mode: hidden === true ? 'gm' : 'public', userIds: [] } },
+    },
+  }], { source: 'token.access.patch', ...options });
+  return api.tokens.get(id);
 }
 
 export async function setTokenDiameterMeters(api, value, diameterMeters, options = {}) {

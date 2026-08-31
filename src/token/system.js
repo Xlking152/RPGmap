@@ -7,7 +7,8 @@ import {
   removeSceneToken,
   updateSceneToken,
 } from './model.js';
-import { mergeActorDeltaPatch, resolveTokenActor } from './actor.js';
+import { createInitialActorDelta, mergeActorDeltaPatch, resolveTokenActor } from './actor.js';
+import { actorUsesIndependentInstances } from '../actor/classification.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -30,6 +31,12 @@ export function createTokenRuntimeSystem() {
         return clone(result.token);
       }
 
+      async function perform(operation, { source, render = true, kind = 'token' } = {}) {
+        if (typeof api.world.performOperations !== 'function') return null;
+        await api.world.performOperations([operation], { source, render, kind });
+        return true;
+      }
+
       api.tokens = {
         schemaVersion: 2,
         list() { return listActiveSceneTokens(api.world.get()); },
@@ -45,33 +52,71 @@ export function createTokenRuntimeSystem() {
             diameterMeters: options.diameterMeters ?? prototype.diameterMeters ?? 1,
             showName: options.showName ?? prototype.showName ?? true,
           };
-          return commit(createSceneToken(world, input), {
-            source: 'token-v2:create', reason: 'token.create', render: true,
-          });
+          const prepared = createSceneToken(world, input, { ruleset: api.ruleset });
+          if (typeof api.world.performOperations !== 'function') {
+            return commit(prepared, { source: 'token-v2:create', reason: 'token.create', render: true });
+          }
+          await api.world.performOperations([{
+            type: 'token.create',
+            payload: { sceneId: world.activeSceneId, token: prepared.token },
+          }], { source: 'token-v2:create', render: true, kind: 'token' });
+          return api.tokens.get(prepared.token.id);
         },
         async move(tokenId, point = {}) {
-          return commit(moveSceneToken(api.world.get(), tokenId, point), {
-            source: 'token-v2:move', reason: 'token.move', render: true,
-          });
+          const world = api.world.get();
+          const prepared = moveSceneToken(world, tokenId, point, { ruleset: api.ruleset });
+          if (!await perform({
+            type: 'token.move',
+            payload: {
+              sceneId: world.activeSceneId, tokenId: String(tokenId), placement: 'map',
+              x: prepared.token.x, y: prepared.token.y, featureId: null,
+            },
+          }, { source: 'token-v2:move' })) {
+            return commit(prepared, { source: 'token-v2:move', reason: 'token.move', render: true });
+          }
+          return api.tokens.get(tokenId);
         },
         async placeInFeature(tokenId, featureId) {
-          return commit(placeSceneTokenInFeature(api.world.get(), tokenId, featureId), {
-            source: 'token-v2:place-feature', reason: 'token.place-feature', render: true,
-          });
+          const world = api.world.get();
+          const prepared = placeSceneTokenInFeature(world, tokenId, featureId, { ruleset: api.ruleset });
+          if (!await perform({
+            type: 'token.move',
+            payload: {
+              sceneId: world.activeSceneId, tokenId: String(tokenId), placement: 'feature',
+              x: null, y: null, featureId: prepared.token.featureId,
+            },
+          }, { source: 'token-v2:place-feature' })) {
+            return commit(prepared, { source: 'token-v2:place-feature', reason: 'token.place-feature', render: true });
+          }
+          return api.tokens.get(tokenId);
         },
         async update(tokenId, changes = {}, { render = true } = {}) {
-          return commit(updateSceneToken(api.world.get(), tokenId, changes), {
-            source: 'token-v2:update', reason: 'token.update', render,
-          });
+          const world = api.world.get();
+          const prepared = updateSceneToken(world, tokenId, changes, { ruleset: api.ruleset });
+          if (!await perform({
+            type: 'token.upsert',
+            payload: { sceneId: world.activeSceneId, token: prepared.token },
+          }, { source: 'token-v2:update', render })) {
+            return commit(prepared, { source: 'token-v2:update', reason: 'token.update', render });
+          }
+          return api.tokens.get(tokenId);
         },
         async setActorLink(tokenId, actorLink, { clearDelta = false, render = true } = {}) {
           const current = getActiveSceneToken(api.world.get(), tokenId);
           if (!current) throw new Error(`Unknown Token: ${tokenId}`);
+          const actor = api.world.get().actors?.find(item => String(item?.id) === String(current.actorId));
+          if (actorUsesIndependentInstances(actor) && actorLink !== false) {
+            const error = new Error(`${actor.type} Token instances cannot link runtime state to their Actor template`);
+            error.code = 'instance_link_forbidden';
+            throw error;
+          }
           const linked = actorLink !== false;
           const changes = { actorLink: linked };
           if (clearDelta) changes.actorDelta = null;
-          else if (!linked && !current.actorDelta) changes.actorDelta = {};
-          return commit(updateSceneToken(api.world.get(), tokenId, changes), {
+          else if (!linked && !current.actorDelta) {
+            changes.actorDelta = createInitialActorDelta(actor, { ruleset: api.ruleset });
+          }
+          return commit(updateSceneToken(api.world.get(), tokenId, changes, { ruleset: api.ruleset }), {
             source: 'token-v2:actor-link', reason: 'token.actor-link', render,
           });
         },
@@ -86,14 +131,27 @@ export function createTokenRuntimeSystem() {
           const actorDelta = replace
             ? clone(object(patch))
             : mergeActorDeltaPatch(current.actorDelta, patch);
-          return commit(updateSceneToken(api.world.get(), tokenId, { actorDelta }), {
-            source: 'token-v2:actor-delta', reason: 'token.actor-delta', render,
-          });
+          const world = api.world.get();
+          if (!await perform({
+            type: 'token.actorDelta.replace',
+            payload: { sceneId: world.activeSceneId, tokenId: String(tokenId), actorDelta },
+          }, { source: 'token-v2:actor-delta', render })) {
+            return commit(updateSceneToken(world, tokenId, { actorDelta }, { ruleset: api.ruleset }), {
+              source: 'token-v2:actor-delta', reason: 'token.actor-delta', render,
+            });
+          }
+          return api.tokens.get(tokenId);
         },
         async remove(tokenId) {
-          const removed = await commit(removeSceneToken(api.world.get(), tokenId), {
-            source: 'token-v2:remove', reason: 'token.remove', render: true,
-          });
+          const world = api.world.get();
+          const prepared = removeSceneToken(world, tokenId);
+          let removed;
+          if (!await perform({
+            type: 'token.delete',
+            payload: { sceneId: world.activeSceneId, tokenId: String(tokenId) },
+          }, { source: 'token-v2:remove' })) {
+            removed = await commit(prepared, { source: 'token-v2:remove', reason: 'token.remove', render: true });
+          } else removed = prepared.token;
           api.emit?.('token:delete', {
             id: removed.id,
             tokenId: removed.id,

@@ -16,6 +16,7 @@ function runtime(overrides = {}) {
     id: 'token-a',
     actorId: 'actor-a',
     hidden: false,
+    visibility: { mode: 'public', userIds: [] },
     diameterMeters: 5,
     rotation: 15,
     elevationFt: 10,
@@ -35,6 +36,20 @@ function runtime(overrides = {}) {
         return structuredClone(token);
       },
     },
+    world: {
+      get() { return { activeSceneId: 'scene-a' }; },
+      async performOperations(operations) {
+        assert.equal(operations.length, 1);
+        const operation = operations[0];
+        assert.equal(operation.type, 'token.access.patch');
+        calls.push(structuredClone(operation.payload.patch));
+        token = {
+          ...token,
+          visibility: { ...token.visibility, ...structuredClone(operation.payload.patch.visibility) },
+        };
+        return true;
+      },
+    },
   };
 }
 
@@ -45,11 +60,12 @@ function withoutComments(source) {
 }
 
 test('Token property snapshot reads only canonical Token fields', () => {
-  const api = runtime({ hidden: true, rotation: 725, elevationFt: 25 });
+  const api = runtime({ visibility: { mode: 'gm', userIds: [] }, rotation: 725, elevationFt: 25 });
   assert.deepEqual(tokenPropertySnapshot(api, 'token-a'), {
     id: 'token-a',
     actorId: 'actor-a',
     hidden: true,
+    visibility: { mode: 'gm', userIds: [] },
     diameterMeters: 5,
     rotation: 5,
     elevationFt: 25,
@@ -58,14 +74,14 @@ test('Token property snapshot reads only canonical Token fields', () => {
   });
 });
 
-test('Token property mutations write only through api.tokens.update', async () => {
+test('Token property mutations use access operation for visibility and Token updates for geometry', async () => {
   const api = runtime();
   await setTokenHidden(api, 'token-a', true);
   await setTokenDiameterMeters(api, 'token-a', 10);
   await setTokenRotation(api, 'token-a', -45);
   await setTokenElevationFt(api, 'token-a', 35);
   assert.deepEqual(api.calls, [
-    { hidden: true },
+    { visibility: { mode: 'gm', userIds: [] } },
     { diameterMeters: 10 },
     { rotation: 315 },
     { elevationFt: 35 },
