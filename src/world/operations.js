@@ -71,7 +71,6 @@ const OPERATION_TYPES = new Set([
 ]);
 
 const STATUS_TYPES = new Set([...OPERATION_TYPES].filter(type => type.startsWith('status.')));
-const MAX_FOG_RADIUS_METERS = 120;
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -540,18 +539,15 @@ function applyCanonicalOperation(state, operation, context = {}) {
     if (type === 'scene.fog.reset') scene.fog = resetFogParty(scene.fog, partyId);
     else if (type === 'scene.fog.hide') {
       const radiusMeters = Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
-      if (radiusMeters > MAX_FOG_RADIUS_METERS) fail('Fog radius exceeds 120 metres', 'fog_radius_limit');
       scene.fog = hideFogCircle(scene.fog, partyId, {
         x: finite(payload.x, 'x'), y: finite(payload.y, 'y'),
         radiusMeters,
       }, map);
     } else if (payload.from && payload.to) {
       const radiusMeters = Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
-      if (radiusMeters > MAX_FOG_RADIUS_METERS) fail('Fog radius exceeds 120 metres', 'fog_radius_limit');
       scene.fog = exploreFogSweep(scene.fog, partyId, payload.from, payload.to, radiusMeters, map);
     } else {
       const radiusMeters = Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
-      if (radiusMeters > MAX_FOG_RADIUS_METERS) fail('Fog radius exceeds 120 metres', 'fog_radius_limit');
       scene.fog = exploreFogCircle(scene.fog, partyId, {
         x: finite(payload.x, 'x'), y: finite(payload.y, 'y'),
         radiusMeters,
