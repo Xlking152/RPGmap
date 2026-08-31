@@ -31,16 +31,21 @@ function installStyles(documentNode) {
   style.id = STYLE_ID;
   style.textContent = `
     .rpg-token-v2 { background:transparent !important; border:0 !important; overflow:visible !important; }
-    .rpg-token-v2 .rpg-token-v2-core { border-radius:50%; overflow:hidden; transform:scale(1); transition:transform 140ms ease,filter 140ms ease; transform-origin:center; }
+    .rpg-token-v2 .rpg-token-v2-core { position:relative; border-radius:50%; overflow:visible; transform:scale(1); transition:transform 140ms ease,filter 140ms ease; transform-origin:center; }
     .rpg-token-v2 .rpg-token-v2-core.selected { transform:scale(1.16); filter:drop-shadow(0 4px 8px rgba(0,0,0,.34)); }
     .rpg-token-v2 .rpg-token-v2-portrait { width:100%; height:100%; display:grid; place-items:center; border-radius:inherit; overflow:hidden; }
     .rpg-token-v2 .rpg-token-v2-portrait img { width:100%; height:100%; object-fit:cover; }
     .rpg-token-v2-core[data-audience-visibility="allied-invisible"] { opacity:.48; filter:saturate(.55); }
+    .rpg-token-v2-core[data-audience-visibility="vague"] .rpg-token-v2-portrait { opacity:.62; border:2px dashed #d9e0df; background:#7b8587; filter:grayscale(1); }
+    .rpg-token-v2-core[data-gm-private="true"] .rpg-token-v2-portrait { opacity:.48; filter:saturate(.55); }
+    .rpg-token-v2-flags { position:absolute; z-index:3; left:50%; bottom:calc(100% + 3px); transform:translateX(-50%); display:flex; gap:3px; white-space:nowrap; pointer-events:none; }
+    .rpg-token-v2-flag { padding:2px 4px; border-radius:4px; color:#fff; background:rgba(39,52,55,.92); font:700 9px/1.2 "Microsoft YaHei",sans-serif; }
+    .rpg-token-v2-flag.invisible { background:rgba(75,92,112,.92); }
     .token-v2-label-row { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
     .token-v2-elevation-label { display:inline-flex; align-items:center; min-height:17px; padding:1px 4px; border-radius:4px; color:#eaf6f7; background:rgba(42,67,72,.92); font-size:9px; font-weight:800; line-height:1.2; }
     .token-v2-name-label { font-weight:750; }
     .rpgmap-token-status-v2-marker { background:transparent !important; border:0 !important; pointer-events:none !important; overflow:visible !important; }
-    .selected-token-summary { position:fixed; right:16px; bottom:18px; z-index:1600; width:210px; min-height:92px; box-sizing:border-box; display:flex; align-items:center; gap:11px; padding:10px; border:1px solid rgba(38,60,62,.28); border-radius:8px; background:rgba(248,250,247,.96); box-shadow:0 10px 28px rgba(18,27,29,.24); pointer-events:none; }
+    .selected-token-summary { position:absolute; right:12px; bottom:max(12px,env(safe-area-inset-bottom)); z-index:1600; width:210px; min-height:92px; box-sizing:border-box; display:flex; align-items:center; gap:11px; padding:10px; border:1px solid rgba(38,60,62,.28); border-radius:8px; background:rgba(248,250,247,.96); box-shadow:0 10px 28px rgba(18,27,29,.24); pointer-events:none; }
     .selected-token-summary[hidden] { display:none !important; }
     .selected-token-summary-portrait { flex:0 0 72px; width:72px; height:72px; display:grid; place-items:center; overflow:hidden; border:3px solid var(--token-color,#3d9b63); border-radius:50%; background:var(--token-color,#3d9b63); color:white; font:800 28px/1 sans-serif; }
     .selected-token-summary-portrait img { width:100%; height:100%; object-fit:cover; }
@@ -68,9 +73,14 @@ export function tokenIcon(api, model) {
   const portrait = model.avatarDataUrl
     ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="">`
     : `<span>${escapeHtml((Array.from(model.name)[0] || '?').toUpperCase())}</span>`;
+  const flags = model.gmViewer ? [
+    ...(model.gmOnly ? ['<span class="rpg-token-v2-flag gm-only">GM 专属</span>'] : []),
+    ...(model.invisible ? ['<span class="rpg-token-v2-flag invisible">隐身</span>'] : []),
+  ].join('') : '';
+  const gmPrivate = model.gmViewer && (model.gmOnly || model.invisible);
   return L.divIcon({
     className: 'rpg-token-v2',
-    html: `<div class="rpg-token-v2-core${model.selected ? ' selected' : ''}" data-token-id="${escapeHtml(model.id)}" data-audience-visibility="${escapeHtml(model.audienceVisibility || '')}" style="--token-color:${model.color};--token-size:${size}px"><div class="rpg-token-v2-portrait" style="transform:rotate(${model.rotation}deg)">${portrait}</div></div>`,
+    html: `<div class="rpg-token-v2-core${model.selected ? ' selected' : ''}" data-token-id="${escapeHtml(model.id)}" data-audience-visibility="${escapeHtml(model.audienceVisibility || '')}" data-gm-private="${gmPrivate}" style="--token-color:${model.color};--token-size:${size}px">${flags ? `<span class="rpg-token-v2-flags">${flags}</span>` : ''}<div class="rpg-token-v2-portrait" style="transform:rotate(${model.rotation}deg)">${portrait}</div></div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
@@ -132,16 +142,23 @@ export function createTokenRendererSystem() {
       const summary = documentNode.createElement('aside');
       summary.className = 'selected-token-summary';
       summary.hidden = true;
-      (api.map.getContainer().closest('.app-shell') || documentNode.body).append(summary);
+      const summaryHost = api.map.getContainer().parentElement || documentNode.body;
+      if (summaryHost && windowNode.getComputedStyle?.(summaryHost).position === 'static') summaryHost.style.position = 'relative';
+      summaryHost.append(summary);
 
       function resolveModel(token) {
         try {
           const resolved = api.tokens.resolveActor(token.id);
+          const statusSnapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
+          const multiplayer = api.multiplayer?.getStatus?.() || {};
+          const gmViewer = !multiplayer.connected || multiplayer.session?.role === 'gm' || multiplayer.role === 'gm';
           return createTokenViewModel({
             token,
             actor: resolved.actor,
             selected: selectedIds.has(String(token.id)),
             ruleset: api.ruleset,
+            gmViewer,
+            invisible: statusSnapshot.capabilities?.visibility === 'invisible',
           });
         } catch (error) {
           console.warn('[RPGmap Token Renderer] cannot resolve Token Actor', token?.id, error);
@@ -160,6 +177,7 @@ export function createTokenRendererSystem() {
       function renderStatuses(models, tokensById) {
         statusLayer.clearLayers();
         for (const model of models) {
+          if (model.audienceRestricted) continue;
           if (animations.has(model.id)) continue;
           const token = tokensById.get(model.id);
           if (!token) continue;
@@ -185,6 +203,11 @@ export function createTokenRendererSystem() {
         const primaryId = String(api.selection?.getPrimaryTokenId?.() || '');
         const model = models.find(item => item.id === primaryId) || models.find(item => item.selected) || null;
         if (!model) {
+          summary.hidden = true;
+          summary.replaceChildren();
+          return;
+        }
+        if (model.audienceVisibility === 'vague') {
           summary.hidden = true;
           summary.replaceChildren();
           return;
@@ -304,6 +327,7 @@ export function createTokenRendererSystem() {
             visualPoints.set(model.id, point);
             view.on('click', event => {
               L.DomEvent.stopPropagation(event);
+              if (model.audienceVisibility === 'vague') return;
               const token = api.tokens.get(model.id);
               if (!token) return;
               api.selection?.replace?.([token.id], token.id);

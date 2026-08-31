@@ -23,7 +23,7 @@ function installStyles(documentNode) {
     .runtime-v2-shell .ui-primary-tool { min-height:34px; display:inline-flex; align-items:center; justify-content:center; gap:5px; border:1px solid rgba(79,96,98,.22); border-radius:8px; padding:6px 10px; color:#334347; background:#f7f9f6; font:inherit; font-weight:750; cursor:pointer; }
     .runtime-v2-shell .ui-primary-tool:hover { background:#eef4f0; }
     .runtime-v2-shell .ui-primary-tool.active { color:#fff; background:#176d76; border-color:#176d76; }
-    .runtime-v2-shell .sidebar .tabbar { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; padding:8px; }
+    .runtime-v2-shell .sidebar .tabbar { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:5px; padding:8px; }
     .runtime-v2-shell .ui-sidebar-tab { border:0; border-radius:7px; padding:8px 10px; background:#edf1ee; color:#556265; font-weight:800; cursor:pointer; }
     .runtime-v2-shell .ui-sidebar-tab.active { color:#fff; background:#176d76; }
     .runtime-v2-shell .ui-current-card { border:1px solid rgba(70,90,90,.18); border-radius:10px; padding:11px; background:#fff; display:grid; gap:9px; }
@@ -56,7 +56,7 @@ function actorView(api, token) {
     return {
       actor,
       synthetic: resolved.synthetic === true,
-      name: String(presentation.name || actor?.name || token.id),
+      name: String(token.name || presentation.name || actor?.name || token.id),
       avatar: presentation.avatarDataUrl || null,
       color: presentation.color || '#176d76',
     };
@@ -88,7 +88,6 @@ export function createAppShellUiV2() {
       const tabbar = shell.querySelector('.sidebar .tabbar');
       const actorPanel = api.uiPanels?.actors;
       const currentPanel = api.uiPanels?.get?.('current');
-      const layersPanel = api.uiPanels?.get?.('layers');
       const importInput = documentNode.createElement('input');
       importInput.type = 'file';
       importInput.accept = 'application/json,.json';
@@ -124,8 +123,7 @@ export function createAppShellUiV2() {
         select.classList.add('active');
         const range = button(documentNode, '范围', () => { setMainTool('aoe'); activatePanel('areas'); });
         range.dataset.mainTool = 'aoe';
-        const layers = button(documentNode, '图层', () => { setMainTool('pan'); activatePanel('layers'); });
-        toolbar.append(select, range, layers);
+        toolbar.append(select, range);
       }
 
       if (toolbarRight) {
@@ -210,27 +208,8 @@ export function createAppShellUiV2() {
         currentPanel.append(card);
       }
 
-      function renderLayers() {
-        if (!layersPanel) return;
-        layersPanel.replaceChildren();
-        const section = documentNode.createElement('div');
-        section.className = 'section';
-        const title = documentNode.createElement('h2'); title.textContent = '地图图层'; section.append(title);
-        const chip = documentNode.createElement('label'); chip.className = 'check-chip';
-        const input = documentNode.createElement('input'); input.type = 'checkbox'; input.checked = api.getState()?.preferences?.gridVisible !== false;
-        chip.append(input, documentNode.createTextNode('显示动态网格'));
-        section.append(chip);
-        input.addEventListener('change', () => {
-          const next = api.getState();
-          next.preferences ||= {};
-          next.preferences.gridVisible = input.checked;
-          api.commitState(next, { source: 'ui:grid', render: true });
-        });
-        layersPanel.append(section);
-      }
-
       const off = [];
-      const renderAll = () => { renderCurrent(); renderLayers(); };
+      const renderAll = () => { renderCurrent(); };
       const selectionOff = api.selection.subscribe?.(renderCurrent);
       if (selectionOff) off.push(selectionOff);
       for (const eventName of ['token:create', 'token:delete', 'token:move', 'token:property-change', 'elevation:token-change', 'status:change', 'state:commit', 'state:import']) {

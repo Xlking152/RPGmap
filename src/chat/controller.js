@@ -104,7 +104,6 @@ export function createChatController({ selection } = {}) {
       chatTab.dataset.uiSidebar = 'chat';
       chatTab.textContent = '聊天';
       tabbar.prepend(chatTab);
-      tabbar.style.gridTemplateColumns = 'repeat(3,minmax(0,1fr))';
 
       const panel = documentNode.createElement('section');
       panel.className = 'panel';

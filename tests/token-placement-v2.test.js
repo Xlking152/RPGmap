@@ -86,6 +86,14 @@ test('blocked placement never creates a Scene Token', async () => {
   assert.equal(runtime.calls.filter(call => call.type === 'create').length, 0);
 });
 
+test('Actor placement forwards independent-instance linkage and instance name', async () => {
+  const runtime = api();
+  await createActorTokenAtPoint(runtime, 'actor-7', { x: 2, y: 3 }, { actorLink: false, name: '怪物1' });
+  const created = runtime.calls.find(call => call.type === 'create');
+  assert.equal(created.options.actorLink, false);
+  assert.equal(created.options.name, '怪物1');
+});
+
 test('Token repositioning validates while excluding itself and writes only through api.tokens.move', async () => {
   const runtime = api();
   const result = await relocateActorTokenAtPoint(runtime, 'token-existing', { x: 21.2, y: 31.9 });

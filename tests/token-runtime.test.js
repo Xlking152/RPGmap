@@ -43,10 +43,11 @@ function world() {
 }
 
 test('Token Runtime creates independent Token ids and allows one Actor to have many Tokens', () => {
-  const first = createSceneToken(world(), { actorId: 'actor-a', x: 1.5, y: 2.5 });
+  const first = createSceneToken(world(), { actorId: 'actor-a', name: 'A1', x: 1.5, y: 2.5 });
   assert.match(first.token.id, /^token-/);
   assert.notEqual(first.token.id, 'actor-a');
   assert.equal(first.token.actorId, 'actor-a');
+  assert.equal(first.token.name, 'A1');
 
   const second = createSceneToken(first.world, { actorId: 'actor-a', id: 'token-a-2', x: 3.5, y: 4.5 });
   assert.equal(listActiveSceneTokens(second.world).length, 2);

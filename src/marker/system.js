@@ -1,5 +1,6 @@
 import L from 'leaflet';
 import { latLngToWorld, worldToLatLng } from '../engine/geometry.js';
+import { resolveStatusUiSnapshot } from '../status/ui.js';
 
 const MARKER_PANE = 'lightweightMarkerPane';
 const STYLE_ID = 'rpgmap-lightweight-marker-style';
@@ -25,6 +26,15 @@ function installStyles(documentNode) {
     .marker-form label { display:grid; gap:4px; font-size:11px; color:#59676a; }
     .marker-form input,.marker-form select { width:100%; box-sizing:border-box; padding:7px; border:1px solid #cbd5d2; border-radius:6px; background:#fff; }
     .marker-actions { display:flex; flex-wrap:wrap; gap:6px; }
+    .marker-template-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 8px; align-items:center; padding:7px 0; border-bottom:1px solid rgba(70,90,90,.14); }
+    .marker-template-row strong,.marker-instance-row input[type="text"] { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    .marker-template-row small { grid-column:1; color:#667477; }
+    .marker-template-row .marker-actions { grid-column:2; grid-row:1/3; flex-wrap:nowrap; }
+    .marker-instance-drawer { display:grid; gap:8px; border-left:3px solid #176d76; }
+    .marker-instance-toolbar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+    .marker-instance-row { display:grid; grid-template-columns:auto minmax(90px,1fr) 64px 64px; gap:6px; align-items:center; }
+    .marker-instance-row input { width:100%; box-sizing:border-box; }
+    .marker-instance-row small { grid-column:2/-1; color:#687477; }
   `;
   documentNode.head.append(style);
 }
@@ -54,6 +64,8 @@ export function createLightweightMarkerSystem() {
       pane.style.zIndex = '512';
       const layer = L.layerGroup([], { pane: MARKER_PANE }).addTo(api.map);
       let pending = null;
+      let selectedTemplateId = null;
+      const selectedInstanceIds = new Set();
 
       function list() {
         return structuredClone(activeScene(api)?.markers || []);
@@ -76,6 +88,36 @@ export function createLightweightMarkerSystem() {
         const status = api.multiplayer?.getStatus?.();
         if (!status?.connected || status.session?.role === 'gm') return true;
         return (marker.controllerUserIds || []).map(String).includes(String(status.session?.userId || ''));
+      }
+
+      function canControlToken(token) {
+        const status = api.multiplayer?.getStatus?.();
+        return !status?.connected || status.session?.role === 'gm'
+          || api.multiplayer?.canControlToken?.(token.id) === true;
+      }
+
+      function actorTokens(actorId) {
+        return (activeScene(api)?.tokens || []).filter(token => String(token.actorId) === String(actorId));
+      }
+
+      function healthForToken(tokenId) {
+        try { return api.health?.resolveToken?.(tokenId) || null; }
+        catch { return null; }
+      }
+
+      function renderInstanceDrawer(actor) {
+        if (!actor) return '';
+        const tokens = actorTokens(actor.id);
+        const definitions = api.status?.getDefinitions?.() || [];
+        const statusOptions = definitions.map(definition => `<option value="${escapeHtml(definition.id)}">${escapeHtml(definition.label || definition.name || definition.id)}</option>`).join('');
+        const rows = tokens.map(token => {
+          const health = healthForToken(token.id);
+          const controlled = canControlToken(token);
+          const statuses = resolveStatusUiSnapshot(api, { tokenId: token.id, actorId: token.actorId }).statuses
+            .map(status => status.label || status.name || status.definitionId).join('、') || '无状态';
+          return `<label class="marker-instance-row" data-marker-instance-row="${escapeHtml(token.id)}"><input type="checkbox" data-marker-instance-check value="${escapeHtml(token.id)}" ${selectedInstanceIds.has(String(token.id)) ? 'checked' : ''}><input type="text" maxlength="80" value="${escapeHtml(token.name || actor.name)}" data-marker-instance-name="${escapeHtml(token.id)}" ${controlled ? '' : 'disabled'}><input type="number" min="0" value="${escapeHtml(health?.current ?? 0)}" title="当前生命" data-marker-instance-health="current" data-token-id="${escapeHtml(token.id)}" ${controlled ? '' : 'disabled'}><input type="number" min="0" value="${escapeHtml(health?.max ?? 0)}" title="生命上限" data-marker-instance-health="max" data-token-id="${escapeHtml(token.id)}" ${controlled ? '' : 'disabled'}><small>${escapeHtml(statuses)} · ${token.actorLink === false ? '独立实例' : '旧共享 Token'}</small></label>`;
+        }).join('');
+        return `<section class="marker-form marker-instance-drawer" data-marker-instance-drawer><h2>${escapeHtml(actor.name)} · 当前 Scene 实例</h2><div class="marker-instance-toolbar"><button type="button" class="small-button" data-marker-instance-select-all ${tokens.length ? '' : 'disabled'}>全选</button><select data-marker-batch-status ${statusOptions ? '' : 'disabled'}>${statusOptions || '<option>无可用状态</option>'}</select><button type="button" class="small-button" data-marker-batch-status-action="apply" ${statusOptions ? '' : 'disabled'}>批量添加</button><button type="button" class="small-button" data-marker-batch-status-action="remove" ${statusOptions ? '' : 'disabled'}>批量移除</button></div>${rows || '<div class="ui-current-empty">当前 Scene 尚无该模板的 Token。</div>'}</section>`;
       }
 
       function renderMap() {
@@ -111,11 +153,14 @@ export function createLightweightMarkerSystem() {
           const open = actor.audienceRestricted === true
             ? ''
             : `<button type="button" class="small-button" data-marker-actor-open="${escapeHtml(actor.id)}">模板卡</button>`;
-          return `<article class="marker-list-item"><strong>${escapeHtml(actor.name)}</strong><small>${escapeHtml(type)} · ${actor.type === 'npc' || actor.type === 'summon' ? '独立实例' : '共享角色'}</small><div class="marker-actions">${open}${canPlace ? `<button type="button" class="small-button" data-marker-actor-place="${escapeHtml(actor.id)}">放置 Token</button>` : ''}</div></article>`;
+          return `<article class="marker-template-row"><strong>${escapeHtml(actor.name)}</strong><small>${escapeHtml(type)} · 独立实例 · ${actorTokens(actor.id).length} 个</small><div class="marker-actions">${open}${canPlace ? `<button type="button" class="small-button" data-marker-actor-place="${escapeHtml(actor.id)}">放置</button>` : ''}<button type="button" class="small-button" data-marker-actor-manage="${escapeHtml(actor.id)}">实例</button></div></article>`;
         }).join('');
+        const selectedTemplate = actorTemplates.find(actor => String(actor.id) === String(selectedTemplateId)) || null;
         const parties = [...new Set((world.actors || []).map(actor => String(actor.partyId || '')).filter(Boolean))].sort();
         const partyOptions = parties.map(partyId => `<option value="${escapeHtml(partyId)}">${escapeHtml(partyId)}</option>`).join('');
         const rows = list().map(marker => `<article class="marker-list-item"><strong>${escapeHtml(marker.name || KINDS[marker.kind])}</strong><small>${escapeHtml(KINDS[marker.kind] || marker.kind)} · ${escapeHtml(marker.visibility?.mode || 'public')} · ${Math.round(marker.x)}, ${Math.round(marker.y)}</small>${canControl(marker) ? `<div class="marker-actions"><button type="button" class="small-button" data-marker-move="${escapeHtml(marker.id)}">移动</button><button type="button" class="small-button danger" data-marker-delete="${escapeHtml(marker.id)}">删除</button></div>` : '<small>只读</small>'}</article>`).join('');
+        const scene = activeScene(api);
+        const lighting = ['normal', 'dim', 'dark'].includes(String(scene?.settings?.lighting)) ? scene.settings.lighting : 'normal';
         panel.innerHTML = `<div class="marker-panel"><form class="marker-form" data-marker-create>
           <h2>其他指示物</h2>
           <label>类别<select name="kind">${allowedKinds.map(([kind, label]) => `<option value="${kind}">${label}</option>`).join('')}</select></label>
@@ -123,7 +168,7 @@ export function createLightweightMarkerSystem() {
           <label>可见性<select name="visibility"><option value="public">公开</option><option value="party">队伍</option>${gm ? '<option value="gm">仅 GM</option>' : ''}</select></label>
           <label>队伍<input name="partyId" maxlength="80" placeholder="party-default" ${gm ? '' : 'disabled'}></label>
           <div class="marker-actions"><button type="submit" class="small-button primary" ${allowedKinds.length ? '' : 'disabled'}>放置指示物</button></div>
-        </form><section class="marker-form"><h2>Actor 型指示物</h2>${actorRows || '<div class="ui-current-empty">没有可用模板。</div>'}</section>${gm ? `<section class="marker-form" data-fog-controls><h2>战争迷雾</h2><label>队伍<select name="partyId">${partyOptions}</select></label><label>重新隐藏半径<input name="radiusMeters" type="number" min="5" max="120" step="5" value="20"></label><div class="marker-actions"><button type="button" class="small-button" data-vision-full>全图视角</button><button type="button" class="small-button" data-fog-hide ${parties.length ? '' : 'disabled'}>重新隐藏</button><button type="button" class="small-button danger" data-fog-reset ${parties.length ? '' : 'disabled'}>重置探索</button></div></section>` : ''}${rows || '<div class="ui-current-empty">当前 Scene 没有可见指示物。</div>'}</div>`;
+        </form><section class="marker-form"><h2>Actor 型指示物</h2>${actorRows || '<div class="ui-current-empty">没有可用模板。</div>'}</section>${renderInstanceDrawer(selectedTemplate)}${gm ? `<section class="marker-form" data-fog-controls><h2>战争迷雾</h2><label>环境光<select data-scene-lighting><option value="normal" ${lighting === 'normal' ? 'selected' : ''}>正常</option><option value="dim" ${lighting === 'dim' ? 'selected' : ''}>昏暗</option><option value="dark" ${lighting === 'dark' ? 'selected' : ''}>黑暗</option></select></label><label>队伍<select name="partyId">${partyOptions}</select></label><label>重新隐藏半径<input name="radiusMeters" type="number" min="5" max="120" step="5" value="20"></label><div class="marker-actions"><button type="button" class="small-button" data-vision-full>全图视角</button><button type="button" class="small-button" data-fog-hide ${parties.length ? '' : 'disabled'}>重新隐藏</button><button type="button" class="small-button danger" data-fog-reset ${parties.length ? '' : 'disabled'}>重置探索</button></div></section>` : ''}${rows || '<div class="ui-current-empty">当前 Scene 没有可见指示物。</div>'}</div>`;
       }
 
       function beginPlacement(value) {
@@ -145,11 +190,50 @@ export function createLightweightMarkerSystem() {
           controllerUserIds: [], color: '#b94b42',
         });
       });
-      panel?.addEventListener('click', event => {
+      panel?.addEventListener('click', async event => {
         const actorOpen = event.target.closest('[data-marker-actor-open]');
-        if (actorOpen) api.entities?.openActor?.(actorOpen.dataset.markerActorOpen);
+        if (actorOpen) { api.entities?.openActor?.(actorOpen.dataset.markerActorOpen); return; }
         const actorPlace = event.target.closest('[data-marker-actor-place]');
-        if (actorPlace) api.entities?.placeActor?.(actorPlace.dataset.markerActorPlace);
+        if (actorPlace) { api.entities?.placeActor?.(actorPlace.dataset.markerActorPlace, { actorLink: false }); return; }
+        const actorManage = event.target.closest('[data-marker-actor-manage]');
+        if (actorManage) {
+          selectedTemplateId = actorManage.dataset.markerActorManage;
+          selectedInstanceIds.clear();
+          renderPanel();
+          return;
+        }
+        if (event.target.closest('[data-marker-instance-select-all]')) {
+          const actor = api.world.get().actors.find(item => String(item.id) === String(selectedTemplateId));
+          const ids = actor ? actorTokens(actor.id).map(token => String(token.id)) : [];
+          const allSelected = ids.length && ids.every(id => selectedInstanceIds.has(id));
+          selectedInstanceIds.clear();
+          if (!allSelected) ids.forEach(id => selectedInstanceIds.add(id));
+          renderPanel();
+          return;
+        }
+        const batchAction = event.target.closest('[data-marker-batch-status-action]');
+        if (batchAction) {
+          const definitionId = panel.querySelector('[data-marker-batch-status]')?.value;
+          const tokens = actorTokens(selectedTemplateId).filter(token => selectedInstanceIds.has(String(token.id)) && canControlToken(token));
+          if (!tokens.length || !definitionId) {
+            api.showToast?.('请先选择至少一个可控制实例和状态', 'error');
+            return;
+          }
+          const type = batchAction.dataset.markerBatchStatusAction === 'remove' ? 'status.remove' : 'status.apply';
+          try {
+            await api.status.applyBatch(tokens.map(token => ({
+              type,
+              scope: token.actorLink === false ? 'syntheticActor' : 'token',
+              targetId: token.id,
+              definitionId,
+              ...(type === 'status.apply' ? { stacks: 1 } : {}),
+            })));
+            api.showToast?.(`已批量${type === 'status.apply' ? '添加' : '移除'}状态`, 'success');
+          } catch (error) {
+            api.showToast?.(error.message, 'error');
+          }
+          return;
+        }
         if (event.target.closest('[data-vision-full]')) {
           api.vision?.setSource?.(null).catch(error => api.showToast?.(error.message, 'error'));
         }
@@ -173,6 +257,45 @@ export function createLightweightMarkerSystem() {
         if (move) beginPlacement({ type: 'move', id: move.dataset.markerMove });
         const remove = event.target.closest('[data-marker-delete]');
         if (remove) api.markers.remove(remove.dataset.markerDelete).catch(error => api.showToast?.(error.message, 'error'));
+      });
+      panel?.addEventListener('change', async event => {
+        const checkbox = event.target.closest('[data-marker-instance-check]');
+        if (checkbox) {
+          if (checkbox.checked) selectedInstanceIds.add(String(checkbox.value));
+          else selectedInstanceIds.delete(String(checkbox.value));
+          return;
+        }
+        const nameInput = event.target.closest('[data-marker-instance-name]');
+        if (nameInput) {
+          try {
+            await api.tokens.update(nameInput.dataset.markerInstanceName, {
+              name: String(nameInput.value || '').trim().slice(0, 80) || '未命名实例',
+            });
+          } catch (error) { api.showToast?.(error.message, 'error'); }
+          return;
+        }
+        const healthInput = event.target.closest('[data-marker-instance-health]');
+        if (healthInput) {
+          const operationType = healthInput.dataset.markerInstanceHealth === 'max' ? 'set-max' : 'set-current';
+          try {
+            await api.world.performOperations([{ type: 'actor.runtime.perform', payload: {
+              sceneId: api.world.get().activeSceneId,
+              tokenId: healthInput.dataset.tokenId,
+              operation: { type: 'health.runtime', operation: { type: operationType, value: Number(healthInput.value) || 0 } },
+            } }], { source: 'markers:instance.health' });
+          } catch (error) { api.showToast?.(error.message, 'error'); }
+          return;
+        }
+        const lightingInput = event.target.closest('[data-scene-lighting]');
+        if (lightingInput) {
+          const scene = activeScene(api);
+          if (!scene) return;
+          try {
+            await api.world.performOperations([{ type: 'scene.upsert', payload: {
+              scene: { ...scene, settings: { ...(scene.settings || {}), lighting: lightingInput.value } },
+            } }], { source: 'scene:lighting' });
+          } catch (error) { api.showToast?.(error.message, 'error'); }
+        }
       });
       const handleMapClick = event => {
         if (!pending || event.target.closest?.('.leaflet-control,.rpg-token-v2,.lightweight-marker-icon')) return;

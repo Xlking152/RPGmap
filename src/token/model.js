@@ -143,6 +143,7 @@ export function getActiveSceneToken(world, tokenId) {
 export function createSceneToken(world, {
   actorId,
   id: tokenId,
+  name = null,
   x = 0,
   y = 0,
   featureId = null,
@@ -173,6 +174,7 @@ export function createSceneToken(world, {
     created = normalizeSceneToken({
       id: candidateId,
       actorId: targetActorId,
+      name,
       actorLink,
       actorDelta,
       placement: featureId ? 'feature' : 'map',

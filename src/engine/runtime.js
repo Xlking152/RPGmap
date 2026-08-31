@@ -59,7 +59,6 @@ function shellMarkup() {
             <section class="panel" data-panel="current" data-canonical-panel-owner="true"></section>
             <section class="panel" data-panel="inspect" data-canonical-panel-owner="true"></section>
             <section class="panel" data-panel="areas" data-canonical-panel-owner="true"></section>
-            <section class="panel" data-panel="layers" data-canonical-panel-owner="true"></section>
             <section class="panel" data-panel="markers" data-canonical-panel-owner="true"></section>
           </div>
         </aside>
@@ -206,7 +205,6 @@ export function createRpgMapRuntime({
 
   function renderGrid() {
     gridLayer.clearLayers();
-    if (state?.preferences?.gridVisible === false) return;
     const spacing = gridSpacing();
     const bounds = map.getBounds();
     const northWest = latLngToWorld({ lat: bounds.getNorth(), lng: bounds.getWest() }, mapPackage.height);

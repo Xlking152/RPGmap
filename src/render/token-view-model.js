@@ -27,14 +27,14 @@ export function actorDisplayForm(actor, { ruleset } = {}) {
  * Tokens). Appearance precedence is explicit Token override -> current Ruleset
  * presentation override -> Core Actor prototype/img fallback.
  */
-export function createTokenViewModel({ token, actor, selected = false, ruleset } = {}) {
+export function createTokenViewModel({ token, actor, selected = false, ruleset, gmViewer = false, invisible = false } = {}) {
   if (!token || !actor || token.placement !== 'map') return null;
   const x = finite(token.x);
   const y = finite(token.y);
   if (x === null || y === null) return null;
 
   const presentation = describeActor(actor, ruleset ? { ruleset } : {}) || {};
-  const name = text(presentation.name, text(actor.name, text(token.name, String(token.id || 'Token'))));
+  const name = text(token.name, text(presentation.name, text(actor.name, String(token.id || 'Token'))));
   const avatarDataUrl = text(
     token?.texture?.src
       ?? presentation.avatarDataUrl
@@ -65,5 +65,8 @@ export function createTokenViewModel({ token, actor, selected = false, ruleset }
     actorLink: token.actorLink !== false,
     audienceRestricted: token.audienceRestricted === true || actor.audienceRestricted === true,
     audienceVisibility: token.audienceVisibility || null,
+    gmViewer: Boolean(gmViewer),
+    gmOnly: token?.visibility?.mode === 'gm',
+    invisible: Boolean(invisible),
   });
 }
