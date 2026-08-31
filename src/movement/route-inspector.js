@@ -73,6 +73,10 @@ export function createMovementRouteInspector(api) {
     const start = finitePoint(from);
     const destination = finitePoint(to);
     if (!token || !start || !destination) return null;
+    if (api.movement?.validateTokenMove) {
+      const result = await api.movement.validateTokenMove(tokenId, destination, { from: start });
+      return result?.valid ? clone(result) : null;
+    }
     return clone(await findDirectNavigationPath(navigation(token), start, destination));
   }
 
@@ -81,6 +85,9 @@ export function createMovementRouteInspector(api) {
     const start = finitePoint(from);
     const destination = finitePoint(to);
     if (!token || !start || !destination) return { valid: false, reason: '无效移动端点' };
+    if (api.movement?.inspectTokenMove) {
+      return clone(api.movement.inspectTokenMove(tokenId, destination, { from: start }));
+    }
     return clone(inspectDirectNavigationPath(navigation(token), start, destination));
   }
 

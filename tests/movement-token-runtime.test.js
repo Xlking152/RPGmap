@@ -37,11 +37,18 @@ function world(tokenValue = token()) {
   };
 }
 
-function fixture({ tokenValue = token(), features = [] } = {}) {
+function fixture({
+  tokenValue = token(), features = [],
+  statusCapabilities = { canMove: true, canInteract: true, collisionBypassGroups: [] },
+  multiplayer = null, combat = null,
+} = {}) {
   let currentWorld = world(tokenValue);
   const state = {
     characters: [{ id: tokenValue.id, location: { type: 'map', x: 999, y: 999 } }],
-    preferences: { featureStates: {} },
+    preferences: {
+      featureStates: {},
+      ...(combat ? { combatSystem: { combat } } : {}),
+    },
     sceneEvents: [],
   };
   const listeners = new Map();
@@ -74,7 +81,7 @@ function fixture({ tokenValue = token(), features = [] } = {}) {
       resolve() {
         return {
           statusVersion: 'test', statuses: [],
-          capabilities: { canMove: true, canInteract: true, collisionBypassGroups: [] },
+          capabilities: structuredClone(statusCapabilities),
         };
       },
     },
@@ -89,6 +96,7 @@ function fixture({ tokenValue = token(), features = [] } = {}) {
       for (const listener of listeners.get(name) || []) listener({ detail });
     },
   };
+  if (multiplayer) api.multiplayer = multiplayer;
   createMovementTokenRuntimeSystem().register(api);
   return { api, events, getWorld: () => structuredClone(currentWorld), state };
 }
@@ -158,4 +166,34 @@ test('Feature Actor-status side effects on an unlinked Token write Synthetic Act
   assert.equal(npc.actorLink, false);
   assert.equal(npc.actorDelta.effects.length, 1);
   assert.equal(npc.actorDelta.effects[0].definitionId, 'status-rooted');
+});
+
+test('movement preview and commit planning share structured status and permission failures', async () => {
+  const rooted = fixture({
+    statusCapabilities: { canMove: false, canInteract: true, reasons: ['定身状态禁止移动'], collisionBypassGroups: [] },
+  });
+  const rootedInspection = rooted.api.movement.inspectTokenMove('token-a', { x: 4.5, y: 1.5 });
+  assert.equal(rootedInspection.valid, false);
+  assert.equal(rootedInspection.code, 'status_movement_forbidden');
+  assert.equal(rootedInspection.reason, '定身状态禁止移动');
+  assert.equal((await rooted.api.movement.validateTokenMove('token-a', { x: 4.5, y: 1.5 })).code, 'status_movement_forbidden');
+  assert.equal(await rooted.api.movement.planTokenMove('token-a', { x: 4.5, y: 1.5 }), null);
+
+  const denied = fixture({
+    multiplayer: {
+      getStatus: () => ({ session: { role: 'player' } }),
+      canControlToken: () => false,
+    },
+  });
+  const deniedInspection = denied.api.movement.inspectTokenMove('token-a', { x: 4.5, y: 1.5 });
+  assert.equal(deniedInspection.code, 'movement_permission_denied');
+  assert.match(deniedInspection.reason, /没有.*移动权限/);
+});
+
+test('direct keyboard-style movement uses the same authoritative movement transaction', async () => {
+  const { api, getWorld } = fixture();
+  const result = await api.movement.moveTokenTo('token-a', { x: 6.5, y: 1.5 });
+  assert.equal(result.valid, true);
+  assert.equal(result.committed, true);
+  assert.equal(getWorld().scenes[0].tokens[0].x, 6.5);
 });

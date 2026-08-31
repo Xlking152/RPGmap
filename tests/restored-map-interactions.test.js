@@ -33,4 +33,8 @@ test('Movement system activates the restored live Token drag controller', () => 
   assert.match(movementController, /settings\.cycle\(direction, \{ source: 'wheel' \}\)/);
   assert.match(movementController, /api\.movement\.planTokenMove\(tokenId, target\)/);
   assert.match(movementController, /api\.movement\.commitTokenMove\(\)/);
+  assert.match(movementController, /api\.movement\.moveTokenTo\(current\.id, destination\)/);
+  assert.match(movementController, /w: \{ x: 0, y: -1 \}/);
+  assert.match(movementController, /event\.ctrlKey \|\| event\.altKey \|\| event\.metaKey/);
+  assert.match(movementController, /\[data-actor-sheet\]/);
 });
