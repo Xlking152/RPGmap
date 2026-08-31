@@ -1,6 +1,6 @@
 # RPGmap
 
-RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.2.2**，提供 World/Scene 管理、Actor 模板与 Token 实例、地图移动与测距、生命/伤势、状态、战斗、聊天、权限投影、侦测与隐身、战争迷雾，以及 Windows 本机/局域网多人运行包。
+RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.2.3**，提供 World/Scene 管理、Actor 模板与 Token 实例、地图移动与测距、生命/伤势、状态、战斗、聊天、权限投影、侦测与隐身、战争迷雾，以及 Windows 本机/局域网多人运行包。
 
 内置的“北宋兰州城”是复杂 Reference MapPackage，用于验证建筑、城墙、城门、桥梁、水体、破坏、洪水、导航和 29 张 WebP 美术资源能够通过通用 Core 运行。
 
@@ -9,7 +9,7 @@ RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前�
 正式 Windows Release：
 
 1. 安装 Node.js `20.19+` 或 `22.12+`。
-2. 下载并解压 `RPGmap-v2.2.2.zip`。
+2. 下载并解压 `RPGmap-v2.2.3.zip`。
 3. 双击 `start-rpgmap.bat`。
 4. GM 使用启动窗口中的 Local URL 与 GM Secret；同一局域网的 Player 使用 LAN URL 与 Join Code。
 
@@ -22,13 +22,13 @@ RPGmap 仅面向本机和可信局域网，不应直接暴露到公网。World�
 - World Manager：先选择或创建 World，再按其 Ruleset 与 Active Scene 加载地图。
 - Scene/MapPackage：同一地图可建立多个 Scene，Feature State 与 Token 相互隔离。
 - Actor/Token：Actor 是可复用模板；PC 可使用 Linked Token，怪物、NPC 与召唤物强制使用 Unlinked Token，并在各自 `actorDelta` 中独立保存生命、伤势、状态、资源和当前形态。
-- 地图工具：选择、框选、拖动、严格直线 waypoint、碰撞、测距和高度。v2.2.1 增加 WASD 单格移动，预览、鼠标提交与键盘提交共用同一权限、状态、战斗回合和碰撞校验。群组移动仍保持相对队形并原子提交。
+- 地图工具：选择、框选、直接拖动、碰撞、测距和高度。v2.2.3 将 Token 移动收敛为松开即提交的直接拖动，并用 document 级 Pointer 生命周期避免拖动事件丢失；WASD 使用串行输入队列，不再因为上一格异步提交尚未完成而吞掉连续按键。群组拖动仍保持相对队形并原子提交。
 - 规则系统：Infinite Horror Actor、Health、B/L/A 伤势、Status/Effect、Damage/Healing；侦测分为精确与模糊范围，并结合明暗环境、暗视等感官能力计算。
 - 战斗与聊天：先攻、回合权限、共享聊天与系统日志；当前战斗者离开本回合起点后，会保留不可交互的回合起点幻影直到下一回合。普通 Player 在战斗中仍只能移动当前回合的一个 Token，群移不能绕过 Combat Turn Lock；GM 可按需要调整多个 Token。
 - Local/LAN：服务器权威 operation、revision、幂等、Actor/Token 控制权、Combat Turn Lock、按用户裁剪的 AudienceProjection 与滚动备份。
-- 视野与迷雾：玩家选择自己控制的 Token 作为唯一实时视野来源；视野圆心始终跟随该 Token 的最新权威坐标，精确与模糊范围实际看过的 5 米网格区域按 Scene 与队伍持久化共享，GM 可重置或重新隐藏。
+- 视野与迷雾：玩家选择自己控制的 Token 作为唯一实时视野来源；视野圆心始终跟随该 Token 的最新权威坐标，精确与模糊范围实际看过的 5 米网格区域按 Scene 与队伍持久化共享，GM 可重置或重新隐藏。Infinite Horror 运行时视野统一限制到 120 m，导入表中更大的原始数值保留在形态数据中，但不会再触发 Fog operation 错误导致视野层无法显示。
 - 隐身与可见性：Token 支持公开、队伍、仅 GM 和指定用户；隐身 Token 仅向 GM、控制者、队友及明确授权用户以半透明形式投影。
-- 其他指示物：陷阱、目标点、区域和注释使用轻量 Marker；指示物库分别提供怪物、NPC 与其他模板区域，怪物/NPC 可从各自 XLSX 入口导入，并可在当前 Scene 实例抽屉中逐个检查 HP 与状态及执行 GM 批量状态操作。
+- 其他指示物：陷阱、目标点、区域和注释使用轻量 Marker；指示物库分别提供怪物、NPC 与其他模板区域，怪物/NPC 可从各自 XLSX 入口导入，并可在当前 Scene 实例抽屉中逐个检查 HP 与状态及执行 GM 批量状态操作。怪物、NPC 与召唤物的 Actor 状态写入其 Synthetic Actor Token 的 `actorDelta.effects`，不会修改模板或同模板的其他实例。
 - 发布验证：audit、全量测试、tracked syntax、bundle budget、严格包清单、SHA-256 和 Windows Edge smoke。
 
 ## 架构边界
@@ -55,6 +55,8 @@ Scene
 - MapPackage 描述地图尺寸、SVG/资产、Feature、Capability 与 Navigation，不保存 Campaign 状态。
 - World schema 3 是持久化权威；Entity/UI/compatibility projection 与玩家 AudienceProjection 只能只读生成，不能覆盖服务器 World。
 - 普通多人写入使用 operation schema 1；完整 World 只用于初始化、快照、显式导入和恢复。
+
+v2.2.3 修复三个直接影响桌面跑团的回归：Token 鼠标拖动改为 document 级 Pointer 生命周期并松开即移动，WASD 改为连续队列；导入角色的有效视野在进入 Fog operation 前统一到 120 m 运行时上限；怪物/NPC/召唤物批量状态不再把 Synthetic Actor 重新当作 Actor 模板写入，而是直接更新各自 Token 的 `actorDelta.effects`。
 
 v2.2.0 将 Actor 明确为模板，将 NPC/召唤物 Token 明确为独立运行实例；所有伤害、Health、Status、Effect 与 Combat 操作都按 `tokenId` 结算。Local/LAN 服务端针对每个会话生成 AudienceProjection，隐藏实体不会通过快照、补丁、战斗、聊天或查询旁路泄漏。首期视野为无墙体遮挡的圆形范围；原始地图资产仍会下载到客户端，因此战争迷雾不是地图底图 DRM。
 
