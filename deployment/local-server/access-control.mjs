@@ -277,6 +277,30 @@ export function currentCombatActorId(state) {
   return tokenActorMap(state).get(String(current?.tokenId || '')) || cleanActorId(current?.actorId) || null;
 }
 
+export function currentCombatTokenId(state) {
+  const combat = combatState(state);
+  if (!combat || combat.state !== 'active' || !Array.isArray(combat.combatants) || !combat.combatants.length) return null;
+  const index = Math.max(0, Math.min(combat.combatants.length - 1, Number(combat.turnIndex) || 0));
+  const tokenId = combat.combatants[index]?.tokenId;
+  return tokenId == null || tokenId === '' ? null : String(tokenId);
+}
+
+function actorForToken(state, token) {
+  const actorId = cleanActorId(token?.actorId);
+  if (!actorId) return null;
+  return (activeWorld(state)?.actors || []).find(actor => String(actor?.id) === actorId)
+    || (entityState(state).actors || []).find(actor => String(actor?.id) === actorId)
+    || null;
+}
+
+export function userControlsToken(state, user, token) {
+  if (!user || !token) return false;
+  const userId = String(user.id || '');
+  if (userId && (token.controllerUserIds || []).map(String).includes(userId)) return true;
+  const actor = actorForToken(state, token);
+  return actor?.type === 'pc' && ownershipLevel(user, actor.id) === OWNERSHIP.OWNER;
+}
+
 export function validatePlayerWorldPush({ before, next, user } = {}) {
   if (!user || user.disabled) return { ok: false, code: 'identity_required', message: '需要已批准的 Player 身份' };
   if (!before || typeof before !== 'object') return { ok: false, code: 'gm_initialization_required', message: 'World 只能由 GM 初始化' };
@@ -309,11 +333,16 @@ export function validatePlayerWorldPush({ before, next, user } = {}) {
     return { ok: false, code: 'combat_turn_locked', message: '当前处于战斗中，只能操控先攻顺序中正在行动的 Actor', activeActorId };
   }
   const sceneTokens = tokenMapFromScene(before);
+  const activeTokenId = currentCombatTokenId(before);
   for (const tokenId of movedTokenIds) {
     const token = sceneTokens.get(String(tokenId));
     const actorId = cleanActorId(token?.actorId);
-    if (!actorId || ownershipLevel(user, actorId) !== OWNERSHIP.OWNER) return { ok: false, code: 'actor_not_owned', message: '你没有该 Token 所属 Actor 的 OWNER 权限', tokenId, actorId };
-    if (activeActorId && String(activeActorId) !== actorId) return { ok: false, code: 'combat_turn_locked', message: '战斗中只能移动当前回合 Actor 的 Token', tokenId, actorId };
+    if (!token || !userControlsToken(before, user, token)) {
+      return { ok: false, code: 'token_not_controlled', message: '你没有该 Token 的控制权限', tokenId, actorId };
+    }
+    if (activeTokenId && String(activeTokenId) !== String(tokenId)) {
+      return { ok: false, code: 'combat_turn_locked', message: '战斗中只能移动当前回合的 Token', tokenId, actorId, activeTokenId };
+    }
     const capabilities = resolveStatusCapabilitiesForToken(before, tokenId);
     if (capabilities.canMove === false) {
       const reason = capabilities.reasons?.length ? `（${capabilities.reasons.join('、')}）` : '';
