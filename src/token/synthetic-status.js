@@ -1,5 +1,5 @@
 import { reduceStatusOperation } from '../status/model.js';
-import { createActorDelta, resolveTokenActor } from './actor.js';
+import { resolveTokenActor } from './actor.js';
 import { updateSceneToken } from './model.js';
 
 function clone(value) {
@@ -37,11 +37,10 @@ function normalizeOperation(operation = {}) {
 /**
  * Apply an Actor-scoped Status operation to one unlinked Token instance.
  *
- * The existing Status reducer remains the single implementation of stacking,
- * definition validation, notes, enabled state, and numeric Actor changes. We
- * feed it the resolved Synthetic Actor as a temporary Actor target, then derive
- * a fresh ActorDelta from the updated result. The World Actor template is never
- * mutated.
+ * Synthetic Actor effects are persisted directly in Token.actorDelta.effects.
+ * Feeding a Monster/NPC/Summon back through an `actor` target would correctly
+ * trip the template guard, so the canonical Status reducer must receive the
+ * unlinked Token itself with `scope: syntheticActor`.
  */
 export function applySyntheticActorStatusOperation(rawWorld, rawOperation, context = {}) {
   const operation = normalizeOperation(rawOperation);
@@ -55,27 +54,21 @@ export function applySyntheticActorStatusOperation(rawWorld, rawOperation, conte
   const entityState = {
     schemaVersion: 3,
     statusDefinitions: clone(rawWorld?.statusDefinitions || []),
-    actors: [clone(resolved.actor)],
-    tokens: [],
+    actors: [clone(resolved.baseActor)],
+    tokens: [clone(resolved.token)],
   };
-  const reduced = reduceStatusOperation(entityState, {
-    ...clone(operation),
-    scope: 'actor',
-    targetId: resolved.actor.id,
-  }, context);
-  const updatedActor = reduced.state.actors.find(actor => String(actor?.id) === String(resolved.actor.id));
-  if (!updatedActor) throw new Error('Synthetic Actor status reducer did not return its Actor target');
+  const reduced = reduceStatusOperation(entityState, operation, context);
+  const reducedToken = reduced.state.tokens.find(token => String(token?.id) === String(operation.targetId));
+  if (!reducedToken) throw new Error('Synthetic Actor status reducer did not return its Token target');
 
-  const actorDelta = createActorDelta(resolved.baseActor, updatedActor, {
-    ruleset: context.ruleset,
-    currentDelta: resolved.token.actorDelta,
-  });
+  const actorDelta = clone(reducedToken.actorDelta || {});
   const updated = updateSceneToken(rawWorld, operation.targetId, { actorDelta });
+  const updatedResolved = resolveTokenActor(updated.world, operation.targetId, { ruleset: context.ruleset });
   return {
     world: updated.world,
     token: updated.token,
-    actor: clone(updatedActor),
-    actorDelta: clone(actorDelta),
+    actor: clone(updatedResolved.actor),
+    actorDelta,
     results: reduced.results.map(result => ({
       ...result,
       scope: 'syntheticActor',
