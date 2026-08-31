@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.2.1
+
+- Token 移动预览与提交共用结构化校验，并增加 WASD 单格移动；Local/LAN 仍由服务器复验控制权、战斗回合、状态和碰撞。未配置的简单 Health `0/0` 不再被误判为耗尽或死亡。
+- Infinite Horror 增加精确/模糊侦测范围、感官能力、环境亮度降级与 Token 实例覆盖；AudienceProjection 只向模糊范围内的敌对 Token 下发量化位置的匿名轮廓，不泄露 Actor/Token ID、名称、图片、Health、Effect 或其他私有数据。
+- XLSX 导入器按规则表标签读取侦测数值与布尔感官，支持缓存公式值、中英单位、多种勾选形式、工作表容错和结构化警告；新增 `npm run test:xlsx` 生产导入校验命令。
+- 角色库只显示 PC，“其他指示物”管理 NPC/召唤物/其他模板与当前 Scene 实例；每个实例使用稳定编号名称，GM 可在抽屉中批量施加/移除状态。
+- GM 专属与隐身 Token 在 GM 视角显示独立半透明徽章；选中摘要固定在地图容器右下角。移除旧“图层”面板并始终显示网格，侧栏收敛为四个等宽主标签。
+- 应用版本升至 `2.2.1`；World schema 保持 `3`，operation schema 保持 `1`，Infinite Horror Ruleset 与 Lanzhou MapPackage 数据版本不变。
+
 ## v2.2.0
 
 - World schema 升级到 `3`，旧 schema 2 World 在写回前备份并幂等迁移；Actor 增加 `pc / npc / summon / other` 分类与队伍，Token 增加控制者、可见性和视野配置，Scene 增加 5 米网格迷雾数据。operation schema 保持 `1`。

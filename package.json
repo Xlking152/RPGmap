@@ -1,6 +1,6 @@
 {
   "name": "rpgmap",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,6 +13,7 @@
     "check:package": "node scripts/verify-package.mjs",
     "benchmark": "node scripts/performance-benchmark.mjs",
     "test": "node --test tests/*.test.js",
+    "test:xlsx": "node scripts/test-xlsx-import.mjs",
     "package:local-server": "node scripts/package-local-server.mjs"
   },
   "dependencies": {
