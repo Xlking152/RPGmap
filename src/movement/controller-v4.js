@@ -109,6 +109,7 @@ export function createMovementControllerV4({ settings } = {}) {
       }
 
       function reset(message = '') {
+        const mode = interaction?.mode || null;
         clearPreview();
         api.movement.cancelPending?.();
         interaction = null;
@@ -117,6 +118,7 @@ export function createMovementControllerV4({ settings } = {}) {
           api.map.dragging.enable();
         }
         delete mapElement.dataset.rpgMovementDisabledDragging;
+        if (mode === 'click' && previousTool && api.getTool?.() === 'token-move') api.setTool?.(previousTool);
         if (message) status(message);
       }
 
@@ -369,8 +371,10 @@ export function createMovementControllerV4({ settings } = {}) {
         getGroupPreviewMembers() { return interaction?.members?.map(member => ({ ...member })) || []; },
       });
 
-      const selectionOff = api.selection.subscribe?.(() => {
-        if (!interaction?.pending && interaction?.mode !== 'drag') reset();
+      const selectionOff = api.selection.subscribe?.(snapshot => {
+        if (!interaction || interaction.pending) return;
+        const primary = snapshot?.primaryId || api.selection.getPrimaryTokenId?.() || null;
+        if (String(primary || '') !== String(interaction.tokenId)) reset();
       });
       if (selectionOff) off.push(selectionOff);
       const stepOff = settings.subscribe(() => {
