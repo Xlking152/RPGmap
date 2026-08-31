@@ -70,7 +70,7 @@ function installStyles(documentNode) {
 }
 
 function canEditHealth(api, actor, tokenId = null) {
-  if (!tokenId && ['npc', 'summon'].includes(String(actor?.type || ''))) return false;
+  if (!tokenId && ['monster', 'npc', 'summon'].includes(String(actor?.type || ''))) return false;
   if (tokenId && api.multiplayer?.getStatus?.()?.connected) {
     return api.multiplayer?.canControlToken?.(tokenId) === true;
   }

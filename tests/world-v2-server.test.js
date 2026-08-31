@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
-import { synchronizeWorldV2Mirror } from '../deployment/local-server/world-v2.mjs';
+import { assertWorldV2, synchronizeWorldV2Mirror } from '../deployment/local-server/world-v2.mjs';
 import { migrateTestStateToWorldV3 } from './helpers/world-v3.js';
 
 function state() {
@@ -78,4 +78,15 @@ test('World V2 rejects migration-only attack-area anchors', () => {
     anchor: { type: 'character', characterId: 'token-1' },
   });
   assert.throws(() => assertWorldState(value), { code: 'legacy_character_forbidden' });
+});
+
+test('server World V2 accepts monster Actors only as independent Token instances', () => {
+  const value = state().preferences.worldV2;
+  value.actors[0].type = 'monster';
+  value.actors[0].partyId = null;
+  value.scenes[0].tokens[0].actorLink = false;
+  value.scenes[0].tokens[0].actorDelta = {};
+  assert.equal(assertWorldV2(value), value);
+  value.scenes[0].tokens[0].actorLink = true;
+  assert.throws(() => assertWorldV2(value), { code: 'instance_link_forbidden' });
 });

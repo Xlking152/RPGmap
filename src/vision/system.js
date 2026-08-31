@@ -32,6 +32,24 @@ function runtimeScene(api) {
   return world?.scenes?.find(scene => String(scene?.id ?? '') === String(world?.activeSceneId ?? '')) || null;
 }
 
+export function resolveLiveAudienceVision(audience, scene, sourceTokenId = undefined) {
+  if (!audience || typeof audience !== 'object') return null;
+  const requestedTokenId = sourceTokenId === undefined ? audience.source?.tokenId : sourceTokenId;
+  const tokenId = String(requestedTokenId ?? '').trim();
+  if (!tokenId) return { ...audience, source: null };
+  const token = scene?.tokens?.find(item => String(item?.id ?? '') === tokenId);
+  if (!token || token.placement !== 'map') return { ...audience, source: null };
+  return {
+    ...audience,
+    source: {
+      ...(audience.source || {}),
+      tokenId,
+      x: Number(token.x),
+      y: Number(token.y),
+    },
+  };
+}
+
 export function createVisionFogSystem() {
   return Object.freeze({
     register(api) {
@@ -49,6 +67,7 @@ export function createVisionFogSystem() {
       let localSourceTokenId = null;
       let lastLocalVision = null;
       let localExploreChain = Promise.resolve();
+      let connectedClearPending = false;
       let renderFrame = 0;
       const off = [];
 
@@ -100,21 +119,49 @@ export function createVisionFogSystem() {
       }
 
       function queueLocalExploration(subject, previous = null) {
-        if (!subject?.partyId || subject.rangeMeters <= 0) return Promise.resolve(null);
+        if (!subject?.partyId || subject.vagueRangeMeters <= 0) return Promise.resolve(null);
         const payload = previous && previous.sceneId === subject.sceneId
           ? {
               sceneId: subject.sceneId, partyId: subject.partyId,
               from: { x: previous.x, y: previous.y }, to: { x: subject.x, y: subject.y },
-              radiusMeters: subject.rangeMeters,
+              radiusMeters: subject.vagueRangeMeters,
             }
           : {
               sceneId: subject.sceneId, partyId: subject.partyId,
-              x: subject.x, y: subject.y, radiusMeters: subject.rangeMeters,
+              x: subject.x, y: subject.y, radiusMeters: subject.vagueRangeMeters,
             };
         localExploreChain = localExploreChain.catch(() => null).then(() => api.world.performOperations([
           { type: 'scene.fog.explore', payload },
         ], { source: 'vision:explore' }));
         return localExploreChain;
+      }
+
+      function confirmedSourceTokenId() {
+        if (api.multiplayer?.getStatus?.()?.connected) {
+          return api.multiplayer?.getVisionSource?.() || null;
+        }
+        return localSourceTokenId;
+      }
+
+      function liveVisionState() {
+        const state = api.getState?.() || {};
+        const audience = state.preferences?.audienceVision || localVisionState();
+        return resolveLiveAudienceVision(audience, runtimeScene(api), confirmedSourceTokenId());
+      }
+
+      function clearUnavailableConnectedSource() {
+        if (!api.multiplayer?.getStatus?.()?.connected || connectedClearPending) return;
+        const tokenId = api.multiplayer?.getVisionSource?.();
+        if (!tokenId) return;
+        const scene = runtimeScene(api);
+        const token = scene?.tokens?.find(item => String(item?.id ?? '') === String(tokenId));
+        const canControl = token && token.placement === 'map'
+          && api.multiplayer?.canControlToken?.(tokenId) === true;
+        if (canControl) return;
+        connectedClearPending = true;
+        api.multiplayer.setVisionSource(null)
+          .catch(error => api.showToast?.(error.message, 'error'))
+          .finally(() => { connectedClearPending = false; });
       }
 
       function synchronizeLocalVision() {
@@ -136,8 +183,7 @@ export function createVisionFogSystem() {
       }
 
       function render() {
-        const state = api.getState?.() || {};
-        const audience = state.preferences?.audienceVision || localVisionState();
+        const audience = liveVisionState();
         if (!audience) {
           canvas.hidden = true;
           return;
@@ -237,10 +283,10 @@ export function createVisionFogSystem() {
           return { tokenId: localSourceTokenId };
         },
         getSource() {
-          return api.getState?.()?.preferences?.audienceVision?.source?.tokenId || localSourceTokenId;
+          return confirmedSourceTokenId();
         },
         getVisibleRegion() {
-          return structuredClone(api.getState?.()?.preferences?.audienceVision?.source || localVisionState()?.source || null);
+          return structuredClone(liveVisionState()?.source || null);
         },
         getExplored(partyId) {
           return structuredClone(normalizeFogState(runtimeScene(api)?.fog).exploredByParty[String(partyId)] || { rows: {} });
@@ -271,6 +317,7 @@ export function createVisionFogSystem() {
       for (const eventName of ['state:commit', 'state:import', 'scene:activate']) {
         const dispose = api.on?.(eventName, () => {
           synchronizeLocalVision();
+          clearUnavailableConnectedSource();
           scheduleRender();
         });
         if (typeof dispose === 'function') off.push(dispose);
@@ -279,6 +326,11 @@ export function createVisionFogSystem() {
         const dispose = api.on?.(eventName, scheduleRender);
         if (typeof dispose === 'function') off.push(dispose);
       }
+      const disposeCapabilities = api.on?.('multiplayer:capabilities', () => {
+        clearUnavailableConnectedSource();
+        scheduleRender();
+      });
+      if (typeof disposeCapabilities === 'function') off.push(disposeCapabilities);
       api.map.on?.('move zoom resize viewreset', scheduleRender);
       render();
       api.on?.('app:destroy', () => {

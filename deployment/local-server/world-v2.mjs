@@ -1,7 +1,7 @@
 import { assertStatusState } from './status-operations.mjs';
 import { assertFeatureStatePatch, isPlainObject } from './world-operations.mjs';
 
-const ACTOR_TYPES = new Set(['pc', 'npc', 'summon', 'other']);
+const ACTOR_TYPES = new Set(['pc', 'monster', 'npc', 'summon', 'other']);
 const VISIBILITY_MODES = new Set(['public', 'party', 'gm', 'users']);
 
 export const WORLD_V2_SCHEMA_VERSION = 3;
@@ -126,7 +126,7 @@ function assertFog(value, label) {
 }
 
 function assertTokenAccess(token, actor, label) {
-  if ((actor.type === 'npc' || actor.type === 'summon') && token.actorLink !== false) fail(`${label} cannot link an independent Actor`, 'instance_link_forbidden');
+  if (['monster', 'npc', 'summon'].includes(String(actor.type)) && token.actorLink !== false) fail(`${label} cannot link an independent Actor`, 'instance_link_forbidden');
   stringIds(token.controllerUserIds, `${label}.controllerUserIds`);
   const visibility = object(token.visibility, `${label}.visibility`);
   if (!VISIBILITY_MODES.has(String(visibility.mode))) fail(`${label}.visibility.mode is invalid`);

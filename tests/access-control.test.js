@@ -112,6 +112,14 @@ test('access normalization never exposes raw credentials and keeps default Actor
   assert.equal(normalized.users[0].ownership['actor-a'], 'observer');
 });
 
+test('access normalization preserves formal monster placement grants', () => {
+  const normalized = normalizeAccessState({ users: [{
+    id: 'u-monster', name: 'Monster Handler',
+    placementGrants: { actorTypes: ['monster', 'npc', 'forged'], actorIds: [], markerKinds: [] },
+  }] });
+  assert.deepEqual(normalized.users[0].placementGrants.actorTypes, ['monster', 'npc']);
+});
+
 test('Player may change owned Actor but not unowned Actor or Combat state in World V2', () => {
   const user = createBoundUser({ name: 'Alice', defaultActorId: 'actor-a' }).user;
   const before = world();

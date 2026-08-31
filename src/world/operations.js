@@ -359,7 +359,7 @@ function applyCanonicalOperation(state, operation, context = {}) {
     }
     const record = actorById(world, payload.actorId);
     if (actorUsesIndependentInstances(record.actor)) {
-      fail('NPC and summon runtime operations require tokenId', 'instance_target_required');
+      fail('Monster, NPC, and summon runtime operations require tokenId', 'instance_target_required');
     }
     if (!context.ruleset) fail('Actor runtime operation requires Ruleset', 'ruleset_required');
     const applied = performActorOperation(record.actor, runtimeOperation, { ...context, actor: record.actor });

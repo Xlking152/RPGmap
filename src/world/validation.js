@@ -1,7 +1,7 @@
 import { WORLD_SCHEMA_VERSION } from './constants.js';
 import { assertFeatureStatePatch, isPlainObject } from './feature-states.js';
 
-const ACTOR_TYPES = new Set(['pc', 'npc', 'summon', 'other']);
+const ACTOR_TYPES = new Set(['pc', 'monster', 'npc', 'summon', 'other']);
 const VISIBILITY_MODES = new Set(['public', 'party', 'gm', 'users']);
 
 function fail(message, code = 'invalid_world') {
@@ -74,7 +74,7 @@ function assertSchema3Actor(actor, label) {
 
 function assertSchema3Token(token, actor, label) {
   if (typeof token.actorLink !== 'boolean') fail(`${label}.actorLink must be boolean`);
-  if ((actor.type === 'npc' || actor.type === 'summon') && token.actorLink !== false) fail(`${label} cannot link an independent Actor`, 'instance_link_forbidden');
+  if (['monster', 'npc', 'summon'].includes(String(actor.type)) && token.actorLink !== false) fail(`${label} cannot link an independent Actor`, 'instance_link_forbidden');
   stringIds(token.controllerUserIds, `${label}.controllerUserIds`);
   const visibility = object(token.visibility, `${label}.visibility`);
   if (!VISIBILITY_MODES.has(String(visibility.mode))) fail(`${label}.visibility.mode is invalid`);

@@ -101,8 +101,8 @@ function statusCollection(entities, scope, targetId) {
   const list = scope === 'actor' ? entities.actors : entities.tokens;
   const target = list.find(entry => String(entry?.id) === String(targetId));
   if (!target) fail(`${scope} target does not exist: ${targetId}`, 'status_target_not_found');
-  if (scope === 'actor' && ['npc', 'summon'].includes(String(target.type))) {
-    fail('NPC and summon statuses require a Synthetic Actor Token target', 'instance_target_required');
+  if (scope === 'actor' && ['monster', 'npc', 'summon'].includes(String(target.type))) {
+    fail('Monster, NPC, and summon statuses require a Synthetic Actor Token target', 'instance_target_required');
   }
   if (scope === 'syntheticActor') {
     if (target.actorLink !== false) fail('syntheticActor requires an unlinked Token', 'synthetic_actor_required');

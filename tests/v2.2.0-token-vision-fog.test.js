@@ -7,6 +7,7 @@ import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-hor
 import { reduceStatusOperation } from '../src/status/model.js';
 import { resolveTokenActor } from '../src/token/actor.js';
 import { projectStateForAudience } from '../src/vision/audience.js';
+import { resolveLiveAudienceVision } from '../src/vision/system.js';
 import {
   exploreFogCircle,
   exploreFogSweep,
@@ -165,6 +166,43 @@ test('Infinite Horror describes bounded vision without exposing private storage 
   assert.equal(infiniteHorrorRuleset.vision.describe(normal).rangeMeters, 80);
   assert.equal(infiniteHorrorRuleset.vision.describe(high).rangeMeters, 120);
   assert.equal(infiniteHorrorRuleset.actor.instances.supported, true);
+});
+
+test('live audience vision follows the latest authoritative Token coordinates and clears invalid sources', () => {
+  const audience = {
+    source: { tokenId: 'scout', x: 10, y: 10, preciseRangeMeters: 15, vagueRangeMeters: 30 },
+    partyIds: ['party-a'],
+  };
+  const scene = { tokens: [{ id: 'scout', placement: 'map', x: 45, y: 60 }] };
+  assert.deepEqual(resolveLiveAudienceVision(audience, scene, 'scout').source, {
+    tokenId: 'scout', x: 45, y: 60, preciseRangeMeters: 15, vagueRangeMeters: 30,
+  });
+  assert.equal(resolveLiveAudienceVision(audience, { tokens: [] }, 'scout').source, null);
+  assert.equal(resolveLiveAudienceVision(audience, scene, null).source, null);
+  assert.equal(resolveLiveAudienceVision(audience, {
+    tokens: [{ id: 'scout', placement: 'feature', x: 45, y: 60 }],
+  }, 'scout').source, null);
+});
+
+test('monster Tokens use independent runtime state and reject linked placement', () => {
+  const template = actor({ id: 'monster-template', type: 'monster', partyId: null, health: 14 });
+  let current = state({
+    actors: [template],
+    tokens: [
+      token({ id: 'monster-a', actorId: template.id, actorLink: false }),
+      token({ id: 'monster-b', actorId: template.id, actorLink: false, x: 20 }),
+    ],
+  });
+  current = apply(current, [{
+    type: 'actor.runtime.perform',
+    payload: { sceneId: 'scene-a', tokenId: 'monster-a', operation: { type: 'health.damage', amount: 4 } },
+  }]);
+  assert.equal(tokenHealth(current, 'monster-a').current, 10);
+  assert.equal(tokenHealth(current, 'monster-b').current, 14);
+  assert.throws(() => apply(current, [{
+    type: 'token.create',
+    payload: { sceneId: 'scene-a', token: token({ id: 'linked-monster', actorId: template.id, actorLink: true }) },
+  }]), error => error?.code === 'instance_link_forbidden');
 });
 
 test('two NPC Tokens keep runtime Health independent and actorId-only mutation is rejected', () => {

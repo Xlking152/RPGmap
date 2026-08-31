@@ -1,6 +1,7 @@
 import { createActorFromImport, addFormToActor } from './model.js';
 import { describeActor, describeActorSheet as describeActorSheetDocument, performActorOperation as performActorDocumentOperation } from '../actor/index.js';
 import { importActorXlsx } from './xlsx-importer.js';
+import { normalizeActorClassification } from '../actor/classification.js';
 import { imageToAvatarDataUrl } from './avatar.js';
 import { EntityStore } from './store.js';
 import { upsertCanonicalActor } from './actor-operations.js';
@@ -175,6 +176,14 @@ export function actorUiCapabilities(ruleset, sheetDescription = {}) {
   });
 }
 
+export function classifyNewImportedActor(actor, actorType = 'pc') {
+  const classification = normalizeActorClassification({
+    type: actorType,
+    partyId: String(actorType) === 'pc' ? actor?.partyId : null,
+  });
+  return { ...actor, type: classification.type, partyId: classification.partyId };
+}
+
 export function createEntityUiTool(options = {}) {
   return {
     register(api) {
@@ -190,6 +199,7 @@ export function createEntityUiTool(options = {}) {
       let selectedTokenId = null;
       let openTokenId = null;
       let pendingImportActorId = null;
+      let pendingImportActorType = 'pc';
       let openActorId = null;
       let openTab = 'overview';
       let renderingPanel = false;
@@ -303,8 +313,8 @@ export function createEntityUiTool(options = {}) {
           setStatus('当前没有该 Token 实例的控制权限');
           return false;
         }
-        if (actor?.type === 'npc' || actor?.type === 'summon') {
-          setStatus('NPC 与召唤物的运行状态必须从地图 Token 实例卡修改');
+        if (['monster', 'npc', 'summon'].includes(String(actor?.type || ''))) {
+          setStatus('怪物、NPC 与召唤物的运行状态必须从地图 Token 实例卡修改');
           return false;
         }
         return requireActorEdit(actor?.id);
@@ -361,9 +371,9 @@ export function createEntityUiTool(options = {}) {
               const canPlaceActor = capabilities().canPlaceActor?.(actor.id);
               const statusSnapshot = actor.audienceRestricted ? { actorStatuses: [], derivedStatuses: [] }
                 : resolveStatusUiSnapshot(api, { actorId: actor.id });
-              const typeLabel = ({ pc: 'PC', npc: 'NPC / 怪物', summon: '召唤物', other: '其他' })[actor.type] || 'PC';
+              const typeLabel = ({ pc: 'PC', monster: '怪物', npc: 'NPC', summon: '召唤物', other: '其他' })[actor.type] || 'PC';
               return `<article class="entity-card" data-actor-id="${escapeHtml(actor.id)}">
-                <div class="entity-card-status"><small>${escapeHtml(typeLabel)} · ${actor.type === 'npc' || actor.type === 'summon' ? '独立实例' : '共享角色'}</small></div>
+                <div class="entity-card-status"><small>${escapeHtml(typeLabel)} · ${['monster', 'npc', 'summon'].includes(String(actor.type)) ? '独立实例' : '共享角色'}</small></div>
                 <div class="entity-card-top">${avatarHtml(actor, api.ruleset)}<div class="entity-card-copy"><strong>${escapeHtml(actor.name)}</strong><small>${escapeHtml(presentation.variantLabel || '无形态')} · ${count ? `${count} 个 Token` : '未放置'}</small></div></div>
                 <div class="entity-card-status">${renderStatusStrip([...statusSnapshot.actorStatuses, ...statusSnapshot.derivedStatuses], { limit: 4, emptyText: '无状态' })}</div>
                 <div class="entity-card-actions">
@@ -421,7 +431,7 @@ export function createEntityUiTool(options = {}) {
         if (!tabs.some(([id]) => id === openTab)) openTab = tabs[0]?.[0] || 'status';
         const instanceToken = openToken();
         const instanceMode = instanceToken?.actorLink === false;
-        const independentTemplate = !instanceMode && (actor.type === 'npc' || actor.type === 'summon');
+        const independentTemplate = !instanceMode && ['monster', 'npc', 'summon'].includes(String(actor.type));
         const canEdit = actor.audienceRestricted !== true && (instanceMode
           ? (api.multiplayer?.getStatus?.()?.connected ? api.multiplayer?.canControlToken?.(instanceToken.id) === true : true)
           : capabilities().canEditActor?.(actor.id));
@@ -432,7 +442,7 @@ export function createEntityUiTool(options = {}) {
           ...(selectedToken ? { tokenId: selectedToken.id } : {}),
         });
         const classificationControls = !instanceMode && capabilities().canManageStructure
-          ? `<div class="entity-formbar"><label>类型<select data-actor-type><option value="pc" ${actor.type === 'pc' ? 'selected' : ''}>PC</option><option value="npc" ${actor.type === 'npc' ? 'selected' : ''}>NPC / 怪物</option><option value="summon" ${actor.type === 'summon' ? 'selected' : ''}>召唤物</option><option value="other" ${actor.type === 'other' ? 'selected' : ''}>其他</option></select></label><label>队伍<input data-actor-party maxlength="80" value="${escapeHtml(actor.partyId || '')}"></label></div>`
+          ? `<div class="entity-formbar"><label>类型<select data-actor-type><option value="pc" ${actor.type === 'pc' ? 'selected' : ''}>PC</option><option value="monster" ${actor.type === 'monster' ? 'selected' : ''}>怪物</option><option value="npc" ${actor.type === 'npc' ? 'selected' : ''}>NPC</option><option value="summon" ${actor.type === 'summon' ? 'selected' : ''}>召唤物</option><option value="other" ${actor.type === 'other' ? 'selected' : ''}>其他</option></select></label><label>队伍<input data-actor-party maxlength="80" value="${escapeHtml(actor.partyId || '')}"></label></div>`
           : '';
         const html = `<div class="entity-sheet-backdrop"><div class="entity-sheet ${canEdit ? '' : 'entity-sheet-readonly'} ${independentTemplate ? 'entity-template-runtime-readonly' : ''}" data-actor-id="${escapeHtml(actor.id)}" data-token-id="${escapeHtml(instanceToken?.id || '')}" data-sheet-mode="${instanceMode ? 'instance' : 'template'}" role="dialog" aria-modal="true">
           <header class="entity-sheet-header">${avatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><input type="text" maxlength="80" value="${escapeHtml(actor.name)}" data-actor-name ${instanceMode || actor.audienceRestricted ? 'disabled' : ''}><div class="entity-formbar"><strong>${instanceMode ? 'Token 实例卡' : 'Actor 模板卡'}</strong>${sheetCapabilities.hasVariants ? `<span>当前形态</span><select data-form-select>${(sheetDescription.variants || []).map(item => `<option value="${escapeHtml(item.id)}" ${String(item.id) === String(sheetDescription.currentVariantId) ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select>${sheetCapabilities.canCycleVariants ? '<button type="button" class="small-button primary" data-sheet-action="cycle-form">V · 切换</button>' : ''}${!instanceMode && sheetCapabilities.canImportXlsx ? '<button type="button" class="small-button" data-sheet-action="add-form">+ 形态</button>' : ''}` : ''}${instanceMode ? '' : '<button type="button" class="small-button" data-sheet-action="avatar">更换头像</button>'}</div><div class="status-title-band">${renderStatusStrip(titleSnapshot.statuses, { limit: 8, emptyText: '无机械状态' })}</div></div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>
@@ -469,10 +479,12 @@ export function createEntityUiTool(options = {}) {
           return true;
         },
         placeActor(actorId, options = {}) { tokenController.beginPlacement(actorId, options); },
+        requestImport(actorType = 'pc') { chooseImport(null, actorType); },
+        canImportXlsx: rulesetCapabilities.canImportXlsx,
         closeSheet,
       };
 
-      async function parseImport(file, actorId = null) {
+      async function parseImport(file, actorId = null, actorType = 'pc') {
         if (!requireStructure('只有 GM 可以导入角色卡或形态')) return;
         if (!file || importBusy) return;
         importBusy = true;
@@ -498,7 +510,7 @@ export function createEntityUiTool(options = {}) {
             indicator(`${actor.name} · ${form?.name || formName}`);
             setStatus(`已导入 ${actor.name} 的新形态“${form?.name || formName}”`);
           } else {
-            actor = createActorFromImport(imported, { ruleset: api.ruleset });
+            actor = classifyNewImportedActor(createActorFromImport(imported, { ruleset: api.ruleset }), actorType);
             if (!await persistActorAndRender(actor, { source: 'entities:actor.create' })) return;
             openSheet(actor.id);
             setStatus(`已创建角色“${actor.name}” · 可点击“放置棋子”放到地图`);
@@ -512,12 +524,14 @@ export function createEntityUiTool(options = {}) {
           importBusy = false;
           xlsxInput.value = '';
           pendingImportActorId = null;
+          pendingImportActorType = 'pc';
         }
       }
 
-      function chooseImport(actorId = null) {
+      function chooseImport(actorId = null, actorType = 'pc') {
         if (!requireStructure('只有 GM 可以导入角色卡或形态')) return;
         pendingImportActorId = actorId;
+        pendingImportActorType = actorType;
         xlsxInput.click();
       }
 
@@ -565,7 +579,7 @@ export function createEntityUiTool(options = {}) {
 
       panel.addEventListener('click', handlePanelClick);
       importButton.addEventListener('click', () => chooseImport());
-      xlsxInput.addEventListener('change', () => parseImport(xlsxInput.files?.[0], pendingImportActorId));
+      xlsxInput.addEventListener('change', () => parseImport(xlsxInput.files?.[0], pendingImportActorId, pendingImportActorType));
 
       documentNode.addEventListener('click', async event => {
         if (statusUi.handleClick(event)) return;
@@ -638,7 +652,7 @@ export function createEntityUiTool(options = {}) {
           if (!baseActor || openToken() || !requireStructure()) { renderSheet(); return; }
           const nextType = String(event.target.value || 'pc');
           try {
-            if (nextType === 'npc' || nextType === 'summon') {
+            if (['monster', 'npc', 'summon'].includes(nextType)) {
               await api.world.performOperations([{ type: 'actor.instances.detach', payload: {
                 actorId: baseActor.id,
                 actorType: nextType,

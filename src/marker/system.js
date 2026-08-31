@@ -146,15 +146,21 @@ export function createLightweightMarkerSystem() {
         const gm = !capabilities.connected || capabilities.role === 'gm';
         const allowedKinds = Object.entries(KINDS).filter(([kind]) => capabilities.canPlaceMarker?.(kind) !== false);
         const world = api.world.get();
-        const actorTemplates = (world.actors || []).filter(actor => ['npc', 'summon', 'other'].includes(String(actor.type)));
-        const actorRows = actorTemplates.map(actor => {
+        const actorTemplates = (world.actors || []).filter(actor => ['monster', 'npc', 'summon', 'other'].includes(String(actor.type)));
+        const actorRows = actors => actors.map(actor => {
           const canPlace = capabilities.canPlaceActor?.(actor.id) !== false;
-          const type = ({ npc: 'NPC / 怪物', summon: '召唤物', other: '其他' })[actor.type] || '其他';
+          const type = ({ monster: '怪物', npc: 'NPC', summon: '召唤物', other: '其他' })[actor.type] || '其他';
           const open = actor.audienceRestricted === true
             ? ''
             : `<button type="button" class="small-button" data-marker-actor-open="${escapeHtml(actor.id)}">模板卡</button>`;
           return `<article class="marker-template-row"><strong>${escapeHtml(actor.name)}</strong><small>${escapeHtml(type)} · 独立实例 · ${actorTokens(actor.id).length} 个</small><div class="marker-actions">${open}${canPlace ? `<button type="button" class="small-button" data-marker-actor-place="${escapeHtml(actor.id)}">放置</button>` : ''}<button type="button" class="small-button" data-marker-actor-manage="${escapeHtml(actor.id)}">实例</button></div></article>`;
-        }).join('');
+        }).join('') || '<div class="ui-current-empty">没有可用模板。</div>';
+        const monsterRows = actorRows(actorTemplates.filter(actor => actor.type === 'monster'));
+        const npcRows = actorRows(actorTemplates.filter(actor => actor.type === 'npc'));
+        const otherTemplateRows = actorRows(actorTemplates.filter(actor => ['summon', 'other'].includes(String(actor.type))));
+        const importButton = type => gm && api.entities?.canImportXlsx
+          ? `<button type="button" class="small-button primary" data-marker-import-actor-type="${type}">导入 XLSX</button>`
+          : '';
         const selectedTemplate = actorTemplates.find(actor => String(actor.id) === String(selectedTemplateId)) || null;
         const parties = [...new Set((world.actors || []).map(actor => String(actor.partyId || '')).filter(Boolean))].sort();
         const partyOptions = parties.map(partyId => `<option value="${escapeHtml(partyId)}">${escapeHtml(partyId)}</option>`).join('');
@@ -168,7 +174,7 @@ export function createLightweightMarkerSystem() {
           <label>可见性<select name="visibility"><option value="public">公开</option><option value="party">队伍</option>${gm ? '<option value="gm">仅 GM</option>' : ''}</select></label>
           <label>队伍<input name="partyId" maxlength="80" placeholder="party-default" ${gm ? '' : 'disabled'}></label>
           <div class="marker-actions"><button type="submit" class="small-button primary" ${allowedKinds.length ? '' : 'disabled'}>放置指示物</button></div>
-        </form><section class="marker-form"><h2>Actor 型指示物</h2>${actorRows || '<div class="ui-current-empty">没有可用模板。</div>'}</section>${renderInstanceDrawer(selectedTemplate)}${gm ? `<section class="marker-form" data-fog-controls><h2>战争迷雾</h2><label>环境光<select data-scene-lighting><option value="normal" ${lighting === 'normal' ? 'selected' : ''}>正常</option><option value="dim" ${lighting === 'dim' ? 'selected' : ''}>昏暗</option><option value="dark" ${lighting === 'dark' ? 'selected' : ''}>黑暗</option></select></label><label>队伍<select name="partyId">${partyOptions}</select></label><label>重新隐藏半径<input name="radiusMeters" type="number" min="5" max="120" step="5" value="20"></label><div class="marker-actions"><button type="button" class="small-button" data-vision-full>全图视角</button><button type="button" class="small-button" data-fog-hide ${parties.length ? '' : 'disabled'}>重新隐藏</button><button type="button" class="small-button danger" data-fog-reset ${parties.length ? '' : 'disabled'}>重置探索</button></div></section>` : ''}${rows || '<div class="ui-current-empty">当前 Scene 没有可见指示物。</div>'}</div>`;
+        </form><section class="marker-form"><div class="marker-instance-toolbar"><h2>怪物</h2>${importButton('monster')}</div>${monsterRows}</section><section class="marker-form"><div class="marker-instance-toolbar"><h2>NPC</h2>${importButton('npc')}</div>${npcRows}</section><section class="marker-form"><h2>其他模板</h2>${otherTemplateRows}</section>${renderInstanceDrawer(selectedTemplate)}${gm ? `<section class="marker-form" data-fog-controls><h2>战争迷雾</h2><label>环境光<select data-scene-lighting><option value="normal" ${lighting === 'normal' ? 'selected' : ''}>正常</option><option value="dim" ${lighting === 'dim' ? 'selected' : ''}>昏暗</option><option value="dark" ${lighting === 'dark' ? 'selected' : ''}>黑暗</option></select></label><label>队伍<select name="partyId">${partyOptions}</select></label><label>重新隐藏半径<input name="radiusMeters" type="number" min="5" max="120" step="5" value="20"></label><div class="marker-actions"><button type="button" class="small-button" data-vision-full>全图视角</button><button type="button" class="small-button" data-fog-hide ${parties.length ? '' : 'disabled'}>重新隐藏</button><button type="button" class="small-button danger" data-fog-reset ${parties.length ? '' : 'disabled'}>重置探索</button></div></section>` : ''}${rows || '<div class="ui-current-empty">当前 Scene 没有可见指示物。</div>'}</div>`;
       }
 
       function beginPlacement(value) {
@@ -191,6 +197,8 @@ export function createLightweightMarkerSystem() {
         });
       });
       panel?.addEventListener('click', async event => {
+        const actorImport = event.target.closest('[data-marker-import-actor-type]');
+        if (actorImport) { api.entities?.requestImport?.(actorImport.dataset.markerImportActorType); return; }
         const actorOpen = event.target.closest('[data-marker-actor-open]');
         if (actorOpen) { api.entities?.openActor?.(actorOpen.dataset.markerActorOpen); return; }
         const actorPlace = event.target.closest('[data-marker-actor-place]');

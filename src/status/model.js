@@ -339,8 +339,8 @@ function targetForOperation(entityState, message) {
   const collection = scope === 'actor' ? entityState.actors : entityState.tokens;
   const entry = collection.find(item => String(item?.id) === targetId);
   if (!entry) throw statusError(`${scope} target does not exist: ${targetId}`, 'status_target_not_found');
-  if (scope === 'actor' && ['npc', 'summon'].includes(String(entry.type))) {
-    throw statusError('NPC and summon statuses require a Synthetic Actor Token target', 'instance_target_required');
+  if (scope === 'actor' && ['monster', 'npc', 'summon'].includes(String(entry.type))) {
+    throw statusError('Monster, NPC, and summon statuses require a Synthetic Actor Token target', 'instance_target_required');
   }
   if (scope === 'syntheticActor') {
     if (entry.actorLink !== false) throw statusError('syntheticActor requires an unlinked Token', 'synthetic_actor_required');

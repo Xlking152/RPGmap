@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { createActorFromRulesetImport } from '../src/actor/index.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
+import { isFogCellExplored } from '../src/vision/fog.js';
 
 const WEBSOCKET_WAIT_TIMEOUT_MS = 15_000;
 
@@ -237,6 +238,12 @@ function initialTokenVisionWorld() {
   const pc = rulesetActor({
     id: 'actor-a', name: 'Scout', type: 'pc', partyId: 'party-a', health: 12, perception: 1,
   });
+  pc.system.forms[0].detection = {
+    configured: true,
+    preciseRangeMeters: 10,
+    vagueRangeMeters: 30,
+    senses: {},
+  };
   const npc = rulesetActor({
     id: 'actor-b', name: 'Hostile Template', type: 'npc', partyId: 'party-hostile', health: 20,
   });
@@ -1312,6 +1319,8 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     const sharedRows = teammateBeforeMove.state.preferences.worldV2.scenes[0]
       .fog.exploredByParty['party-a'].rows;
     assert.ok(Object.keys(sharedRows).length > 0);
+    assert.equal(isFogCellExplored(teammateBeforeMove.state.preferences.worldV2.scenes[0].fog,
+      'party-a', { x: 10, y: 35 }), true);
 
     const teammateMoveCommit = waitForMessage(playerB.ws, message =>
       message.type === 'world.operation.committed' && message.revision === 3);
@@ -1324,6 +1333,9 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     const teammateMove = await teammateMoveCommit;
     assert.equal(move.committed.revision, teammateMove.revision);
     assert.ok(teammateMove.patch.world.scenes.fog.length > 0);
+    const sourceAfterMove = await requestWorldSnapshot(playerA.ws);
+    assert.equal(sourceAfterMove.state.preferences.audienceVision.source.x, 45);
+    assert.equal(sourceAfterMove.state.preferences.audienceVision.source.y, 10);
 
     const deniedSource = waitForMessage(playerB.ws, message => message.type === 'vision.source.denied');
     playerB.ws.send(JSON.stringify({ type: 'vision.source.set', tokenId: 'token-b' }));

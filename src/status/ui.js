@@ -298,7 +298,7 @@ function definitionOptions(definitions, scope) {
 
 export function renderActorStatusSheet({ api, actor, tokens = [], allTokens = tokens, selectedTokenIds = [], canManage = false, canManageDefinitions = false, pendingKeys = new Set() } = {}) {
   const actorSnapshot = resolveStatusUiSnapshot(api, { actorId: actor?.id });
-  const independent = ['npc', 'summon'].includes(String(actor?.type || ''));
+  const independent = ['monster', 'npc', 'summon'].includes(String(actor?.type || ''));
   const selectedIds = new Set((selectedTokenIds || []).map(String));
   const selectedTargets = (allTokens || []).filter(token => selectedIds.has(String(token?.id)));
   const tokenRows = tokens.map(token => {

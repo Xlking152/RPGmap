@@ -110,6 +110,7 @@ export function createMultiplayerController() {
       let revision = 0;
       let audienceRevision = 0;
       let pendingVisionSource = null;
+      let activeVisionSourceTokenId = null;
       let session = null;
       let permissions = { worldWrite: false, worldReset: false, manageAccess: false, combatManage: false, actorOwnerIds: [], actorObserverIds: [], defaultActorId: null, placementGrants: { actorTypes: [], actorIds: [], markerKinds: [] } };
       let clients = [];
@@ -246,7 +247,7 @@ export function createMultiplayerController() {
       function placementGrantRows(user) {
         const grants = user.placementGrants || {};
         const actorTypeOptions = [
-          ['pc', 'PC'], ['npc', 'NPC / 怪物'], ['summon', '召唤物'], ['other', '其他 Actor'],
+          ['pc', 'PC'], ['monster', '怪物'], ['npc', 'NPC'], ['summon', '召唤物'], ['other', '其他 Actor'],
         ];
         const markerOptions = [
           ['trap', '陷阱'], ['target', '目标点'], ['area', '区域'], ['note', '注释'],
@@ -618,6 +619,13 @@ export function createMultiplayerController() {
         });
       }
 
+      function setActiveVisionSource(tokenId = null) {
+        const next = tokenId == null || String(tokenId).trim() === '' ? null : String(tokenId);
+        if (activeVisionSourceTokenId === next) return;
+        activeVisionSourceTokenId = next;
+        api.emit?.('vision:source-change', { tokenId: next });
+      }
+
       function rejectVisionSource(message = 'Vision source request was interrupted') {
         if (!pendingVisionSource) return;
         const error = new Error(message);
@@ -780,6 +788,7 @@ export function createMultiplayerController() {
           publishCapabilities();
           revision = Number(message.world?.revision) || 0;
           audienceRevision = Math.max(0, Number(message.audienceRevision) || 0);
+          setActiveVisionSource(message.world?.state?.preferences?.audienceVision?.source?.tokenId || null);
           renderButton();
           save('role', session?.role || 'player');
           if (session?.identityStatus === 'pending') {
@@ -827,9 +836,9 @@ export function createMultiplayerController() {
           audienceRevision = Math.max(audienceRevision, Number(message.audienceRevision) || 0);
           const source = message.tokenId == null ? '' : String(message.tokenId);
           save('visionSourceTokenId', source);
+          setActiveVisionSource(source || null);
           if (pendingVisionSource) pendingVisionSource.resolve({ tokenId: source || null, revision: Number(message.revision) || revision });
           pendingVisionSource = null;
-          api.emit?.('vision:source-change', { tokenId: source || null });
           return;
         }
 
@@ -838,6 +847,8 @@ export function createMultiplayerController() {
           error.code = message.code || 'vision_source_denied';
           if (pendingVisionSource) pendingVisionSource.reject(error);
           pendingVisionSource = null;
+          setActiveVisionSource(null);
+          save('visionSourceTokenId', '');
           return;
         }
 
@@ -1128,6 +1139,7 @@ export function createMultiplayerController() {
         }
         connected = false;
         joining = true;
+        setActiveVisionSource(null);
         rejectVisionSource('Reconnecting to the Local/LAN server');
         session = null;
         inFlight = false;
@@ -1172,6 +1184,7 @@ export function createMultiplayerController() {
           remoteEpoch += 1;
           connected = false;
           joining = false;
+          setActiveVisionSource(null);
           session = null;
           inFlight = false;
           pendingPush = false;
@@ -1196,6 +1209,7 @@ export function createMultiplayerController() {
         socket = null;
         connected = false;
         joining = false;
+        setActiveVisionSource(null);
         session = null;
         rejectVisionSource('Local/LAN connection closed');
         inFlight = false;
@@ -1337,6 +1351,7 @@ export function createMultiplayerController() {
         performStateOperation,
         performWorldOperation,
         setVisionSource,
+        getVisionSource: () => activeVisionSourceTokenId,
         clearChat: () => send({ type: 'chat.clear' }),
         getCapabilities,
         canControlActor: actorId => canControlActor({ actorId, state: api.getState(), permissions }),
@@ -1354,6 +1369,7 @@ export function createMultiplayerController() {
           joining,
           revision,
           audienceRevision,
+          visionSourceTokenId: activeVisionSourceTokenId,
           session: session ? { ...session } : null,
           permissions: structuredClone(permissions),
           clients: clients.map(item => ({ ...item })),

@@ -121,7 +121,7 @@ function restrictedActor(actor) {
     id: String(actor.id),
     name: String(actor.name || 'Unknown'),
     img: typeof actor.img === 'string' ? actor.img : null,
-    type: ['pc', 'npc', 'summon', 'other'].includes(String(actor.type)) ? String(actor.type) : 'other',
+    type: ['pc', 'monster', 'npc', 'summon', 'other'].includes(String(actor.type)) ? String(actor.type) : 'other',
     partyId: null,
     prototypeToken: {
       texture: { src: typeof actor.img === 'string' ? actor.img : null },

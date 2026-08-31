@@ -1,4 +1,4 @@
-export const ACTOR_TYPES = Object.freeze(['pc', 'npc', 'summon', 'other']);
+export const ACTOR_TYPES = Object.freeze(['pc', 'monster', 'npc', 'summon', 'other']);
 
 const ACTOR_TYPE_SET = new Set(ACTOR_TYPES);
 
@@ -23,5 +23,5 @@ export function normalizeActorClassification(raw = {}, { legacy = false } = {}) 
 }
 
 export function actorUsesIndependentInstances(actor) {
-  return actor?.type === 'npc' || actor?.type === 'summon';
+  return ['monster', 'npc', 'summon'].includes(String(actor?.type || ''));
 }

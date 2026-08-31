@@ -674,7 +674,7 @@ function authorizeOperations(session, operations) {
       }
       const actor = world.state?.preferences?.worldV2?.actors?.find(item => String(item?.id ?? '') === actorId);
       if (!actorId || actor?.type !== 'pc' || user?.ownership?.[actorId] !== OWNERSHIP.OWNER) {
-        operationDenied(actor?.type === 'npc' || actor?.type === 'summon' ? 'instance_target_required' : 'actor_not_owned', 'Player runtime operations require an owned PC or controlled Token instance');
+        operationDenied(['monster', 'npc', 'summon'].includes(String(actor?.type)) ? 'instance_target_required' : 'actor_not_owned', 'Player runtime operations require an owned PC or controlled Token instance');
       }
       return value;
     }
@@ -690,7 +690,7 @@ function authorizeOperations(session, operations) {
       if (!actor || (!grants.actorIds?.includes(actorId) && !grants.actorTypes?.includes(String(actor.type)))) {
         operationDenied('token_placement_forbidden', 'Actor template placement is not granted');
       }
-      if (actor.type === 'npc' || actor.type === 'summon') {
+      if (['monster', 'npc', 'summon'].includes(String(actor.type))) {
         payload.token.actorLink = false;
         delete payload.token.actorDelta;
       }
@@ -788,7 +788,7 @@ function appendVisionExplorationOperations(operations) {
           partyId: vision.partyId,
           from: { x: vision.x, y: vision.y },
           to: { x: Number(operation.payload.x), y: Number(operation.payload.y) },
-          radiusMeters: vision.rangeMeters,
+          radiusMeters: vision.vagueRangeMeters,
         },
       });
     }
@@ -1140,7 +1140,7 @@ server.on('upgrade', (req, socket) => {
             type: 'scene.fog.explore',
             payload: {
               sceneId: vision.sceneId, partyId: vision.partyId,
-              x: vision.x, y: vision.y, radiusMeters: vision.rangeMeters,
+              x: vision.x, y: vision.y, radiusMeters: vision.vagueRangeMeters,
             },
           }], { ruleset: serverRuleset, now: new Date().toISOString(), mapMetrics: { metersPerUnit: 1 } });
           assertWorldState(applied.state);

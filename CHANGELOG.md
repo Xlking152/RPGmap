@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.2.2
+
+- 实时视野改为保存服务器确认的视野源 Token ID，并在每次渲染与 World commit 后从当前 Scene 解析最新权威坐标；Token 移动、重连、Scene 切换、删除、进入 Feature 或失去控制权时不再残留旧位置视野。
+- 离线与 Local/LAN 迷雾探索统一使用模糊侦测范围，移动按起终点连续 sweep；精确范围外但模糊范围内的实际可见区域也会永久写入 Scene Fog，离开后继续显示淡色记忆迷雾，只有 GM 的重新隐藏或重置探索会清除。
+- Actor 正式增加 `monster` 类型。怪物、NPC 与召唤物均强制使用独立 Token/`actorDelta`；旧 `npc` 不迁移，仍保持 NPC，`summon/other` 继续保留。
+- 指示物库将模板拆分为“怪物”“NPC”“其他模板”三块；怪物与 NPC 各有独立 XLSX 导入入口，新建模板自动分类，同名追加形态不会改写现有 Actor 类型。
+- 应用版本升至 `2.2.2`；World schema 保持 `3`，operation schema 保持 `1`，Infinite Horror Ruleset 与 Lanzhou MapPackage 数据版本不变。
+
 ## v2.2.1
 
 - Token 移动预览与提交共用结构化校验，并增加 WASD 单格移动；Local/LAN 仍由服务器复验控制权、战斗回合、状态和碰撞。未配置的简单 Health `0/0` 不再被误判为耗尽或死亡。

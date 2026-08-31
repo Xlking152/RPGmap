@@ -161,7 +161,7 @@ function changedActorIds(before, next) {
 function newPlayerKey() { return randomBytes(8).toString('hex').toUpperCase(); }
 function newAuthToken() { return randomBytes(32).toString('base64url'); }
 export function hashCredential(value) { return createHash('sha256').update(String(value || '')).digest('hex'); }
-const ACTOR_TYPES = new Set(['pc', 'npc', 'summon', 'other']);
+const ACTOR_TYPES = new Set(['pc', 'monster', 'npc', 'summon', 'other']);
 const MARKER_KINDS = new Set(['trap', 'target', 'area', 'note']);
 function normalizePlacementGrants(raw) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
