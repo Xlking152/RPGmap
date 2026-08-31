@@ -46,9 +46,10 @@ export function normalizeTokenVisibility(raw, { actor = null, legacyHidden = fal
 export function normalizeTokenVision(raw, { actor = null } = {}) {
   const source = object(raw);
   const override = source.rangeOverrideMeters;
+  const parsedOverride = Number(override);
   const rangeOverrideMeters = override === null || override === undefined || override === ''
     ? null
-    : Math.max(0, Math.min(120, Number(override) || 0));
+    : Math.max(0, Number.isFinite(parsedOverride) ? parsedOverride : 0);
   return {
     ...clone(source),
     enabled: source.enabled !== false && Boolean(actor),
