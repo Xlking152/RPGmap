@@ -149,7 +149,8 @@ export function createHealthInstanceUi() {
             if (!detail.dataset.rulesetHealthBase) detail.dataset.rulesetHealthBase = detail.textContent || '';
             detail.classList.add('marker-instance-health-summary');
             const prefix = [presentation.view.summary, presentation.view.status].filter(Boolean).join(' · ');
-            detail.textContent = [prefix, detail.dataset.rulesetHealthBase].filter(Boolean).join(' · ');
+            const nextText = [prefix, detail.dataset.rulesetHealthBase].filter(Boolean).join(' · ');
+            if (detail.textContent !== nextText) detail.textContent = nextText;
           }
         }
 
@@ -168,12 +169,21 @@ export function createHealthInstanceUi() {
         if (!tokenId) return;
         const presentation = healthPresentation(api, tokenId);
         const spans = [...body.children].filter(child => child.tagName === 'SPAN');
-        for (const span of spans.slice(1)) span.remove();
-        if (!presentation) return;
-        const healthLine = documentNode.createElement('span');
-        healthLine.dataset.rulesetHealthSummary = '';
-        healthLine.textContent = `生命 ${presentation.view.summary || '—'}`;
-        body.append(healthLine);
+        let healthLine = body.querySelector('[data-ruleset-health-summary]');
+        for (const span of spans.slice(1)) {
+          if (span !== healthLine) span.remove();
+        }
+        if (!presentation) {
+          healthLine?.remove();
+          return;
+        }
+        if (!healthLine) {
+          healthLine = documentNode.createElement('span');
+          healthLine.dataset.rulesetHealthSummary = '';
+          body.append(healthLine);
+        }
+        const nextText = `生命 ${presentation.view.summary || '—'}`;
+        if (healthLine.textContent !== nextText) healthLine.textContent = nextText;
       }
 
       function decorate() {
