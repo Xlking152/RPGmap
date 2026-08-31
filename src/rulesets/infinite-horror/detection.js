@@ -6,6 +6,8 @@ export const INFINITE_HORROR_DETECTION_SENSES = Object.freeze([
   'darkvision',
 ]);
 
+const DEFAULT_VISION_RANGE_CEILING_METERS = 120;
+
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
@@ -57,7 +59,10 @@ export function resolveInfiniteHorrorDetection({ form, runtime, perception = nul
     configured: form?.detection?.configured === true,
   });
   const perceptionValue = perception === null || perception === undefined ? 1 : Number(perception);
-  const fallback = Math.max(20, 30 + (Number.isFinite(perceptionValue) ? perceptionValue : 1) * 10);
+  const fallback = Math.max(20, Math.min(
+    DEFAULT_VISION_RANGE_CEILING_METERS,
+    30 + (Number.isFinite(perceptionValue) ? perceptionValue : 1) * 10,
+  ));
   const override = normalizeInfiniteHorrorDetectionOverride(runtime?.detectionOverrides);
   let preciseRangeMeters = range(override.preciseRangeMeters ?? (base.configured ? base.preciseRangeMeters : fallback));
   let vagueRangeMeters = range(override.vagueRangeMeters ?? (base.configured ? base.vagueRangeMeters : preciseRangeMeters));
