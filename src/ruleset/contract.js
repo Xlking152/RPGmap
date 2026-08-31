@@ -35,6 +35,32 @@ function prepareActorPresentation(raw = {}) {
   });
 }
 
+function plainClone(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? structuredClone(value) : {};
+}
+
+function prepareActorInstances(raw = {}) {
+  return Object.freeze({
+    supported: ['createDelta', 'normalizeDelta', 'fromResolved', 'rebaseDelta']
+      .some(key => typeof raw[key] === 'function'),
+    createDelta: actorFunction(raw.createDelta, () => ({})),
+    normalizeDelta: actorFunction(raw.normalizeDelta, (_baseActor, delta) => plainClone(delta)),
+    fromResolved: actorFunction(raw.fromResolved, (_baseActor, _resolvedActor, context = {}) => (
+      plainClone(context.currentDelta)
+    )),
+    rebaseDelta: actorFunction(raw.rebaseDelta, (_previousBase, nextBase, delta, context = {}) => (
+      actorFunction(raw.normalizeDelta, (_baseActor, value) => plainClone(value))(nextBase, delta, context)
+    )),
+    templateFingerprint: actorFunction(raw.templateFingerprint, actor => plainClone(actor)),
+  });
+}
+
+function prepareVision(raw = {}) {
+  return Object.freeze({
+    describe: actorFunction(raw.describe, () => ({ enabled: false, rangeMeters: 0 })),
+  });
+}
+
 function presentationOptions(value) {
   return Object.freeze((Array.isArray(value) ? value : []).map(option => Object.freeze({ ...option })));
 }
@@ -64,6 +90,7 @@ export function prepareRuleset(raw = {}) {
   const health = raw.health && typeof raw.health === 'object' ? raw.health : {};
   const statuses = raw.statuses && typeof raw.statuses === 'object' ? raw.statuses : {};
   const importers = raw.importers && typeof raw.importers === 'object' ? raw.importers : {};
+  const vision = raw.vision && typeof raw.vision === 'object' ? raw.vision : {};
 
   return Object.freeze({
     apiVersion,
@@ -94,6 +121,7 @@ export function prepareRuleset(raw = {}) {
         changed: false,
         blocked: 'unknown_actor_operation',
       })),
+      instances: prepareActorInstances(actor.instances),
       presentation: prepareActorPresentation(actor.presentation),
     }),
     health: Object.freeze({
@@ -115,6 +143,7 @@ export function prepareRuleset(raw = {}) {
       derive: optionalFunction(statuses.derive),
       canonicalizeChangeTarget: optionalFunction(statuses.canonicalizeChangeTarget),
     }),
+    vision: prepareVision(vision),
     importers: Object.freeze({ ...importers }),
     metadata: Object.freeze({ ...(raw.metadata || {}) }),
   });

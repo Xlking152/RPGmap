@@ -56,7 +56,7 @@ export async function createActorTokenAtPoint(api, actorId, point, options = {})
     diameterMeters: options.diameterMeters ?? 1,
     rotation: options.rotation ?? 0,
     elevationFt: options.elevationFt ?? 0,
-    hidden: options.hidden === true,
+    visibility: options.visibility || (options.hidden === true ? { mode: 'gm', userIds: [] } : null),
     locked: options.locked === true,
     showName: options.showName !== false,
     effects: Array.isArray(options.effects) ? options.effects : [],

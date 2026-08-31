@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
 import { synchronizeWorldV2Mirror } from '../deployment/local-server/world-v2.mjs';
+import { migrateTestStateToWorldV3 } from './helpers/world-v3.js';
 
 function state() {
-  return {
+  return migrateTestStateToWorldV3({
     markers: [],
     attackAreas: [],
     sceneEvents: [],
@@ -38,7 +39,7 @@ function state() {
         }],
       },
     },
-  };
+  });
 }
 
 test('server projection regenerates reducer mirrors from authoritative World V2', () => {

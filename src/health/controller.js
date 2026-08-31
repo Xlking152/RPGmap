@@ -1,10 +1,5 @@
 import { deriveActorDocument, performActorOperation } from '../actor/index.js';
 import { EntityStore } from '../entities/store.js';
-import { createActorDelta } from '../token/actor.js';
-
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
 
 function uniqueIds(values = []) {
   return [...new Set(values.filter(value => value !== null && value !== undefined).map(String))];
@@ -19,7 +14,6 @@ function runHealthOperation(actor, operation, context) {
 }
 
 function healthTargetsForTokens(store, api, tokenIds = []) {
-  const seen = new Set();
   const result = [];
   for (const requestedId of tokenIds.map(String)) {
     const token = store.token(requestedId);
@@ -27,9 +21,7 @@ function healthTargetsForTokens(store, api, tokenIds = []) {
 
     if (token.actorLink === false && api.tokens?.resolveActor) {
       const resolved = api.tokens.resolveActor(token.id);
-      const key = `token:${token.id}`;
-      if (!resolved?.actor || seen.has(key)) continue;
-      seen.add(key);
+      if (!resolved?.actor) continue;
       result.push({
         tokenId: String(token.id),
         token,
@@ -41,28 +33,38 @@ function healthTargetsForTokens(store, api, tokenIds = []) {
     }
 
     const actor = store.actor(token.actorId);
-    const key = `actor:${actor?.id ?? ''}`;
-    if (!actor || seen.has(key)) continue;
-    seen.add(key);
+    if (!actor) continue;
     result.push({ tokenId: String(token.id), token, actor, baseActor: actor, synthetic: false });
   }
   return result;
 }
 
-function worldOperationForTarget(target) {
-  if (target.synthetic) {
-    return {
-      type: 'token.actorDelta.replace',
-      payload: {
-        tokenId: String(target.tokenId),
-        actorDelta: createActorDelta(target.baseActor, target.actor),
-      },
-    };
-  }
+function worldOperationForTarget(target, operation, sceneId) {
   return {
-    type: 'actor.upsert',
-    payload: { actor: clone(target.actor) },
+    type: 'actor.runtime.perform',
+    payload: {
+      sceneId: String(sceneId),
+      tokenId: String(target.tokenId),
+      operation,
+    },
   };
+}
+
+function worldOperationForActor(actorId, operation, sceneId) {
+  return {
+    type: 'actor.runtime.perform',
+    payload: { sceneId: String(sceneId), actorId: String(actorId), operation },
+  };
+}
+
+function healthTargetForSubject(store, api, actorId, tokenId = null) {
+  if (tokenId) {
+    const target = healthTargetsForTokens(store, api, [tokenId])[0] || null;
+    if (!target || (actorId && String(target.baseActor?.id || target.actor?.id) !== String(actorId))) return null;
+    return target;
+  }
+  const actor = store.actor(actorId);
+  return actor ? { actor, baseActor: actor, tokenId: null, synthetic: false } : null;
 }
 
 export function createHealthController() {
@@ -97,8 +99,15 @@ export function createHealthController() {
         return !capabilities || capabilities.canEditActor?.(actorId) !== false;
       }
 
+      function canControlToken(tokenId, actorId) {
+        const multiplayer = api.multiplayer;
+        if (!multiplayer?.getStatus?.()?.connected) return true;
+        if (typeof multiplayer.canControlToken === 'function') return multiplayer.canControlToken(tokenId) === true;
+        return canEditActor(actorId);
+      }
+
       function controllableTargets(targets) {
-        return targets.filter(({ actor }) => canEditActor(actor.id));
+        return targets.filter(({ tokenId, actor }) => canControlToken(tokenId, actor.id));
       }
 
       async function mutateTokenHealth(tokenIds, payload, operationType) {
@@ -109,11 +118,12 @@ export function createHealthController() {
         const changedTargets = [];
         const results = targets.map(target => {
           const context = store.actorContext(target.actor);
-          const operation = runHealthOperation(target.actor, {
+          const runtimeOperation = {
             type: operationType,
             amount: payload?.amount,
             damageType: payload?.type,
-          }, context);
+          };
+          const operation = runHealthOperation(target.actor, runtimeOperation, context);
           const result = {
             tokenId: target.tokenId,
             actorId: target.actor.id,
@@ -126,7 +136,7 @@ export function createHealthController() {
             blocked: operation.blocked || null,
           };
           if (operation.changed) {
-            operations.push(worldOperationForTarget(target));
+            operations.push(worldOperationForTarget(target, runtimeOperation, api.world.get().activeSceneId));
             changedTargets.push(target);
           }
           return result;
@@ -161,32 +171,50 @@ export function createHealthController() {
           const actor = store.actorForToken(tokenId);
           return actor ? resolveActorHealth(actor, store.actorContext(actor)) : null;
         },
-        async setMode(actorId, mode) {
+        async setMode(actorId, mode, { tokenId = null } = {}) {
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });
-          const actor = store.actor(actorId);
-          if (!actor || !canEditActor(actor.id)) return null;
+          const target = healthTargetForSubject(store, api, actorId, tokenId);
+          if (!target) return null;
+          const { actor } = target;
+          const editable = target.tokenId
+            ? canControlToken(target.tokenId, target.baseActor?.id || actor.id)
+            : canEditActor(actor.id);
+          if (!editable) return null;
           const context = store.actorContext(actor);
           const result = runHealthOperation(actor, { type: 'health.set-mode', mode }, context);
           if (result.changed) {
-            await commitHealthOperations([worldOperationForTarget({ actor, synthetic: false })], {
+            const worldOperation = target.tokenId
+              ? worldOperationForTarget(target, { type: 'health.set-mode', mode }, api.world.get().activeSceneId)
+              : worldOperationForActor(actor.id, { type: 'health.set-mode', mode }, api.world.get().activeSceneId);
+            await commitHealthOperations([worldOperation], {
               actorIds: [actor.id],
+              tokenIds: target.tokenId ? [target.tokenId] : [],
               source: 'health:mode',
             });
           }
           return result.value || resolveActorHealth(actor, context);
         },
-        async performActorOperation(actorId, operation) {
+        async performActorOperation(actorId, operation, { tokenId = null } = {}) {
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });
-          const actor = store.actor(actorId);
-          if (!actor || !canEditActor(actor.id)) return null;
+          const target = healthTargetForSubject(store, api, actorId, tokenId);
+          if (!target) return null;
+          const { actor } = target;
+          const editable = target.tokenId
+            ? canControlToken(target.tokenId, target.baseActor?.id || actor.id)
+            : canEditActor(actor.id);
+          if (!editable) return null;
           const context = store.actorContext(actor);
           const before = resolveActorHealth(actor, context);
           const result = runHealthOperation(actor, { type: 'health.runtime', operation }, context);
           if (result.changed) {
-            await commitHealthOperations([worldOperationForTarget({ actor, synthetic: false })], {
+            const worldOperation = target.tokenId
+              ? worldOperationForTarget(target, { type: 'health.runtime', operation }, api.world.get().activeSceneId)
+              : worldOperationForActor(actor.id, { type: 'health.runtime', operation }, api.world.get().activeSceneId);
+            await commitHealthOperations([worldOperation], {
               actorIds: [actor.id],
+              tokenIds: target.tokenId ? [target.tokenId] : [],
               source: 'health:runtime',
             });
           }

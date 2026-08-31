@@ -15,8 +15,8 @@ test('Health controller has no projection-first persistence path', () => {
   assert.doesNotMatch(controller, /store\.persist\s*\(/);
   assert.doesNotMatch(controller, /persistNow\s*\(/);
   assert.match(controller, /api\.world\?\.performOperations/);
-  assert.match(controller, /type:\s*'actor\.upsert'/);
-  assert.match(controller, /type:\s*'token\.actorDelta\.replace'/);
+  assert.match(controller, /type:\s*'actor\.runtime\.perform'/);
+  assert.match(controller, /tokenId:\s*target\.tokenId/);
   assert.match(controller, /kind:\s*'health'/);
 });
 

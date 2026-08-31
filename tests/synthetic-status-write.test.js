@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { migrateTestWorldToV3 } from './helpers/world-v3.js';
 import { applySyntheticActorStatusOperation } from '../src/token/synthetic-status.js';
 import { resolveTokenActor } from '../src/token/actor.js';
 import { createTokenStatusBridgeSystem } from '../src/token/status-bridge.js';
@@ -116,9 +117,10 @@ test('World V2 server validator accepts legal actorDelta effects and rejects for
   const applied = applySyntheticActorStatusOperation(world(), {
     type: 'status.apply', targetId: 'npc-a', definitionId: 'status-rooted',
   }, { idFactory: () => 'effect-rooted-a' });
-  assert.doesNotThrow(() => assertWorldV2(applied.world));
+  const canonical = migrateTestWorldToV3(applied.world);
+  assert.doesNotThrow(() => assertWorldV2(canonical));
 
-  const forged = structuredClone(applied.world);
+  const forged = structuredClone(canonical);
   forged.scenes[0].tokens[0].actorDelta.effects[0].definitionId = 'status-does-not-exist';
   assert.throws(() => assertWorldV2(forged), /references missing definition/);
 });

@@ -11,3 +11,10 @@ export {
   resolveActorAttribute,
   validateActorDocument,
 } from './model.js';
+export {
+  ACTOR_TYPES,
+  actorUsesIndependentInstances,
+  normalizeActorClassification,
+  normalizeActorType,
+  normalizePartyId,
+} from './classification.js';

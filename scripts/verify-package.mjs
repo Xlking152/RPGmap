@@ -27,6 +27,7 @@ const EXPECTED_ROOT_ENTRIES = [
   'launcher.mjs',
   'map',
   'portable-storage.mjs',
+  'ruleset-authority.mjs',
   'server.mjs',
   'start-rpgmap.bat',
   'status-capabilities-v2.mjs',
@@ -82,6 +83,8 @@ const version = JSON.parse(await readFile(path.join(root, 'VERSION.json'), 'utf8
 if (version.version !== packageJson.version || version.releaseTag !== `v${packageJson.version}`) {
   fail(`VERSION.json does not match package version ${packageJson.version}`);
 }
+if (version.worldSchema !== 3) fail(`VERSION.json worldSchema must be 3, received ${version.worldSchema}`);
+if (version.operationSchema !== 1) fail(`VERSION.json operationSchema must be 1, received ${version.operationSchema}`);
 if (!/^[0-9a-f]{40}$/i.test(String(version.commit || ''))) fail('VERSION.json commit must be a full Git commit');
 if (expectedCommit && String(version.commit).toLowerCase() !== expectedCommit) {
   fail(`VERSION.json commit ${version.commit} does not match ${expectedCommit}`);

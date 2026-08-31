@@ -1,5 +1,19 @@
 export const INFINITE_HORROR_STATUS_DEFINITIONS = Object.freeze([
   Object.freeze({
+    id: 'status-invisible',
+    name: '隐身',
+    label: '隐身',
+    description: '只有 GM、控制者、队友或明确授权的用户可以看到该 Token。',
+    icon: 'eye-off',
+    color: '#607d76',
+    category: 'trait',
+    scopes: Object.freeze(['actor', 'token']),
+    maxStacks: 1,
+    changes: Object.freeze([]),
+    capabilities: Object.freeze({ visibility: 'invisible' }),
+    builtIn: true,
+  }),
+  Object.freeze({
     id: 'status-spirit',
     name: '灵体',
     label: '灵体',

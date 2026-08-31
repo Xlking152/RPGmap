@@ -251,6 +251,17 @@ export function canManageStatuses(api) {
   return capabilities.canManageStructure !== false;
 }
 
+export function canManageStatusDefinitions(api) {
+  const capabilities = api?.multiplayer?.getCapabilities?.();
+  if (!capabilities || capabilities.connected === false) return true;
+  if (Object.prototype.hasOwnProperty.call(capabilities, 'canManageStatusDefinitions')) {
+    return capabilities.canManageStatusDefinitions === true;
+  }
+  const multiplayer = api?.multiplayer?.getStatus?.();
+  if (multiplayer?.connected) return multiplayer.session?.role === 'gm';
+  return capabilities.canManageStructure !== false;
+}
+
 function statusMutationKey(scope, targetId, definitionId) {
   return `${scope}:${targetId}:${definitionId}`;
 }
@@ -285,8 +296,9 @@ function definitionOptions(definitions, scope) {
     : '<option value="">暂无可用状态</option>';
 }
 
-export function renderActorStatusSheet({ api, actor, tokens = [], allTokens = tokens, selectedTokenIds = [], canManage = false, pendingKeys = new Set() } = {}) {
+export function renderActorStatusSheet({ api, actor, tokens = [], allTokens = tokens, selectedTokenIds = [], canManage = false, canManageDefinitions = false, pendingKeys = new Set() } = {}) {
   const actorSnapshot = resolveStatusUiSnapshot(api, { actorId: actor?.id });
+  const independent = ['npc', 'summon'].includes(String(actor?.type || ''));
   const selectedIds = new Set((selectedTokenIds || []).map(String));
   const selectedTargets = (allTokens || []).filter(token => selectedIds.has(String(token?.id)));
   const tokenRows = tokens.map(token => {
@@ -306,25 +318,25 @@ export function renderActorStatusSheet({ api, actor, tokens = [], allTokens = to
   const palette = canManage ? `<section class="entity-section status-palette">
     <h3>GM 状态管理</h3>
     <div class="status-palette-row">
-      <label>作用范围 <select data-status-palette-scope><option value="actor">Actor（所有 Linked Token）</option>${tokens.length ? '<option value="token">Token（支持批量）</option>' : ''}</select></label>
+      <label>作用范围 <select data-status-palette-scope>${independent ? '<option value="token">Token 实例（支持批量）</option>' : `<option value="actor">Actor（所有 Linked Token）</option>${tokens.length ? '<option value="token">Token（支持批量）</option>' : ''}`}</select></label>
       <label>操作 <select data-status-palette-mode><option value="apply">施加 / 叠加</option><option value="remove">移除</option></select></label>
-      <label>状态 <select data-status-palette-definition data-status-actor-options="${escapeStatusHtml(definitionOptions(definitions, 'actor'))}" data-status-token-options="${escapeStatusHtml(definitionOptions(definitions, 'token'))}">${definitionOptions(definitions, 'actor')}</select></label>
+      <label>状态 <select data-status-palette-definition data-status-actor-options="${escapeStatusHtml(definitionOptions(definitions, 'actor'))}" data-status-token-options="${escapeStatusHtml(definitionOptions(definitions, independent ? 'actor' : 'token'))}">${definitionOptions(definitions, 'actor')}</select></label>
       <label>层数 <input type="number" min="1" max="99" value="1" data-status-palette-stacks></label>
       <button type="button" class="small-button primary" data-status-action="palette-submit" data-status-actor="${escapeStatusHtml(actor?.id)}" ${pendingStatus || !definitions.length ? 'disabled' : ''}>${pendingStatus ? '正在等待服务器确认…' : '提交并等待确认'}</button>
     </div>
-    <label class="status-map-selection" data-status-palette-actor-wrap><input type="checkbox" data-status-use-actor-map-selection ${selectedActorIds.length ? '' : 'disabled'}> 使用地图当前选中的 ${selectedActorIds.length} 个 Actor${selectedActorIds.length > 1 ? '（批量）' : ''}</label>
-    <div class="status-token-targets" data-status-palette-token-wrap hidden>
+    <label class="status-map-selection" data-status-palette-actor-wrap ${independent ? 'hidden' : ''}><input type="checkbox" data-status-use-actor-map-selection ${selectedActorIds.length ? '' : 'disabled'}> 使用地图当前选中的 ${selectedActorIds.length} 个 Actor${selectedActorIds.length > 1 ? '（批量）' : ''}</label>
+    <div class="status-token-targets" data-status-palette-token-wrap ${independent ? '' : 'hidden'}>
       <strong>Token 目标</strong>
       ${tokens.length ? `<div class="status-token-checklist">${tokens.map(token => `<label><input type="checkbox" data-status-token-target value="${escapeStatusHtml(token.id)}" ${defaultTargets.includes(token) ? 'checked' : ''}>${escapeStatusHtml(token.id)}</label>`).join('')}</div>` : '<small>当前 Actor 没有 Token。</small>'}
       <label class="status-map-selection"><input type="checkbox" data-status-use-map-selection ${selectedTargets.length ? 'checked' : 'disabled'}> 使用地图当前选中的 ${selectedTargets.length} 个 Token${selectedTargets.length > 1 ? '（批量）' : ''}</label>
     </div>
-    <div class="status-definition-actions"><button type="button" class="small-button" data-status-action="definition-new" ${pendingDefinition ? 'disabled' : ''}>+ 自定义状态</button><small>自定义状态只允许白名单机械能力，不执行脚本。</small></div>
-    ${definitions.filter(definition => !definition.builtIn).length ? `<details><summary>管理自定义定义</summary><div class="status-definition-list">${definitions.filter(definition => !definition.builtIn).map(definition => {
+    ${canManageDefinitions ? `<div class="status-definition-actions"><button type="button" class="small-button" data-status-action="definition-new" ${pendingDefinition ? 'disabled' : ''}>+ 自定义状态</button><small>自定义状态只允许白名单机械能力，不执行脚本。</small></div>` : ''}
+    ${canManageDefinitions && definitions.filter(definition => !definition.builtIn).length ? `<details><summary>管理自定义定义</summary><div class="status-definition-list">${definitions.filter(definition => !definition.builtIn).map(definition => {
       const pending = pendingKeys.has(`definition:${definition.id}`);
       return `<div class="${pending ? 'pending' : ''}"><span>${escapeStatusHtml(definition.label)}${pending ? ' · 等待确认…' : ''}</span><button type="button" class="small-button" data-status-action="definition-edit" data-status-definition="${escapeStatusHtml(definition.id)}" ${pending ? 'disabled' : ''}>编辑</button><button type="button" class="small-button danger" data-status-action="definition-delete" data-status-definition="${escapeStatusHtml(definition.id)}" ${pending ? 'disabled' : ''}>删除</button></div>`;
     }).join('')}</div></details>` : ''}
   </section>` : '<section class="entity-section"><p class="entity-help">状态为服务器权威数据。当前会话只读，只有 GM 可以施加、调整或移除机械状态。</p></section>';
-  return `${palette}<section class="entity-section status-target-section"><h3>Actor 状态 · 影响 Linked Token</h3>${statusCards(actorSnapshot.actorStatuses, { canManage, pendingKeys, scope: 'actor', targetId: actor?.id })}</section>${tokenRows || '<section class="entity-section"><h3>Token 状态</h3><div class="status-empty">当前 Actor 尚未放置 Token。</div></section>'}<section class="entity-section status-target-section"><h3>派生状态 · 由生命与不良状态自动计算</h3>${statusCards(actorSnapshot.derivedStatuses, { canManage: false, pendingKeys, scope: 'actor', targetId: actor?.id })}</section>`;
+  return `${palette}<section class="entity-section status-target-section"><h3>${independent ? '模板初始状态 · 实例只读继承' : 'Actor 状态 · 影响 Linked Token'}</h3>${statusCards(actorSnapshot.actorStatuses, { canManage: canManage && !independent, pendingKeys, scope: 'actor', targetId: actor?.id })}</section>${tokenRows || '<section class="entity-section"><h3>Token 状态</h3><div class="status-empty">当前 Actor 尚未放置 Token。</div></section>'}<section class="entity-section status-target-section"><h3>派生状态 · 由生命与不良状态自动计算</h3>${statusCards(actorSnapshot.derivedStatuses, { canManage: false, pendingKeys, scope: 'actor', targetId: actor?.id })}</section>`;
 }
 
 export function parseStatusDefinitionChanges(value) {
@@ -396,14 +408,19 @@ export function createStatusUiController({ api, documentNode, getContext, render
       safeRender();
     }
   }
-  function requireManager() {
+  function requireMutation() {
     if (canManageStatuses(api)) return true;
-    notify('只有 GM 可以管理机械状态');
+    notify('只有 GM 或目标控制者可以修改该状态');
+    return false;
+  }
+  function requireDefinitionManager() {
+    if (canManageStatusDefinitions(api)) return true;
+    notify('只有 GM 可以管理状态定义');
     return false;
   }
   function closeDefinitionEditor() { documentNode?.querySelector?.('[data-status-definition-editor]')?.remove(); }
   function openDefinitionEditor(definitionId = null) {
-    if (!requireManager()) return;
+    if (!requireDefinitionManager()) return;
     const definition = definitionId ? statusDefinitions(api).find(item => String(item.id) === String(definitionId)) : null;
     if (definition?.builtIn) { notify('内置状态定义不可编辑'); return; }
     closeDefinitionEditor();
@@ -427,10 +444,13 @@ export function createStatusUiController({ api, documentNode, getContext, render
       ? selectedMapTargets(context)
       : [...sheet.querySelectorAll('[data-status-token-target]:checked')].map(input => contextTokens(context).find(token => String(token?.id) === String(input.value))).filter(Boolean);
     const unique = new Map(tokens.map(token => [String(token.id), token]));
-    return [...unique.values()].map(token => ({ scope: 'token', targetId: String(token.id) }));
+    return [...unique.values()].map(token => ({
+      scope: token.actorLink === false ? 'syntheticActor' : 'token',
+      targetId: String(token.id),
+    }));
   }
   function submitPalette(actionNode) {
-    if (!requireManager()) return;
+    if (!requireMutation()) return;
     const sheet = actionNode.closest('.entity-sheet');
     const context = getContext?.() || {};
     if (!sheet || !context.actor) return;
@@ -447,7 +467,7 @@ export function createStatusUiController({ api, documentNode, getContext, render
     void perform(keys, mutation, mode === 'apply' ? `已确认施加状态：${targets.length} 个目标` : `已确认移除状态：${targets.length} 个目标`);
   }
   function mutateStatus(actionNode, action) {
-    if (!requireManager()) return;
+    if (!requireMutation()) return;
     const scope = String(actionNode.dataset.statusScope || 'actor');
     const targetId = String(actionNode.dataset.statusTarget || '');
     const definitionId = String(actionNode.dataset.statusDefinition || '');
@@ -467,7 +487,7 @@ export function createStatusUiController({ api, documentNode, getContext, render
     void perform(key, () => statusApiCall(api, method, payload), '状态变更已获服务器确认');
   }
   function deleteDefinition(definitionId) {
-    if (!requireManager() || !definitionId) return;
+    if (!requireDefinitionManager() || !definitionId) return;
     const definition = statusDefinitions(api).find(item => String(item.id) === String(definitionId));
     if (!definition || definition.builtIn) { notify('内置状态定义不可删除'); return; }
     if (!documentNode?.defaultView?.confirm?.(`删除自定义状态“${definition.label}”？仍在使用的定义会被服务器拒绝。`)) return;
@@ -504,7 +524,7 @@ export function createStatusUiController({ api, documentNode, getContext, render
     const form = event.target?.closest?.('[data-status-definition-form]');
     if (!form) return false;
     event.preventDefault();
-    if (!requireManager()) return true;
+    if (!requireDefinitionManager()) return true;
     try {
       const context = getContext?.() || {};
       const values = new FormData(form);

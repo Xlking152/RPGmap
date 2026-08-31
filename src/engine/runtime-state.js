@@ -3,11 +3,13 @@ import { normalizeEntityState } from '../entities/model.js';
 import { canonicalAttackAreas } from '../world/attack-anchors.js';
 import {
   WORLD_STATE_KEY,
+  WORLD_SCHEMA_VERSION,
   normalizeWorldV2,
   projectWorldV2ToRuntimeState,
 } from '../world/model.js';
 import { isLegacySaveV2Payload, migrateLegacySaveV2 } from '../legacy/save-v2.js';
 import { assertPersistedWorldV2, assertWorldRuleset } from '../world/validation.js';
+import { migrateWorldSchema3State } from '../world/migration.js';
 import {
   FEATURE_STATE_KEY,
   LEGACY_FEATURE_INTERACTION_STATE_KEY,
@@ -117,8 +119,10 @@ export function validateRuntimeState(raw, { mapPackage, ruleset } = {}) {
   const metadata = mapMetadata(mapPackage);
   const hasCanonicalWorld = Boolean(source.preferences?.[WORLD_STATE_KEY]);
   if (hasCanonicalWorld) {
-    assertPersistedWorldV2(source.preferences[WORLD_STATE_KEY]);
-    source = migrateLegacySceneFeatureStates(source).state;
+    assertPersistedWorldV2(source.preferences[WORLD_STATE_KEY], {
+      acceptedSchemaVersions: [2, WORLD_SCHEMA_VERSION],
+    });
+    source = migrateWorldSchema3State(migrateLegacySceneFeatureStates(source).state).state;
   }
   const mapId = hasCanonicalWorld ? metadata.id : String(source.mapId ?? metadata.id).trim();
   const mapVersion = hasCanonicalWorld ? metadata.version : String(source.mapVersion ?? metadata.version).trim();
@@ -163,11 +167,13 @@ export function prepareRuntimeState(raw, { mapPackage, ruleset } = {}) {
     && (Object.prototype.hasOwnProperty.call(parsed.preferences, FEATURE_STATE_KEY)
       || Object.prototype.hasOwnProperty.call(parsed.preferences, LEGACY_FEATURE_INTERACTION_STATE_KEY)));
   const migratedCharacters = Object.prototype.hasOwnProperty.call(parsed, 'characters');
+  const migratedWorldSchema = Number(parsed?.preferences?.[WORLD_STATE_KEY]?.schemaVersion) === 2;
   const state = validateRuntimeState(parsed, { mapPackage, ruleset });
   return Object.freeze({
     state,
     world: clone(state.preferences?.[WORLD_STATE_KEY] || null),
-    migrated: migratedCharacters || migratedFeatureState,
+    migrated: migratedCharacters || migratedFeatureState || migratedWorldSchema,
+    migratedWorldSchema,
     migratedCharacters: 0,
     fromVersion: String(parsed.mapVersion ?? state.mapVersion),
     toVersion: state.mapVersion,

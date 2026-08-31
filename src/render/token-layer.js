@@ -31,13 +31,23 @@ function installStyles(documentNode) {
   style.id = STYLE_ID;
   style.textContent = `
     .rpg-token-v2 { background:transparent !important; border:0 !important; overflow:visible !important; }
-    .rpg-token-v2 .rpg-token-v2-core { border-radius:50%; overflow:hidden; }
+    .rpg-token-v2 .rpg-token-v2-core { border-radius:50%; overflow:hidden; transform:scale(1); transition:transform 140ms ease,filter 140ms ease; transform-origin:center; }
+    .rpg-token-v2 .rpg-token-v2-core.selected { transform:scale(1.16); filter:drop-shadow(0 4px 8px rgba(0,0,0,.34)); }
     .rpg-token-v2 .rpg-token-v2-portrait { width:100%; height:100%; display:grid; place-items:center; border-radius:inherit; overflow:hidden; }
     .rpg-token-v2 .rpg-token-v2-portrait img { width:100%; height:100%; object-fit:cover; }
+    .rpg-token-v2-core[data-audience-visibility="allied-invisible"] { opacity:.48; filter:saturate(.55); }
     .token-v2-label-row { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
     .token-v2-elevation-label { display:inline-flex; align-items:center; min-height:17px; padding:1px 4px; border-radius:4px; color:#eaf6f7; background:rgba(42,67,72,.92); font-size:9px; font-weight:800; line-height:1.2; }
     .token-v2-name-label { font-weight:750; }
     .rpgmap-token-status-v2-marker { background:transparent !important; border:0 !important; pointer-events:none !important; overflow:visible !important; }
+    .selected-token-summary { position:fixed; right:16px; bottom:18px; z-index:1600; width:210px; min-height:92px; box-sizing:border-box; display:flex; align-items:center; gap:11px; padding:10px; border:1px solid rgba(38,60,62,.28); border-radius:8px; background:rgba(248,250,247,.96); box-shadow:0 10px 28px rgba(18,27,29,.24); pointer-events:none; }
+    .selected-token-summary[hidden] { display:none !important; }
+    .selected-token-summary-portrait { flex:0 0 72px; width:72px; height:72px; display:grid; place-items:center; overflow:hidden; border:3px solid var(--token-color,#3d9b63); border-radius:50%; background:var(--token-color,#3d9b63); color:white; font:800 28px/1 sans-serif; }
+    .selected-token-summary-portrait img { width:100%; height:100%; object-fit:cover; }
+    .selected-token-summary-body { min-width:0; display:grid; gap:4px; }
+    .selected-token-summary-body strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; color:#263638; }
+    .selected-token-summary-body span { font-size:11px; color:#647174; }
+    @media(max-width:650px){ .selected-token-summary{right:8px;bottom:76px;width:176px;min-height:76px;padding:8px}.selected-token-summary-portrait{flex-basis:56px;width:56px;height:56px;font-size:22px} }
   `;
   documentNode.head.append(style);
 }
@@ -50,8 +60,7 @@ function pixelsPerMeter(api) {
 }
 
 function renderSize(api, model) {
-  const base = Math.max(18, Math.min(144, model.diameterMeters * pixelsPerMeter(api)));
-  return base * (model.selected ? 1.16 : 1);
+  return Math.max(18, Math.min(144, model.diameterMeters * pixelsPerMeter(api)));
 }
 
 export function tokenIcon(api, model) {
@@ -61,7 +70,7 @@ export function tokenIcon(api, model) {
     : `<span>${escapeHtml((Array.from(model.name)[0] || '?').toUpperCase())}</span>`;
   return L.divIcon({
     className: 'rpg-token-v2',
-    html: `<div class="rpg-token-v2-core${model.selected ? ' selected' : ''}" data-token-id="${escapeHtml(model.id)}" style="--token-color:${model.color};--token-size:${size}px"><div class="rpg-token-v2-portrait" style="transform:rotate(${model.rotation}deg)">${portrait}</div></div>`,
+    html: `<div class="rpg-token-v2-core${model.selected ? ' selected' : ''}" data-token-id="${escapeHtml(model.id)}" data-audience-visibility="${escapeHtml(model.audienceVisibility || '')}" style="--token-color:${model.color};--token-size:${size}px"><div class="rpg-token-v2-portrait" style="transform:rotate(${model.rotation}deg)">${portrait}</div></div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
@@ -120,6 +129,10 @@ export function createTokenRendererSystem() {
       let selectedIds = new Set(api.selection?.getSelectedTokenIds?.() || []);
       let destroyed = false;
       const off = [];
+      const summary = documentNode.createElement('aside');
+      summary.className = 'selected-token-summary';
+      summary.hidden = true;
+      (api.map.getContainer().closest('.app-shell') || documentNode.body).append(summary);
 
       function resolveModel(token) {
         try {
@@ -166,6 +179,29 @@ export function createTokenRendererSystem() {
             }),
           }).addTo(statusLayer);
         }
+      }
+
+      function renderSummary(models) {
+        const primaryId = String(api.selection?.getPrimaryTokenId?.() || '');
+        const model = models.find(item => item.id === primaryId) || models.find(item => item.selected) || null;
+        if (!model) {
+          summary.hidden = true;
+          summary.replaceChildren();
+          return;
+        }
+        const portrait = model.avatarDataUrl
+          ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="">`
+          : escapeHtml((Array.from(model.name)[0] || '?').toUpperCase());
+        let healthText = '';
+        if (!model.audienceRestricted) {
+          const health = api.health?.resolveToken?.(model.id);
+          if (health && Number.isFinite(Number(health.current)) && Number.isFinite(Number(health.max))) {
+            healthText = `<span>生命 ${Number(health.current)} / ${Number(health.max)}</span>`;
+          }
+        }
+        summary.style.setProperty('--token-color', model.color);
+        summary.innerHTML = `<div class="selected-token-summary-portrait">${portrait}</div><div class="selected-token-summary-body"><strong>${escapeHtml(model.name)}</strong><span>${model.audienceRestricted ? '公开摘要' : model.actorLink ? '共享角色' : '独立实例'}</span>${healthText}</div>`;
+        summary.hidden = false;
       }
 
       function beginSegment(motion, target) {
@@ -281,6 +317,7 @@ export function createTokenRendererSystem() {
           setTooltip(api, documentNode, view, model);
         }
         renderStatuses(models, tokensById);
+        renderSummary(models);
       }
 
       const selectionOff = api.selection?.subscribe?.(snapshot => {
@@ -307,6 +344,7 @@ export function createTokenRendererSystem() {
         statusLayer.clearLayers();
         api.map.removeLayer?.(tokenLayer);
         api.map.removeLayer?.(statusLayer);
+        summary.remove();
         off.splice(0).forEach(dispose => dispose?.());
       }));
 

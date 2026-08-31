@@ -69,7 +69,7 @@ test('Actor placement writes through api.tokens.create with the existing Actor i
         diameterMeters: 1,
         rotation: 0,
         elevationFt: 0,
-        hidden: false,
+        visibility: null,
         locked: false,
         showName: true,
         effects: [],

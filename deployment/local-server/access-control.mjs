@@ -161,7 +161,20 @@ function changedActorIds(before, next) {
 function newPlayerKey() { return randomBytes(8).toString('hex').toUpperCase(); }
 function newAuthToken() { return randomBytes(32).toString('base64url'); }
 export function hashCredential(value) { return createHash('sha256').update(String(value || '')).digest('hex'); }
-export function createAccessState() { return { schemaVersion: 2, users: [] }; }
+const ACTOR_TYPES = new Set(['pc', 'npc', 'summon', 'other']);
+const MARKER_KINDS = new Set(['trap', 'target', 'area', 'note']);
+function normalizePlacementGrants(raw) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const clean = (value, allowed = null) => [...new Set((Array.isArray(value) ? value : [])
+    .map(item => String(item ?? '').trim().slice(0, 160))
+    .filter(item => item && (!allowed || allowed.has(item))))].slice(0, 128);
+  return {
+    actorTypes: clean(source.actorTypes, ACTOR_TYPES),
+    actorIds: clean(source.actorIds),
+    markerKinds: clean(source.markerKinds, MARKER_KINDS),
+  };
+}
+export function createAccessState() { return { schemaVersion: 3, users: [] }; }
 export function normalizeOwnership(raw) {
   const result = {};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return result;
@@ -188,20 +201,21 @@ export function normalizeAccessState(raw) {
       : typeof item.claimHash === 'string' && item.claimHash.length === 64 ? item.claimHash : null;
     users.push({
       id, name: cleanName(item.name), role: 'player', defaultActorId, ownership,
+      placementGrants: normalizePlacementGrants(item.placementGrants),
       tokenHash: typeof item.tokenHash === 'string' && item.tokenHash.length === 64 ? item.tokenHash : null,
       playerKeyHash: keyHash, claimHash: keyHash, disabled: item.disabled === true,
       createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
       updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString(),
     });
   }
-  return { schemaVersion: 2, users };
+  return { schemaVersion: 3, users };
 }
-function baseUser({ name, defaultActorId = null, ownership = {} } = {}) {
+function baseUser({ name, defaultActorId = null, ownership = {}, placementGrants = {} } = {}) {
   const normalizedOwnership = normalizeOwnership(ownership);
   const actorId = cleanActorId(defaultActorId);
   if (actorId) normalizedOwnership[actorId] = OWNERSHIP.OWNER;
   const now = new Date().toISOString();
-  return { id: randomUUID(), name: cleanName(name), role: 'player', defaultActorId: actorId, ownership: normalizedOwnership, tokenHash: null, playerKeyHash: null, claimHash: null, disabled: false, createdAt: now, updatedAt: now };
+  return { id: randomUUID(), name: cleanName(name), role: 'player', defaultActorId: actorId, ownership: normalizedOwnership, placementGrants: normalizePlacementGrants(placementGrants), tokenHash: null, playerKeyHash: null, claimHash: null, disabled: false, createdAt: now, updatedAt: now };
 }
 export function createBoundUser(options = {}) {
   const playerKey = newPlayerKey();
@@ -238,6 +252,7 @@ export function updateUserRecord(user, patch = {}) {
   if (!user) return null;
   if (patch.name !== undefined) user.name = cleanName(patch.name, user.name);
   if (patch.ownership !== undefined) user.ownership = normalizeOwnership(patch.ownership);
+  if (patch.placementGrants !== undefined) user.placementGrants = normalizePlacementGrants(patch.placementGrants);
   if (patch.defaultActorId !== undefined) {
     const actorId = cleanActorId(patch.defaultActorId);
     if (actorId) user.ownership[actorId] = OWNERSHIP.OWNER;
@@ -250,7 +265,7 @@ export function updateUserRecord(user, patch = {}) {
 }
 export function publicUser(user) {
   if (!user) return null;
-  return { id: user.id, name: user.name, role: 'player', defaultActorId: user.defaultActorId || null, ownership: { ...user.ownership }, disabled: user.disabled === true, claimed: Boolean(user.tokenHash), hasPlayerKey: Boolean(user.playerKeyHash), createdAt: user.createdAt, updatedAt: user.updatedAt };
+  return { id: user.id, name: user.name, role: 'player', defaultActorId: user.defaultActorId || null, ownership: { ...user.ownership }, placementGrants: normalizePlacementGrants(user.placementGrants), disabled: user.disabled === true, claimed: Boolean(user.tokenHash), hasPlayerKey: Boolean(user.playerKeyHash), createdAt: user.createdAt, updatedAt: user.updatedAt };
 }
 export function ownershipLevel(user, actorId) { return !user || !actorId ? OWNERSHIP.NONE : user.ownership?.[String(actorId)] || OWNERSHIP.NONE; }
 export function actorCatalogFromWorld(state) { return (entityState(state).actors || []).map(actor => ({ id: String(actor.id), name: cleanName(actor.name, 'Actor') })); }

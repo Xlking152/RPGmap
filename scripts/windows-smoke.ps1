@@ -11,6 +11,19 @@ if (-not (Test-Path -LiteralPath $batch -PathType Leaf)) {
   throw "Packaged launcher is missing: $batch"
 }
 
+function Clear-RpgMapSmokeState {
+  Remove-Item -LiteralPath (Join-Path $rootPath 'map\world.json'), (Join-Path $rootPath 'map\users.json') -Force -ErrorAction SilentlyContinue
+  foreach ($relative in @('map\backups', 'map\uploads')) {
+    $directory = Join-Path $rootPath $relative
+    if (-not (Test-Path -LiteralPath $directory -PathType Container)) { continue }
+    Get-ChildItem -LiteralPath $directory -File -ErrorAction SilentlyContinue | ForEach-Object {
+      Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
+Clear-RpgMapSmokeState
+
 # Reserve an ephemeral loopback port instead of assuming 30000 is free on the
 # hosted Windows image. The listener is released immediately before launch.
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -69,11 +82,25 @@ try {
         $health.multiplayer.publicMode -eq $false
       ) {
         Write-Host "[smoke] /api/health passed on port $port"
+        $launcherOutput = if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout -Raw } else { '' }
+        $secretMatch = [regex]::Match($launcherOutput, 'GM Secret\s+:\s+([A-Fa-f0-9]+)')
+        if (-not $secretMatch.Success) { throw 'Packaged launcher did not publish a GM Secret for smoke.' }
+        $smokeGmSecret = $secretMatch.Groups[1].Value
+        $joinMatch = [regex]::Match($launcherOutput, 'Join Code\s+:\s+(\d{6})')
+        if (-not $joinMatch.Success) { throw 'Packaged launcher did not publish a Join Code for smoke.' }
+        $smokeJoinCode = $joinMatch.Groups[1].Value
+        $hostUrl = "http://127.0.0.1:$port/#rpgmap-host=1&gmSecret=$smokeGmSecret"
         Write-Host '[smoke] opening World Manager and Lanzhou Runtime in Edge'
         $browserAttempted = $true
-        & node (Join-Path $PSScriptRoot 'browser-smoke.mjs') "http://127.0.0.1:$port/" ($TimeoutSeconds * 1000)
+        & node (Join-Path $PSScriptRoot 'browser-smoke.mjs') $hostUrl ($TimeoutSeconds * 1000)
         if ($LASTEXITCODE -ne 0) { throw 'Packaged Edge browser smoke failed.' }
         Write-Host '[smoke] World Manager and Lanzhou Runtime passed'
+        Write-Host '[smoke] validating LAN identity, projection, vision and fog authority'
+        & node (Join-Path $PSScriptRoot 'lan-vision-smoke.mjs') "http://127.0.0.1:$port" $smokeGmSecret $smokeJoinCode
+        if ($LASTEXITCODE -ne 0) { throw 'Packaged LAN vision smoke failed.' }
+        & node (Join-Path $PSScriptRoot 'browser-smoke.mjs') $hostUrl ($TimeoutSeconds * 1000) fog
+        if ($LASTEXITCODE -ne 0) { throw 'Packaged Fog Canvas browser smoke failed.' }
+        Write-Host '[smoke] LAN projection and Fog Canvas passed'
         return
       }
     } catch {
@@ -102,4 +129,5 @@ try {
     if (-not $launcher.HasExited) { Stop-Process -Id $launcher.Id -Force -ErrorAction SilentlyContinue }
   }
   Remove-Item -LiteralPath $stdout, $stderr, $serverPidFile -Force -ErrorAction SilentlyContinue
+  Clear-RpgMapSmokeState
 }

@@ -20,6 +20,17 @@ export const infiniteHorrorRuleset = prepareRuleset({
     derive: deriveInfiniteHorrorStatuses,
     canonicalizeChangeTarget: (_actor, path) => canonicalizeInfiniteHorrorAttributePath(path),
   },
+  vision: {
+    describe(actor, context = {}) {
+      const perception = INFINITE_HORROR_ACTOR.resolveAttribute(actor, 'system.attributes.perception', context);
+      const value = perception === null ? 1 : Number(perception);
+      return Object.freeze({
+        enabled: true,
+        rangeMeters: Math.max(20, Math.min(120, 30 + (Number.isFinite(value) ? value : 1) * 10)),
+        source: perception === null ? 'fallback' : 'system.attributes.perception',
+      });
+    },
+  },
   importers: {
     xlsx: {
       id: 'character-card-v1',

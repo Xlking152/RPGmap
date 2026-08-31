@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.2.0
+
+- World schema 升级到 `3`，旧 schema 2 World 在写回前备份并幂等迁移；Actor 增加 `pc / npc / summon / other` 分类与队伍，Token 增加控制者、可见性和视野配置，Scene 增加 5 米网格迷雾数据。operation schema 保持 `1`。
+- Actor 成为可复用模板；NPC 与召唤物 Token 强制使用独立实例，当前生命、B/L/A 伤势、状态、资源和形态只写入该 Token 的 `actorDelta`。模板的静态属性与生命上限仍动态继承，降低上限时仅截断超出的实例当前生命。
+- 新增实例化放置、运行时操作、旧共享 Token 原子拆分、Token 访问控制、Marker 和 Fog operation；Health、Status、Effect、聊天伤害、Combat 与批量结算统一传递 `tokenId`，拒绝含义不明的 NPC/召唤物 `actorId` 运行时写入。
+- Local/LAN 新增逐会话 `AudienceProjection`。服务器保留完整权威 World，并按 GM、控制权、队伍、指定用户、可见性、隐身和当前实时视野裁剪快照、补丁、Combat、Chat、Effect、Status、Access 目录及查询结果；隐藏目标的拒绝或冲突不会携带 canonical World。
+- Infinite Horror 新增通用隐身能力和视野描述：默认范围为 `30 + 感知 × 10m`，缺失感知时 `40m`，限制在 `20–120m`。玩家每次只使用一个受控 Token 的实时圆形视野，已探索区域按 `sceneId + partyId` 持久化共享，GM 可重置或重新隐藏。
+- 新增轻量“其他指示物”、模板卡/实例卡标识、Token 控制与可见性编辑、迷雾控制、GM 全图/Token 视角切换，以及右下角稳定尺寸的圆形 Token 摘要；桌面和 390px 移动端均通过无溢出验证。
+- World Manager 改用轻量 Ruleset 元数据，选择 World 后才加载完整 Ruleset 与地图 Runtime。相对正式 v2.1.6 基线，首屏 JS gzip 降低约 `75%`，总 JS gzip 增长约 `6.6%`，CSS gzip 不变，均通过 v2.2.0 bundle budget。
+- Windows packaged-server smoke 现在覆盖 GM/Player 身份授权、逐用户投影、视野来源、迷雾持久化、隐藏目标拒绝零泄漏、动态地图与真实 Canvas 遮罩；正式包 `VERSION.json` 明确校验应用版本、完整 commit、World schema `3` 与 operation schema `1`。
+
 ## v2.1.6
 
 - 新增 FVTT 风格的 Group Token Movement：拖动多选集合中的任意已选 Token 时保留 selection，并将被拖 Token 作为 leader；其他成员按开始规划时的相对 `dx/dy` 保持队形。

@@ -73,17 +73,17 @@ test('two unlinked Tokens sharing one template take damage independently', async
   assert.equal(api.health.resolveActor('actor-template').current, 10);
 });
 
-test('linked Tokens still share the World Actor and selected duplicates only apply damage once', async () => {
+test('linked Tokens share the World Actor while each selected Token is settled independently', async () => {
   const { api } = fixture();
   await api.tokens.create({ actorId: 'actor-template', id: 'pc-a', actorLink: true });
   await api.tokens.create({ actorId: 'actor-template', id: 'pc-b', actorLink: true });
 
   const results = await api.health.applyDamageToTokenIds(['pc-a', 'pc-b'], { amount: 2 });
-  assert.equal(results.length, 1);
-  assert.equal(results[0].synthetic, false);
-  assert.equal(api.health.resolveActor('actor-template').current, 8);
-  assert.equal(api.health.resolveToken('pc-a').current, 8);
-  assert.equal(api.health.resolveToken('pc-b').current, 8);
+  assert.equal(results.length, 2);
+  assert.equal(results.every(result => result.synthetic === false), true);
+  assert.equal(api.health.resolveActor('actor-template').current, 6);
+  assert.equal(api.health.resolveToken('pc-a').current, 6);
+  assert.equal(api.health.resolveToken('pc-b').current, 6);
 });
 
 test('healing an unlinked Token updates only that Token delta', async () => {
@@ -108,6 +108,23 @@ test('healing an unlinked Token updates only that Token delta', async () => {
   assert.equal(api.health.resolveActor('actor-template').current, 10);
 });
 
+test('instance sheet Health operations target the selected Token instead of its template', async () => {
+  const { api } = fixture();
+  await api.tokens.create({ actorId: 'actor-template', id: 'npc-a', actorLink: false });
+  await api.tokens.create({ actorId: 'actor-template', id: 'npc-b', actorLink: false });
+
+  const result = await api.health.performActorOperation(
+    'actor-template',
+    { type: 'set-current', value: 3 },
+    { tokenId: 'npc-a' },
+  );
+
+  assert.equal(result.changed, true);
+  assert.equal(api.health.resolveToken('npc-a').current, 3);
+  assert.equal(api.health.resolveToken('npc-b').current, 10);
+  assert.equal(api.health.resolveActor('actor-template').current, 10);
+});
+
 test('mixed linked and Synthetic health changes commit as one atomic World batch', async () => {
   const { api } = fixture();
   await api.tokens.create({ actorId: 'actor-template', id: 'pc-a', actorLink: true });
@@ -123,9 +140,9 @@ test('mixed linked and Synthetic health changes commit as one atomic World batch
   const results = await api.health.applyDamageToTokenIds(['pc-a', 'npc-a'], { amount: 2 });
   assert.equal(results.length, 2);
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].operations.map(operation => operation.type).sort(), [
-    'actor.upsert',
-    'token.actorDelta.replace',
+  assert.deepEqual(calls[0].operations.map(operation => operation.type), [
+    'actor.runtime.perform',
+    'actor.runtime.perform',
   ]);
   assert.equal(calls[0].options.kind, 'health');
   assert.equal(api.health.resolveActor('actor-template').current, 8);

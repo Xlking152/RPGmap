@@ -12,6 +12,7 @@ import {
 } from '../deployment/local-server/access-control.mjs';
 import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
+import { migrateTestStateToWorldV3 } from './helpers/world-v3.js';
 
 function canonicalToken(id, actorId, x, y) {
   return {
@@ -41,7 +42,7 @@ function world({ activeActorId = null } = {}) {
     { id: 'cb-b', tokenId: 'token-b', actorId: 'actor-b', initiative: 5, order: 1 },
   ];
   const turnIndex = activeActorId === 'actor-b' ? 1 : 0;
-  return {
+  return migrateTestStateToWorldV3({
     version: 2,
     mapId: 'test',
     preferences: {
@@ -70,7 +71,7 @@ function world({ activeActorId = null } = {}) {
         updatedAt: '2026-01-01T00:00:00.000Z',
       },
     },
-  };
+  });
 }
 
 function moveToken(state, tokenId, patch) {
@@ -206,7 +207,9 @@ test('server Player permissions allow canonical World V2 movement but protect Wo
   const sceneTamper = structuredClone(before);
   sceneTamper.preferences.worldV2.scenes.push({
     id: 'scene-forged', name: 'Forged', mapPackage: { id: 'test', version: '1' },
-    tokens: [], markers: [], attackAreas: [], sceneEvents: [], settings: { gridVisible: true },
+    tokens: [], markers: [], attackAreas: [], sceneEvents: [], featureStates: {},
+    fog: { schemaVersion: 1, cellSizeMeters: 5, exploredByParty: {} },
+    settings: { gridVisible: true },
   });
   assert.equal(validatePlayerWorldPush({ before, next: sceneTamper, user }).code, 'world_scope_forbidden');
 });

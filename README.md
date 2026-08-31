@@ -1,6 +1,6 @@
 # RPGmap
 
-RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.1.6**，提供 World/Scene 管理、Actor/Token、地图移动与测距、生命/伤势、状态、战斗、聊天，以及 Windows 本机/局域网多人运行包。
+RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.2.0**，提供 World/Scene 管理、Actor 模板与 Token 实例、地图移动与测距、生命/伤势、状态、战斗、聊天、权限投影、隐身、战争迷雾，以及 Windows 本机/局域网多人运行包。
 
 内置的“北宋兰州城”是复杂 Reference MapPackage，用于验证建筑、城墙、城门、桥梁、水体、破坏、洪水、导航和 29 张 WebP 美术资源能够通过通用 Core 运行。
 
@@ -9,7 +9,7 @@ RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前�
 正式 Windows Release：
 
 1. 安装 Node.js `20.19+` 或 `22.12+`。
-2. 下载并解压 `RPGmap-v2.1.6.zip`。
+2. 下载并解压 `RPGmap-v2.2.0.zip`。
 3. 双击 `start-rpgmap.bat`。
 4. GM 使用启动窗口中的 Local URL 与 GM Secret；同一局域网的 Player 使用 LAN URL 与 Join Code。
 
@@ -21,11 +21,14 @@ RPGmap 仅面向本机和可信局域网，不应直接暴露到公网。World�
 
 - World Manager：先选择或创建 World，再按其 Ruleset 与 Active Scene 加载地图。
 - Scene/MapPackage：同一地图可建立多个 Scene，Feature State 与 Token 相互隔离。
-- Actor/Token：Linked Token 使用 Base Actor；Unlinked Token 通过 `actorDelta` 保存独立状态。
+- Actor/Token：Actor 是可复用模板；PC 可使用 Linked Token，NPC 与召唤物强制使用 Unlinked Token，并在各自 `actorDelta` 中独立保存生命、伤势、状态、资源和当前形态。
 - 地图工具：选择、框选、拖动、严格直线 waypoint、碰撞、测距、高度，以及选择模式下的 Feature 检查/开关；移动规划带 Token 终点预览，确认后 Token 会平滑经过已确认的路径段。v2.1.6 起可框选多个 Token，拖动任一已选 Token 作为 leader，整组保持相对队形移动；每个成员按自身直径、高度和状态独立校验碰撞，任一受阻则整组拒绝。
 - 规则系统：Infinite Horror Actor、Health、B/L/A 伤势、Status/Effect、Damage/Healing。
 - 战斗与聊天：先攻、回合权限、共享聊天与系统日志；当前战斗者离开本回合起点后，会保留不可交互的回合起点幻影直到下一回合。普通 Player 在战斗中仍只能移动当前回合的一个 Token，群移不能绕过 Combat Turn Lock；GM 可按需要调整多个 Token。
-- Local/LAN：服务器权威 operation、revision、幂等、Actor Ownership、Combat Turn Lock 与滚动备份。
+- Local/LAN：服务器权威 operation、revision、幂等、Actor/Token 控制权、Combat Turn Lock、按用户裁剪的 AudienceProjection 与滚动备份。
+- 视野与迷雾：玩家选择自己控制的 Token 作为唯一实时视野来源；5 米网格的已探索区域按 Scene 与队伍持久化共享，GM 可重置或重新隐藏。
+- 隐身与可见性：Token 支持公开、队伍、仅 GM 和指定用户；隐身 Token 仅向 GM、控制者、队友及明确授权用户以半透明形式投影。
+- 其他指示物：陷阱、目标点、区域和注释使用轻量 Marker，并与 Token 使用同一套控制和可见性边界。
 - 发布验证：audit、全量测试、tracked syntax、bundle budget、严格包清单、SHA-256 和 Windows Edge smoke。
 
 ## 架构边界
@@ -41,6 +44,7 @@ World
 Scene
 ├─ mapPackage
 ├─ tokens
+├─ fog
 ├─ featureStates
 ├─ sceneEvents
 └─ markers / attackAreas / settings
@@ -49,8 +53,10 @@ Scene
 - Core 提供通用能力，不理解 Infinite Horror 私有字段或兰州分类。
 - Ruleset 拥有 `Actor.system`、派生、展示与规则操作。
 - MapPackage 描述地图尺寸、SVG/资产、Feature、Capability 与 Navigation，不保存 Campaign 状态。
-- World V2 是持久化权威；Entity/UI/compatibility projection 只能只读生成。
+- World schema 3 是持久化权威；Entity/UI/compatibility projection 与玩家 AudienceProjection 只能只读生成，不能覆盖服务器 World。
 - 普通多人写入使用 operation schema 1；完整 World 只用于初始化、快照、显式导入和恢复。
+
+v2.2.0 将 Actor 明确为模板，将 NPC/召唤物 Token 明确为独立运行实例；所有伤害、Health、Status、Effect 与 Combat 操作都按 `tokenId` 结算。Local/LAN 服务端针对每个会话生成 AudienceProjection，隐藏实体不会通过快照、补丁、战斗、聊天或查询旁路泄漏。首期视野为无墙体遮挡的圆形范围；原始地图资产仍会下载到客户端，因此战争迷雾不是地图底图 DRM。
 
 v2.1.2 恢复 v1.6.3 的 Token 拖动、范围手柄和地图地物检查体验，但不恢复旧 Character Runtime；详细结构审计与修改过程见 [v2.1.2 Interaction Restoration](reference/V2.1.2-INTERACTION-RESTORATION.md)。
 

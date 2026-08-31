@@ -29,6 +29,8 @@ import { createTokenRendererSystem } from '../render/token-layer.js';
 import { createSceneAreaSystem } from '../scene/areas.js';
 import { createSceneAreaHandleSystem } from '../scene/area-handles.js';
 import { createSceneManagerSystem } from '../scene/manager.js';
+import { createVisionFogSystem } from '../vision/index.js';
+import { createLightweightMarkerSystem } from '../marker/index.js';
 
 export async function startMapRuntime({
   appContainer,
@@ -83,12 +85,14 @@ export async function startMapRuntime({
       createStatusSystem(),
       createTokenStatusBridgeSystem(),
       createStatusUiSystem(),
+      createVisionFogSystem(),
       createTokenRendererSystem(),
       createFeatureInteractionSystem(),
       createTokenElevationSystem(),
       createSceneAreaSystem(),
       createSceneAreaHandleSystem(),
       createAppShellUi(),
+      createLightweightMarkerSystem(),
       createMeasurementSystem(),
       createHealthSystem(),
       createChatSystem({ selection: selectionSystem }),

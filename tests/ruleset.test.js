@@ -7,6 +7,23 @@ import {
   listRulesets,
   setActiveRuleset,
 } from '../src/ruleset/index.js';
+import {
+  listBuiltInRulesets,
+  loadBuiltInRulesetReference,
+  resolveBuiltInRulesetReference,
+} from '../src/ruleset/builtins.js';
+
+test('World Manager resolves lightweight Ruleset metadata before loading implementation', async () => {
+  assert.deepEqual(listBuiltInRulesets(), [{
+    id: 'infinite-horror', title: '无限跑团', version: '1.0.0',
+  }]);
+  assert.equal(resolveBuiltInRulesetReference({ id: 'infinite-horror', version: '1.0.0' }).title, '无限跑团');
+  assert.throws(() => resolveBuiltInRulesetReference({ id: 'missing', version: '1.0.0' }),
+    error => error?.code === 'unknown_ruleset');
+  assert.throws(() => resolveBuiltInRulesetReference({ id: 'infinite-horror', version: '9.0.0' }),
+    error => error?.code === 'ruleset_version_incompatible');
+  assert.equal((await loadBuiltInRulesetReference({ id: 'infinite-horror', version: '1.0.0' })).id, 'infinite-horror');
+});
 
 test('infinite horror is registered as the default built-in ruleset', () => {
   assert.equal(RULESET_API_VERSION, 1);
@@ -33,7 +50,7 @@ test('infinite horror is registered as the default built-in ruleset', () => {
   assert.equal(typeof ruleset.health.applyHealing, 'function');
   assert.equal(typeof ruleset.health.presentation.describe, 'function');
   assert.deepEqual(ruleset.statuses.definitions.map(item => item.id), [
-    'status-spirit', 'status-rooted', 'status-incapacitated',
+    'status-invisible', 'status-spirit', 'status-rooted', 'status-incapacitated',
   ]);
   assert.equal(typeof ruleset.statuses.derive, 'function');
   assert.equal(typeof ruleset.importers.xlsx.importFile, 'function');

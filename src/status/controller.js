@@ -167,39 +167,36 @@ export function createStatusController() {
         deferredStateChange = false;
         try {
           let result;
-          if (online) {
-            if (typeof api.multiplayer?.performStatusOperation !== 'function') {
-              throw new Error('当前联机控制器不支持状态操作');
+          if (typeof api.world?.performOperations === 'function') {
+            const operationPayload = clone(payload);
+            const requestedOperationId = operationPayload.operationId || null;
+            delete operationPayload.operationId;
+            result = await api.world.performOperations([{ type, payload: operationPayload }], {
+              source: `status:${type}`,
+              render: false,
+              kind: 'status',
+              requestedOperationId,
+            });
+          } else if (!online) {
+            const appState = clone(api.getState?.() || {});
+            appState.preferences ||= {};
+            const reduced = reduceStatusOperation(appState.preferences[ENTITY_PREFERENCE_KEY], { type, ...clone(payload) }, {
+              source: { role: 'offline' },
+            });
+            appState.preferences[ENTITY_PREFERENCE_KEY] = reduced.state;
+            if (typeof api.commitState === 'function') {
+              api.commitState(appState, { source: `status:${type}`, render: false });
+            } else if (typeof api.importState === 'function') {
+              api.importState(appState);
+            } else {
+              throw new Error('当前运行环境无法保存状态变更');
             }
+            api.persistNow?.();
+            result = { offline: true, results: reduced.results };
+          } else if (typeof api.multiplayer?.performStatusOperation === 'function') {
             result = await api.multiplayer.performStatusOperation(type, clone(payload));
           } else {
-            if (typeof api.world?.performOperations === 'function') {
-              const operationPayload = clone(payload);
-              const requestedOperationId = operationPayload.operationId || null;
-              delete operationPayload.operationId;
-              result = await api.world.performOperations([{ type, payload: operationPayload }], {
-                source: `status:${type}`,
-                render: false,
-                kind: 'status',
-                requestedOperationId,
-              });
-            } else {
-              const appState = clone(api.getState?.() || {});
-              appState.preferences ||= {};
-              const reduced = reduceStatusOperation(appState.preferences[ENTITY_PREFERENCE_KEY], { type, ...clone(payload) }, {
-                source: { role: 'offline' },
-              });
-              appState.preferences[ENTITY_PREFERENCE_KEY] = reduced.state;
-              if (typeof api.commitState === 'function') {
-                api.commitState(appState, { source: `status:${type}`, render: false });
-              } else if (typeof api.importState === 'function') {
-                api.importState(appState);
-              } else {
-                throw new Error('当前运行环境无法保存状态变更');
-              }
-              api.persistNow?.();
-              result = { offline: true, results: reduced.results };
-            }
+            throw new Error('Current multiplayer runtime does not support canonical Status operations');
           }
           const snapshot = resolve(resolutionContext(payload));
           emitChange(mutationDetail(type, payload, result, online, snapshot));

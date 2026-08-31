@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBoundUser, validatePlayerWorldPush } from '../deployment/local-server/access-control.mjs';
 import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
+import { migrateTestStateToWorldV3 } from './helpers/world-v3.js';
 
 function tokenRuntime({ x = 1, y = 2 } = {}) {
   return {
@@ -22,7 +23,7 @@ function tokenWorld({ x = 1, y = 2 } = {}) {
 }
 
 function state({ x = 1, y = 2 } = {}) {
-  return {
+  return migrateTestStateToWorldV3({
     version: 2,
     mapId: 'test',
     markers: [], attackAreas: [], sceneEvents: [],
@@ -50,7 +51,7 @@ function state({ x = 1, y = 2 } = {}) {
         updatedAt: '2026-01-01T00:00:00.000Z',
       },
     },
-  };
+  });
 }
 
 test('canonical Scene Token placement survives server normalization', () => {

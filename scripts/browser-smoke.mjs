@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +8,9 @@ if (process.platform !== 'win32') throw new Error('Packaged browser smoke requir
 const targetUrl = String(process.argv[2] || '').trim();
 if (!/^http:\/\/127\.0\.0\.1:\d+\/?/.test(targetUrl)) throw new Error('Browser smoke requires a loopback HTTP URL');
 const timeoutMs = Math.max(10_000, Number(process.argv[3]) || 30_000);
+const mode = String(process.argv[4] || 'bootstrap');
+if (!['bootstrap', 'fog'].includes(mode)) throw new Error(`Unknown browser smoke mode: ${mode}`);
+const viewportMatch = /^(\d{2,4})x(\d{2,4})$/.exec(String(process.env.RPGMAP_SMOKE_VIEWPORT || ''));
 
 function edgePath() {
   const roots = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean);
@@ -102,7 +105,9 @@ try {
       else resolve(message.result);
       return;
     }
-    if (message.method === 'Network.loadingFailed') failures.push(message.params?.errorText || 'request failed');
+    if (message.method === 'Network.loadingFailed' && message.params?.errorText !== 'net::ERR_ABORTED') {
+      failures.push(message.params?.errorText || 'request failed');
+    }
     if (message.method === 'Network.responseReceived' && Number(message.params?.response?.status) >= 400) {
       failures.push(`${message.params.response.status} ${message.params.response.url}`);
     }
@@ -135,18 +140,27 @@ try {
     return result.result?.value;
   };
   await Promise.all([send('Runtime.enable'), send('Network.enable'), send('Log.enable')]);
+  if (viewportMatch) {
+    await send('Emulation.setDeviceMetricsOverride', {
+      width: Number(viewportMatch[1]), height: Number(viewportMatch[2]),
+      deviceScaleFactor: 1, mobile: true,
+    });
+    await send('Page.reload', { ignoreCache: true });
+  }
 
-  await retry(
-    () => evaluate(`Boolean(document.querySelector('[data-world-create-form]')) && document.body.innerText.includes('北宋兰州城')`),
-    'World Manager with built-in Lanzhou metadata',
-    deadline,
-  );
-  await evaluate(`(() => {
-    const form = document.querySelector('[data-world-create-form]');
-    form.querySelector('[name="name"]').value = 'Packaged Smoke World';
-    form.requestSubmit();
-    return true;
-  })()`);
+  if (mode === 'bootstrap') {
+    await retry(
+      () => evaluate(`Boolean(document.querySelector('[data-world-create-form]')) && document.body.innerText.includes('北宋兰州城')`),
+      'World Manager with built-in Lanzhou metadata',
+      deadline,
+    );
+    await evaluate(`(() => {
+      const form = document.querySelector('[data-world-create-form]');
+      form.querySelector('[name="name"]').value = 'Packaged Smoke World';
+      form.requestSubmit();
+      return true;
+    })()`);
+  }
   let runtime;
   try {
     runtime = await retry(
@@ -191,6 +205,27 @@ try {
     })`).catch(() => null);
     throw new Error(`${error.message}; page=${JSON.stringify(pageState)}; requests=${JSON.stringify(failures)}; errors=${JSON.stringify(exceptions)}`);
   }
+  let fogAudit = null;
+  if (mode === 'fog') {
+    await retry(() => evaluate(`(() => {
+        const api = document.querySelector('#app')?.rpgMapApp;
+        return { connected: api?.multiplayer?.getStatus?.()?.connected === true, token: Boolean(api?.tokens?.get?.('smoke-pc-token')) };
+      })()`).then(status => status?.connected && status?.token ? status : null),
+    'LAN Runtime with smoke Token', deadline);
+    await evaluate(`document.querySelector('#app').rpgMapApp.vision.setSource('smoke-pc-token')`);
+    await evaluate(`document.querySelector('#app').rpgMapApp.selection.replace(['smoke-pc-token'], 'smoke-pc-token')`);
+    fogAudit = await retry(() => evaluate(`(() => {
+        const canvas = document.querySelector('.rpgmap-vision-fog-canvas');
+        if (!canvas || canvas.hidden || !canvas.width || !canvas.height) return null;
+        const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        let minAlpha = 255, maxAlpha = 0;
+        for (let index = 3; index < data.length; index += 4) {
+          minAlpha = Math.min(minAlpha, data[index]);
+          maxAlpha = Math.max(maxAlpha, data[index]);
+        }
+        return maxAlpha > 200 && minAlpha < 200 ? { width: canvas.width, height: canvas.height, minAlpha, maxAlpha } : null;
+      })()`), 'Fog Canvas with opaque and realtime-visible pixels', deadline);
+  }
   const assetAudit = await evaluate(`(async () => {
     const response = await fetch('./.vite/manifest.json', { cache: 'no-store' });
     if (!response.ok) throw new Error('manifest request failed: ' + response.status);
@@ -220,14 +255,36 @@ try {
   if (visualState.baseSvgCount !== 1 || visualState.mapImageCount < 1) {
     throw new Error(`Lanzhou base SVG was not rendered: ${JSON.stringify(visualState)}`);
   }
+  const layoutAudit = await evaluate(`(() => {
+    const summary = document.querySelector('.selected-token-summary:not([hidden])');
+    const rect = summary?.getBoundingClientRect() || null;
+    return {
+      innerWidth,
+      bodyScrollWidth: document.body.scrollWidth,
+      documentScrollWidth: document.documentElement.scrollWidth,
+      summary: rect ? { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } : null,
+    };
+  })()`);
+  if (layoutAudit.bodyScrollWidth > layoutAudit.innerWidth || layoutAudit.documentScrollWidth > layoutAudit.innerWidth) {
+    throw new Error(`Browser layout has horizontal overflow: ${JSON.stringify(layoutAudit)}`);
+  }
+  if (layoutAudit.summary && (layoutAudit.summary.left < 0 || layoutAudit.summary.right > layoutAudit.innerWidth)) {
+    throw new Error(`Selected Token summary leaves the viewport: ${JSON.stringify(layoutAudit)}`);
+  }
+  if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
+    const directory = path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR);
+    await mkdir(directory, { recursive: true });
+    const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    await writeFile(path.join(directory, `packaged-${mode}.png`), Buffer.from(capture.data, 'base64'));
+  }
   if (failures.length) throw new Error(`Browser requests failed: ${failures.join('; ')}`);
   if (exceptions.length) throw new Error(`Browser runtime errors: ${exceptions.join('; ')}`);
-  for (const pattern of [/\/assets\/map-runtime-[^/]+\.js$/, /\/assets\/default-map-[^/]+\.js$/, /\.webp$/]) {
+  for (const pattern of [/\/assets\/ruleset-[^/]+\.js$/, /\/assets\/map-runtime-[^/]+\.js$/, /\/assets\/default-map-[^/]+\.js$/, /\.webp$/]) {
     if (!responses.some(url => pattern.test(url))) {
       throw new Error(`Browser did not load required Runtime asset: ${pattern}; visual=${JSON.stringify(visualState)}; responses=${JSON.stringify(responses.slice(-20))}`);
     }
   }
-  console.log(JSON.stringify({ worldManager: true, map: 'northern-song-lanzhou-1104', assets: assetAudit, ...runtime }));
+  console.log(JSON.stringify({ worldManager: mode === 'bootstrap', map: 'northern-song-lanzhou-1104', assets: assetAudit, fog: fogAudit, layout: layoutAudit, ...runtime }));
   await send('Browser.close');
   browserClosed = true;
 } catch (error) {

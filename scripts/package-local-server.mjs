@@ -63,11 +63,28 @@ await viteBuild({
     },
   },
 });
+await viteBuild({
+  configFile: false,
+  logLevel: 'error',
+  build: {
+    target: 'es2020',
+    emptyOutDir: false,
+    minify: false,
+    outDir: root,
+    lib: {
+      entry: path.join(projectRoot, 'src', 'server', 'authority.js'),
+      formats: ['es'],
+      fileName: () => 'ruleset-authority.mjs',
+    },
+  },
+});
 await copy('文档/操作指南.md', 'docs/OPERATION-GUIDE.md');
 
 await writeFile(path.join(root, 'VERSION.json'), `${JSON.stringify({
   app: 'RPGmap', version, releaseTag: `v${version}`,
   commit: await sourceCommit(),
+  worldSchema: 3,
+  operationSchema: 1,
   serverMode: 'multiplayer', platform: 'windows', storageMode: 'portable-map-root-server-authoritative',
   launcherMode: 'local-lan-v2', defaultPort: 30000,
 }, null, 2)}\n`);

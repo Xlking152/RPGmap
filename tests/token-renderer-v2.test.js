@@ -77,8 +77,11 @@ test('Token renderer displays Synthetic Actor instance overrides without mutatin
   assert.equal(base.forms[0].avatarDataUrl, 'data:image/webp;base64,BASE');
 });
 
-test('hidden or Feature-placed Tokens have no map view model', () => {
-  assert.equal(createTokenViewModel({ token: token({ hidden: true }), actor: actor() }), null);
+test('GM-only Tokens remain renderable in GM state while Feature-placed Tokens do not', () => {
+  assert.ok(createTokenViewModel({
+    token: token({ visibility: { mode: 'gm', userIds: [] } }),
+    actor: actor(),
+  }));
   assert.equal(createTokenViewModel({
     token: token({ placement: 'feature', x: null, y: null, featureId: 'building-1' }),
     actor: actor(),
