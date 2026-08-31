@@ -64,11 +64,19 @@ export function createVisionFogSystem() {
         const actor = token && world?.actors?.find(item => String(item.id) === String(token.actorId));
         if (!token || !actor || token.placement !== 'map') return null;
         const resolved = api.tokens?.resolveActor?.(token.id)?.actor || actor;
-        const description = api.ruleset?.vision?.describe?.(resolved, { token }) || {};
+        const description = api.ruleset?.vision?.describe?.(resolved, {
+          token, scene, lighting: scene?.settings?.lighting || 'normal',
+        }) || {};
         const rangeMeters = token.vision?.rangeOverrideMeters ?? description.rangeMeters;
+        const preciseRangeMeters = Number(rangeMeters) || 0;
+        const vagueRangeMeters = token.vision?.rangeOverrideMeters == null
+          ? Math.max(preciseRangeMeters, Number(description.vagueRangeMeters ?? preciseRangeMeters) || 0)
+          : preciseRangeMeters;
         return {
           sceneId: String(scene.id), tokenId: String(token.id),
-          x: Number(token.x), y: Number(token.y), rangeMeters: Number(rangeMeters) || 0,
+          x: Number(token.x), y: Number(token.y), rangeMeters: preciseRangeMeters,
+          preciseRangeMeters, vagueRangeMeters,
+          senses: structuredClone(description.senses || {}), lighting: description.lighting || 'normal',
           partyId: actor.partyId ? String(actor.partyId) : null,
         };
       }
@@ -81,6 +89,10 @@ export function createVisionFogSystem() {
           source: {
             tokenId: subject.tokenId, x: subject.x, y: subject.y,
             rangeMeters: subject.rangeMeters,
+            preciseRangeMeters: subject.preciseRangeMeters,
+            vagueRangeMeters: subject.vagueRangeMeters,
+            senses: subject.senses,
+            lighting: subject.lighting,
           },
           partyIds: subject.partyId ? [subject.partyId] : [],
           gmPreview: true,
@@ -167,11 +179,12 @@ export function createVisionFogSystem() {
           }
         };
         const source = audience.source;
-        const drawCurrentCircle = () => {
-          if (!source || Number(source.rangeMeters) <= 0) return;
+        const drawCurrentCircle = rawRange => {
+          const range = Number(rawRange) || 0;
+          if (!source || range <= 0) return;
           const center = api.map.latLngToContainerPoint(worldToLatLng({ x: Number(source.x), y: Number(source.y) }, api.mapPackage.height));
           const edge = api.map.latLngToContainerPoint(worldToLatLng({
-            x: Number(source.x) + Number(source.rangeMeters) / metersPerUnit,
+            x: Number(source.x) + range / metersPerUnit,
             y: Number(source.y),
           }, api.mapPackage.height));
           context.beginPath();
@@ -185,13 +198,14 @@ export function createVisionFogSystem() {
         context.globalCompositeOperation = 'destination-out';
         context.fillStyle = '#000';
         drawExplored();
-        drawCurrentCircle();
+        drawCurrentCircle(source?.vagueRangeMeters ?? source?.rangeMeters);
         context.globalCompositeOperation = 'source-over';
         context.fillStyle = 'rgba(18,25,27,0.62)';
         drawExplored();
+        drawCurrentCircle(source?.vagueRangeMeters ?? source?.rangeMeters);
         context.globalCompositeOperation = 'destination-out';
         context.fillStyle = '#000';
-        drawCurrentCircle();
+        drawCurrentCircle(source?.preciseRangeMeters ?? source?.rangeMeters);
         context.globalCompositeOperation = 'source-over';
       }
 

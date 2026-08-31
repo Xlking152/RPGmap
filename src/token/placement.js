@@ -49,6 +49,7 @@ export async function createActorTokenAtPoint(api, actorId, point, options = {})
 
   const token = await api.tokens.create({
     actorId: targetActorId,
+    ...(options.name == null ? {} : { name: String(options.name) }),
     x: placement.point.x,
     y: placement.point.y,
     actorLink: options.actorLink !== false,

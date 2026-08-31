@@ -4,7 +4,6 @@ export const UI_CONTEXT_PANELS = Object.freeze({
   distance: 'measure',
   route: 'measure',
   aoe: 'areas',
-  layers: 'layers',
 });
 
 export function entityStateFromApp(appState) {

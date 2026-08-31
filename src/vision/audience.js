@@ -90,18 +90,30 @@ function currentVision(world, context, actors) {
   const actor = token ? actors.get(String(token.actorId)) : null;
   if (!token || !actor || token.placement !== 'map' || !tokenControlled(token, actor, context)) return null;
   const resolved = token.actorLink === false ? mergeActorDelta(actor, token.actorDelta) : actor;
-  const description = context.ruleset?.vision?.describe?.(resolved, { token, user: context.user }) || {};
+  const description = context.ruleset?.vision?.describe?.(resolved, {
+    token, user: context.user, scene, lighting: scene?.settings?.lighting || 'normal',
+  }) || {};
   const override = token.vision?.rangeOverrideMeters;
-  const rangeMeters = override === null || override === undefined
-    ? Number(description.rangeMeters) || 0
+  const preciseRangeMeters = override === null || override === undefined
+    ? Number(description.preciseRangeMeters ?? description.rangeMeters) || 0
     : Number(override) || 0;
-  if (token.vision?.enabled === false || rangeMeters <= 0) return null;
-  return { tokenId: String(token.id), x: Number(token.x), y: Number(token.y), rangeMeters };
+  const vagueRangeMeters = override === null || override === undefined
+    ? Math.max(preciseRangeMeters, Number(description.vagueRangeMeters ?? preciseRangeMeters) || 0)
+    : preciseRangeMeters;
+  if (token.vision?.enabled === false || vagueRangeMeters <= 0) return null;
+  return {
+    tokenId: String(token.id), x: Number(token.x), y: Number(token.y),
+    rangeMeters: preciseRangeMeters, preciseRangeMeters, vagueRangeMeters,
+    senses: clone(description.senses || {}), lighting: description.lighting || 'normal',
+  };
 }
 
-function inCurrentVision(token, vision, metersPerUnit) {
-  if (!vision || token?.placement !== 'map') return false;
-  return Math.hypot(Number(token.x) - vision.x, Number(token.y) - vision.y) * metersPerUnit <= vision.rangeMeters;
+function detectionLevel(token, vision, metersPerUnit) {
+  if (!vision || token?.placement !== 'map') return 'none';
+  const distance = Math.hypot(Number(token.x) - vision.x, Number(token.y) - vision.y) * metersPerUnit;
+  if (distance <= vision.preciseRangeMeters) return 'precise';
+  if (distance <= vision.vagueRangeMeters) return 'vague';
+  return 'none';
 }
 
 function restrictedActor(actor) {
@@ -127,25 +139,40 @@ function actorPlacementGranted(actor, context) {
     || (Array.isArray(grants.actorTypes) && grants.actorTypes.map(String).includes(String(actor.type)));
 }
 
-function restrictedToken(token) {
+function restrictedToken(token, { level = 'precise', vision = null, metersPerUnit = 1 } = {}) {
+  const vague = level === 'vague';
+  const vagueId = `audience-vague-token-${String(token.id)}`;
+  const vagueActorId = `audience-vague-actor-${String(token.id)}`;
+  const quantize = value => Math.round(Number(value) * metersPerUnit / 5) * 5 / metersPerUnit;
   return {
-    id: String(token.id),
-    actorId: String(token.actorId),
+    id: vague ? vagueId : String(token.id),
+    actorId: vague ? vagueActorId : String(token.actorId),
     actorLink: true,
     actorDelta: null,
     placement: token.placement === 'feature' ? 'feature' : 'map',
-    x: token.placement === 'map' ? Number(token.x) : null,
-    y: token.placement === 'map' ? Number(token.y) : null,
+    x: token.placement === 'map' ? (vague ? quantize(token.x) : Number(token.x)) : null,
+    y: token.placement === 'map' ? (vague ? quantize(token.y) : Number(token.y)) : null,
     featureId: token.placement === 'feature' ? String(token.featureId || '') || null : null,
-    texture: clone(token.texture || { src: null }),
-    color: token.color == null ? null : String(token.color),
+    texture: vague ? { src: null } : clone(token.texture || { src: null }),
+    color: vague ? '#7b8587' : token.color == null ? null : String(token.color),
     diameterMeters: Number(token.diameterMeters) || 1,
     rotation: Number(token.rotation) || 0,
     elevationFt: Number(token.elevationFt) || 0,
     locked: token.locked === true,
-    showName: token.showName !== false,
+    showName: vague ? false : token.showName !== false,
     effects: [],
     audienceRestricted: true,
+    audienceVisibility: vague ? 'vague' : 'precise',
+    ...(vague ? { approximateDirection: Math.atan2(Number(token.y) - vision.y, Number(token.x) - vision.x) } : {}),
+  };
+}
+
+function vagueActor(token) {
+  return {
+    id: `audience-vague-actor-${String(token.id)}`,
+    name: '模糊轮廓', img: null, type: 'other', partyId: null,
+    prototypeToken: { texture: { src: null }, showName: false },
+    system: {}, effects: [], audienceRestricted: true, audienceVisibility: 'vague',
   };
 }
 
@@ -207,6 +234,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const referencedActorIds = new Set();
   const restrictedActorIds = new Set();
   const restrictedTokenIds = new Set();
+  const vagueActors = [];
 
   for (const scene of world.scenes || []) {
     const isActive = String(scene.id) === String(world.activeSceneId);
@@ -217,16 +245,23 @@ export function projectStateForAudience(rawState, rawContext = {}) {
       const authorized = authorizedForPrivateData(rawToken, actor, context, parties);
       if (tokenInvisible(rawToken, actor, definitions) && !authorized) return [];
       const hostile = !authorized;
-      if (hostile && (!isActive || !inCurrentVision(rawToken, vision, metersPerUnit))) return [];
+      const level = hostile && isActive ? detectionLevel(rawToken, vision, metersPerUnit) : 'precise';
+      if (hostile && (!isActive || level === 'none')) return [];
       let token = clone(rawToken);
-      visibleTokenIds.add(String(token.id));
-      sceneVisibleTokenIds.add(String(token.id));
-      referencedActorIds.add(String(actor.id));
       if (authorized) {
+        visibleTokenIds.add(String(token.id));
+        sceneVisibleTokenIds.add(String(token.id));
+        referencedActorIds.add(String(actor.id));
         privateActorIds.add(String(actor.id));
         if (tokenInvisible(rawToken, actor, definitions)) token.audienceVisibility = 'allied-invisible';
+      } else if (level === 'vague') {
+        token = restrictedToken(rawToken, { level, vision, metersPerUnit });
+        vagueActors.push(vagueActor(rawToken));
       } else {
-        token = restrictedToken(rawToken);
+        visibleTokenIds.add(String(token.id));
+        sceneVisibleTokenIds.add(String(token.id));
+        referencedActorIds.add(String(actor.id));
+        token = restrictedToken(rawToken, { level, vision, metersPerUnit });
         restrictedActorIds.add(String(actor.id));
         restrictedTokenIds.add(String(token.id));
       }
@@ -256,6 +291,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     restrictedActorIds.add(actorId);
     return [restrictedActor(actor)];
   });
+  world.actors.push(...vagueActors);
   const hiddenTokenIds = new Set();
   for (const scene of rawState?.preferences?.worldV2?.scenes || []) {
     for (const token of scene.tokens || []) if (!visibleTokenIds.has(String(token.id))) hiddenTokenIds.add(String(token.id));

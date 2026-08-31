@@ -105,6 +105,24 @@ function movementCapability(api, token) {
   return snapshot?.capabilities || { canMove: true, canInteract: true, reasons: [] };
 }
 
+function movementFailure(code, reason, details = {}) {
+  return Object.freeze({ valid: false, code, reason, ...clone(details) });
+}
+
+function movementError(failure) {
+  const error = new Error(failure?.reason || 'Token 移动失败');
+  error.code = failure?.code || 'movement_failed';
+  error.details = clone(failure);
+  return error;
+}
+
+function activeCombatTokenId(api) {
+  const combat = api.getState?.()?.preferences?.combatSystem?.combat;
+  if (!combat || combat.state !== 'active' || !Array.isArray(combat.combatants) || !combat.combatants.length) return null;
+  const index = Math.max(0, Math.min(combat.combatants.length - 1, Number(combat.turnIndex) || 0));
+  return combat.combatants[index]?.tokenId == null ? null : String(combat.combatants[index].tokenId);
+}
+
 function applyStatusOperationToWorld(rawWorld, operation, context = {}) {
   const world = clone(rawWorld);
   const sceneIndex = activeSceneIndex(world);
@@ -203,50 +221,83 @@ export function createMovementTokenRuntimeSystem() {
         api.emit?.('token:move-cancelled', {
           id: tokenId,
           tokenId,
+          code: error?.code || 'movement_failed',
           reason: error?.message || String(error || 'movement cancelled'),
         });
       }
 
+      function inspectMovementAccess(tokenId, destination, { from = null } = {}) {
+        const token = api.tokens.get(tokenId);
+        const start = finitePoint(from) || tokenMapPoint(token);
+        const to = finitePoint(destination);
+        if (!token) return movementFailure('token_not_found', '找不到要移动的 Token');
+        if (!start) return movementFailure('token_not_on_map', 'Token 当前不在地图上');
+        if (!to) return movementFailure('invalid_destination', '移动终点无效');
+
+        const multiplayer = api.multiplayer?.getStatus?.() || null;
+        const role = multiplayer?.session?.role || multiplayer?.role || 'offline';
+        if (role !== 'gm' && role !== 'offline') {
+          if (api.multiplayer?.canControlToken?.(token.id) === false) {
+            return movementFailure('movement_permission_denied', '当前身份没有该 Token 的移动权限');
+          }
+          const activeTokenId = activeCombatTokenId(api);
+          if (activeTokenId && activeTokenId !== String(token.id)) {
+            return movementFailure('combat_turn_locked', '战斗中只能移动当前回合的 Token', { activeTokenId });
+          }
+        }
+
+        const capability = movementCapability(api, token);
+        if (capability.canMove === false) {
+          return movementFailure('status_movement_forbidden', capability.reasons?.[0] || '当前状态禁止 Token 移动');
+        }
+        return { valid: true, token, from: start, destination: to };
+      }
+
+      function inspectTokenMove(tokenId, destination, options = {}) {
+        const access = inspectMovementAccess(tokenId, destination, options);
+        if (!access.valid) return access;
+        const inspected = inspectDirectNavigationPath(navigation(access.token), access.from, access.destination);
+        return inspected?.valid === false
+          ? movementFailure('path_blocked', inspected.reason || '路径不可通行', inspected)
+          : clone({ code: 'ok', ...inspected, valid: true });
+      }
+
+      async function validateTokenMove(tokenId, destination, options = {}) {
+        const access = inspectMovementAccess(tokenId, destination, options);
+        if (!access.valid) return access;
+        const route = await findDirectNavigationPath(navigation(access.token), access.from, access.destination);
+        if (!route) {
+          const inspected = inspectTokenMove(tokenId, destination, options);
+          return inspected.valid ? movementFailure('path_blocked', '路径不可通行') : inspected;
+        }
+        return clone({ valid: true, code: 'ok', ...route });
+      }
+
       async function planTokenMove(tokenId, destination, arrival = null) {
+        const result = await validateTokenMove(tokenId, destination);
+        if (!result.valid) {
+          pendingPlan = null;
+          return null;
+        }
         const token = api.tokens.get(tokenId);
         const from = tokenMapPoint(token);
         const to = finitePoint(destination);
-        if (!token || !from || !to) {
-          pendingPlan = null;
-          return null;
-        }
-        const capability = movementCapability(api, token);
-        if (capability.canMove === false) {
-          pendingPlan = null;
-          return null;
-        }
-        const route = await findDirectNavigationPath(navigation(token), from, to);
-        if (!route) {
-          pendingPlan = null;
-          return null;
-        }
         pendingPlan = {
           tokenId: token.id,
           actorId: token.actorId,
           from,
-          destination: clone(route.destination || to),
-          route: clone(route),
+          destination: clone(result.destination || to),
+          route: clone(result),
           arrival: clone(arrival),
         };
-        return clone({ valid: true, ...route, arrival });
+        return clone({ ...result, arrival });
       }
 
       async function executePlan(plan) {
         const current = api.tokens.get(plan.tokenId);
         const from = tokenMapPoint(current);
-        if (!current || !from) throw new Error('Token 已不在地图上，请重新规划移动');
-        const capability = movementCapability(api, current);
-        if (capability.canMove === false) {
-          throw new Error(capability.reasons?.[0] || '当前状态禁止 Token 移动');
-        }
-
-        const route = await findDirectNavigationPath(navigation(current), from, plan.destination);
-        if (!route) throw new Error('执行时路径已不可通行');
+        const route = await validateTokenMove(plan.tokenId, plan.destination);
+        if (!route.valid) throw movementError(route);
 
         let world = api.world.get();
         let reason = 'token.move';
@@ -295,6 +346,26 @@ export function createMovementTokenRuntimeSystem() {
         return true;
       }
 
+      async function moveTokenTo(tokenId, destination, arrival = null) {
+        const result = await validateTokenMove(tokenId, destination);
+        if (!result.valid) return result;
+        const token = api.tokens.get(tokenId);
+        try {
+          await executePlan({
+            tokenId: token.id,
+            actorId: token.actorId,
+            from: tokenMapPoint(token),
+            destination: clone(result.destination || destination),
+            route: clone(result),
+            arrival: clone(arrival),
+          });
+          return clone({ ...result, committed: true });
+        } catch (error) {
+          emitCancelled(tokenId, error);
+          return movementFailure(error?.code || 'movement_failed', error?.message || 'Token 移动失败');
+        }
+      }
+
       function groupMemberPath(origin, leaderStart, leaderPoints) {
         return leaderPoints.map(point => ({
           x: origin.x + point.x - leaderStart.x,
@@ -307,9 +378,9 @@ export function createMovementTokenRuntimeSystem() {
           const token = api.tokens.get(member.tokenId);
           const current = tokenMapPoint(token);
           if (!token || !current || !samePoint(current, member.origin)) throw new Error('群组位置已变化，请重新规划移动');
-          const capability = movementCapability(api, token);
-          if (capability.canMove === false) throw new Error(capability.reasons?.[0] || `Token ${member.tokenId} 当前禁止移动`);
           const points = groupMemberPath(member.origin, plan.leaderStart, plan.leaderPoints);
+          const access = inspectMovementAccess(member.tokenId, points[1] || points[0], { from: current });
+          if (!access.valid) throw movementError(access);
           for (let index = 0; index < points.length - 1; index += 1) {
             if (!await findDirectNavigationPath(navigation(token), points[index], points[index + 1])) {
               throw new Error(`Token ${member.tokenId} 的第 ${index + 1} 段路径已不可通行`);
@@ -428,18 +499,13 @@ export function createMovementTokenRuntimeSystem() {
         return true;
       }
 
-      async function inspectTokenMove(tokenId, destination) {
-        const token = api.tokens.get(tokenId);
-        const from = tokenMapPoint(token);
-        const to = finitePoint(destination);
-        if (!token || !from || !to) return { valid: false, reason: 'Token 不在地图上' };
-        return inspectDirectNavigationPath(navigation(token), from, to);
-      }
-
       api.movement = Object.freeze({
         canonicalSceneTokens: true,
+        inspectMovementAccess,
+        validateTokenMove,
         planTokenMove,
         commitTokenMove,
+        moveTokenTo,
         planTokenGroupMove,
         commitTokenGroupMove,
         inspectTokenMove,

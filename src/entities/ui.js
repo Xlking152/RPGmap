@@ -31,7 +31,7 @@ function installStyles(documentNode) {
   style.id = STYLE_ID;
   style.textContent = `
     [data-tool="marker"], [data-tool="marker-select"], [data-action="clear-markers"],
-    [data-tab="markers"], [data-panel="markers"] { display: none !important; }
+    [data-tab="markers"] { display: none !important; }
     .entity-toolbar-button { white-space: nowrap; }
     .entity-panel { display: grid; gap: 10px; }
     .entity-panel-head { display:flex; gap:7px; flex-wrap:wrap; align-items:center; }
@@ -69,6 +69,10 @@ function installStyles(documentNode) {
     .entity-stat strong { font-size:16px; }
     .entity-stat small { grid-column:1/-1; color:#758082; }
     .entity-stat input { width:66px; }
+    .entity-detection-ranges,.entity-detection-senses { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .entity-detection-range { display:grid; grid-template-columns:auto 76px; gap:3px 8px; align-items:center; }
+    .entity-detection-range small { grid-column:1/-1; color:#758082; }
+    .entity-detection-sense { display:inline-flex; gap:5px; align-items:center; padding:5px 7px; border:1px solid #d8dfdc; border-radius:7px; }
     .entity-check-table { width:100%; border-collapse:collapse; font-size:12px; }
     .entity-check-table th,.entity-check-table td { padding:7px 6px; border-bottom:1px solid #e0e5e2; text-align:left; vertical-align:top; }
     .entity-check-table th { color:#607073; font-size:11px; }
@@ -139,6 +143,11 @@ function renderSheetSection(section) {
   if (section.type === 'stats') {
     const items = (section.items || []).map(item => `<div class="entity-stat"><span>${escapeHtml(item.label || item.id)}</span><strong>${escapeHtml(item.value)}</strong><small>${escapeHtml(item.detail || '')}</small><label>临时 <input type="number" step="1" value="${escapeHtml(item.adjustment || 0)}"${operationData(item.operation)}></label></div>`).join('');
     return `<section class="entity-section" data-sheet-section-id="${escapeHtml(section.id || '')}">${title}<div class="entity-grid">${items || '<div class="entity-empty">暂无数据。</div>'}</div>${help}</section>`;
+  }
+  if (section.type === 'detection') {
+    const ranges = (section.ranges || []).map(item => `<label class="entity-detection-range"><span>${escapeHtml(item.label)}</span><input type="number" min="0" step="1" value="${escapeHtml(item.value)}"${operationData(item.operation)}><small>形态基础 ${escapeHtml(item.base)} m</small></label>`).join('');
+    const senses = (section.senses || []).map(item => `<label class="entity-detection-sense"><input type="checkbox"${item.value ? ' checked' : ''}${operationData(item.operation)}> ${escapeHtml(item.label)}<small>基础 ${item.base ? '是' : '否'}</small></label>`).join('');
+    return `<section class="entity-section" data-sheet-section-id="${escapeHtml(section.id || '')}">${title}<div class="entity-detection-ranges">${ranges}</div><div class="entity-detection-senses">${senses}</div>${help}</section>`;
   }
   if (section.type === 'table') {
     const columns = (section.columns || []).map(column => `<th>${escapeHtml(column)}</th>`).join('');
@@ -333,7 +342,7 @@ export function createEntityUiTool(options = {}) {
       function renderPanel() {
         if (!panel) return;
         renderingPanel = true;
-        const actors = entityState().actors;
+        const actors = entityState().actors.filter(actor => String(actor.type || 'pc') === 'pc');
         const canManageStructure = capabilities().canManageStructure;
         const legacyMarkerCount = Array.isArray(api.getState().markers) ? api.getState().markers.length : 0;
         importButton.hidden = !canManageStructure || !rulesetCapabilities.canImportXlsx;
@@ -359,7 +368,7 @@ export function createEntityUiTool(options = {}) {
                 <div class="entity-card-status">${renderStatusStrip([...statusSnapshot.actorStatuses, ...statusSnapshot.derivedStatuses], { limit: 4, emptyText: '无状态' })}</div>
                 <div class="entity-card-actions">
                   ${actor.audienceRestricted ? '' : `<button type="button" class="small-button" data-entity-action="open" data-id="${escapeHtml(actor.id)}">角色卡</button>`}
-                  ${canPlaceActor ? `<button type="button" class="small-button" data-entity-action="place" data-id="${escapeHtml(actor.id)}">放置 Token</button>` : ''}
+                  ${canPlaceActor ? `<label><input type="checkbox" data-entity-share checked> 共享角色数据</label><button type="button" class="small-button" data-entity-action="place" data-id="${escapeHtml(actor.id)}">放置 Token</button>` : ''}
                   ${canManageStructure && sheetCapabilities.hasVariants && sheetCapabilities.canImportXlsx ? `<button type="button" class="small-button" data-entity-action="add-form" data-id="${escapeHtml(actor.id)}">导入新形态</button>` : ''}${canManageStructure ? `<button type="button" class="small-button danger" data-entity-action="delete" data-id="${escapeHtml(actor.id)}">删除角色</button>` : ''}
                   ${!canEditActor ? '<small>只读</small>' : ''}
                 </div>
@@ -459,7 +468,7 @@ export function createEntityUiTool(options = {}) {
           openSheet(token.actorId, tab, token.id);
           return true;
         },
-        placeActor(actorId) { tokenController.beginPlacement(actorId); },
+        placeActor(actorId, options = {}) { tokenController.beginPlacement(actorId, options); },
         closeSheet,
       };
 
@@ -542,7 +551,10 @@ export function createEntityUiTool(options = {}) {
           if (!await persistActorAndRender(actor, { source: 'entities:actor.create' })) return;
           openSheet(actor.id);
         } else if (action === 'open') openSheet(id);
-        else if (action === 'place') tokenController.beginPlacement(id);
+        else if (action === 'place') {
+          const shared = button.closest('[data-actor-id]')?.querySelector('[data-entity-share]')?.checked !== false;
+          tokenController.beginPlacement(id, { actorLink: shared });
+        }
         else if (action === 'add-form') chooseImport(id);
         else if (action === 'delete') tokenController.removeActor(id).catch(error => {
           console.error('[RPGmap Entity UI] Actor delete failed', error);
@@ -657,7 +669,7 @@ export function createEntityUiTool(options = {}) {
           if (!requireRuntimeEdit(actor)) { renderSheet(); return; }
           const operation = decodeData(event.target.dataset.actorOperation);
           if (!operation) return;
-          operation.value = event.target.value;
+          operation.value = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
           await performCanonicalRuntimeOperation(operation, { source: 'entities:actor.operation' });
         }
       });

@@ -35,9 +35,9 @@ test('application chrome keeps the restrained neutral, river and brick palette',
   assert.match(styles, /\.section \{[\s\S]*?border-bottom: 1px solid var\(--line\);/);
   assert.doesNotMatch(styles, /linear-gradient/i);
   assert.equal(packageJson.dependencies.lucide, '1.30.0');
-  assert.equal(packageJson.version, '2.2.0');
-  assert.match(indexSource, /application-version" content="2\.2\.0"/);
-  assert.match(indexSource, /RPGmap 2\.2\.0/);
+  assert.equal(packageJson.version, '2.2.1');
+  assert.match(indexSource, /application-version" content="2\.2\.1"/);
+  assert.match(indexSource, /RPGmap 2\.2\.1/);
 });
 
 test('production registry splits the built-in map and large vendors without suppressing chunk warnings', () => {
@@ -67,8 +67,9 @@ test('modern shell owns Actor/current panels and Token-first tools without legac
 
 test('Token placement owns the map click directly through the canonical Entity controller', () => {
   assert.match(entityUiSource, /mapElement\.addEventListener\('click', tokenController\.handleMapClick, true\)/);
-  assert.match(entityUiSource, /tokenController\.beginPlacement\(id\)/);
-  assert.match(tokenControllerSource, /createActorTokenAtPoint\(api, actorId, point\)/);
+  assert.match(entityUiSource, /tokenController\.beginPlacement\(id, \{ actorLink: shared \}\)/);
+  assert.match(tokenControllerSource, /createActorTokenAtPoint\(api, actorId, point, pendingPlacementOptions\)/);
+  assert.match(entityUiSource, /data-entity-share checked/);
   assert.match(tokenControllerSource, /relocateActorTokenAtPoint\(api, target, point\)/);
   assert.doesNotMatch(entityUiSource, /api\.placeCharacter|placePendingTokenAtMapClick|api\.setTool\('character-place'\)/);
   assert.doesNotMatch(tokenControllerSource, /api\.placeCharacter|api\.repositionCharacter|character:create|character:move|state\.characters/);

@@ -87,10 +87,11 @@ export function resolveHealth(runtime, { max = 0 } = {}) {
   const mode = runtime?.mode === HEALTH_MODE_WOUND_TRACK ? HEALTH_MODE_WOUND_TRACK : HEALTH_MODE_SIMPLE;
   if (mode === HEALTH_MODE_SIMPLE) {
     const current = clamp(nonNegativeInt(runtime?.current, limit), 0, limit);
+    const depleted = limit > 0 && current <= 0;
     return {
       mode, max: limit, current, healthy: current, bashing: 0, lethal: 0, aggravated: 0,
-      status: current > 0 ? 'normal' : 'depleted', deteriorating: false,
-      dead: current <= 0, unconscious: current <= 0,
+      status: depleted ? 'depleted' : 'normal', deteriorating: false,
+      dead: depleted, unconscious: depleted,
     };
   }
   const wounds = normalizeWounds(runtime?.wounds, limit);
@@ -227,7 +228,10 @@ function injuryStateLabel(state) {
 
 function healthStatusLabel(state) {
   if (!state) return '未知';
-  if (state.mode === HEALTH_MODE_SIMPLE) return state.current > 0 ? '正常' : '生命耗尽';
+  if (state.mode === HEALTH_MODE_SIMPLE) {
+    if (state.max <= 0) return '未配置';
+    return state.current > 0 ? '正常' : '生命耗尽';
+  }
   if (state.dead) return '死亡';
   const injury = injuryStateLabel(state);
   if (state.unconscious) return `${injury} · 昏迷${state.deteriorating ? ' · 伤势恶化' : ''}`;

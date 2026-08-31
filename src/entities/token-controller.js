@@ -1,6 +1,7 @@
 import { latLngToWorld } from '../engine/geometry.js';
 import { TOKEN_DIAMETERS_METERS } from '../elevation/model.js';
 import { createActorTokenAtPoint, relocateActorTokenAtPoint } from '../token/placement.js';
+import { nextTokenInstanceName } from '../token/naming.js';
 import {
   normalizeTokenRotation,
   setTokenDiameterMeters,
@@ -66,6 +67,7 @@ export function createEntityTokenController({
   }
 
   let pendingActorId = null;
+  let pendingPlacementOptions = {};
   let pendingRelocationTokenId = null;
   let placementBusy = false;
   let propertyBusy = false;
@@ -100,6 +102,7 @@ export function createEntityTokenController({
   function clearPlacement({ message = '', restoreTool = true } = {}) {
     const hadPending = Boolean(pendingActorId || pendingRelocationTokenId);
     pendingActorId = null;
+    pendingPlacementOptions = {};
     pendingRelocationTokenId = null;
     placementBusy = false;
     documentNode.querySelector?.('.entity-placement-hud')?.remove();
@@ -108,7 +111,7 @@ export function createEntityTokenController({
     return hadPending;
   }
 
-  function beginPlacement(actorId) {
+  function beginPlacement(actorId, options = {}) {
     const target = id(actorId);
     const actor = store.actor(target);
     if (!actor) return false;
@@ -117,10 +120,15 @@ export function createEntityTokenController({
       return false;
     }
     pendingActorId = target;
+    pendingPlacementOptions = {
+      actorLink: actor.type === 'pc' ? options.actorLink !== false : false,
+      name: String(options.name || nextTokenInstanceName(tokens(), actor)).trim().slice(0, 80)
+        || nextTokenInstanceName(tokens(), actor),
+    };
     pendingRelocationTokenId = null;
     closeSheet();
-    renderHud(`放置 Token：点击地图放置“${actor.name || '角色'}”`);
-    setStatus(`放置 Token：请在地图上点击“${actor.name || '角色'}”的位置`);
+    renderHud(`放置 Token：${pendingPlacementOptions.name} · ${pendingPlacementOptions.actorLink ? '共享角色数据' : '独立实例'}`);
+    setStatus(`放置 Token：请在地图上点击“${pendingPlacementOptions.name}”的位置`);
     return true;
   }
 
@@ -195,7 +203,7 @@ export function createEntityTokenController({
         clearPlacement({ message: '当前没有该 Actor 的 Token 放置权限' });
         return true;
       }
-      const result = await createActorTokenAtPoint(api, actorId, point);
+      const result = await createActorTokenAtPoint(api, actorId, point, pendingPlacementOptions);
       if (!result.ok || !result.token) {
         setStatus('该位置不可放置 Token；请选择地图中的可通行位置，或点击取消');
         return true;

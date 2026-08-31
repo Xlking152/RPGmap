@@ -60,6 +60,15 @@ test('simple hp remains available as a generic mode', () => {
   assert.equal(state.current, 7);
 });
 
+test('simple hp with an unconfigured zero maximum is not depleted', () => {
+  const state = resolveHealth(createHealthRuntime({ mode: HEALTH_MODE_SIMPLE, max: 0 }), { max: 0 });
+  assert.equal(state.current, 0);
+  assert.equal(state.max, 0);
+  assert.equal(state.status, 'normal');
+  assert.equal(state.dead, false);
+  assert.equal(state.unconscious, false);
+});
+
 test('injury state uses B-equivalent weighting from the rulebook', () => {
   let runtime = createHealthRuntime({ mode: HEALTH_MODE_WOUND_TRACK, max: 10, simpleCurrent: 10 });
   runtime = applyWoundDamage(runtime, { amount: 2, type: 'L' }, { max: 10 }).runtime;

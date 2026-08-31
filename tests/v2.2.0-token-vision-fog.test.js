@@ -296,6 +296,47 @@ test('Audience projection removes hostile private data and invisible or GM-only 
   assert.ok(gm.preferences.worldV2.actors.find(item => item.id === hostile.id).system.forms.length);
 });
 
+test('vague detection projects only an anonymous quantized outline without canonical references', () => {
+  const scout = actor({ id: 'pc-vague-scout', type: 'pc', partyId: 'party-a' });
+  scout.system.forms[0].detection = {
+    configured: true, preciseRangeMeters: 20, vagueRangeMeters: 100,
+    senses: { trueSight: false, xrayVision: false, spiritSight: false, lowLightVision: false, darkvision: false },
+  };
+  const hostile = actor({ id: 'npc-vague-hostile', name: 'Secret Horror', type: 'npc', partyId: 'party-b' });
+  const current = state({
+    actors: [scout, hostile],
+    tokens: [
+      token({ id: 'vague-scout-token', actorId: scout.id, x: 10, y: 10 }),
+      token({ id: 'canonical-hostile-token', actorId: hostile.id, actorLink: false, x: 53, y: 12,
+        actorDelta: infiniteHorrorRuleset.actor.instances.createDelta(hostile), visibility: { mode: 'public', userIds: [] } }),
+    ],
+  });
+  current.preferences.combatSystem = { combat: {
+    state: 'active', turnIndex: 0, combatants: [{ tokenId: 'canonical-hostile-token', actorId: hostile.id }],
+  } };
+  current.preferences.chatSystem = { messages: [{ id: 'secret-chat', data: { tokenId: 'canonical-hostile-token' }, text: 'leak' }] };
+  current.preferences.worldV2.scenes[0].attackAreas = [{ id: 'secret-area', anchor: { type: 'token', tokenId: 'canonical-hostile-token' } }];
+  const projected = projectStateForAudience(current, {
+    role: 'player', userId: 'player-a',
+    user: { id: 'player-a', ownership: { [scout.id]: 'owner' } },
+    visionSourceTokenId: 'vague-scout-token', ruleset: infiniteHorrorRuleset,
+    mapMetrics: { metersPerUnit: 1 },
+  });
+  const projectedWorld = projected.preferences.worldV2;
+  const outline = projectedWorld.scenes[0].tokens.find(item => item.audienceVisibility === 'vague');
+  assert.ok(outline);
+  assert.notEqual(outline.id, 'canonical-hostile-token');
+  assert.notEqual(outline.actorId, hostile.id);
+  assert.equal(outline.showName, false);
+  assert.equal(outline.texture.src, null);
+  assert.equal(outline.x % 5, 0);
+  assert.equal(projectedWorld.actors.some(item => item.id === hostile.id), false);
+  assert.equal(projectedWorld.actors.find(item => item.id === outline.actorId).name, '模糊轮廓');
+  assert.equal(projected.preferences.combatSystem.combat, null);
+  assert.deepEqual(projected.preferences.chatSystem.messages, []);
+  assert.deepEqual(projectedWorld.scenes[0].attackAreas, []);
+});
+
 test('controlling one NPC does not grant visibility to its entire hostile party', () => {
   const controlled = actor({ id: 'npc-controlled', type: 'npc', partyId: 'hostile-party' });
   const sibling = actor({ id: 'npc-sibling', type: 'npc', partyId: 'hostile-party' });

@@ -62,6 +62,7 @@ export function createMovementControllerV3({ settings } = {}) {
       let groupMembers = [];
       let blockedMemberId = null;
       let moving = false;
+      let keyboardMoving = false;
       let routeRequest = 0;
       let routeTimer = null;
       let pendingPoint = null;
@@ -249,7 +250,8 @@ export function createMovementControllerV3({ settings } = {}) {
               : ' · Ctrl/Cmd+点击或 F 添加拐点';
           status(`${groupLabel()}直线路线 ${formatDistance(Number(route.distance) || 0)} · 吸附 ${settings.step} m · ${drag.session.waypoints.length} 个拐点${action}`);
         } else {
-          status(`${groupLabel()}路径受阻${blockedMemberId ? ` · ${blockedMemberId}` : ''} · Ctrl/Cmd+点击添加可通行拐点，右键或 Alt+F 撤销`);
+          const reason = route.inspection?.reason || '路径不可通行';
+          status(`${groupLabel()}移动不可用${blockedMemberId ? ` · ${blockedMemberId}` : ''}：${reason} · Ctrl/Cmd+点击添加拐点，右键或 Alt+F 撤销`);
         }
         showControls(drag.phase === TokenDragPhase.READY && route.valid);
         return route;
@@ -287,7 +289,7 @@ export function createMovementControllerV3({ settings } = {}) {
         drag.setRoute(route);
         draw(route);
         showControls(false);
-        status(`${groupLabel()}拐点路径受阻 · 请换一个位置，或右键 / Alt+F 撤销上一个拐点`);
+        status(`${groupLabel()}拐点不可用：${route.inspection?.reason || '路径不可通行'} · 请换一个位置，或右键 / Alt+F 撤销上一个拐点`);
       }
 
       async function addWaypointAt(rawPoint) {
@@ -574,17 +576,52 @@ export function createMovementControllerV3({ settings } = {}) {
       }
 
       async function keydown(event) {
-        if (!drag.active || moving) return;
-        if (event.defaultPrevented || event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
-        if (event.key === 'Escape') {
-          event.preventDefault(); event.stopImmediatePropagation(); reset('已取消 Token 移动规划'); return;
+        const editable = 'input,textarea,select,[contenteditable="true"],.entity-sheet,.actor-sheet,[data-actor-sheet]';
+        const focusTarget = event.target?.closest?.(editable) || documentNode.activeElement?.closest?.(editable);
+        if (event.defaultPrevented || focusTarget) return;
+        if (drag.active) {
+          if (moving) return;
+          if (event.key === 'Escape') {
+            event.preventDefault(); event.stopImmediatePropagation(); reset('已取消 Token 移动规划'); return;
+          }
+          if (event.key === 'Enter' && drag.phase === TokenDragPhase.READY) {
+            event.preventDefault(); event.stopImmediatePropagation(); await commit(); return;
+          }
+          if (event.key.toLowerCase() === 'f') {
+            event.preventDefault(); event.stopImmediatePropagation();
+            if (event.altKey) await removeWaypoint(); else await addWaypointAtCurrent();
+          }
+          return;
         }
-        if (event.key === 'Enter' && drag.phase === TokenDragPhase.READY) {
-          event.preventDefault(); event.stopImmediatePropagation(); await commit(); return;
+
+        if (moving || keyboardMoving || event.ctrlKey || event.altKey || event.metaKey) return;
+        const direction = {
+          w: { x: 0, y: -1 },
+          a: { x: -1, y: 0 },
+          s: { x: 0, y: 1 },
+          d: { x: 1, y: 0 },
+        }[event.key.toLowerCase()];
+        if (!direction) return;
+        const current = mapToken(api.selection.getPrimaryTokenId?.() || selectedTokenId);
+        if (!current) {
+          status('请先选择一个位于地图上的 Token');
+          return;
         }
-        if (event.key.toLowerCase() === 'f') {
-          event.preventDefault(); event.stopImmediatePropagation();
-          if (event.altKey) await removeWaypoint(); else await addWaypointAtCurrent();
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const destination = {
+          x: Math.max(0, Math.min(api.mapPackage.width, Number(current.x) + direction.x * settings.step)),
+          y: Math.max(0, Math.min(api.mapPackage.height, Number(current.y) + direction.y * settings.step)),
+        };
+        keyboardMoving = true;
+        status(`WASD 移动 ${settings.step} m…`);
+        try {
+          const result = await api.movement.moveTokenTo(current.id, destination);
+          status(result?.valid
+            ? `Token 已移动 ${formatDistance(Number(result.distance) || settings.step)}`
+            : `移动失败：${result?.reason || '当前位置不可通行'}`);
+        } finally {
+          keyboardMoving = false;
         }
       }
 
