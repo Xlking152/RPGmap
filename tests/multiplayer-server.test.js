@@ -1335,13 +1335,17 @@ test('LAN shares explored fog by party while keeping realtime vision per session
       .fog.exploredByParty['party-a'].rows).length >= Object.keys(sharedRows).length);
 
     const concurrentCommitA = waitForMessage(playerA.ws, message =>
-      message.type === 'world.operation.committed' && message.operationId === 'fog-concurrent-a');
-    const concurrentAckA = waitForMessage(playerA.ws, message =>
-      message.type === 'world.operation.ack' && message.operationId === 'fog-concurrent-a');
+      message.type === 'world.operation.committed'
+      && ['fog-concurrent-a', 'fog-concurrent-b'].includes(message.operationId));
+    const concurrentResultA = waitForMessage(playerA.ws, message =>
+      ['world.operation.ack', 'world.operation.denied'].includes(message.type)
+      && message.operationId === 'fog-concurrent-a');
     const concurrentCommitB = waitForMessage(playerB.ws, message =>
-      message.type === 'world.operation.committed' && message.operationId === 'fog-concurrent-a');
-    const concurrentDeniedB = waitForMessage(playerB.ws, message =>
-      message.type === 'world.operation.denied' && message.operationId === 'fog-concurrent-b');
+      message.type === 'world.operation.committed'
+      && ['fog-concurrent-a', 'fog-concurrent-b'].includes(message.operationId));
+    const concurrentResultB = waitForMessage(playerB.ws, message =>
+      ['world.operation.ack', 'world.operation.denied'].includes(message.type)
+      && message.operationId === 'fog-concurrent-b');
     playerA.ws.send(JSON.stringify({
       type: 'world.operation', operationId: 'fog-concurrent-a', baseRevision: 3,
       operations: [{ type: 'token.move', payload: {
@@ -1354,16 +1358,26 @@ test('LAN shares explored fog by party while keeping realtime vision per session
         sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 5, y: 10,
       } }],
     }));
-    const [commitA, ackA, commitB, deniedB] = await Promise.all([
-      concurrentCommitA, concurrentAckA, concurrentCommitB, concurrentDeniedB,
+    const [commitA, resultA, commitB, resultB] = await Promise.all([
+      concurrentCommitA, concurrentResultA, concurrentCommitB, concurrentResultB,
     ]);
+    const results = [resultA, resultB];
+    const acknowledged = results.find(message => message.type === 'world.operation.ack');
+    const denied = results.find(message => message.type === 'world.operation.denied');
+    assert.ok(acknowledged);
+    assert.ok(denied);
+    assert.notEqual(acknowledged.operationId, denied.operationId);
     assert.equal(commitA.revision, 4);
-    assert.equal(ackA.revision, 4);
     assert.equal(commitB.revision, 4);
+    assert.equal(commitA.operationId, acknowledged.operationId);
+    assert.equal(commitB.operationId, acknowledged.operationId);
+    assert.equal(acknowledged.revision, 4);
+    assert.equal(denied.revision, 4);
     assert.ok(commitB.patch.world.scenes.fog.length > 0);
-    assert.equal(deniedB.code, 'revision_conflict');
-    assert.equal(deniedB.revision, 4);
-    assert.equal(deniedB.state.preferences.audienceVision.source, null);
+    assert.equal(denied.code, 'revision_conflict');
+    const deniedVisionSource = denied.state.preferences.audienceVision.source;
+    if (denied.operationId === 'fog-concurrent-a') assert.equal(deniedVisionSource.tokenId, 'token-a');
+    else assert.equal(deniedVisionSource, null);
 
     playerA.ws.close();
     playerB.ws.close();
