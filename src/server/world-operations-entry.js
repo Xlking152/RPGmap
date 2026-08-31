@@ -1,4 +1,4 @@
-import { BUILT_IN_LANZHOU_MAP } from '../map-package/constants.js';
+import { BUILT_IN_LANZHOU_MAP, BUILT_IN_LANZHOU_MAP_BOUNDS } from '../map-package/constants.js';
 import { applyWorldOperations as applyCoreWorldOperations } from '../world/operations.js';
 
 export * from '../world/operations.js';
@@ -28,8 +28,8 @@ function trustedMetricsForScene(scene) {
   // built-in fallback so old Lanzhou saves immediately gain exact bounds after
   // upgrading, without requiring the client to rewrite the Scene first.
   if ((!width || !height) && String(ref.id ?? ref.mapId ?? '') === BUILT_IN_LANZHOU_MAP.id) {
-    width = BUILT_IN_LANZHOU_MAP.width;
-    height = BUILT_IN_LANZHOU_MAP.height;
+    width = BUILT_IN_LANZHOU_MAP_BOUNDS.width;
+    height = BUILT_IN_LANZHOU_MAP_BOUNDS.height;
   }
 
   return width && height ? { metersPerUnit: 1, width, height } : null;
