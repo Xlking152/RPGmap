@@ -108,8 +108,10 @@ export function createMultiplayerController() {
       let joining = false;
       let applyingRemote = false;
       let revision = 0;
+      let audienceRevision = 0;
+      let pendingVisionSource = null;
       let session = null;
-      let permissions = { worldWrite: false, worldReset: false, manageAccess: false, combatManage: false, actorOwnerIds: [], actorObserverIds: [], defaultActorId: null };
+      let permissions = { worldWrite: false, worldReset: false, manageAccess: false, combatManage: false, actorOwnerIds: [], actorObserverIds: [], defaultActorId: null, placementGrants: { actorTypes: [], actorIds: [], markerKinds: [] } };
       let clients = [];
       let access = { users: [], pending: [], actors: [], canManage: false, selfUserId: null };
       let inFlight = false;
@@ -241,6 +243,25 @@ export function createMultiplayerController() {
         }).join('')}</div>`;
       }
 
+      function placementGrantRows(user) {
+        const grants = user.placementGrants || {};
+        const actorTypeOptions = [
+          ['pc', 'PC'], ['npc', 'NPC / 怪物'], ['summon', '召唤物'], ['other', '其他 Actor'],
+        ];
+        const markerOptions = [
+          ['trap', '陷阱'], ['target', '目标点'], ['area', '区域'], ['note', '注释'],
+        ];
+        const checks = (values, key, options) => options.map(([value, label]) =>
+          `<label><input type="checkbox" data-mp-placement-grant="${key}" value="${escapeHtml(value)}" ${(values || []).includes(value) ? 'checked' : ''}>${escapeHtml(label)}</label>`).join('');
+        const actorIds = access.actors.map(actor =>
+          `<label><input type="checkbox" data-mp-placement-grant="actorIds" value="${escapeHtml(actor.id)}" ${(grants.actorIds || []).includes(actor.id) ? 'checked' : ''}>${escapeHtml(actor.name)}</label>`).join('');
+        return `<div class="multiplayer-section"><h3>放置授权</h3>
+          <div class="multiplayer-muted">Actor 类型</div><div class="multiplayer-presence">${checks(grants.actorTypes, 'actorTypes', actorTypeOptions)}</div>
+          <div class="multiplayer-muted">指定模板</div><div class="multiplayer-presence">${actorIds || '无 Actor 模板'}</div>
+          <div class="multiplayer-muted">其他指示物</div><div class="multiplayer-presence">${checks(grants.markerKinds, 'markerKinds', markerOptions)}</div>
+        </div>`;
+      }
+
       function defaultActorOptions(selected, ownerOnly = false, ownership = {}) {
         const actors = ownerOnly ? access.actors.filter(actor => ownership?.[actor.id] === 'owner') : access.actors;
         return `<option value="">未分配</option>${actors.map(actor => `<option value="${escapeHtml(actor.id)}" ${String(selected || '') === String(actor.id) ? 'selected' : ''}>${escapeHtml(actor.name)}</option>`).join('')}`;
@@ -262,6 +283,7 @@ export function createMultiplayerController() {
               <label class="multiplayer-field">默认角色<select name="defaultActorId">${defaultActorOptions(user.defaultActorId)}</select></label>
             </div>
             ${ownershipRows(user)}
+            ${placementGrantRows(user)}
             <div class="multiplayer-actions"><button type="button" class="multiplayer-mini-button" data-mp-reset-key="${escapeHtml(user.id)}">重发 Player Key</button><button type="button" class="multiplayer-mini-button danger" data-mp-delete-user="${escapeHtml(user.id)}">删除 User</button><button type="submit" class="multiplayer-mini-button primary">保存权限</button></div>
           </form>`;
         }).join('');
@@ -364,19 +386,36 @@ export function createMultiplayerController() {
         if (!connected) return {
           connected: false, role: 'offline', canManageWorld: true, canManageStructure: true,
           canImportActors: true, canClearChat: true, canEditActor: () => true,
-          canPlaceActor: () => true, canManageStatuses: true,
+          canPlaceActor: () => true, canPlaceMarker: () => true, canManageStatuses: true,
+          canManageStatusDefinitions: true, canControlToken: () => true,
         };
         const gm = session?.role === 'gm';
+        const activePlayer = !gm && session?.identityStatus === 'active';
         return {
           connected: true,
-          role: gm ? 'gm' : session?.identityStatus === 'active' ? 'player' : 'observer',
+          role: gm ? 'gm' : activePlayer ? 'player' : 'observer',
           canManageWorld: gm,
           canManageStructure: gm,
           canImportActors: gm,
           canClearChat: gm,
-          canManageStatuses: gm,
+          canManageStatuses: gm || activePlayer,
+          canManageStatusDefinitions: gm,
           canEditActor: actorId => gm || canControlActor({ actorId, state: api.getState(), permissions }),
-          canPlaceActor: () => gm,
+          canControlToken: tokenId => {
+            if (gm) return true;
+            const token = api.tokens?.get?.(tokenId);
+            if (!token) return false;
+            if ((token.controllerUserIds || []).map(String).includes(String(session?.userId || ''))) return true;
+            const actor = api.world?.get?.()?.actors?.find(item => String(item?.id) === String(token.actorId));
+            return actor?.type === 'pc' && canControlActor({ actorId: actor.id, state: api.getState(), permissions });
+          },
+          canPlaceActor: actorId => {
+            if (gm) return true;
+            const grants = permissions.placementGrants || {};
+            const actor = api.world?.get?.()?.actors?.find(item => String(item?.id) === String(actorId));
+            return Boolean(grants.actorIds?.includes(String(actorId)) || grants.actorTypes?.includes(String(actor?.type || '')));
+          },
+          canPlaceMarker: kind => gm || permissions.placementGrants?.markerKinds?.includes(String(kind)),
         };
       }
       function publishCapabilities() { api.emit?.('multiplayer:capabilities', getCapabilities()); }
@@ -434,6 +473,11 @@ export function createMultiplayerController() {
       function performWorldOperation(state, { reason = 'atomic-world' } = {}) {
         if (!connected) return Promise.reject(new Error('当前未连接局域网服务器'));
         if (!permissions.worldWrite) return Promise.reject(new Error('当前身份没有 World 写入权限'));
+        if (lastServerState && !/^(?:file-import:|backup-restore:|recovery:)/.test(String(reason || ''))) {
+          const error = new Error('完整 World 只允许用于显式导入或恢复');
+          error.code = 'world_replace_explicit_only';
+          return Promise.reject(error);
+        }
         if (isWorldOperationChannelBusy({
           applyingRemote,
           remoteApplyPending,
@@ -557,6 +601,31 @@ export function createMultiplayerController() {
         });
       }
 
+      function setVisionSource(tokenId = null) {
+        if (!connected) return Promise.reject(new Error('Not connected to the Local/LAN server'));
+        if (pendingVisionSource) {
+          const error = new Error('Another vision source request is pending');
+          error.code = 'vision_source_busy';
+          return Promise.reject(error);
+        }
+        const value = tokenId == null ? null : String(tokenId);
+        return new Promise((resolve, reject) => {
+          pendingVisionSource = { tokenId: value, resolve, reject };
+          if (!send({ type: 'vision.source.set', tokenId: value })) {
+            pendingVisionSource = null;
+            reject(new Error('Unable to send vision source request'));
+          }
+        });
+      }
+
+      function rejectVisionSource(message = 'Vision source request was interrupted') {
+        if (!pendingVisionSource) return;
+        const error = new Error(message);
+        error.code = 'vision_source_interrupted';
+        pendingVisionSource.reject(error);
+        pendingVisionSource = null;
+      }
+
       function performStateOperation(state, { reason = 'state-operation' } = {}) {
         if (!connected) return Promise.reject(new Error('当前未连接局域网服务器'));
         const before = api.exportState();
@@ -670,23 +739,11 @@ export function createMultiplayerController() {
         pendingPush = false;
         inFlight = true;
         activeWorldOperationId = operationId('world');
-        if (!send({ type: 'world.push', operationId: activeWorldOperationId, baseRevision: revision, state: nextState, reason: 'client-state' })) {
+        if (!send({ type: 'world.push', operationId: activeWorldOperationId, baseRevision: revision, state: nextState, reason: 'bootstrap-init' })) {
           inFlight = false;
           pendingPush = true;
           activeWorldOperationId = null;
         }
-      }
-
-      function queuePush() {
-        if (!connected || applyingRemote || !permissions.worldWrite) return;
-        pendingPush = true;
-        queueMicrotask(flushPush);
-      }
-
-      function pushCommittedWorld() {
-        if (!connected || applyingRemote || !permissions.worldWrite) return;
-        pendingPush = true;
-        flushPush();
       }
 
       function flushPendingNetworkWork() {
@@ -722,6 +779,7 @@ export function createMultiplayerController() {
           permissions = message.permissions || permissions;
           publishCapabilities();
           revision = Number(message.world?.revision) || 0;
+          audienceRevision = Math.max(0, Number(message.audienceRevision) || 0);
           renderButton();
           save('role', session?.role || 'player');
           if (session?.identityStatus === 'pending') {
@@ -762,6 +820,33 @@ export function createMultiplayerController() {
             selfUserId: message.selfUserId || null,
           };
           if (!overlay.hidden && connected) renderDashboard();
+          return;
+        }
+
+        if (message.type === 'vision.source.ack') {
+          audienceRevision = Math.max(audienceRevision, Number(message.audienceRevision) || 0);
+          const source = message.tokenId == null ? '' : String(message.tokenId);
+          save('visionSourceTokenId', source);
+          if (pendingVisionSource) pendingVisionSource.resolve({ tokenId: source || null, revision: Number(message.revision) || revision });
+          pendingVisionSource = null;
+          api.emit?.('vision:source-change', { tokenId: source || null });
+          return;
+        }
+
+        if (message.type === 'vision.source.denied') {
+          const error = new Error(message.message || 'Vision source rejected');
+          error.code = message.code || 'vision_source_denied';
+          if (pendingVisionSource) pendingVisionSource.reject(error);
+          pendingVisionSource = null;
+          return;
+        }
+
+        if (message.type === 'audience.snapshot') {
+          const incomingAudienceRevision = Number(message.audienceRevision);
+          if (!Number.isSafeInteger(incomingAudienceRevision) || incomingAudienceRevision <= audienceRevision) return;
+          audienceRevision = incomingAudienceRevision;
+          applyRemoteState(message.state, Number(message.revision) || revision, message.reason || 'audience.snapshot')
+            .then(flushPendingNetworkWork);
           return;
         }
 
@@ -1043,6 +1128,7 @@ export function createMultiplayerController() {
         }
         connected = false;
         joining = true;
+        rejectVisionSource('Reconnecting to the Local/LAN server');
         session = null;
         inFlight = false;
         pendingPush = false;
@@ -1072,6 +1158,7 @@ export function createMultiplayerController() {
             userId: isPlayer ? saved('userId', '') : '',
             authToken: isPlayer ? saved('authToken', '') : '',
             claimCode: isPlayer ? submittedPlayerKey : '',
+            visionSourceTokenId: saved('visionSourceTokenId', ''),
           });
         });
         ws.addEventListener('message', event => { if (socket === ws) handleMessage(event); });
@@ -1088,6 +1175,7 @@ export function createMultiplayerController() {
           session = null;
           inFlight = false;
           pendingPush = false;
+          rejectVisionSource('Local/LAN connection closed');
           deferredChat = [];
           activeWorldOperationId = null;
           rejectAtomicWorldOperations('局域网连接已断开，未确认的 World 操作已取消');
@@ -1109,6 +1197,7 @@ export function createMultiplayerController() {
         connected = false;
         joining = false;
         session = null;
+        rejectVisionSource('Local/LAN connection closed');
         inFlight = false;
         pendingPush = false;
         deferredChat = [];
@@ -1131,6 +1220,15 @@ export function createMultiplayerController() {
         const defaultActorId = String(new FormData(form).get('defaultActorId') || '');
         if (defaultActorId) result[defaultActorId] = 'owner';
         return result;
+      }
+
+      function collectPlacementGrants(form) {
+        const grants = { actorTypes: [], actorIds: [], markerKinds: [] };
+        for (const input of form.querySelectorAll('[data-mp-placement-grant]:checked')) {
+          const key = input.dataset.mpPlacementGrant;
+          if (Object.hasOwn(grants, key)) grants[key].push(String(input.value));
+        }
+        return grants;
       }
 
       button.addEventListener('click', () => renderDialog(connected ? `当前已连接 · revision ${revision}` : ''));
@@ -1199,6 +1297,7 @@ export function createMultiplayerController() {
             name: String(form.get('userName') || ''),
             defaultActorId: String(form.get('defaultActorId') || ''),
             ownership: collectOwnership(target),
+            placementGrants: collectPlacementGrants(target),
           });
           return;
         }
@@ -1219,28 +1318,42 @@ export function createMultiplayerController() {
         }
         queueCommittedOperations(api.exportState(), 'state:saved');
       });
-      api.on('state:import', queuePush);
+      api.on('state:import', detail => {
+        if (!connected || session?.role !== 'gm') return;
+        performWorldOperation(detail?.state || api.exportState(), {
+          reason: `file-import:${String(detail?.source || 'import').slice(0, 40)}`,
+        }).catch(error => setMapStatus(`Import sync failed: ${error.message}`));
+      });
 
       api.multiplayer = {
         connect,
         disconnect,
         requestWorld: () => send({ type: 'world.request' }),
         requestAccess: () => send({ type: 'access.request' }),
-        pushWorld: pushCommittedWorld,
         appendChat,
         appendChatAfterWorld,
         performStatusOperation,
         performOperations,
         performStateOperation,
         performWorldOperation,
+        setVisionSource,
         clearChat: () => send({ type: 'chat.clear' }),
         getCapabilities,
         canControlActor: actorId => canControlActor({ actorId, state: api.getState(), permissions }),
+        canControlToken: tokenId => {
+          if (session?.role === 'gm') return true;
+          const token = api.tokens?.get?.(tokenId);
+          if (!token) return false;
+          if ((token.controllerUserIds || []).map(String).includes(String(session?.userId || ''))) return true;
+          const actor = api.world?.get?.()?.actors?.find(item => String(item?.id) === String(token.actorId));
+          return actor?.type === 'pc' && canControlActor({ actorId: actor.id, state: api.getState(), permissions });
+        },
         canObserveActor: actorId => session?.role === 'gm' || (permissions.actorObserverIds || []).map(String).includes(String(actorId)),
         getStatus: () => ({
           connected,
           joining,
           revision,
+          audienceRevision,
           session: session ? { ...session } : null,
           permissions: structuredClone(permissions),
           clients: clients.map(item => ({ ...item })),

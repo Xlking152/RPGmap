@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createBoundUser, validatePlayerWorldPush } from '../deployment/local-server/access-control.mjs';
 import { resolveStatusCapabilitiesForToken } from '../deployment/local-server/status-operations.mjs';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
+import { migrateTestStateToWorldV3 } from './helpers/world-v3.js';
 
 function state() {
   const actor = { id: 'actor-a', name: 'A', runtime: { hp: 10 }, effects: [] };
@@ -11,7 +12,7 @@ function state() {
     diameterMeters: 1, rotation: 0, elevationFt: 0, hidden: false, locked: false, showName: true,
     x: 1, y: 1,
   };
-  return {
+  return migrateTestStateToWorldV3({
     version: 2,
     mapId: 'test',
     markers: [], attackAreas: [], sceneEvents: [],
@@ -41,7 +42,7 @@ function state() {
         updatedAt: '2026-01-01T00:00:00.000Z',
       },
     },
-  };
+  });
 }
 
 function rootedDelta() {

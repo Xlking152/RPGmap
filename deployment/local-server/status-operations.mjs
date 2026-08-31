@@ -19,9 +19,9 @@ const STATUS_MESSAGE_TYPES = new Set([
   'status.definition.upsert',
   'status.definition.delete',
 ]);
-const SCOPES = new Set(['actor', 'token']);
+const SCOPES = new Set(['actor', 'token', 'syntheticActor']);
 const CHANGE_MODES = new Set(['add', 'set', 'multiply', 'min', 'max']);
-const CAPABILITY_KEYS = new Set(['canMove', 'canInteract', 'canActInCombat', 'collisionBypassGroups']);
+const CAPABILITY_KEYS = new Set(['canMove', 'canInteract', 'canActInCombat', 'collisionBypassGroups', 'visibility']);
 const CATEGORIES = new Set(['buff', 'debuff', 'trait', 'status']);
 const DEFINITION_OWNED_EFFECT_KEYS = Object.freeze([
   'name', 'label', 'description', 'icon', 'color', 'category', 'scope', 'scopes',
@@ -97,10 +97,19 @@ function definitionFor(entities, definitionId) {
 }
 
 function statusCollection(entities, scope, targetId) {
-  if (!SCOPES.has(scope)) fail('status scope must be actor or token');
+  if (!SCOPES.has(scope)) fail('status scope must be actor, token, or syntheticActor');
   const list = scope === 'actor' ? entities.actors : entities.tokens;
   const target = list.find(entry => String(entry?.id) === String(targetId));
   if (!target) fail(`${scope} target does not exist: ${targetId}`, 'status_target_not_found');
+  if (scope === 'actor' && ['npc', 'summon'].includes(String(target.type))) {
+    fail('NPC and summon statuses require a Synthetic Actor Token target', 'instance_target_required');
+  }
+  if (scope === 'syntheticActor') {
+    if (target.actorLink !== false) fail('syntheticActor requires an unlinked Token', 'synthetic_actor_required');
+    if (!target.actorDelta || typeof target.actorDelta !== 'object' || Array.isArray(target.actorDelta)) target.actorDelta = {};
+    if (!Array.isArray(target.actorDelta.effects)) target.actorDelta.effects = [];
+    return { target: target.actorDelta, effects: target.actorDelta.effects };
+  }
   if (!Array.isArray(target.effects)) target.effects = [];
   return { target, effects: target.effects };
 }
@@ -110,7 +119,7 @@ function normalizeTarget(message, label = 'status operation') {
     ? message.target
     : message;
   const scope = text(source?.scope, `${label}.scope`, { required: true, max: 16 });
-  if (!SCOPES.has(scope)) fail(`${label}.scope must be actor or token`);
+  if (!SCOPES.has(scope)) fail(`${label}.scope must be actor, token, or syntheticActor`);
   return { scope, targetId: id(source?.targetId ?? source?.id, `${label}.targetId`) };
 }
 
@@ -149,6 +158,9 @@ export function assertStatusDefinition(value, label = 'status definition') {
   for (const key of Object.keys(capabilities)) if (!CAPABILITY_KEYS.has(key)) fail(`${label}.capabilities.${key} is not allowed`);
   for (const key of ['canMove', 'canInteract', 'canActInCombat']) {
     if (capabilities[key] !== undefined && typeof capabilities[key] !== 'boolean') fail(`${label}.capabilities.${key} must be boolean`);
+  }
+  if (capabilities.visibility !== undefined && capabilities.visibility !== 'invisible') {
+    fail(`${label}.capabilities.visibility must be invisible`);
   }
   if (capabilities.collisionBypassGroups !== undefined) {
     const groups = array(capabilities.collisionBypassGroups, `${label}.capabilities.collisionBypassGroups`, 4);
@@ -276,8 +288,10 @@ function applyOne(state, message, context) {
     } else {
       const usedByToken = entities.tokens.some(token => (token.effects || []).some(effect => String(effect.definitionId) === definition.id));
       if (usedByToken && (definition.changes || []).length) fail('Token statuses cannot gain Actor numeric changes', 'status_scope_forbidden');
-      const maxInUse = Math.max(1, ...entities.actors.concat(entities.tokens).flatMap(target => (target.effects || [])
-        .filter(effect => String(effect.definitionId) === definition.id).map(effect => Number(effect.stacks) || 1)));
+      const maxInUse = Math.max(1, ...entities.actors.concat(entities.tokens).flatMap(target => [
+        ...(target.effects || []),
+        ...(target.actorDelta?.effects || []),
+      ]).filter(effect => String(effect.definitionId) === definition.id).map(effect => Number(effect.stacks) || 1));
       if (definition.maxStacks < maxInUse) fail('maxStacks is lower than an applied stack count', 'status_definition_in_use');
       entities.statusDefinitions[index] = definition;
     }
@@ -289,8 +303,10 @@ function applyOne(state, message, context) {
     const index = entities.statusDefinitions.findIndex(item => String(item?.id) === definitionId);
     if (index < 0) fail(`Status definition does not exist: ${definitionId}`, 'status_definition_not_found');
     if (entities.statusDefinitions[index]?.builtIn === true) fail('Built-in status definitions are read-only', 'status_builtin_readonly');
-    const referenced = entities.actors.concat(entities.tokens).some(target =>
-      (target.effects || []).some(effect => String(effect.definitionId) === definitionId));
+    const referenced = entities.actors.concat(entities.tokens).some(target => [
+      ...(target.effects || []),
+      ...(target.actorDelta?.effects || []),
+    ].some(effect => String(effect.definitionId) === definitionId));
     if (referenced) fail('Status definition is still in use', 'status_definition_in_use');
     entities.statusDefinitions.splice(index, 1);
     return { action: 'definition.delete', definitionId };
@@ -301,7 +317,8 @@ function applyOne(state, message, context) {
   const definitionId = id(message.statusId ?? message.definitionId, 'statusId');
   const definition = definitionFor(entities, definitionId);
   if (!definition) fail(`Status definition does not exist: ${definitionId}`, 'status_definition_not_found');
-  if (!definition.scopes.includes(scope)) fail(`Status cannot be applied to ${scope}`, 'status_scope_forbidden');
+  const definitionScope = scope === 'syntheticActor' ? 'actor' : scope;
+  if (!definition.scopes.includes(definitionScope)) fail(`Status cannot be applied to ${scope}`, 'status_scope_forbidden');
   if (scope === 'token' && (definition.changes || []).length) fail('Token statuses cannot modify Actor numeric values', 'status_scope_forbidden');
   const index = effects.findIndex(effect => String(effect?.definitionId) === definitionId);
 

@@ -35,9 +35,16 @@ import {
   assertWorldOperationMessage,
   createWorldOperationPatch,
   migrateLegacySceneFeatureStates,
+  migrateWorldSchema3State,
   projectWorldOperationState,
   stripLegacyFeatureStateProjection,
 } from './world-operations.mjs';
+import {
+  canUserControlToken,
+  describeVisionForToken,
+  projectStateForAudience,
+  serverRuleset,
+} from './ruleset-authority.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '0.0.0.0';
@@ -317,10 +324,13 @@ if (loadedWorld !== undefined) {
   if (!loadedWorld || typeof loadedWorld !== 'object' || Array.isArray(loadedWorld)) await quarantineCorruptFile(WORLD_FILE, 'world', new Error('root must be an object'));
   if (loadedWorld.state !== null && loadedWorld.state !== undefined) {
     try {
-      const migration = migrateLegacySceneFeatureStates(loadedWorld.state);
-      assertWorldState(migration.state);
-      loadedWorld.state = migration.state;
-      if (migration.migrated) await writeJsonWithBackup(WORLD_FILE, 'world', loadedWorld);
+      const featureMigration = migrateLegacySceneFeatureStates(loadedWorld.state);
+      const schemaMigration = migrateWorldSchema3State(featureMigration.state);
+      assertWorldState(schemaMigration.state);
+      loadedWorld.state = schemaMigration.state;
+      if (featureMigration.migrated || schemaMigration.migrated) {
+        await writeJsonWithBackup(WORLD_FILE, 'world', loadedWorld);
+      }
     } catch (error) {
       if (error?.code === 'feature_state_migration_conflict') throw error;
       await quarantineCorruptFile(WORLD_FILE, 'world', error);
@@ -462,20 +472,41 @@ function broadcast(message, exceptSocket = null, predicate = null) {
 }
 function broadcastPresence() { broadcast(presencePayload()); }
 function broadcastWorld(message, exceptSocket = null) {
-  broadcast(message, exceptSocket, session => session.role === 'gm' || session.identityStatus === 'active');
+  for (const [socket, session] of sessions) {
+    if (socket === exceptSocket || (session.role !== 'gm' && session.identityStatus !== 'active')) continue;
+    const projected = message.state === undefined ? message : {
+      ...message,
+      state: audienceStateFor(session, message.state),
+      audienceRevision: session.audienceRevision,
+    };
+    sendSocket(socket, projected);
+  }
 }
-function statusSnapshot({ operationId, originSessionId, reason }) {
+function audienceStateFor(session, state = world.state) {
+  if (!state) return null;
+  return projectStateForAudience(state, {
+    role: session.role,
+    userId: session.userId,
+    user: session.userId ? findUser(session.userId) : null,
+    visionSourceTokenId: session.visionSourceTokenId,
+    ruleset: serverRuleset,
+    mapMetrics: { metersPerUnit: 1 },
+  });
+}
+function statusSnapshot({ operationId, originSessionId, reason }, session = null) {
   return {
     type: 'world.snapshot',
     operationId,
     revision: world.revision,
     updatedAt: world.updatedAt,
-    state: world.state,
+    state: session ? audienceStateFor(session) : world.state,
+    audienceRevision: session?.audienceRevision,
     originSessionId,
     reason,
   };
 }
 function sendStatusDenied(socket, message, code, description) {
+  const session = sessions.get(socket);
   return sendSocket(socket, {
     type: 'status.denied',
     operationId: statusOperationIdForReply(message?.operationId),
@@ -483,10 +514,12 @@ function sendStatusDenied(socket, message, code, description) {
     message: String(description || '服务器拒绝了状态操作'),
     revision: world.revision,
     updatedAt: world.updatedAt,
-    state: world.state,
+    state: session ? audienceStateFor(session) : null,
+    audienceRevision: session?.audienceRevision,
   });
 }
 function sendWorldOperationDenied(socket, message, code, description, extra = {}) {
+  const session = sessions.get(socket);
   return sendSocket(socket, {
     type: 'world.operation.denied',
     operationId: statusOperationIdForReply(message?.operationId),
@@ -494,13 +527,57 @@ function sendWorldOperationDenied(socket, message, code, description, extra = {}
     message: String(description || '服务器拒绝了 World 操作'),
     revision: world.revision,
     updatedAt: world.updatedAt,
-    state: world.state,
+    state: session ? audienceStateFor(session) : null,
+    audienceRevision: session?.audienceRevision,
     ...extra,
+  });
+}
+function visibleResultIds(state) {
+  const worldValue = state?.preferences?.worldV2;
+  return {
+    actors: new Set((worldValue?.actors || []).map(item => String(item?.id ?? ''))),
+    tokens: new Set((worldValue?.scenes || []).flatMap(scene => (scene.tokens || []).map(item => String(item?.id ?? '')))),
+    markers: new Set((worldValue?.scenes || []).flatMap(scene => (scene.markers || []).map(item => String(item?.id ?? '')))),
+  };
+}
+function projectResultsForSession(results, projectedState, session) {
+  if (session.role === 'gm') return structuredClone(results || []);
+  const visible = visibleResultIds(projectedState);
+  return (results || []).filter(result => {
+    if (result?.tokenId && !visible.tokens.has(String(result.tokenId))) return false;
+    if (result?.actorId && !visible.actors.has(String(result.actorId))) return false;
+    if (result?.markerId && !visible.markers.has(String(result.markerId))) return false;
+    return true;
+  }).map(result => structuredClone(result));
+}
+function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId }) {
+  for (const [socket, session] of sessions) {
+    if (session.role !== 'gm' && session.identityStatus !== 'active') continue;
+    const beforeProjection = audienceStateFor(session, beforeState);
+    const afterProjection = audienceStateFor(session, afterState);
+    sendSocket(socket, {
+      type: 'world.operation.committed', operationId, baseRevision, revision, updatedAt,
+      patch: createWorldOperationPatch(beforeProjection, afterProjection),
+      results: projectResultsForSession(results, afterProjection, session),
+      originSessionId,
+      audienceRevision: session.audienceRevision,
+    });
+  }
+}
+function sendAudienceSnapshot(socket, session, reason = 'audience.changed') {
+  session.audienceRevision += 1;
+  return sendSocket(socket, {
+    type: 'audience.snapshot',
+    audienceRevision: session.audienceRevision,
+    revision: world.revision,
+    updatedAt: world.updatedAt,
+    state: audienceStateFor(session),
+    reason,
   });
 }
 function sessionPermissions(session) {
   if (session.role === 'gm') {
-    return { worldWrite: true, worldReset: true, manageAccess: true, combatManage: true, actorOwnerIds: ['*'], actorObserverIds: ['*'], defaultActorId: null };
+    return { worldWrite: true, worldReset: true, manageAccess: true, combatManage: true, actorOwnerIds: ['*'], actorObserverIds: ['*'], defaultActorId: null, placementGrants: { actorTypes: ['*'], actorIds: ['*'], markerKinds: ['*'] } };
   }
   const user = session.userId ? findUser(session.userId) : null;
   const ownerIds = user ? Object.entries(user.ownership).filter(([, level]) => level === OWNERSHIP.OWNER).map(([id]) => id) : [];
@@ -513,7 +590,210 @@ function sessionPermissions(session) {
     actorOwnerIds: ownerIds,
     actorObserverIds: observerIds,
     defaultActorId: user?.defaultActorId || null,
+    placementGrants: user?.placementGrants || { actorTypes: [], actorIds: [], markerKinds: [] },
   };
+}
+function canonicalRecord(tokenId) {
+  const worldValue = world.state?.preferences?.worldV2;
+  const scene = worldValue?.scenes?.find(item => String(item?.id ?? '') === String(worldValue?.activeSceneId ?? ''));
+  const token = scene?.tokens?.find(item => String(item?.id ?? '') === String(tokenId));
+  const actor = token && worldValue?.actors?.find(item => String(item?.id ?? '') === String(token.actorId));
+  return { world: worldValue, scene, token, actor };
+}
+function canonicalScene(sceneId) {
+  const worldValue = world.state?.preferences?.worldV2;
+  return worldValue?.scenes?.find(item => String(item?.id ?? '') === String(sceneId ?? '')) || null;
+}
+function sessionControlsToken(session, tokenId) {
+  if (session.role === 'gm') return true;
+  const user = session.userId ? findUser(session.userId) : null;
+  return canUserControlToken(world.state, tokenId, { user, userId: session.userId });
+}
+function operationDenied(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  throw error;
+}
+function authorizeOperations(session, operations) {
+  if (operations.some(operation => operation.type === 'scene.fog.explore')) {
+    operationDenied('fog_explore_server_only', 'Fog exploration is derived from the authoritative vision source');
+  }
+  if (session.role === 'gm') return operations;
+  const user = findUser(session.userId);
+  const grants = user?.placementGrants || { actorTypes: [], actorIds: [], markerKinds: [] };
+  const userPartyId = (() => {
+    const actors = world.state?.preferences?.worldV2?.actors || [];
+    const preferred = actors.find(actor => String(actor.id) === String(user?.defaultActorId || ''));
+    if (['pc', 'summon'].includes(String(preferred?.type || '')) && preferred?.partyId) return String(preferred.partyId);
+    return String(actors.find(actor => ['pc', 'summon'].includes(String(actor?.type || ''))
+      && user?.ownership?.[String(actor.id)] === OWNERSHIP.OWNER && actor.partyId)?.partyId || '') || null;
+  })();
+  const playerRuntimeTypes = new Set([
+    'health.set-mode', 'health.runtime', 'health.damage', 'health.healing',
+    'variant.set', 'variant.cycle', 'resource.set-current', 'resource.step',
+    'resource.set-max', 'resource.add-custom', 'resource.remove-custom',
+    'attribute.set-adjustment', 'bad-status.set-current',
+  ]);
+  const authorizeStatusTarget = target => {
+    const scope = String(target?.scope || '');
+    const targetId = String(target?.targetId || target?.id || '');
+    if ((scope === 'token' || scope === 'syntheticActor') && sessionControlsToken(session, targetId)) return;
+    if (scope === 'actor') {
+      const actor = world.state?.preferences?.worldV2?.actors?.find(item => String(item?.id ?? '') === targetId);
+      if (actor?.type === 'pc' && user?.ownership?.[targetId] === OWNERSHIP.OWNER) return;
+    }
+    operationDenied('status_target_not_controlled', 'Status target is not controlled by this Player');
+  };
+  return operations.map(operation => {
+    const value = structuredClone(operation);
+    const payload = value.payload || {};
+    if (value.type === 'token.move') {
+      const tokenId = String(payload.tokenId || '');
+      if (!tokenId) operationDenied('token_target_required', 'Player Token movement requires tokenId');
+      if (!sessionControlsToken(session, tokenId)) operationDenied('token_not_controlled', 'Token is not controlled by this Player');
+      const combat = world.state?.preferences?.combatSystem?.combat;
+      if (combat?.state === 'active' && Array.isArray(combat.combatants) && combat.combatants.length) {
+        const current = combat.combatants[Math.max(0, Math.min(combat.combatants.length - 1, Number(combat.turnIndex) || 0))];
+        if (String(current?.tokenId || '') !== tokenId) operationDenied('combat_turn_locked', 'Only the active Combat Token may act');
+      }
+      return value;
+    }
+    if (value.type === 'actor.runtime.perform') {
+      const runtimeType = String(payload.operation?.type || '');
+      if (!playerRuntimeTypes.has(runtimeType)) operationDenied('actor_runtime_operation_forbidden', 'This Actor runtime operation is restricted to the GM');
+      const tokenId = String(payload.tokenId || '');
+      const actorId = String(payload.actorId || '');
+      if (tokenId) {
+        if (!sessionControlsToken(session, tokenId)) operationDenied('token_not_controlled', 'Token is not controlled by this Player');
+        const combat = world.state?.preferences?.combatSystem?.combat;
+        if (combat?.state === 'active' && Array.isArray(combat.combatants) && combat.combatants.length) {
+          const current = combat.combatants[Math.max(0, Math.min(combat.combatants.length - 1, Number(combat.turnIndex) || 0))];
+          if (String(current?.tokenId || '') !== tokenId) operationDenied('combat_turn_locked', 'Only the active Combat Token may act');
+        }
+        return value;
+      }
+      const actor = world.state?.preferences?.worldV2?.actors?.find(item => String(item?.id ?? '') === actorId);
+      if (!actorId || actor?.type !== 'pc' || user?.ownership?.[actorId] !== OWNERSHIP.OWNER) {
+        operationDenied(actor?.type === 'npc' || actor?.type === 'summon' ? 'instance_target_required' : 'actor_not_owned', 'Player runtime operations require an owned PC or controlled Token instance');
+      }
+      return value;
+    }
+    if (value.type === 'token.create') {
+      if (String(payload.sceneId || '') !== String(world.state?.preferences?.worldV2?.activeSceneId || '')) {
+        operationDenied('scene_not_active', 'Players may place Tokens only in the active Scene');
+      }
+      if (!payload.token || typeof payload.token !== 'object' || Array.isArray(payload.token)) {
+        operationDenied('invalid_token_payload', 'token.create requires a Token object');
+      }
+      const actorId = String(payload.token.actorId || '');
+      const actor = world.state?.preferences?.worldV2?.actors?.find(item => String(item?.id ?? '') === actorId);
+      if (!actor || (!grants.actorIds?.includes(actorId) && !grants.actorTypes?.includes(String(actor.type)))) {
+        operationDenied('token_placement_forbidden', 'Actor template placement is not granted');
+      }
+      if (actor.type === 'npc' || actor.type === 'summon') {
+        payload.token.actorLink = false;
+        delete payload.token.actorDelta;
+      }
+      payload.token.controllerUserIds = [session.userId];
+      payload.token.visibility = {
+        mode: actor.type === 'pc' ? (actor.partyId ? 'party' : 'public')
+          : actor.type === 'summon' && actor.partyId ? 'party' : 'users',
+        userIds: actor.type === 'pc' || (actor.type === 'summon' && actor.partyId) ? [] : [session.userId],
+      };
+      payload.token.vision = {
+        enabled: true,
+        rangeOverrideMeters: null,
+        overrideUserIds: [],
+      };
+      return value;
+    }
+    if (value.type === 'marker.upsert') {
+      if (String(payload.sceneId || '') !== String(world.state?.preferences?.worldV2?.activeSceneId || '')) {
+        operationDenied('scene_not_active', 'Players may place Markers only in the active Scene');
+      }
+      const kind = String(payload.marker?.kind || 'note');
+      if (!grants.markerKinds?.includes(kind)) operationDenied('marker_placement_forbidden', 'Marker placement is not granted');
+      const scene = canonicalScene(payload.sceneId);
+      if (scene?.markers?.some(item => String(item?.id ?? '') === String(payload.marker?.id || ''))) {
+        operationDenied('marker_exists', 'Players cannot replace an existing Marker');
+      }
+      payload.marker.controllerUserIds = [session.userId];
+      const requestedVisibility = String(payload.marker.visibility?.mode || 'public');
+      const mode = kind === 'trap' ? 'users' : requestedVisibility === 'party' && userPartyId ? 'party' : 'public';
+      payload.marker.visibility = { mode, userIds: mode === 'users' ? [session.userId] : [] };
+      payload.marker.partyId = mode === 'party' ? userPartyId : null;
+      return value;
+    }
+    if (value.type === 'marker.move' || value.type === 'marker.delete') {
+      if (String(payload.sceneId || '') !== String(world.state?.preferences?.worldV2?.activeSceneId || '')) {
+        operationDenied('scene_not_active', 'Players may modify Markers only in the active Scene');
+      }
+      const scene = canonicalScene(payload.sceneId);
+      const marker = scene?.markers?.find(item => String(item?.id ?? '') === String(payload.markerId || ''));
+      if (!marker?.controllerUserIds?.includes(session.userId)) operationDenied('marker_not_controlled', 'Marker is not controlled by this Player');
+      return value;
+    }
+    if (value.type === 'token.access.patch') {
+      const record = canonicalRecord(payload.tokenId);
+      const keys = Object.keys(payload.patch || {});
+      const visionOnly = keys.length === 1 && keys[0] === 'vision';
+      if (!visionOnly || !record.token?.vision?.overrideUserIds?.includes(session.userId)) {
+        operationDenied('token_access_gm_only', 'Only the GM can modify Token control or visibility');
+      }
+      const visionKeys = Object.keys(payload.patch.vision || {});
+      if (visionKeys.some(key => key !== 'rangeOverrideMeters')) {
+        operationDenied('vision_override_forbidden', 'Player may only modify the granted vision range override');
+      }
+      return value;
+    }
+    if (value.type === 'actor.upsert') {
+      const actorId = String(payload.actor?.id || '');
+      const current = world.state?.preferences?.worldV2?.actors?.find(item => String(item?.id ?? '') === actorId);
+      if (!current || current.type !== 'pc' || user?.ownership?.[actorId] !== OWNERSHIP.OWNER) {
+        operationDenied('actor_not_owned', 'Only an owned PC template may be edited');
+      }
+      if (payload.actor.type !== current.type || payload.actor.partyId !== current.partyId) {
+        operationDenied('actor_classification_gm_only', 'Only the GM can change Actor classification or party');
+      }
+      return value;
+    }
+    if (value.type.startsWith('status.') && !value.type.startsWith('status.definition.')) {
+      if (value.type === 'status.batch') {
+        for (const item of Array.isArray(payload.operations) ? payload.operations : []) {
+          authorizeStatusTarget(item?.target || item);
+        }
+      } else authorizeStatusTarget(payload.target || payload);
+      return value;
+    }
+    operationDenied(`${value.type.replaceAll('.', '_')}_gm_only`, `Only the GM can perform ${value.type}`);
+  });
+}
+function appendVisionExplorationOperations(operations) {
+  const next = operations.map(operation => structuredClone(operation));
+  const seen = new Set();
+  for (const operation of operations) {
+    if (operation.type !== 'token.move' || operation.payload?.placement === 'feature') continue;
+    const tokenId = String(operation.payload?.tokenId || '');
+    for (const session of sessions.values()) {
+      if (String(session.visionSourceTokenId || '') !== tokenId) continue;
+      const vision = describeVisionForToken(world.state, tokenId);
+      if (!vision?.partyId) continue;
+      const key = `${vision.sceneId}:${vision.partyId}:${tokenId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      next.push({
+        type: 'scene.fog.explore',
+        payload: {
+          sceneId: vision.sceneId,
+          partyId: vision.partyId,
+          from: { x: vision.x, y: vision.y },
+          to: { x: Number(operation.payload.x), y: Number(operation.payload.y) },
+          radiusMeters: vision.rangeMeters,
+        },
+      });
+    }
+  }
+  return next;
 }
 function accessSnapshotFor(session) {
   const gm = session.role === 'gm';
@@ -529,7 +809,7 @@ function accessSnapshotFor(session) {
     selfUserId: session.userId || null,
     users,
     pending: gm ? [...sessions.values()].filter(item => item.role === 'player' && item.identityStatus === 'pending').map(publicSession) : [],
-    actors: actorCatalogFromWorld(world.state),
+    actors: actorCatalogFromWorld(audienceStateFor(session)),
   };
 }
 function sendAccessSnapshot(socket) {
@@ -585,7 +865,8 @@ function sendWelcome(socket, session, { includeWorld = true, pendingApproval = f
     type: 'welcome',
     session: publicSession(session),
     identity: { status: session.identityStatus, user: session.userId ? publicUser(findUser(session.userId)) : null, pendingApproval },
-    world: { revision: world.revision, updatedAt: world.updatedAt, state: includeWorld ? world.state : null },
+    world: { revision: world.revision, updatedAt: world.updatedAt, state: includeWorld ? audienceStateFor(session) : null },
+    audienceRevision: session.audienceRevision,
     permissions: sessionPermissions(session),
     server: multiplayerInfo(),
   });
@@ -602,6 +883,7 @@ function refreshOnlineUser(userId) {
     }
     session.name = user.name;
     sendSocket(socket, { type: 'permissions.update', user: publicUser(user), permissions: sessionPermissions(session) });
+    sendAudienceSnapshot(socket, session, 'access.permissions.updated');
   }
 }
 
@@ -716,6 +998,15 @@ server.on('upgrade', (req, socket) => {
         }
       }
 
+      session.visionSourceTokenId = null;
+      session.audienceRevision = 0;
+      const requestedVisionSource = String(message.visionSourceTokenId || '').trim();
+      if (requestedVisionSource && world.state) {
+        const user = session.userId ? findUser(session.userId) : null;
+        if (session.role === 'gm' || canUserControlToken(world.state, requestedVisionSource, {
+          user, userId: session.userId,
+        })) session.visionSourceTokenId = requestedVisionSource;
+      }
       sessions.set(socket, session);
       joined = true;
       clearTimeout(helloTimer);
@@ -752,7 +1043,11 @@ server.on('upgrade', (req, socket) => {
         const pendingSession = pendingSocket ? sessions.get(pendingSocket) : null;
         if (!pendingSession || pendingSession.identityStatus !== 'pending') return sendSocket(socket, { type: 'error', code: 'pending_not_found', message: '待批准玩家已离线或不存在' });
         const cleaned = cleanOwnershipForWorld(message.ownership, message.defaultActorId);
-        const created = createBoundUser({ name: uniqueUserName(message.name || pendingSession.name), ...cleaned });
+        const created = createBoundUser({
+          name: uniqueUserName(message.name || pendingSession.name),
+          ...cleaned,
+          placementGrants: message.placementGrants,
+        });
         access.users.push(created.user);
         await persistAccess();
         pendingSession.userId = created.user.id;
@@ -768,7 +1063,11 @@ server.on('upgrade', (req, socket) => {
 
       if (message.type === 'access.user.create') {
         const cleaned = cleanOwnershipForWorld(message.ownership, message.defaultActorId);
-        const created = createClaimableUser({ name: uniqueUserName(message.name || 'Player'), ...cleaned });
+        const created = createClaimableUser({
+          name: uniqueUserName(message.name || 'Player'),
+          ...cleaned,
+          placementGrants: message.placementGrants,
+        });
         access.users.push(created.user);
         await persistAccess();
         sendSocket(socket, { type: 'access.claim', user: publicUser(created.user), claimCode: created.claimCode, message: '认领码只显示这一次，请发给对应玩家。' });
@@ -780,7 +1079,13 @@ server.on('upgrade', (req, socket) => {
         const user = findUser(message.userId);
         if (!user) return sendSocket(socket, { type: 'error', code: 'user_not_found', message: 'Player User 不存在' });
         const cleaned = cleanOwnershipForWorld(message.ownership ?? user.ownership, message.defaultActorId ?? user.defaultActorId);
-        updateUserRecord(user, { name: uniqueUserName(message.name ?? user.name, user.id), ownership: cleaned.ownership, defaultActorId: cleaned.defaultActorId, disabled: message.disabled ?? user.disabled });
+        updateUserRecord(user, {
+          name: uniqueUserName(message.name ?? user.name, user.id),
+          ownership: cleaned.ownership,
+          defaultActorId: cleaned.defaultActorId,
+          placementGrants: message.placementGrants ?? user.placementGrants,
+          disabled: message.disabled ?? user.disabled,
+        });
         await persistAccess();
         refreshOnlineUser(user.id);
         broadcastPresence();
@@ -817,6 +1122,58 @@ server.on('upgrade', (req, socket) => {
       }
     }
 
+    if (message?.type === 'vision.source.set') {
+      if (session.role !== 'gm' && session.identityStatus !== 'active') {
+        return sendSocket(socket, { type: 'vision.source.denied', code: 'identity_required', message: 'Active identity required' });
+      }
+      const tokenId = message.tokenId == null ? '' : String(message.tokenId).trim();
+      if (tokenId && !sessionControlsToken(session, tokenId)) {
+        return sendSocket(socket, { type: 'vision.source.denied', code: 'vision_source_not_controlled', message: 'Vision source is not controlled by this user' });
+      }
+      const beforeState = world.state;
+      session.visionSourceTokenId = tokenId || null;
+      const vision = tokenId ? describeVisionForToken(world.state, tokenId) : null;
+      if (vision?.partyId) {
+        let applied;
+        try {
+          applied = applyWorldOperations(world.state, [{
+            type: 'scene.fog.explore',
+            payload: {
+              sceneId: vision.sceneId, partyId: vision.partyId,
+              x: vision.x, y: vision.y, radiusMeters: vision.rangeMeters,
+            },
+          }], { ruleset: serverRuleset, now: new Date().toISOString(), mapMetrics: { metersPerUnit: 1 } });
+          assertWorldState(applied.state);
+        } catch (error) {
+          session.visionSourceTokenId = null;
+          return sendSocket(socket, { type: 'vision.source.denied', code: error.code || 'vision_source_invalid', message: error.message });
+        }
+        const nextWorld = {
+          schemaVersion: 1, worldId: WORLD_ID, revision: world.revision + 1,
+          updatedAt: new Date().toISOString(), state: applied.state,
+          recentStatusOperations: world.recentStatusOperations || [],
+        };
+        try { await persistWorld(nextWorld); }
+        catch (error) {
+          session.visionSourceTokenId = null;
+          return sendSocket(socket, { type: 'vision.source.denied', code: 'persist_failed', message: error.message });
+        }
+        const baseRevision = world.revision;
+        world = nextWorld;
+        broadcastOperationCommit({
+          beforeState, afterState: world.state, operationId: `vision-${randomUUID()}`,
+          baseRevision, revision: world.revision, updatedAt: world.updatedAt,
+          results: applied.results, originSessionId: session.id,
+        });
+      }
+      sendSocket(socket, {
+        type: 'vision.source.ack', tokenId: session.visionSourceTokenId,
+        revision: world.revision, audienceRevision: session.audienceRevision,
+      });
+      sendAudienceSnapshot(socket, session, 'vision.source.set');
+      return;
+    }
+
     if (message?.type === 'world.operation') {
       let envelope;
       try { envelope = assertWorldOperationMessage(message); }
@@ -845,13 +1202,13 @@ server.on('upgrade', (req, socket) => {
           operationId: envelope.operationId,
           originSessionId: session.id,
           reason: 'world.operation.duplicate',
-        }));
+        }, session));
         return sendSocket(socket, {
           type: 'world.operation.ack',
           operationId: envelope.operationId,
           revision: world.revision,
           committedRevision: completed.revision,
-          results: completed.results,
+          results: projectResultsForSession(completed.results, audienceStateFor(session), session),
           duplicate: true,
         });
       }
@@ -867,8 +1224,12 @@ server.on('upgrade', (req, socket) => {
       let patch;
       try {
         const now = new Date().toISOString();
-        applied = applyWorldOperations(world.state, envelope.operations, {
+        const authorizedOperations = authorizeOperations(session, envelope.operations);
+        const operations = appendVisionExplorationOperations(authorizedOperations);
+        applied = applyWorldOperations(world.state, operations, {
           now,
+          ruleset: serverRuleset,
+          mapMetrics: { metersPerUnit: 1 },
           userId: session.userId,
           sessionId: session.id,
           applyStatus(state, statusMessage) {
@@ -884,23 +1245,6 @@ server.on('upgrade', (req, socket) => {
           const error = new Error('聊天记录只能通过服务器提交');
           error.code = 'chat_server_only';
           throw error;
-        }
-        if (session.role !== 'gm') {
-          const user = findUser(session.userId);
-          // Operation reducers refresh canonical World projections such as
-          // entitySystem and gridVisible. Normalize both sides before applying
-          // the established ownership/status/combat checks so projection noise
-          // is not mistaken for an additional Player write.
-          const authorization = validatePlayerWorldPush({
-            before: projectWorldOperationState(structuredClone(world.state)),
-            next: projectWorldOperationState(structuredClone(applied.state)),
-            user,
-          });
-          if (!authorization.ok) {
-            return sendWorldOperationDenied(socket, message, authorization.code, authorization.message, {
-              activeActorId: authorization.activeActorId || null,
-            });
-          }
         }
         if (Buffer.byteLength(JSON.stringify(applied.state)) > MAX_WS_PAYLOAD) {
           const error = new Error('World state is too large');
@@ -931,23 +1275,25 @@ server.on('upgrade', (req, socket) => {
       }
 
       const baseRevision = world.revision;
+      const beforeState = world.state;
       world = nextWorld;
       rememberStatusOperation(envelope.operationId, world.revision, applied.results);
-      broadcastWorld({
-        type: 'world.operation.committed',
+      broadcastOperationCommit({
+        beforeState,
+        afterState: world.state,
         operationId: envelope.operationId,
         baseRevision,
         revision: world.revision,
         updatedAt: world.updatedAt,
-        patch,
         results: applied.results,
         originSessionId: session.id,
       });
+      const originProjection = audienceStateFor(session);
       sendSocket(socket, {
         type: 'world.operation.ack',
         operationId: envelope.operationId,
         revision: world.revision,
-        results: applied.results,
+        results: projectResultsForSession(applied.results, originProjection, session),
         duplicate: false,
       });
       broadcastAccessSnapshots();
@@ -971,7 +1317,7 @@ server.on('upgrade', (req, socket) => {
           operationId,
           originSessionId: session.id,
           reason: 'status.duplicate',
-        }));
+        }, session));
         return sendSocket(socket, {
           type: 'status.ack',
           operationId,
@@ -1043,12 +1389,27 @@ server.on('upgrade', (req, socket) => {
 
     if (message?.type === 'world.push') {
       const worldOperationId = statusOperationIdForReply(message.operationId);
+      if (session.role !== 'gm') {
+        return sendSocket(socket, {
+          type: 'world.denied', operationId: worldOperationId, code: 'world_push_gm_only',
+          message: 'Full World replacement is restricted to the GM', revision: world.revision,
+          updatedAt: world.updatedAt, state: audienceStateFor(session), audienceRevision: session.audienceRevision,
+        });
+      }
+      const replacementReason = String(message.reason || '').trim();
+      if (world.state && !/^(?:file-import:|backup-restore:|recovery:)/.test(replacementReason)) {
+        return sendSocket(socket, {
+          type: 'world.denied', operationId: worldOperationId, code: 'world_replace_explicit_only',
+          message: 'Full World replacement requires an explicit import or recovery action', revision: world.revision,
+          updatedAt: world.updatedAt, state: audienceStateFor(session), audienceRevision: session.audienceRevision,
+        });
+      }
       if (!message.state || typeof message.state !== 'object' || Array.isArray(message.state)) {
         return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'invalid_state', message: 'World state must be an object' });
       }
       let incomingState;
       try {
-        incomingState = migrateLegacySceneFeatureStates(message.state).state;
+        incomingState = migrateWorldSchema3State(migrateLegacySceneFeatureStates(message.state).state).state;
         assertWorldState(incomingState);
       } catch (error) {
         return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: error?.code || 'invalid_state', message: error?.message || 'World state 无效' });
@@ -1167,7 +1528,7 @@ server.on('upgrade', (req, socket) => {
 
     if (message?.type === 'world.request') {
       if (session.role !== 'gm' && session.identityStatus !== 'active') return sendSocket(socket, { type: 'error', code: 'identity_pending', message: '等待 GM 批准身份' });
-      return sendSocket(socket, { type: 'world.snapshot', revision: world.revision, updatedAt: world.updatedAt, state: world.state, originSessionId: null, reason: 'request' });
+      return sendSocket(socket, { type: 'world.snapshot', revision: world.revision, updatedAt: world.updatedAt, state: audienceStateFor(session), audienceRevision: session.audienceRevision, originSessionId: null, reason: 'request' });
     }
 
     if (message?.type === 'ping') return sendSocket(socket, { type: 'pong', at: Date.now() });
