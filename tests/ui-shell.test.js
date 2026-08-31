@@ -6,10 +6,12 @@ const runtimeSource = readFileSync(new URL('../src/engine/runtime.js', import.me
 const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
 const mapRuntimeSource = readFileSync(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
 const builtinsSource = readFileSync(new URL('../src/map-package/builtins.js', import.meta.url), 'utf8');
+const rulesetBuiltinsSource = readFileSync(new URL('../src/ruleset/builtins.js', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const appShellSource = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
 const entityUiSource = readFileSync(new URL('../src/entities/ui.js', import.meta.url), 'utf8');
 const tokenControllerSource = readFileSync(new URL('../src/entities/token-controller.js', import.meta.url), 'utf8');
+const markerSource = readFileSync(new URL('../src/marker/system.js', import.meta.url), 'utf8');
 const sceneRenderer = readFileSync(new URL('../src/render/scene-renderer.js', import.meta.url), 'utf8');
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const indexSource = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -33,16 +35,19 @@ test('application chrome keeps the restrained neutral, river and brick palette',
   assert.match(styles, /\.section \{[\s\S]*?border-bottom: 1px solid var\(--line\);/);
   assert.doesNotMatch(styles, /linear-gradient/i);
   assert.equal(packageJson.dependencies.lucide, '1.30.0');
-  assert.equal(packageJson.version, '2.1.6');
-  assert.match(indexSource, /application-version" content="2\.1\.6"/);
-  assert.match(indexSource, /RPGmap 2\.1\.6/);
+  assert.equal(packageJson.version, '2.2.0');
+  assert.match(indexSource, /application-version" content="2\.2\.0"/);
+  assert.match(indexSource, /RPGmap 2\.2\.0/);
 });
 
 test('production registry splits the built-in map and large vendors without suppressing chunk warnings', () => {
   assert.match(mainSource, /registerBuiltInMapPackages/);
+  assert.match(mainSource, /loadBuiltInRulesetReference/);
   assert.match(mainSource, /await import\('\.\/runtime\/map-runtime\.js'\)/);
   assert.match(mapRuntimeSource, /mapPackageRegistry\.load/);
   assert.doesNotMatch(mainSource, /leaflet|styles\.css|createRpgMapRuntime/);
+  assert.doesNotMatch(mainSource, /ruleset\/index\.js|rulesets\/infinite-horror/);
+  assert.match(rulesetBuiltinsSource, /await import\('\.\/index\.js'\)/);
   assert.match(builtinsSource, /await import\('\.\/default-map\.js'\)/);
   assert.match(viteSource, /manualChunks/);
   assert.match(viteSource, /vendor-leaflet/);
@@ -67,6 +72,13 @@ test('Token placement owns the map click directly through the canonical Entity c
   assert.match(tokenControllerSource, /relocateActorTokenAtPoint\(api, target, point\)/);
   assert.doesNotMatch(entityUiSource, /api\.placeCharacter|placePendingTokenAtMapClick|api\.setTool\('character-place'\)/);
   assert.doesNotMatch(tokenControllerSource, /api\.placeCharacter|api\.repositionCharacter|character:create|character:move|state\.characters/);
+});
+
+test('restricted audience records cannot open Actor or Token sheets through UI entry points', () => {
+  assert.match(entityUiSource, /actor\.audienceRestricted === true/);
+  assert.match(entityUiSource, /resolved\.audienceRestricted === true/);
+  assert.match(entityUiSource, /api\.entities\.openToken\(token\.id, openTab\)/);
+  assert.match(markerSource, /actor\.audienceRestricted === true/);
 });
 
 test('destruction rendering separates buildings, pontoon bridges and wall breaches', () => {

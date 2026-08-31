@@ -23,7 +23,7 @@ function installStyles(documentNode) {
     .runtime-v2-shell .ui-primary-tool { min-height:34px; display:inline-flex; align-items:center; justify-content:center; gap:5px; border:1px solid rgba(79,96,98,.22); border-radius:8px; padding:6px 10px; color:#334347; background:#f7f9f6; font:inherit; font-weight:750; cursor:pointer; }
     .runtime-v2-shell .ui-primary-tool:hover { background:#eef4f0; }
     .runtime-v2-shell .ui-primary-tool.active { color:#fff; background:#176d76; border-color:#176d76; }
-    .runtime-v2-shell .sidebar .tabbar { display:grid; grid-template-columns:1fr 1fr; gap:5px; padding:8px; }
+    .runtime-v2-shell .sidebar .tabbar { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; padding:8px; }
     .runtime-v2-shell .ui-sidebar-tab { border:0; border-radius:7px; padding:8px 10px; background:#edf1ee; color:#556265; font-weight:800; cursor:pointer; }
     .runtime-v2-shell .ui-sidebar-tab.active { color:#fff; background:#176d76; }
     .runtime-v2-shell .ui-current-card { border:1px solid rgba(70,90,90,.18); border-radius:10px; padding:11px; background:#fff; display:grid; gap:9px; }
@@ -205,7 +205,7 @@ export function createAppShellUiV2() {
           actions.append(button(documentNode, '离开 Feature', () => void api.movement?.exitFeature?.(token.id), 'small-button primary'));
         }
         actions.append(button(documentNode, '高度', event => api.elevation?.openTokenElevationEditor?.(token.id, event), 'small-button'));
-        if (view.actor?.id) actions.append(button(documentNode, '角色卡', () => api.entities?.openActor?.(view.actor.id), 'small-button'));
+        if (view.actor?.id && !view.actor.audienceRestricted) actions.append(button(documentNode, '角色卡', () => api.entities?.openToken?.(token.id), 'small-button'));
         card.append(actions);
         currentPanel.append(card);
       }

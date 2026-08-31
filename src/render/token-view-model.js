@@ -28,7 +28,7 @@ export function actorDisplayForm(actor, { ruleset } = {}) {
  * presentation override -> Core Actor prototype/img fallback.
  */
 export function createTokenViewModel({ token, actor, selected = false, ruleset } = {}) {
-  if (!token || !actor || token.hidden === true || token.placement !== 'map') return null;
+  if (!token || !actor || token.placement !== 'map') return null;
   const x = finite(token.x);
   const y = finite(token.y);
   if (x === null || y === null) return null;
@@ -63,5 +63,7 @@ export function createTokenViewModel({ token, actor, selected = false, ruleset }
     showName: token.showName !== false,
     selected: Boolean(selected),
     actorLink: token.actorLink !== false,
+    audienceRestricted: token.audienceRestricted === true || actor.audienceRestricted === true,
+    audienceVisibility: token.audienceVisibility || null,
   });
 }
