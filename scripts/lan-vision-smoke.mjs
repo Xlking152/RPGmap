@@ -277,11 +277,11 @@ try {
     statusDefinitions: structuredClone(world.statusDefinitions),
   };
   const imported = waitForMessage(gm.socket, message =>
-    (message.type === 'world.snapshot' && message.reason === 'import-smoke')
+    (message.type === 'world.snapshot' && message.reason === 'file-import:smoke')
       || message.type === 'world.denied'
       || message.type === 'error', 'World import');
   gm.socket.send(JSON.stringify({
-    type: 'world.push', baseRevision: Number(initial?.revision) || 0, state, reason: 'import-smoke',
+    type: 'world.push', baseRevision: Number(initial?.revision) || 0, state, reason: 'file-import:smoke',
   }));
   const importedSnapshot = await imported;
   assert(importedSnapshot.type === 'world.snapshot', `World import failed: ${JSON.stringify(importedSnapshot)}`);
