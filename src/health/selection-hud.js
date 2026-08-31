@@ -21,13 +21,14 @@ function installStyles(documentNode) {
     .health-selection-summary .danger { color:#a33d38; font-weight:800; }
     .health-selection-mode-row { display:flex; flex-wrap:wrap; gap:5px; }
     .health-selection-mode { padding:3px 6px; border-radius:6px; background:#eef3ef; color:#59676a; font-size:10px; font-weight:800; }
-    .health-batch-form { display:grid; grid-template-columns:minmax(72px,.8fr) minmax(92px,1fr) 1fr; gap:6px; align-items:center; }
-    .health-batch-form input,.health-batch-form select,.health-batch-form button { min-width:0; height:32px; box-sizing:border-box; border:1px solid #c9d4d0; border-radius:7px; padding:5px 7px; font:inherit; font-size:11px; }
-    .health-batch-form button { cursor:pointer; font-weight:800; background:#fff; }
-    .health-batch-form button[data-health-batch="damage"] { border-color:#c98e88; color:#963e38; background:#fff5f4; }
-    .health-batch-form button[data-health-batch="healing"] { border-color:#86b798; color:#356f4b; background:#f2faf5; }
+    .health-batch-controls { display:grid; gap:6px; }
+    .health-batch-row { display:grid; grid-template-columns:72px minmax(96px,1fr) minmax(86px,auto); gap:6px; align-items:center; }
+    .health-batch-row input,.health-batch-row select,.health-batch-row button { min-width:0; height:32px; box-sizing:border-box; border:1px solid #c9d4d0; border-radius:7px; padding:5px 7px; font:inherit; font-size:11px; }
+    .health-batch-row button { cursor:pointer; font-weight:800; background:#fff; }
+    .health-batch-row button[data-health-batch="damage"] { border-color:#c98e88; color:#963e38; background:#fff5f4; }
+    .health-batch-row button[data-health-batch="healing"] { border-color:#86b798; color:#356f4b; background:#f2faf5; }
     .health-selection-help { color:#758184; font-size:9px; line-height:1.45; }
-    @media(max-width:650px){ .rpgmap-health-selection-hud{right:8px;bottom:76px;width:min(320px,calc(100% - 16px))}.health-batch-form{grid-template-columns:72px 1fr}.health-batch-form button{grid-column:auto} }
+    @media(max-width:650px){ .rpgmap-health-selection-hud{right:8px;bottom:76px;width:min(320px,calc(100% - 16px))}.health-batch-row{grid-template-columns:68px 1fr}.health-batch-row button{grid-column:1/-1} }
   `;
   documentNode.head.append(style);
 }
@@ -51,10 +52,8 @@ function healthView(api, token) {
   };
 }
 
-function modeLabel(health) {
-  if (health?.mode === 'wound-track') return 'B/L/A';
-  if (health?.mode === 'simple') return '数值 HP';
-  return '其他';
+function modeLabel(entry) {
+  return String(entry?.view?.title || '生命');
 }
 
 function operationTypeOptions(operation, ruleset) {
@@ -63,6 +62,16 @@ function operationTypeOptions(operation, ruleset) {
     config,
     html: (config.types || []).map(option => `<option value="${escapeHtml(option.id)}" ${String(option.id) === String(config.defaultType) ? 'selected' : ''}>${escapeHtml(option.label || option.id)}</option>`).join(''),
   };
+}
+
+function operationRow(operation, options) {
+  const action = operation === 'damage' ? '批量伤害' : '批量恢复';
+  const placeholder = options.config.inputPlaceholder || '数值';
+  return `<div class="health-batch-row" data-health-batch-row="${operation}">
+    <input type="number" min="1" step="1" value="1" aria-label="${escapeHtml(action)}数量" placeholder="${escapeHtml(placeholder)}" data-health-amount>
+    <select aria-label="${escapeHtml(action)}类型" data-health-type>${options.html}</select>
+    <button type="button" data-health-batch="${operation}">${escapeHtml(action)}</button>
+  </div>`;
 }
 
 export function createHealthSelectionHud() {
@@ -98,7 +107,7 @@ export function createHealthSelectionHud() {
 
         const modes = new Map();
         for (const entry of entries) {
-          const label = modeLabel(entry.health);
+          const label = modeLabel(entry);
           modes.set(label, (modes.get(label) || 0) + 1);
         }
         const modeHtml = [...modes.entries()]
@@ -110,19 +119,17 @@ export function createHealthSelectionHud() {
         const title = single ? tokenLabel(api, single.token) : `已选择 ${entries.length} 个实例`;
         const summary = single
           ? `<div>${escapeHtml(single.view.summary || '—')}</div><div class="${single.view.danger ? 'danger' : ''}">${escapeHtml(single.view.status || '')}</div>`
-          : `<div>批量操作会对每个实例分别按自己的生命模式结算，不会把所有实例强制写成同一个绝对值。</div>`;
+          : '<div>批量操作会让每个实例按自己的生命规则分别结算，不会把所有实例覆盖成同一个绝对值。</div>';
 
         hud.innerHTML = `
           <div class="health-selection-head"><strong>${escapeHtml(title)}</strong><span class="health-selection-count">${entries.length} Token</span></div>
           <div class="health-selection-summary">${summary}</div>
           <div class="health-selection-mode-row">${modeHtml}</div>
-          <form class="health-batch-form" data-health-batch-form>
-            <input type="number" min="1" step="1" value="1" aria-label="生命变化数量" data-health-amount>
-            <select aria-label="伤害类型" data-health-type>${damage.html || healing.html}</select>
-            <button type="submit" data-health-batch="damage">批量伤害</button>
-            <button type="submit" data-health-batch="healing">批量恢复</button>
-          </form>
-          <div class="health-selection-help">B/L/A 实例显示并结算 B、L、A 伤势槽；数值 HP 实例继续使用 current/max。混合选择时同一次操作会由各自 Ruleset Health Runtime 分别处理。</div>`;
+          <div class="health-batch-controls">
+            ${operationRow('damage', damage)}
+            ${operationRow('healing', healing)}
+          </div>
+          <div class="health-selection-help">每个实例均通过当前 Ruleset 的 Health Runtime 与 Presentation 展示和结算；混合选择时会保留不同生命模式各自的规则语义。</div>`;
         hud.hidden = false;
       }
 
@@ -130,9 +137,9 @@ export function createHealthSelectionHud() {
         const button = event.target.closest?.('[data-health-batch]');
         if (!button) return;
         event.preventDefault();
-        const form = button.closest('[data-health-batch-form]');
-        const amount = Math.floor(Number(form?.querySelector('[data-health-amount]')?.value));
-        const type = String(form?.querySelector('[data-health-type]')?.value || '');
+        const row = button.closest('[data-health-batch-row]');
+        const amount = Math.floor(Number(row?.querySelector('[data-health-amount]')?.value));
+        const type = String(row?.querySelector('[data-health-type]')?.value || '');
         if (!Number.isFinite(amount) || amount <= 0) {
           api.setStatus?.('批量生命修改：请输入大于 0 的数值');
           return;
