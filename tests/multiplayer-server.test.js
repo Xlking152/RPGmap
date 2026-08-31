@@ -1346,18 +1346,22 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     const concurrentResultB = waitForMessage(playerB.ws, message =>
       ['world.operation.ack', 'world.operation.denied'].includes(message.type)
       && message.operationId === 'fog-concurrent-b');
-    playerA.ws.send(JSON.stringify({
+    const concurrentOperationA = {
       type: 'world.operation', operationId: 'fog-concurrent-a', baseRevision: 3,
       operations: [{ type: 'token.move', payload: {
-        sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 50, y: 10,
+        sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 100, y: 10,
       } }],
-    }));
-    playerB.ws.send(JSON.stringify({
+    };
+    const concurrentOperationB = {
       type: 'world.operation', operationId: 'fog-concurrent-b', baseRevision: 3,
       operations: [{ type: 'token.move', payload: {
-        sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 5, y: 10,
+        sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 45, y: 100,
       } }],
-    }));
+    };
+    // Send B first so the local path exercises the opposite winner from the
+    // original test. The assertions remain order-independent for CI races.
+    playerB.ws.send(JSON.stringify(concurrentOperationB));
+    playerA.ws.send(JSON.stringify(concurrentOperationA));
     const [commitA, resultA, commitB, resultB] = await Promise.all([
       concurrentCommitA, concurrentResultA, concurrentCommitB, concurrentResultB,
     ]);
