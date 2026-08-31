@@ -5,11 +5,11 @@ import { assertWorldV2 } from './world-v2.mjs';
 // projection or authoritative World mutation.
 export const WORLD_LIMITS = Object.freeze({
   maxDepth: 24,
-  maxNodes: 20_000,
+  maxNodes: 200_000,
   maxArrayLength: 1_000,
   maxStringLength: 65_536,
   maxObjectKeys: 256,
-  maxFogRowKeys: 4_096,
+  maxFogRowKeys: 32_768,
   maxChatMessages: 500,
 });
 
@@ -50,11 +50,11 @@ export function assertUniqueIds(items, label, { field = 'id' } = {}) {
 }
 
 function objectKeyLimit(path) {
-  // Fog is stored as a sparse row dictionary. A legitimate multi-kilometre
-  // vision radius can therefore produce well over 256 row keys even though
-  // every row remains canonical and compact. Keep the generic hostile-input
-  // limit for all ordinary objects and grant only Fog row dictionaries a
-  // larger, still-bounded allowance (4096 rows × 5 m = 20.48 km vertically).
+  // Fog is stored as a sparse row dictionary. Large sight radii are clipped to
+  // the real map rectangle before persistence, so row growth follows map size
+  // rather than vision radius. Keep a much larger final safety ceiling only for
+  // canonical Fog rows (32768 × 5 m = 163.84 km vertically); the global node
+  // budget and the multiplayer 8 MB payload budget remain additional bounds.
   return path.endsWith('.rows') && path.includes('.fog.exploredByParty.')
     ? WORLD_LIMITS.maxFogRowKeys
     : WORLD_LIMITS.maxObjectKeys;

@@ -57,7 +57,7 @@ await viteBuild({
     minify: false,
     outDir: root,
     lib: {
-      entry: path.join(projectRoot, 'src', 'world', 'operations.js'),
+      entry: path.join(projectRoot, 'src', 'server', 'world-operations-entry.js'),
       formats: ['es'],
       fileName: () => 'world-operations.mjs',
     },
