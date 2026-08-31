@@ -26,7 +26,7 @@ RPGmap 仅面向本机和可信局域网，不应直接暴露到公网。World�
 - 规则系统：Infinite Horror Actor、Health、B/L/A 伤势、Status/Effect、Damage/Healing；侦测分为精确与模糊范围，并结合明暗环境、暗视等感官能力计算。
 - 战斗与聊天：先攻、回合权限、共享聊天与系统日志；当前战斗者离开本回合起点后，会保留不可交互的回合起点幻影直到下一回合。普通 Player 在战斗中仍只能移动当前回合的一个 Token，群移不能绕过 Combat Turn Lock；GM 可按需要调整多个 Token。
 - Local/LAN：服务器权威 operation、revision、幂等、Actor/Token 控制权、Combat Turn Lock、按用户裁剪的 AudienceProjection 与滚动备份。
-- 视野与迷雾：玩家选择自己控制的 Token 作为唯一实时视野来源；视野圆心始终跟随该 Token 的最新权威坐标，精确与模糊范围实际看过的 5 米网格区域按 Scene 与队伍持久化共享，GM 可重置或重新隐藏。Infinite Horror 运行时视野统一限制到 120 m，导入表中更大的原始数值保留在形态数据中，但不会再触发 Fog operation 错误导致视野层无法显示。
+- 视野与迷雾：玩家选择自己控制的 Token 作为唯一实时视野来源；视野圆心始终跟随该 Token 的最新权威坐标，精确与模糊范围实际看过的 5 米网格区域按 Scene 与队伍持久化共享，GM 可重置或重新隐藏。显式导入或实例覆盖的侦测距离按 Ruleset 原值运行，不再被 Fog 的 120 m 实现上限截断；Fog operation 接受更大半径，并仅把栅格计算裁剪到当前地图实际可覆盖范围。未配置侦测时的自动默认范围仍遵循 Infinite Horror 自身的 `20–120m` fallback 规则。
 - 隐身与可见性：Token 支持公开、队伍、仅 GM 和指定用户；隐身 Token 仅向 GM、控制者、队友及明确授权用户以半透明形式投影。
 - 其他指示物：陷阱、目标点、区域和注释使用轻量 Marker；指示物库分别提供怪物、NPC 与其他模板区域，怪物/NPC 可从各自 XLSX 入口导入，并可在当前 Scene 实例抽屉中逐个检查 HP 与状态及执行 GM 批量状态操作。怪物、NPC 与召唤物的 Actor 状态写入其 Synthetic Actor Token 的 `actorDelta.effects`，不会修改模板或同模板的其他实例。
 - 发布验证：audit、全量测试、tracked syntax、bundle budget、严格包清单、SHA-256 和 Windows Edge smoke。
@@ -57,6 +57,8 @@ Scene
 - 普通多人写入使用 operation schema 1；完整 World 只用于初始化、快照、显式导入和恢复。
 
 v2.2.3 修复三个直接影响桌面跑团的回归：Token 鼠标拖动改为 document 级 Pointer 生命周期并松开即移动，WASD 改为连续队列；导入角色的有效视野在进入 Fog operation 前统一到 120 m 运行时上限；怪物/NPC/召唤物批量状态不再把 Synthetic Actor 重新当作 Actor 模板写入，而是直接更新各自 Token 的 `actorDelta.effects`。
+
+main 后续移除了上述视野修复中的 120 m 运行时截断：显式 Ruleset 侦测值和 Token 覆盖值现在完整进入实时视野、AudienceProjection 与 Fog；Fog 只在内部按地图尺寸裁剪无意义的栅格工作量，不再反向限制规则层侦测距离。
 
 v2.2.0 将 Actor 明确为模板，将 NPC/召唤物 Token 明确为独立运行实例；所有伤害、Health、Status、Effect 与 Combat 操作都按 `tokenId` 结算。Local/LAN 服务端针对每个会话生成 AudienceProjection，隐藏实体不会通过快照、补丁、战斗、聊天或查询旁路泄漏。首期视野为无墙体遮挡的圆形范围；原始地图资产仍会下载到客户端，因此战争迷雾不是地图底图 DRM。
 
