@@ -143,13 +143,14 @@ test('Movement V5 uses RAF preview updates, persistent Leaflet preview objects, 
   assert.doesNotMatch(movementController, /setPointerCapture|releasePointerCapture/);
 });
 
-test('selection health HUD is Ruleset-described and batch edits reuse canonical health operations', () => {
+test('selection health HUD stays Ruleset-described and batch edits reuse canonical health operations', () => {
   assert.match(healthIndex, /createHealthTokenBarsV2/);
   assert.match(healthIndex, /createHealthSelectionHud/);
   assert.match(selectionHud, /describeHealth\(health, \{ ruleset: api\.ruleset \}\)/);
+  assert.match(selectionHud, /entry\?\.view\?\.title/);
   assert.match(selectionHud, /applyDamageToTokenIds/);
   assert.match(selectionHud, /applyHealingToTokenIds/);
-  assert.match(selectionHud, /B\/L\/A/);
+  assert.match(selectionHud, /Health Runtime.*Presentation/);
   assert.match(tokenBars, /function upsertToken/);
   assert.match(tokenBars, /source\.startsWith\('movement:'\)/);
 });
