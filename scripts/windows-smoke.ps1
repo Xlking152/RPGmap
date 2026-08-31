@@ -22,6 +22,30 @@ function Clear-RpgMapSmokeState {
   }
 }
 
+function Invoke-RpgMapBrowserSmoke {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Url,
+    [ValidateSet('bootstrap', 'fog')]
+    [string]$Mode = 'bootstrap'
+  )
+
+  for ($attempt = 1; $attempt -le 2; $attempt++) {
+    if ($Mode -eq 'fog') {
+      & node (Join-Path $PSScriptRoot 'browser-smoke.mjs') $Url ($TimeoutSeconds * 1000) fog
+    } else {
+      & node (Join-Path $PSScriptRoot 'browser-smoke.mjs') $Url ($TimeoutSeconds * 1000)
+    }
+    if ($LASTEXITCODE -eq 0) { return }
+    if ($attempt -lt 2) {
+      Write-Warning "Packaged Edge $Mode smoke failed on attempt $attempt; retrying once with a fresh profile."
+      Start-Sleep -Seconds 2
+    }
+  }
+
+  throw "Packaged Edge $Mode smoke failed after 2 attempts."
+}
+
 Clear-RpgMapSmokeState
 
 # Reserve an ephemeral loopback port instead of assuming 30000 is free on the
@@ -92,14 +116,12 @@ try {
         $hostUrl = "http://127.0.0.1:$port/#rpgmap-host=1&gmSecret=$smokeGmSecret"
         Write-Host '[smoke] opening World Manager and Lanzhou Runtime in Edge'
         $browserAttempted = $true
-        & node (Join-Path $PSScriptRoot 'browser-smoke.mjs') $hostUrl ($TimeoutSeconds * 1000)
-        if ($LASTEXITCODE -ne 0) { throw 'Packaged Edge browser smoke failed.' }
+        Invoke-RpgMapBrowserSmoke -Url $hostUrl
         Write-Host '[smoke] World Manager and Lanzhou Runtime passed'
         Write-Host '[smoke] validating LAN identity, projection, vision and fog authority'
         & node (Join-Path $PSScriptRoot 'lan-vision-smoke.mjs') "http://127.0.0.1:$port" $smokeGmSecret $smokeJoinCode
         if ($LASTEXITCODE -ne 0) { throw 'Packaged LAN vision smoke failed.' }
-        & node (Join-Path $PSScriptRoot 'browser-smoke.mjs') $hostUrl ($TimeoutSeconds * 1000) fog
-        if ($LASTEXITCODE -ne 0) { throw 'Packaged Fog Canvas browser smoke failed.' }
+        Invoke-RpgMapBrowserSmoke -Url $hostUrl -Mode fog
         Write-Host '[smoke] LAN projection and Fog Canvas passed'
         return
       }

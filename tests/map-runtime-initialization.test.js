@@ -9,6 +9,7 @@ import {
 const runtimeSource = readFileSync(new URL('../src/engine/runtime.js', import.meta.url), 'utf8');
 const controlLayerSource = readFileSync(new URL('../src/interaction/control-layer.js', import.meta.url), 'utf8');
 const browserSmokeSource = readFileSync(new URL('../scripts/browser-smoke.mjs', import.meta.url), 'utf8');
+const windowsSmokeSource = readFileSync(new URL('../scripts/windows-smoke.ps1', import.meta.url), 'utf8');
 
 function controlFixture() {
   const button = { style: {} };
@@ -66,4 +67,11 @@ test('Packaged browser smoke requires a rendered ready Lanzhou map', () => {
   assert.match(browserSmokeSource, /leaflet-base-pane svg\.leaflet-image-layer/);
   assert.match(browserSmokeSource, /baseSvgWidth > 0/);
   assert.match(browserSmokeSource, /mapImages > 0/);
+});
+
+test('Windows smoke retries an isolated Edge crash once and still fails after the second attempt', () => {
+  assert.match(windowsSmokeSource, /for \(\$attempt = 1; \$attempt -le 2; \$attempt\+\+\)/);
+  assert.match(windowsSmokeSource, /retrying once with a fresh profile/);
+  assert.match(windowsSmokeSource, /failed after 2 attempts/);
+  assert.doesNotMatch(windowsSmokeSource, /-le 3|while \(\$true\)/);
 });
