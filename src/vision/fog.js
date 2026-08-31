@@ -2,7 +2,10 @@ export const FOG_SCHEMA_VERSION = 1;
 export const FOG_CELL_SIZE_METERS = 5;
 
 const MAX_ROW_SPANS = 4096;
-const MAX_UNBOUNDED_FOG_RADIUS_METERS = 10000;
+// This fallback is used only when no trusted map dimensions are available.
+// Known maps are bounded by their actual rectangle and therefore have no
+// Ruleset-facing sight-radius ceiling.
+const MAX_UNBOUNDED_FOG_RADIUS_METERS = 50000;
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -17,16 +20,53 @@ function finite(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function optionalNonNegative(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
 function mapScale(map = {}) {
   return Math.max(0.000001, finite(map.metersPerUnit, 1));
 }
 
-function effectiveRadiusMeters(radiusMeters, map = {}) {
+function mapGrid(map = {}) {
+  const metersPerUnit = mapScale(map);
+  const cellUnits = FOG_CELL_SIZE_METERS / metersPerUnit;
+  const width = optionalNonNegative(map.width);
+  const height = optionalNonNegative(map.height);
+  const bounded = width !== null && height !== null;
+  return {
+    metersPerUnit,
+    cellUnits,
+    width,
+    height,
+    bounded,
+    maxRow: bounded ? Math.ceil(height / cellUnits) - 1 : Infinity,
+    maxColumn: bounded ? Math.ceil(width / cellUnits) - 1 : Infinity,
+  };
+}
+
+function farthestMapCornerUnits(point, grid) {
+  if (!grid.bounded) return Infinity;
+  const x = finite(point?.x);
+  const y = finite(point?.y);
+  return Math.max(
+    Math.hypot(x, y),
+    Math.hypot(x - grid.width, y),
+    Math.hypot(x, y - grid.height),
+    Math.hypot(x - grid.width, y - grid.height),
+  );
+}
+
+function effectiveRadiusMeters(radiusMeters, map = {}, center = null) {
   const requested = Math.max(0, finite(radiusMeters));
-  const width = Number(map.width);
-  const height = Number(map.height);
-  if (Number.isFinite(width) && width >= 0 && Number.isFinite(height) && height >= 0) {
-    return Math.min(requested, Math.hypot(width, height) * mapScale(map));
+  const grid = mapGrid(map);
+  if (grid.bounded) {
+    const usefulUnits = center
+      ? farthestMapCornerUnits(center, grid)
+      : Math.hypot(grid.width, grid.height);
+    return Math.min(requested, usefulUnits * grid.metersPerUnit);
   }
   return Math.min(requested, MAX_UNBOUNDED_FOG_RADIUS_METERS);
 }
@@ -51,18 +91,28 @@ function mergeSpans(spans = []) {
   return merged;
 }
 
-function normalizeRows(raw) {
+function normalizeRows(raw, map = {}) {
   const rows = {};
+  const grid = mapGrid(map);
   for (const [rowKey, value] of Object.entries(object(raw))) {
     const row = Number(rowKey);
     if (!Number.isSafeInteger(row) || row < 0) continue;
-    const spans = mergeSpans(Array.isArray(value) ? value : []);
+    if (grid.bounded && (grid.maxRow < 0 || row > grid.maxRow)) continue;
+    let spans = mergeSpans(Array.isArray(value) ? value : []);
+    if (grid.bounded) {
+      if (grid.maxColumn < 0) continue;
+      spans = mergeSpans(spans.flatMap(([start, end]) => {
+        const clippedStart = Math.max(0, start);
+        const clippedEnd = Math.min(grid.maxColumn, end);
+        return clippedEnd >= clippedStart ? [[clippedStart, clippedEnd]] : [];
+      }));
+    }
     if (spans.length) rows[String(row)] = spans;
   }
   return rows;
 }
 
-export function normalizeFogState(raw = {}) {
+export function normalizeFogState(raw = {}, map = {}) {
   const source = object(raw);
   const exploredByParty = {};
   for (const [rawPartyId, record] of Object.entries(object(source.exploredByParty))) {
@@ -70,7 +120,7 @@ export function normalizeFogState(raw = {}) {
     if (!partyId) continue;
     exploredByParty[partyId] = {
       ...clone(object(record)),
-      rows: normalizeRows(record?.rows),
+      rows: normalizeRows(record?.rows, map),
     };
   }
   return {
@@ -106,24 +156,40 @@ function removeSpan(rows, row, start, end) {
   else delete rows[String(row)];
 }
 
+function applyFullMap(rows, mode, grid) {
+  if (!grid.bounded || grid.maxRow < 0 || grid.maxColumn < 0) return;
+  for (let row = 0; row <= grid.maxRow; row += 1) {
+    if (mode === 'remove') removeSpan(rows, row, 0, grid.maxColumn);
+    else addSpan(rows, row, 0, grid.maxColumn);
+  }
+}
+
+function circleCoversMap(circle, grid) {
+  if (!grid.bounded || grid.maxRow < 0 || grid.maxColumn < 0) return false;
+  const radiusUnits = Math.max(0, finite(circle?.radiusMeters)) / grid.metersPerUnit;
+  return radiusUnits >= farthestMapCornerUnits(circle, grid);
+}
+
 function rasterCircle(rows, circle, mode, map = {}) {
-  const metersPerUnit = mapScale(map);
-  const cellUnits = FOG_CELL_SIZE_METERS / metersPerUnit;
+  const grid = mapGrid(map);
+  if (grid.bounded && (grid.maxRow < 0 || grid.maxColumn < 0)) return;
+  if (circleCoversMap(circle, grid)) {
+    applyFullMap(rows, mode, grid);
+    return;
+  }
+
   const cx = finite(circle?.x);
   const cy = finite(circle?.y);
-  const radiusUnits = effectiveRadiusMeters(circle?.radiusMeters, map) / metersPerUnit;
-  const width = Number.isFinite(Number(map.width)) ? Math.max(0, Number(map.width)) : Infinity;
-  const height = Number.isFinite(Number(map.height)) ? Math.max(0, Number(map.height)) : Infinity;
-  const minRow = Math.max(0, Math.floor((cy - radiusUnits) / cellUnits));
-  const maxRow = Math.min(Math.ceil(height / cellUnits) - 1, Math.floor((cy + radiusUnits) / cellUnits));
-  const maxColumn = Math.ceil(width / cellUnits) - 1;
+  const radiusUnits = effectiveRadiusMeters(circle?.radiusMeters, map, circle) / grid.metersPerUnit;
+  const minRow = Math.max(0, Math.floor((cy - radiusUnits) / grid.cellUnits));
+  const maxRow = Math.min(grid.maxRow, Math.floor((cy + radiusUnits) / grid.cellUnits));
   for (let row = minRow; row <= maxRow; row += 1) {
-    const y = (row + 0.5) * cellUnits;
+    const y = (row + 0.5) * grid.cellUnits;
     const remaining = radiusUnits ** 2 - (y - cy) ** 2;
     if (remaining < 0) continue;
     const dx = Math.sqrt(remaining);
-    const start = Math.max(0, Math.floor((cx - dx) / cellUnits));
-    const end = Math.min(maxColumn, Math.floor((cx + dx) / cellUnits));
+    const start = Math.max(0, Math.floor((cx - dx) / grid.cellUnits));
+    const end = Math.min(grid.maxColumn, Math.floor((cx + dx) / grid.cellUnits));
     if (end < start) continue;
     if (mode === 'remove') removeSpan(rows, row, start, end);
     else addSpan(rows, row, start, end);
@@ -131,31 +197,44 @@ function rasterCircle(rows, circle, mode, map = {}) {
 }
 
 export function exploreFogCircle(rawFog, partyId, circle, map = {}) {
-  const fog = normalizeFogState(rawFog);
+  const fog = normalizeFogState(rawFog, map);
   rasterCircle(partyRows(fog, partyId), circle, 'add', map);
   return fog;
 }
 
 export function exploreFogSweep(rawFog, partyId, from, to, radiusMeters, map = {}) {
-  const fog = normalizeFogState(rawFog);
+  const fog = normalizeFogState(rawFog, map);
   const rows = partyRows(fog, partyId);
-  const metersPerUnit = mapScale(map);
-  const distanceMeters = Math.hypot(finite(to?.x) - finite(from?.x), finite(to?.y) - finite(from?.y)) * metersPerUnit;
+  const grid = mapGrid(map);
+  const fromCircle = { x: finite(from?.x), y: finite(from?.y), radiusMeters };
+  const toCircle = { x: finite(to?.x), y: finite(to?.y), radiusMeters };
+
+  // If either endpoint already sees the whole map, the union of the sweep is
+  // the whole map as well. Avoid thousands of redundant intermediate circles.
+  if (circleCoversMap(fromCircle, grid)) {
+    applyFullMap(rows, 'add', grid);
+    return fog;
+  }
+  if (circleCoversMap(toCircle, grid)) {
+    applyFullMap(rows, 'add', grid);
+    return fog;
+  }
+
+  const distanceMeters = Math.hypot(finite(to?.x) - finite(from?.x), finite(to?.y) - finite(from?.y)) * grid.metersPerUnit;
   const steps = Math.max(1, Math.ceil(distanceMeters / (FOG_CELL_SIZE_METERS / 2)));
-  const safeRadiusMeters = effectiveRadiusMeters(radiusMeters, map);
   for (let index = 0; index <= steps; index += 1) {
     const ratio = index / steps;
     rasterCircle(rows, {
       x: finite(from?.x) + (finite(to?.x) - finite(from?.x)) * ratio,
       y: finite(from?.y) + (finite(to?.y) - finite(from?.y)) * ratio,
-      radiusMeters: safeRadiusMeters,
+      radiusMeters,
     }, 'add', map);
   }
   return fog;
 }
 
 export function hideFogCircle(rawFog, partyId, circle, map = {}) {
-  const fog = normalizeFogState(rawFog);
+  const fog = normalizeFogState(rawFog, map);
   rasterCircle(partyRows(fog, partyId), circle, 'remove', map);
   return fog;
 }
