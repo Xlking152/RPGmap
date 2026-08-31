@@ -26,7 +26,7 @@ test('form detection is derived with light-level downgrades and runtime override
     (({ preciseRangeMeters, vagueRangeMeters }) => ({ preciseRangeMeters, vagueRangeMeters }))(
       infiniteHorrorRuleset.vision.describe(actor, { lighting: 'normal' }),
     ),
-    { preciseRangeMeters: 30, vagueRangeMeters: 120 },
+    { preciseRangeMeters: 30, vagueRangeMeters: 300 },
   );
   assert.equal(infiniteHorrorRuleset.vision.describe(actor, { lighting: 'dim' }).preciseRangeMeters, 0);
   assert.equal(infiniteHorrorRuleset.vision.describe(actor, { lighting: 'dark' }).vagueRangeMeters, 0);
