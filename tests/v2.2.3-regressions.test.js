@@ -9,7 +9,7 @@ import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-hor
 import { applySyntheticActorStatusBatch } from '../src/token/synthetic-status.js';
 
 const movementIndex = await readFile(new URL('../src/movement/index.js', import.meta.url), 'utf8');
-const movementController = await readFile(new URL('../src/movement/controller-v4.js', import.meta.url), 'utf8');
+const movementController = await readFile(new URL('../src/movement/controller-v5.js', import.meta.url), 'utf8');
 
 function monsterActor() {
   return createActorFromRulesetImport({
@@ -73,13 +73,14 @@ function world() {
   };
 }
 
-test('Movement V4 keeps drag lifecycle on document and queues repeated WASD input', () => {
-  assert.match(movementIndex, /createMovementControllerV4\(\{ settings \}\)\.register\(api\)/);
+test('Movement V5 keeps document drag lifecycle and coalesces repeated WASD input', () => {
+  assert.match(movementIndex, /createMovementControllerV5\(\{ settings \}\)\.register\(api\)/);
   assert.match(movementController, /documentNode\.addEventListener\('pointermove', pointerMove, true\)/);
   assert.match(movementController, /documentNode\.addEventListener\('pointerup', pointerUp, true\)/);
   assert.match(movementController, /const keyboardQueue = \[\]/);
   assert.match(movementController, /while \(keyboardQueue\.length/);
-  assert.match(movementController, /api\.movement\.moveTokenTo\(token\.id, target\)/);
+  assert.match(movementController, /sameDirection\(last, direction\)/);
+  assert.match(movementController, /api\.movementFast\?\.moveTokenTo \|\| api\.movement\.moveTokenTo/);
   assert.doesNotMatch(movementController, /setPointerCapture|releasePointerCapture/);
 });
 
