@@ -6,8 +6,6 @@ export const INFINITE_HORROR_DETECTION_SENSES = Object.freeze([
   'darkvision',
 ]);
 
-export const INFINITE_HORROR_MAX_VISION_RANGE_METERS = 120;
-
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
@@ -15,10 +13,6 @@ function object(value) {
 function range(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(0, number) : fallback;
-}
-
-function runtimeRange(value) {
-  return Math.min(INFINITE_HORROR_MAX_VISION_RANGE_METERS, range(value));
 }
 
 function normalizeSenses(raw = {}, { partial = false } = {}) {
@@ -63,17 +57,11 @@ export function resolveInfiniteHorrorDetection({ form, runtime, perception = nul
     configured: form?.detection?.configured === true,
   });
   const perceptionValue = perception === null || perception === undefined ? 1 : Number(perception);
-  const fallback = Math.max(20, Math.min(INFINITE_HORROR_MAX_VISION_RANGE_METERS, 30 + (Number.isFinite(perceptionValue) ? perceptionValue : 1) * 10));
+  const fallback = Math.max(20, 30 + (Number.isFinite(perceptionValue) ? perceptionValue : 1) * 10);
   const override = normalizeInfiniteHorrorDetectionOverride(runtime?.detectionOverrides);
-  let preciseRangeMeters = override.preciseRangeMeters ?? (base.configured ? base.preciseRangeMeters : fallback);
-  let vagueRangeMeters = override.vagueRangeMeters ?? (base.configured ? base.vagueRangeMeters : preciseRangeMeters);
-
-  // Scene Fog operations intentionally cap a single exploration radius at
-  // 120 m. XLSX values are preserved verbatim in the imported form, but the
-  // live runtime range is bounded here so selecting an imported Token can
-  // never fail before the vision overlay renders.
-  preciseRangeMeters = runtimeRange(preciseRangeMeters);
-  vagueRangeMeters = runtimeRange(Math.max(preciseRangeMeters, vagueRangeMeters));
+  let preciseRangeMeters = range(override.preciseRangeMeters ?? (base.configured ? base.preciseRangeMeters : fallback));
+  let vagueRangeMeters = range(override.vagueRangeMeters ?? (base.configured ? base.vagueRangeMeters : preciseRangeMeters));
+  vagueRangeMeters = Math.max(preciseRangeMeters, vagueRangeMeters);
   const senses = { ...base.senses, ...object(override.senses) };
   const normalizedLighting = ['normal', 'dim', 'dark'].includes(String(lighting)) ? String(lighting) : 'normal';
 
