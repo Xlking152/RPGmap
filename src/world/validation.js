@@ -82,7 +82,7 @@ function assertSchema3Token(token, actor, label) {
   const vision = object(token.vision, `${label}.vision`);
   if (typeof vision.enabled !== 'boolean') fail(`${label}.vision.enabled must be boolean`);
   if (vision.rangeOverrideMeters !== null && (!Number.isFinite(Number(vision.rangeOverrideMeters))
-    || Number(vision.rangeOverrideMeters) < 0 || Number(vision.rangeOverrideMeters) > 120)) {
+    || Number(vision.rangeOverrideMeters) < 0)) {
     fail(`${label}.vision.rangeOverrideMeters is invalid`);
   }
   stringIds(vision.overrideUserIds, `${label}.vision.overrideUserIds`);

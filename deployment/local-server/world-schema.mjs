@@ -9,6 +9,7 @@ export const WORLD_LIMITS = Object.freeze({
   maxArrayLength: 1_000,
   maxStringLength: 65_536,
   maxObjectKeys: 256,
+  maxFogRowKeys: 4_096,
   maxChatMessages: 500,
 });
 
@@ -48,6 +49,17 @@ export function assertUniqueIds(items, label, { field = 'id' } = {}) {
   return seen;
 }
 
+function objectKeyLimit(path) {
+  // Fog is stored as a sparse row dictionary. A legitimate multi-kilometre
+  // vision radius can therefore produce well over 256 row keys even though
+  // every row remains canonical and compact. Keep the generic hostile-input
+  // limit for all ordinary objects and grant only Fog row dictionaries a
+  // larger, still-bounded allowance (4096 rows × 5 m = 20.48 km vertically).
+  return path.endsWith('.rows') && path.includes('.fog.exploredByParty.')
+    ? WORLD_LIMITS.maxFogRowKeys
+    : WORLD_LIMITS.maxObjectKeys;
+}
+
 export function assertSafeJson(value, label = 'world') {
   let nodes = 0;
   const visit = (current, path, depth) => {
@@ -69,7 +81,7 @@ export function assertSafeJson(value, label = 'world') {
     }
     if (!current || typeof current !== 'object') fail(`${path} is not JSON-safe`);
     const entries = Object.entries(current);
-    if (entries.length > WORLD_LIMITS.maxObjectKeys) fail(`${path} has too many keys`, 'world_limit');
+    if (entries.length > objectKeyLimit(path)) fail(`${path} has too many keys`, 'world_limit');
     for (const [key, entry] of entries) {
       if (key.length > 160) fail(`${path} has an oversized key`, 'world_limit');
       visit(entry, `${path}.${key}`, depth + 1);
