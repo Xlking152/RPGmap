@@ -83,21 +83,21 @@ test('Movement V4 keeps drag lifecycle on document and queues repeated WASD inpu
   assert.doesNotMatch(movementController, /setPointerCapture|releasePointerCapture/);
 });
 
-test('configured or overridden vision above the Fog operation limit resolves to 120 m', () => {
+test('configured and overridden vision keeps ruleset ranges above 120 m', () => {
   const configured = resolveInfiniteHorrorDetection({
     form: { detection: { configured: true, preciseRangeMeters: 300, vagueRangeMeters: 450, senses: {} } },
     lighting: 'normal',
   });
-  assert.equal(configured.preciseRangeMeters, 120);
-  assert.equal(configured.vagueRangeMeters, 120);
+  assert.equal(configured.preciseRangeMeters, 300);
+  assert.equal(configured.vagueRangeMeters, 450);
 
   const overridden = resolveInfiniteHorrorDetection({
     form: { detection: { configured: true, preciseRangeMeters: 30, vagueRangeMeters: 60, senses: {} } },
     runtime: { detectionOverrides: { preciseRangeMeters: 200, vagueRangeMeters: 350 } },
     lighting: 'normal',
   });
-  assert.equal(overridden.preciseRangeMeters, 120);
-  assert.equal(overridden.vagueRangeMeters, 120);
+  assert.equal(overridden.preciseRangeMeters, 200);
+  assert.equal(overridden.vagueRangeMeters, 350);
 });
 
 test('monster status batch writes each unlinked Token actorDelta instead of the Actor template', () => {
