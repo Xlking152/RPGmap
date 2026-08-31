@@ -1,15 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BUILT_IN_LANZHOU_MAP } from '../src/map-package/constants.js';
+import { BUILT_IN_LANZHOU_MAP, BUILT_IN_LANZHOU_MAP_BOUNDS } from '../src/map-package/constants.js';
 import { exploreFogCircle, exploreFogSweep } from '../src/vision/fog.js';
 import { applyWorldOperations as applyServerWorldOperations } from '../src/server/world-operations-entry.js';
 import { assertSafeJson, WORLD_LIMITS } from '../deployment/local-server/world-schema.mjs';
 
 const LANZHOU_METRICS = {
   metersPerUnit: 1,
-  width: BUILT_IN_LANZHOU_MAP.width,
-  height: BUILT_IN_LANZHOU_MAP.height,
+  width: BUILT_IN_LANZHOU_MAP_BOUNDS.width,
+  height: BUILT_IN_LANZHOU_MAP_BOUNDS.height,
 };
 
 function worldState() {
