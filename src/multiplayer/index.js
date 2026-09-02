@@ -1,7 +1,9 @@
 import { createMultiplayerController } from './controller.js';
+import { createActorOwnershipUi } from './actor-ownership-ui.js';
 
 export { multiplayerSocketUrl, isLocalHost, sanitizeMultiplayerName, normalizeRequestedRole } from './protocol.js';
 export { createMultiplayerController } from './controller.js';
+export { createActorOwnershipUi, actorOwnershipRows, buildActorOwnershipChanges, submitActorOwnershipChanges } from './actor-ownership-ui.js';
 export { createMultiplayerSessionStorage } from './session.js';
 export { createOperationQueue } from './operation-queue.js';
 export { hasWorldOperationRevisionGap, shouldApplyOwnServerSnapshot } from './revision.js';
@@ -9,6 +11,7 @@ export { createOperationId, parseTransportMessage, sendTransportMessage } from '
 
 export function createMultiplayerSystem(options = {}) {
   const controller = createMultiplayerController(options);
+  const actorOwnershipUi = createActorOwnershipUi(options);
   return {
     register(api) {
       controller.register(api);
@@ -30,6 +33,8 @@ export function createMultiplayerSystem(options = {}) {
           return multiplayer.canControlActor?.(token.actorId) === true;
         };
       }
+
+      actorOwnershipUi.register(api);
     },
   };
 }
