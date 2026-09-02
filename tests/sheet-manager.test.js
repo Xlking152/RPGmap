@@ -72,7 +72,7 @@ test('lazy Entity UI installs the multi-window coordinator after the canonical U
   const managerRegister = entityIndex.indexOf('createActorSheetWindowCoordinator({ api, documentNode, windowNode })');
   assert.ok(uiRegister >= 0 && managerRegister > uiRegister);
   assert.match(lazyTools, /createActorSheetWindowCoordinator/);
-  assert.match(coordinator, /openActor:[\s\S]*openToken:/);
+  assert.match(coordinator, /api\.entities = Object\.freeze\(\{[\s\S]*openActor,[\s\S]*openToken,/);
   assert.match(coordinator, /data-sheet-manager-static/);
   assert.match(coordinator, /storageKey: `rpgmap\.ui\.actor-sheets\.v1\.\$\{worldId\}`/);
 });
