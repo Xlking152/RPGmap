@@ -52,6 +52,8 @@ function installStyles(documentNode) {
   style.textContent = `
     .entity-health-panel { display:grid; gap:10px; }
     .entity-health-head { display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+    .entity-health-head h3 { margin:0; display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; }
+    .entity-health-compact { font-size:18px; color:#344548; letter-spacing:.2px; }
     .entity-health-head label { display:flex; gap:6px; align-items:center; font-size:12px; color:#617073; }
     .entity-health-values { display:grid; grid-template-columns:repeat(4,minmax(90px,1fr)); gap:7px; }
     .entity-health-value { border:1px solid #dce3df; border-radius:8px; padding:8px; background:#f8faf8; }
@@ -89,6 +91,7 @@ function healthSignature(subjectId, state, view, variantId = '') {
     state?.mode,
     state?.max,
     view.summary,
+    view.compactSummary,
     view.status,
     ...(view.segments || []).flatMap(segment => [segment.id, segment.value]),
     ...(view.fields || []).flatMap(field => [field.id, field.value]),
@@ -122,7 +125,7 @@ export function renderActorHealthPanel(api, actor, { actorId = actor.id, tokenId
     ? `<div class="entity-health-bar" title="${escapeHtml(view.summary)}">${view.segments.map(segment => `<span style="width:${width(segment.value)}%;background:${escapeHtml(segment.color || '#4b9f69')}" title="${escapeHtml(segment.label || segment.id)}"></span>`).join('')}</div>`
     : '';
   return `<section class="entity-section entity-health-panel" data-health-panel>
-    <div class="entity-health-head"><h3>${escapeHtml(view.title || '生命系统')}</h3><label>模式 <select data-health-mode="${escapeHtml(actorId)}" data-health-token-id="${escapeHtml(tokenId || '')}"${disabled}>${modeOptionsHtml(health.mode, api.ruleset)}</select></label></div>
+    <div class="entity-health-head"><h3>${escapeHtml(view.title || '生命系统')}${view.compactSummary ? `<span class="entity-health-compact">${escapeHtml(view.compactSummary)}</span>` : ''}</h3><label>模式 <select data-health-mode="${escapeHtml(actorId)}" data-health-token-id="${escapeHtml(tokenId || '')}"${disabled}>${modeOptionsHtml(health.mode, api.ruleset)}</select></label></div>
     ${bar}
     ${values ? `<div class="entity-health-values">${values}</div>` : ''}
     ${view.status ? `<div class="entity-health-status ${view.danger ? 'is-danger' : ''}">${escapeHtml(view.status)}</div>` : ''}
@@ -189,7 +192,7 @@ export function createHealthSheetExtension() {
         node.className = 'ui-health-mini';
         node.dataset.healthMini = '1';
         node.dataset.healthSignature = signature;
-        node.innerHTML = `<strong>生命 · ${escapeHtml(view.summary)}</strong><small>${escapeHtml(view.status)}</small>`;
+        node.innerHTML = `<strong>生命 · ${escapeHtml(view.compactSummary || view.summary)}</strong><small>${escapeHtml(view.status)}</small>`;
         firstCard.querySelector('.ui-inspector-head')?.insertAdjacentElement('afterend', node);
       }
 
@@ -203,8 +206,6 @@ export function createHealthSheetExtension() {
           } catch (error) {
             console.error('[RPGmap Health UI] mode update failed', error);
           } finally {
-            // Re-render from the canonical projection after confirmation or
-            // rejection so the select never keeps an uncommitted draft value.
             queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
           }
           return;
@@ -226,8 +227,6 @@ export function createHealthSheetExtension() {
         } catch (error) {
           console.error('[RPGmap Health UI] runtime update failed', error);
         } finally {
-          // A failed World operation leaves canonical state unchanged; redraw
-          // from that state to roll the edited input back immediately.
           queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
         }
       });
