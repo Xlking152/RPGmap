@@ -1,5 +1,12 @@
 export const RULESET_API_VERSION = 1;
 
+export const ACTOR_SHEET_KINDS = Object.freeze([
+  'character',
+  'monster',
+  'npc',
+  'generic',
+]);
+
 function nonEmptyString(value, field) {
   const text = typeof value === 'string' ? value.trim() : '';
   if (!text) throw new Error(`Ruleset ${field} must be a non-empty string`);
@@ -18,20 +25,100 @@ function actorFunction(value, fallback) {
   return typeof value === 'function' ? value : fallback;
 }
 
-function prepareActorPresentation(raw = {}) {
+function plainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function text(value, fallback = '') {
+  const result = typeof value === 'string' ? value.trim() : '';
+  return result || fallback;
+}
+
+function actorSheetKind(actor, requested) {
+  const explicit = text(requested);
+  if (ACTOR_SHEET_KINDS.includes(explicit)) return explicit;
+  const actorType = String(actor?.type || 'other');
+  if (actorType === 'pc') return 'character';
+  if (actorType === 'monster' || actorType === 'summon') return 'monster';
+  if (actorType === 'npc') return 'npc';
+  return 'generic';
+}
+
+function actorTypeLabel(actor) {
+  return ({
+    pc: 'PC',
+    monster: '怪物',
+    npc: 'NPC',
+    summon: '召唤物',
+    other: '其他',
+  })[String(actor?.type || 'other')] || '其他';
+}
+
+function defaultSheetTab(kind, tabs, requested) {
+  const available = new Set(tabs.map(tab => String(tab?.id || '')).filter(Boolean));
+  const explicit = text(requested);
+  if (explicit && available.has(explicit)) return explicit;
+  const preferred = kind === 'monster' ? 'combat' : 'overview';
+  if (available.has(preferred)) return preferred;
+  if (available.has('overview')) return 'overview';
+  if (available.has('combat')) return 'combat';
+  return String(tabs[0]?.id || '');
+}
+
+function normalizeSheetSummary(raw, actor, kind) {
+  const source = plainObject(raw);
+  const tags = Array.isArray(source.tags)
+    ? source.tags.map(item => String(item ?? '').trim()).filter(Boolean)
+    : [];
   return Object.freeze({
-    describe: actorFunction(raw.describe, actor => ({
-      name: String(actor?.name || ''),
-      avatarDataUrl: null,
-      color: '#64748b',
-      variantLabel: '',
-    })),
-    describeSheet: actorFunction(raw.describeSheet, actor => ({
-      actorId: String(actor?.id || ''),
-      variants: [],
-      currentVariantId: null,
-      tabs: [],
-    })),
+    ...structuredClone(source),
+    type: text(source.type, String(actor?.type || 'other')),
+    typeLabel: text(source.typeLabel, actorTypeLabel(actor)),
+    kind,
+    subtitle: text(source.subtitle),
+    tags: Object.freeze(tags),
+  });
+}
+
+function normalizeSheetDescription(rawDescription, actor) {
+  const source = plainObject(rawDescription);
+  const tabs = (Array.isArray(source.tabs) ? source.tabs : [])
+    .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+    .map(item => structuredClone(item));
+  const variants = (Array.isArray(source.variants) ? source.variants : [])
+    .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+    .map(item => structuredClone(item));
+  const kind = actorSheetKind(actor, source.kind);
+  return Object.freeze({
+    ...structuredClone(source),
+    actorId: text(source.actorId, String(actor?.id || '')),
+    kind,
+    defaultTab: defaultSheetTab(kind, tabs, source.defaultTab),
+    summary: normalizeSheetSummary(source.summary, actor, kind),
+    variants: Object.freeze(variants),
+    currentVariantId: source.currentVariantId == null ? null : String(source.currentVariantId),
+    tabs: Object.freeze(tabs),
+  });
+}
+
+function prepareActorPresentation(raw = {}) {
+  const describe = actorFunction(raw.describe, actor => ({
+    name: String(actor?.name || ''),
+    avatarDataUrl: null,
+    color: '#64748b',
+    variantLabel: '',
+  }));
+  const describeSheet = actorFunction(raw.describeSheet, actor => ({
+    actorId: String(actor?.id || ''),
+    variants: [],
+    currentVariantId: null,
+    tabs: [],
+  }));
+  return Object.freeze({
+    describe,
+    describeSheet(actor, context = {}) {
+      return normalizeSheetDescription(describeSheet(actor, context), actor);
+    },
   });
 }
 
