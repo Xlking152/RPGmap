@@ -25,7 +25,7 @@ test('Player current card removes technical IDs and mutation buttons for uncontr
 });
 
 test('Actor sheets become non-modal draggable and resizable desktop windows', () => {
-  assert.match(sheetWindow, /pointer-events:none !important/);
+  assert.match(sheetWindow, /pointer-events:none\s*!important/);
   assert.match(sheetWindow, /pointer-events:auto/);
   assert.match(sheetWindow, /resize:both/);
   assert.match(sheetWindow, /setAttribute\('aria-modal', 'false'\)/);
