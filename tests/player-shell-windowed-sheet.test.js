@@ -7,8 +7,7 @@ const entityIndex = readFileSync(new URL('../src/entities/index.js', import.meta
 const sheetWindow = readFileSync(new URL('../src/entities/sheet-window-behavior.js', import.meta.url), 'utf8');
 
 test('connected Player shell hides GM World controls and exposes one direct owned-Actor entry', () => {
-  assert.match(appShell, /dataset\.sessionShell = player \? 'player' : 'gm'/);
-  assert.match(appShell, /data-gm-shell-only/);
+  assert.match(appShell, /capabilities\?\.connected === true && capabilities\.role !== 'gm'/);
   assert.match(appShell, /我的角色卡/);
   assert.match(appShell, /getActorAccessLevel\?\.\(preferred\) === 'owner'/);
   assert.match(appShell, /library\.hidden = player/);
@@ -24,13 +23,11 @@ test('Player current card removes technical IDs and mutation buttons for uncontr
   assert.match(appShell, /if \(canControl\) actions\.append\(button\(documentNode, '高度'/);
 });
 
-test('Actor sheets become non-modal draggable and resizable desktop windows', () => {
-  assert.match(sheetWindow, /pointer-events:none\s*!important/);
-  assert.match(sheetWindow, /pointer-events:auto/);
-  assert.match(sheetWindow, /resize:both/);
-  assert.match(sheetWindow, /setAttribute\('aria-modal', 'false'\)/);
+test('Actor sheets become map-friendly draggable and resizable desktop windows', () => {
+  assert.match(sheetWindow, /\.entity-sheet-backdrop\{[^}]*pointer-events:none\s*!important/);
+  assert.match(sheetWindow, /\.entity-sheet-backdrop>\.entity-sheet\{[^}]*resize:both;pointer-events:auto/);
   assert.match(sheetWindow, /documentNode\.addEventListener\('pointerdown', pointerDown, true\)/);
-  assert.match(sheetWindow, /const geometry = new Map\(\)/);
+  assert.match(sheetWindow, /sheet\.style\.zIndex = String\(\+\+zSerial\)/);
 });
 
 test('window behavior registers before the heavy Entity UI is lazily loaded', () => {
