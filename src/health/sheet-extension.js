@@ -14,17 +14,18 @@ function currentEntityState(api) {
   return normalizeEntityState(appState?.preferences?.entitySystem, { ruleset: api?.ruleset });
 }
 
-function subjectFromSheet(api, documentNode) {
-  const sheet = documentNode.querySelector('.entity-sheet');
+function subjectFromSheet(api, sheet) {
   const actorId = sheet?.dataset.actorId;
   if (!actorId) return null;
   const state = currentEntityState(api);
   const baseActor = state.actors.find(actor => String(actor.id) === String(actorId)) || null;
-  if (!baseActor) return null;
+  if (!baseActor || baseActor.audienceRestricted === true) return null;
   const tokenId = String(sheet.dataset.tokenId || '').trim() || null;
   if (!tokenId) return { actor: baseActor, actorId: String(actorId), tokenId: null };
   const actor = api.tokens?.resolveActor?.(tokenId)?.actor || null;
-  return actor ? { actor, actorId: String(actorId), tokenId } : null;
+  return actor && actor.audienceRestricted !== true
+    ? { actor, actorId: String(actorId), tokenId }
+    : null;
 }
 
 function actorContext(api, actor) {
@@ -80,6 +81,13 @@ function canEditHealth(api, actor, tokenId = null) {
   return !capabilities || capabilities.canEditActor?.(actor.id) !== false;
 }
 
+function disabledReason(actor, tokenId = null) {
+  if (!tokenId && ['monster', 'npc', 'summon'].includes(String(actor?.type || ''))) {
+    return '怪物、NPC 与召唤物模板的生命只能从 Token 实例修改';
+  }
+  return tokenId ? '当前没有该 Token 实例的控制权限' : '需要该 Actor 的 OWNER 权限';
+}
+
 function modeOptionsHtml(mode, ruleset) {
   return healthModeOptions({ ruleset }).map(option => `<option value="${escapeHtml(option.id)}" ${String(mode) === String(option.id) ? 'selected' : ''}>${escapeHtml(option.label || option.id)}</option>`).join('');
 }
@@ -109,7 +117,7 @@ export function renderActorHealthPanel(api, actor, { actorId = actor.id, tokenId
   if (!health) return '';
   const view = describeHealth(health, { ruleset: api.ruleset });
   const editable = canEditHealth(api, actor, tokenId);
-  const disabled = editable ? '' : ' disabled title="需要 OWNER 权限且必须轮到该角色行动"';
+  const disabled = editable ? '' : ` disabled title="${escapeHtml(disabledReason(actor, tokenId))}"`;
   const width = value => health.max > 0 ? Math.max(0, Number(value) / health.max * 100) : 0;
   const fields = new Map((view.fields || []).map(field => [String(field.id), field]));
   const segmentIds = new Set((view.segments || []).map(segment => String(segment.id)));
@@ -133,6 +141,13 @@ export function renderActorHealthPanel(api, actor, { actorId = actor.id, tokenId
   </section>`;
 }
 
+function sheetShowsHealth(sheet, actor) {
+  if (!sheet || !actor || sheet.dataset.sheetMode === 'limited' || actor.audienceRestricted === true) return false;
+  const activeTab = String(sheet.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab || '');
+  if (activeTab === 'overview') return true;
+  return activeTab === 'combat' && ['monster', 'summon'].includes(String(actor.type || ''));
+}
+
 export function createHealthSheetExtension() {
   return {
     register(api) {
@@ -141,14 +156,16 @@ export function createHealthSheetExtension() {
       installStyles(documentNode);
       let enhancing = false;
 
-      function enhanceSheet() {
-        if (enhancing) return;
-        const sheet = documentNode.querySelector('.entity-sheet');
-        if (!sheet || sheet.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab !== 'overview') return;
-        const subject = subjectFromSheet(api, documentNode);
-        const actor = subject?.actor;
+      function enhanceSheet(sheet) {
+        if (enhancing || !sheet) return;
         const body = sheet.querySelector('.entity-sheet-body');
-        if (!actor || !body) return;
+        if (!body) return;
+        const subject = subjectFromSheet(api, sheet);
+        const actor = subject?.actor;
+        if (!sheetShowsHealth(sheet, actor)) {
+          body.querySelector('[data-health-panel]')?.remove();
+          return;
+        }
         const health = resolveActorHealth(actor, api);
         if (!health) {
           body.querySelector('[data-health-panel]')?.remove();
@@ -168,6 +185,10 @@ export function createHealthSheetExtension() {
         } finally {
           enhancing = false;
         }
+      }
+
+      function enhanceSheets() {
+        for (const sheet of documentNode.querySelectorAll('.entity-sheet')) enhanceSheet(sheet);
       }
 
       function enhanceInspector() {
@@ -199,6 +220,7 @@ export function createHealthSheetExtension() {
       documentNode.addEventListener('change', async event => {
         const select = event.target.closest?.('[data-health-mode]');
         if (select) {
+          const sheet = select.closest('.entity-sheet');
           try {
             await api.health?.setMode?.(select.dataset.healthMode, select.value, {
               tokenId: String(select.dataset.healthTokenId || '').trim() || null,
@@ -206,13 +228,14 @@ export function createHealthSheetExtension() {
           } catch (error) {
             console.error('[RPGmap Health UI] mode update failed', error);
           } finally {
-            queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
+            queueMicrotask(() => { enhanceSheet(sheet); enhanceInspector(); });
           }
           return;
         }
         const input = event.target.closest?.('[data-health-field-id]');
         if (!input) return;
-        const subject = subjectFromSheet(api, documentNode);
+        const sheet = input.closest('.entity-sheet');
+        const subject = subjectFromSheet(api, sheet);
         const actor = subject?.actor;
         const health = actor ? resolveActorHealth(actor, api) : null;
         const field = health ? describeHealth(health, { ruleset: api.ruleset }).fields?.find(item => String(item.id) === String(input.dataset.healthFieldId)) : null;
@@ -227,17 +250,17 @@ export function createHealthSheetExtension() {
         } catch (error) {
           console.error('[RPGmap Health UI] runtime update failed', error);
         } finally {
-          queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
+          queueMicrotask(() => { enhanceSheet(sheet); enhanceInspector(); });
         }
       });
 
-      const observer = new MutationObserver(() => queueMicrotask(() => { enhanceSheet(); enhanceInspector(); }));
+      const observer = new MutationObserver(() => queueMicrotask(() => { enhanceSheets(); enhanceInspector(); }));
       observer.observe(documentNode.body, { childList: true, subtree: true });
       api.selection?.subscribe?.(() => queueMicrotask(enhanceInspector));
-      api.on('state:import', () => queueMicrotask(() => { enhanceSheet(); enhanceInspector(); }));
-      api.on('state:commit', () => queueMicrotask(() => { enhanceSheet(); enhanceInspector(); }));
-      api.on('health:change', () => queueMicrotask(() => { enhanceSheet(); enhanceInspector(); }));
-      queueMicrotask(() => { enhanceSheet(); enhanceInspector(); });
+      api.on('state:import', () => queueMicrotask(() => { enhanceSheets(); enhanceInspector(); }));
+      api.on('state:commit', () => queueMicrotask(() => { enhanceSheets(); enhanceInspector(); }));
+      api.on('health:change', () => queueMicrotask(() => { enhanceSheets(); enhanceInspector(); }));
+      queueMicrotask(() => { enhanceSheets(); enhanceInspector(); });
     },
   };
 }
