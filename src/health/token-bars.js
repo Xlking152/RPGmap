@@ -44,8 +44,8 @@ function barHtml(health, ruleset) {
   const view = describeHealth(health, { ruleset });
   const pct = value => Math.max(0, Math.min(100, (Number(value) || 0) / max * 100));
   const segments = (view.segments || []).map(item => segment(pct(item.value), item.color, item.label)).join('');
-  if (!segments) return '';
   const compact = String(view.compactSummary || '').trim();
+  if (!segments && !compact) return '';
   return `<div class="rpgmap-token-healthbar" title="${escapeHtml(view.summary)}">${segments}${compact ? `<b class="rpgmap-token-healthbar-value">${escapeHtml(compact)}</b>` : ''}</div>`;
 }
 
