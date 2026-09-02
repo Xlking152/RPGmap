@@ -13,6 +13,11 @@ export function createPermissionSystem() {
   return Object.freeze({
     register(api) {
       api.permissions = Object.freeze({
+        actorLevel(actorId) {
+          const status = api.multiplayer?.getStatus?.() || {};
+          if (status.connected !== true || status.session?.role === 'gm') return 'gm';
+          return api.multiplayer?.getActorAccessLevel?.(actorId) || 'none';
+        },
         can(action, context = {}) {
           const status = api.multiplayer?.getStatus?.() || {};
           const connected = status.connected === true;

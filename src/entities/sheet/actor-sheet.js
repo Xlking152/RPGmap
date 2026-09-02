@@ -1,44 +1,24 @@
-import { createSheetContext, ACTOR_PERMISSION_LEVELS } from './permission.js';
-
-function partFor(section) {
-  const type = String(section?.type || '').trim();
-  return {
-    type,
-    render(data = {}) {
-      return `<section class="entity-section" data-sheet-part="${type}"><h3>${type || 'section'}</h3><pre>${JSON.stringify(data, null, 2)}</pre></section>`;
-    },
-  };
-}
+import { createSheetContext } from './permission.js';
+import { renderLimitedSheetBody, renderPublicProfileEditor, renderSheetBadges } from './parts.js';
 
 export class ActorSheet {
-  constructor({ actor, userId, description = {}, mode = 'play' } = {}) {
+  constructor({ actor, token = null, permissionLevel, mode = 'play', canRuntimeEdit = false, canTokenEdit = false } = {}) {
     this.actor = actor;
-    this.description = description;
-    this.context = createSheetContext({ actor, userId, mode });
+    this.token = token;
+    this.context = createSheetContext({
+      permissionLevel, mode, target: token ? 'token' : 'template', canRuntimeEdit, canTokenEdit,
+    });
   }
 
-  get visibleSections() {
-    const sections = this.description?.tabs?.flatMap(tab => tab.sections || []) || [];
-    if (this.context.level === ACTOR_PERMISSION_LEVELS.LIMITED) {
-      return sections.filter(section => ['text', 'description', 'biography'].includes(section.type));
-    }
-    return sections;
+  renderBadges(description = {}) {
+    return renderSheetBadges({ actor: this.actor, token: this.token, context: this.context, description });
   }
 
-  render() {
-    const title = this.context.level === ACTOR_PERMISSION_LEVELS.LIMITED
-      ? `${this.actor?.name || 'Unknown'}`
-      : `${this.actor?.name || 'Unknown'} (${this.context.level})`;
+  renderLimited() {
+    return renderLimitedSheetBody({ actor: this.actor, token: this.token });
+  }
 
-    return `
-      <article class="entity-sheet" data-sheet-mode="${this.context.mode}">
-        <header class="entity-sheet-header">
-          <strong>${title}</strong>
-          <button data-sheet-mode-toggle>${this.context.mode === 'edit' ? 'Play' : 'Edit'}</button>
-        </header>
-        <div class="entity-sheet-body">
-          ${this.visibleSections.map(section => partFor(section).render(section)).join('')}
-        </div>
-      </article>`;
+  renderPublicProfileEditor(options = {}) {
+    return renderPublicProfileEditor({ actor: this.actor, ...options });
   }
 }

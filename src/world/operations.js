@@ -6,6 +6,7 @@ import {
   stripLegacyFeatureStateProjection,
 } from './feature-states.js';
 import { normalizeActorDocument, performActorOperation } from '../actor/model.js';
+import { normalizeActorPublicProfile } from '../actor/public-profile.js';
 import { actorUsesIndependentInstances, normalizeActorClassification } from '../actor/classification.js';
 import {
   createActorDelta,
@@ -42,6 +43,7 @@ export const WORLD_OPERATION_CACHE_LIMIT = 512;
 const OPERATION_TYPES = new Set([
   'world.rename',
   'actor.upsert',
+  'actor.publicProfile.update',
   'actor.delete',
   'actor.runtime.perform',
   'actor.instances.detach',
@@ -431,6 +433,18 @@ function applyCanonicalOperation(state, operation, context = {}) {
     if (index < 0) world.actors.push(actor);
     else world.actors[index] = actor;
     return { action: type, actorId, created: index < 0 };
+  }
+
+  if (type === 'actor.publicProfile.update') {
+    const actorId = identifier(payload.actorId, 'actorId');
+    const record = actorById(world, actorId);
+    const statusDefinitionIds = (world.statusDefinitions || []).map(definition => String(definition?.id || '')).filter(Boolean);
+    record.actor.publicProfile = normalizeActorPublicProfile(
+      { ...record.actor.publicProfile, ...object(payload.publicProfile, 'actor.publicProfile.update.publicProfile') },
+      { statusDefinitionIds },
+    );
+    record.actor.updatedAt = String(context.now || new Date().toISOString());
+    return { action: type, actorId };
   }
 
   if (type === 'actor.runtime.perform') {

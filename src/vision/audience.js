@@ -1,5 +1,6 @@
 import { mergeActorDelta } from '../token/actor.js';
 import { normalizeFogState } from './fog.js';
+import { normalizeActorPublicProfile } from '../actor/public-profile.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -148,8 +149,27 @@ function restrictedActor(actor) {
     },
     system: {},
     effects: [],
+    publicProfile: normalizeActorPublicProfile(actor.publicProfile, { preserveUnknown: false }),
     audienceRestricted: true,
   };
+}
+
+function publicStatusesForToken(token, actor, definitions) {
+  const profile = normalizeActorPublicProfile(actor?.publicProfile, { preserveUnknown: false });
+  const allowed = new Set(profile.visibleStatusDefinitionIds);
+  if (!allowed.size) return [];
+  return effectsForToken(token, actor).flatMap(effect => {
+    if (effect?.enabled === false) return [];
+    const definition = definitions.get(String(effect?.definitionId ?? ''));
+    if (!definition || !allowed.has(String(definition.id))) return [];
+    return [{
+      name: String(definition.name || definition.label || '状态').slice(0, 120),
+      icon: String(definition.icon || 'circle-dot').slice(0, 80),
+      color: /^#[0-9a-f]{6}$/i.test(String(definition.color || '')) ? String(definition.color) : '#64748b',
+      category: ['buff', 'debuff', 'neutral'].includes(String(definition.category)) ? String(definition.category) : 'neutral',
+      stacks: Math.max(1, Math.min(99, Math.floor(Number(effect.stacks) || 1))),
+    }];
+  });
 }
 
 function actorPlacementGranted(actor, context) {
@@ -160,6 +180,7 @@ function actorPlacementGranted(actor, context) {
 
 function restrictedToken(token, {
   level = 'precise', vision = null, metersPerUnit = 1, opaqueIdFor = null,
+  actor = null, definitions = new Map(),
 } = {}) {
   const vague = level === 'vague';
   const opaque = typeof opaqueIdFor === 'function'
@@ -186,6 +207,7 @@ function restrictedToken(token, {
     locked: token.locked === true,
     showName: vague ? false : token.showName !== false,
     effects: [],
+    publicStatuses: vague || !actor ? [] : publicStatusesForToken(token, actor, definitions),
     controllerUserIds: [],
     visibility: { mode: 'public', userIds: [] },
     vision: {
@@ -311,7 +333,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
         visibleTokenIds.add(String(token.id));
         sceneVisibleTokenIds.add(String(token.id));
         referencedActorIds.add(String(actor.id));
-        token = restrictedToken(rawToken, { level, vision, metersPerUnit });
+        token = restrictedToken(rawToken, { level, vision, metersPerUnit, actor, definitions });
         restrictedActorIds.add(String(actor.id));
         restrictedTokenIds.add(String(token.id));
       }

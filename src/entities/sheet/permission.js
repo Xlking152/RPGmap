@@ -1,40 +1,30 @@
 export const ACTOR_PERMISSION_LEVELS = Object.freeze({
-  NONE: 'NONE',
-  LIMITED: 'LIMITED',
-  OBSERVER: 'OBSERVER',
-  OWNER: 'OWNER',
+  NONE: 'none', LIMITED: 'limited', OBSERVER: 'observer', OWNER: 'owner', GM: 'gm',
 });
 
-const ORDER = Object.freeze({
-  NONE: 0,
-  LIMITED: 1,
-  OBSERVER: 2,
-  OWNER: 3,
-});
+const LEVELS = new Set(Object.values(ACTOR_PERMISSION_LEVELS));
 
-function normalize(value) {
-  const key = String(value || '').toUpperCase();
-  return ACTOR_PERMISSION_LEVELS[key] || ACTOR_PERMISSION_LEVELS.NONE;
+export function normalizeSheetPermissionLevel(value) {
+  const level = String(value || '').toLowerCase();
+  return LEVELS.has(level) ? level : ACTOR_PERMISSION_LEVELS.NONE;
 }
 
-export function actorPermissionLevel(actor, userId) {
-  const id = String(userId || '').trim();
-  if (!id) return ACTOR_PERMISSION_LEVELS.NONE;
-  return normalize(actor?.ownership?.users?.[id] || actor?.permission?.users?.[id]);
-}
-
-export function hasActorPermission(actor, userId, required) {
-  return ORDER[actorPermissionLevel(actor, userId)] >= ORDER[normalize(required)];
-}
-
-export function createSheetContext({ actor, userId, mode = 'play' } = {}) {
-  const level = actorPermissionLevel(actor, userId);
+export function createSheetContext({
+  permissionLevel = 'none', mode = 'play', target = 'template',
+  canRuntimeEdit = false, canTokenEdit = false,
+} = {}) {
+  const level = normalizeSheetPermissionLevel(permissionLevel);
+  const owner = level === ACTOR_PERMISSION_LEVELS.OWNER || level === ACTOR_PERMISSION_LEVELS.GM;
+  const interactionMode = mode === 'edit' && owner && target === 'template' ? 'edit' : 'play';
   return Object.freeze({
-    level,
-    mode,
-    editable: level === ACTOR_PERMISSION_LEVELS.OWNER && mode === 'edit',
-    interactive: level === ACTOR_PERMISSION_LEVELS.OWNER,
+    level, mode: interactionMode, target,
+    visible: level !== ACTOR_PERMISSION_LEVELS.NONE,
     limited: level === ACTOR_PERMISSION_LEVELS.LIMITED,
-    observable: level >= ACTOR_PERMISSION_LEVELS.OBSERVER,
+    observable: [ACTOR_PERMISSION_LEVELS.OBSERVER, ACTOR_PERMISSION_LEVELS.OWNER, ACTOR_PERMISSION_LEVELS.GM].includes(level),
+    owner,
+    editable: owner && interactionMode === 'edit' && target === 'template',
+    runtimeInteractive: owner && canRuntimeEdit === true,
+    tokenEditable: canTokenEdit === true,
+    canToggleMode: owner && target === 'template',
   });
 }

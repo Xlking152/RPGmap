@@ -589,6 +589,18 @@ test('generic World operations reuse Player ownership and status permission chec
     assert.equal(unowned.code, 'actor_not_owned');
     assert.equal(unowned.revision, 3);
 
+    const publicProfileDeniedPromise = waitForMessage(player.ws, message =>
+      message.type === 'world.operation.denied' && message.operationId === 'player-public-profile-1');
+    player.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'player-public-profile-1', baseRevision: 3,
+      operations: [{ type: 'actor.publicProfile.update', payload: {
+        actorId: 'actor-a', publicProfile: { summary: 'forged public text' },
+      } }],
+    }));
+    const publicProfileDenied = await publicProfileDeniedPromise;
+    assert.equal(publicProfileDenied.code, 'actor_publicProfile_update_gm_only');
+    assert.equal(publicProfileDenied.revision, 3);
+
     const playerStatus = await sendWorldOperationsAndWait(player.ws, {
       type: 'world.operation', operationId: 'player-status-generic-1', baseRevision: 3,
       operations: [{
@@ -929,7 +941,10 @@ test('failed status persistence does not advance revision, broadcast, or consume
       scope: 'actor', targetId: 'actor-a', statusId: 'status-rooted',
     };
     const deniedPromise = waitForMessage(gm.ws, value => value.type === 'world.operation.denied' && value.operationId === message.operationId);
-    const forbiddenSnapshot = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.operationId === message.operationId, 200);
+    const forbiddenSnapshot = assert.rejects(
+      waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.operationId === message.operationId, 500),
+      /message timeout/,
+    );
     gm.ws.send(JSON.stringify({
       type: 'world.operation', operationId: message.operationId, baseRevision: message.clientRevision,
       operations: [{ type: message.type, payload: {
@@ -940,7 +955,7 @@ test('failed status persistence does not advance revision, broadcast, or consume
     assert.equal(denied.code, 'persist_failed');
     assert.equal(denied.revision, 1);
     assert.equal(Object.hasOwn(denied, 'state'), false);
-    await assert.rejects(forbiddenSnapshot, /message timeout/);
+    await forbiddenSnapshot;
 
     const canonicalPromise = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.reason === 'request');
     gm.ws.send(JSON.stringify({ type: 'world.snapshot.request' }));
@@ -1545,6 +1560,112 @@ test('GM can pre-create a User and Player can bind it with a reusable Player Key
     assert.equal(player.welcome.identity.status, 'active');
     assert.equal(player.welcome.session.name, 'Prepared Player');
     assert.equal(player.welcome.permissions.defaultActorId, 'actor-a');
+    player.ws.close();
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('Actor ownership batch API is atomic, revisioned, and protects default OWNER', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    await initialized;
+
+    const firstClaim = waitForMessage(gm.ws, message => message.type === 'access.claim' && message.user?.name === 'Observer');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Observer', ownership: {} }));
+    const first = await firstClaim;
+    const secondClaim = waitForMessage(gm.ws, message => message.type === 'access.claim' && message.user?.name === 'Owner');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Owner', defaultActorId: 'actor-a', ownership: { 'actor-a': 'owner' } }));
+    const second = await secondClaim;
+
+    const snapshotPromise = waitForMessage(gm.ws, message => message.type === 'access.snapshot' && message.users?.length === 2);
+    gm.ws.send(JSON.stringify({ type: 'access.request' }));
+    const snapshot = await snapshotPromise;
+    assert.ok(snapshot.revision >= 2);
+
+    const ackPromise = waitForMessage(gm.ws, message => message.type === 'access.actor-ownership.ack' && message.operationId === 'ownership-1');
+    gm.ws.send(JSON.stringify({
+      type: 'access.actor-ownership.update', operationId: 'ownership-1', baseRevision: snapshot.revision,
+      actorId: 'actor-a', changes: [{ userId: first.user.id, level: 'limited' }],
+    }));
+    const ack = await ackPromise;
+    assert.equal(ack.revision, snapshot.revision + 1);
+    assert.deepEqual(ack.results, [{ userId: first.user.id, level: 'limited' }]);
+
+    const stalePromise = waitForMessage(gm.ws, message => message.type === 'access.actor-ownership.denied' && message.operationId === 'ownership-stale');
+    gm.ws.send(JSON.stringify({
+      type: 'access.actor-ownership.update', operationId: 'ownership-stale', baseRevision: snapshot.revision,
+      actorId: 'actor-a', changes: [{ userId: first.user.id, level: 'observer' }],
+    }));
+    assert.equal((await stalePromise).code, 'access_revision_conflict');
+
+    const defaultOwnerPromise = waitForMessage(gm.ws, message => message.type === 'access.actor-ownership.denied' && message.operationId === 'ownership-default');
+    gm.ws.send(JSON.stringify({
+      type: 'access.actor-ownership.update', operationId: 'ownership-default', baseRevision: ack.revision,
+      actorId: 'actor-a', changes: [{ userId: second.user.id, level: 'observer' }],
+    }));
+    assert.equal((await defaultOwnerPromise).code, 'default_actor_owner_required');
+
+    const finalSnapshotPromise = waitForMessage(gm.ws, message => message.type === 'access.snapshot' && message.revision === ack.revision);
+    gm.ws.send(JSON.stringify({ type: 'access.request' }));
+    const finalSnapshot = await finalSnapshotPromise;
+    assert.equal(finalSnapshot.users.find(user => user.id === first.user.id).ownership['actor-a'], 'limited');
+    assert.equal(finalSnapshot.users.find(user => user.id === second.user.id).ownership['actor-a'], 'owner');
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('GM public profile update reaches a connected LIMITED player as a safe patch', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialTokenVisionWorld(), reason: 'init' }));
+    await initialized;
+
+    const claimPromise = waitForMessage(gm.ws, message => message.type === 'access.claim' && message.user?.name === 'Limited Viewer');
+    gm.ws.send(JSON.stringify({
+      type: 'access.user.create', name: 'Limited Viewer', defaultActorId: 'actor-a',
+      ownership: { 'actor-a': 'owner', 'actor-b': 'limited' },
+    }));
+    const claim = await claimPromise;
+    const player = await openAndClaim(runtime.url, {
+      name: 'Limited Viewer', claimCode: claim.claimCode, visionSourceTokenId: 'token-a',
+    });
+    const initialRestricted = player.welcome.world.state.preferences.worldV2.actors
+      .find(actor => actor.id === 'actor-b');
+    assert.equal(initialRestricted.audienceRestricted, true);
+    assert.deepEqual(initialRestricted.system, {});
+
+    const playerCommitPromise = waitForMessage(player.ws, message =>
+      message.type === 'world.operation.committed' && message.operationId === 'public-profile-live-1');
+    const gmCommitPromise = waitForMessage(gm.ws, message =>
+      message.type === 'world.operation.committed' && message.operationId === 'public-profile-live-1');
+    gm.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'public-profile-live-1', baseRevision: 1,
+      operations: [{ type: 'actor.publicProfile.update', payload: {
+        actorId: 'actor-b', publicProfile: {
+          summary: '城门附近的已知敌人', appearance: '披着灰色斗篷', knownFacts: ['行动谨慎'],
+          visibleStatusDefinitionIds: ['status-invisible'],
+        },
+      } }],
+    }));
+    const [playerCommit, gmCommit] = await Promise.all([playerCommitPromise, gmCommitPromise]);
+    assert.equal(gmCommit.revision, 2);
+    const projectedActor = playerCommit.patch.world.actors.upsert.find(actor => actor.id === 'actor-b');
+    assert.deepEqual(projectedActor.publicProfile, {
+      schemaVersion: 1, summary: '城门附近的已知敌人', appearance: '披着灰色斗篷',
+      knownFacts: ['行动谨慎'], visibleStatusDefinitionIds: ['status-invisible'],
+    });
+    assert.deepEqual(projectedActor.system, {});
+    assert.deepEqual(projectedActor.effects, []);
+    assert.equal(JSON.stringify(projectedActor).includes('health'), false);
     player.ws.close();
     gm.ws.close();
   } finally {

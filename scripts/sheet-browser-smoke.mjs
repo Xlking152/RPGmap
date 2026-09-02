@@ -266,14 +266,22 @@ try {
   const restoreAudit = await retryWithSnapshot(() => evaluate(`(() => { const tab = document.querySelector('.entity-sheet[data-token-id="${ids.a}"] .entity-sheet-tab.active')?.dataset.sheetTab; return tab === 'status' ? { tab } : null; })()`), 'per-World tab restoration after close and reopen');
 
   await evaluate(`document.querySelector('#app').rpgMapApp.entities.openActor('${ids.actor}')`);
+  await retryWithSnapshot(() => evaluate(`(() => {
+    const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || ''));
+    const toggle = sheet?.querySelector('[data-sheet-mode-toggle]');
+    return sheet?.dataset.sheetInteractionMode === 'play' && toggle ? true : null;
+  })()`), 'Actor template Play mode');
+  await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); sheet?.querySelector('[data-sheet-mode-toggle]')?.click(); return true; })()`);
   const playEditAudit = await retryWithSnapshot(() => evaluate(`(() => {
     const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || ''));
-    const toggle = sheet?.querySelector('[data-sheet-v2-mode-toggle]');
-    if (!sheet || !toggle) return null;
-    const before = sheet.dataset.sheetInteractionMode; toggle.click();
-    return before === 'play' && sheet.dataset.sheetInteractionMode === 'edit' ? { before, after: sheet.dataset.sheetInteractionMode } : null;
-  })()`), 'Actor template Play/Edit toggle');
-  await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); sheet?.querySelector('[data-sheet-v2-mode-toggle]')?.click(); return true; })()`);
+    return sheet?.dataset.sheetInteractionMode === 'edit' && sheet.querySelector('[data-sheet-mode-toggle]') ? { before: 'play', after: 'edit' } : null;
+  })()`), 'Actor template Edit mode');
+  await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); sheet?.querySelector('[data-sheet-tab="public-profile"]')?.click(); return true; })()`);
+  await retryWithSnapshot(() => evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); return sheet?.querySelector('[data-public-profile-editor]') ? true : null; })()`), 'GM public profile editor');
+  await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); const summary = sheet?.querySelector('[name="summary"]'); if (!summary) return false; summary.value = 'Smoke LIMITED profile'; sheet.querySelector('[data-public-profile-save]')?.click(); return true; })()`);
+  const publicProfileAudit = await retryWithSnapshot(() => evaluate(`(() => { const actor = document.querySelector('#app').rpgMapApp.world.get().actors.find(item => item.id === '${ids.actor}'); return actor?.publicProfile?.summary === 'Smoke LIMITED profile' ? { summary: actor.publicProfile.summary } : null; })()`), 'GM public profile authoritative update');
+  await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); sheet?.querySelector('[data-sheet-mode-toggle]')?.click(); return true; })()`);
+  await retryWithSnapshot(() => evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); return sheet?.dataset.sheetInteractionMode === 'play' ? true : null; })()`), 'Actor template Play mode restored');
 
   if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
     const directory = path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR);
@@ -286,7 +294,7 @@ try {
   if (exceptions.length) throw new Error(`Actor sheet browser runtime errors: ${exceptions.join('; ')}`);
 
   console.log(JSON.stringify({ ready, fixtureRevision: setup.revision, liveSheets: opened, drag: dragAudit, tabs: tabAudit,
-    health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit }));
+    health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit, publicProfile: publicProfileAudit }));
   await send('Browser.close');
   browserClosed = true;
 } catch (error) {

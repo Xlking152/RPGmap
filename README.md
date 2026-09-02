@@ -1,6 +1,6 @@
 # RPGmap
 
-RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.3.0**，提供 World/Scene 管理、Actor 模板与 Token 实例、分段移动与测距、生命/伤势、Status V4、战斗、折叠聊天、四级权限投影、精确/模糊侦测、隐身与战争迷雾，以及 Windows 本机/局域网多人运行包。
+RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.3.1**，提供 World/Scene 管理、Actor 模板与 Token 实例、分段移动与测距、生命/伤势、Status V4、战斗、折叠聊天、四级权限投影、精确/模糊侦测、隐身与战争迷雾，以及 Windows 本机/局域网多人运行包。
 
 内置的“北宋兰州城”是复杂 Reference MapPackage，用于验证建筑、城墙、城门、桥梁、水体、破坏、洪水、导航和 29 张 WebP 美术资源能够通过通用 Core 运行。
 
@@ -9,7 +9,7 @@ RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前�
 正式 Windows Release：
 
 1. 安装 Node.js `20.19+` 或 `22.12+`。
-2. 下载并解压 `RPGmap-v2.3.0.zip`。
+2. 下载并解压 `RPGmap-v2.3.1.zip`。
 3. 双击 `start-rpgmap.bat`。
 4. GM 使用启动窗口中的 Local URL 与 GM Secret；同一局域网的 Player 使用 LAN URL 与 Join Code。
 
@@ -22,6 +22,7 @@ RPGmap 仅面向本机和可信局域网，不应直接暴露到公网。World�
 - World Manager：先选择或创建 World，再按其 Ruleset 与 Active Scene 加载地图。
 - Scene/MapPackage：同一地图可建立多个 Scene，Feature State 与 Token 相互隔离。
 - Actor/Token：Actor 是可复用模板；PC 可使用 Linked Token，怪物、NPC 与召唤物强制使用 Unlinked Token，并在各自 `actorDelta` 中独立保存生命、伤势、状态、资源和当前形态。
+- 角色与怪物卡：Actor Sheet V3 支持多窗口、拖动缩放与 Play/Edit 边界；GM 可维护公共简介、外观、已知情报和可公开状态。LIMITED 玩家只获得服务器裁剪后的公共卡，Unlinked 怪物状态按具体 Token 实例隔离。
 - 地图工具：选择、框选、直接拖动、碰撞、测距和高度。普通拖放提交直线路线；`Ctrl`/`Cmd` 进入分段规划，支持点击或 `F` 添加路径点、右键或 `Alt+F` 撤销、`Enter` 确认和 `Esc` 取消。连续 WASD 合并为有界事务，群组拖动保持相对队形并原子提交。
 - 规则系统：Infinite Horror Actor、Health、B/L/A 伤势、Status/Effect、Damage/Healing；侦测分为精确与模糊范围，并结合明暗环境、暗视等感官能力计算。
 - 生命与批量操作：生命展示与可编辑字段由当前 Ruleset 的 Health Presentation 决定。Infinite Horror 在实例抽屉显示完好/B/L/A 伤势与对应编辑字段；普通 HP 或 DND 类规则可只显示 `current/max`。批量伤害/恢复也从 Ruleset 提供的伤害类型、恢复类型和标签生成。地图右下角保持紧凑的 Primary Token 大头像、名称、实例类型和 Ruleset 生命摘要，不再用大尺寸多选编辑 HUD 遮挡地图。
@@ -56,6 +57,8 @@ Scene
 - MapPackage 描述地图尺寸、SVG/资产、Feature、Capability 与 Navigation，不保存 Campaign 状态。
 - World schema 3 是持久化权威；Entity/UI/compatibility projection 与玩家 AudienceProjection 只能只读生成，不能覆盖服务器 World。
 - 普通多人写入使用 operation schema 2；完整 World 只用于初始化、显式恢复/导入、revision 缺口、Audience 身份变化和跨 MapPackage Scene。
+
+v2.3.1 将角色与怪物卡收口到 Actor Sheet V3：卡片权限由统一 Sheet Context 决定，OWNER/GM 的 Play 与 Edit 分离，OBSERVER 只读，LIMITED 只显示 GM 显式公开的资料和当前 Token 可公开状态。Actor 权限改为带 Access revision 的原子批量提交，不再借用隐藏管理表单。
 
 v2.3.0 将联机写入统一到 Operation Protocol V2，并用细粒度 Audience-safe patch/changeSet 更新 Token、状态、聊天和 Fog；Status schema 与 Access schema 升至 4。新增四区 Token 实例配置、LIMITED 公开摘要、右键快捷状态 HUD、服务器权威持续时间、折叠聊天 composer、恢复完整的 Ctrl/Cmd 分段移动，以及 normal/dim/dark 下的精确/模糊感知。兰州地图的数据和 SVG 改为选择地图后才加载的编译资源；相对 v2.2.6，World reducer 三项中位数均降低超过 25%，三会话 LAN p95 降低超过 30%，总 JS gzip 降低至少 2%。
 

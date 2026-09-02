@@ -1,5 +1,6 @@
 import { getCompatibilityRuleset } from '../ruleset/active-compat.js';
 import { normalizeActorClassification } from './classification.js';
+import { normalizeActorPublicProfile } from './public-profile.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -83,6 +84,7 @@ function shell(raw = {}, {
     name: text(name, text(source.name, '未命名角色')).slice(0, 80),
     img: actorImg,
     prototypeToken: normalizePrototypeToken(prototype, actorImg),
+    publicProfile: normalizeActorPublicProfile(source.publicProfile),
     type: classification.type,
     partyId: classification.partyId,
     system: clone(object(system)),
@@ -161,6 +163,9 @@ export function validateActorDocument(actor, { ruleset = getCompatibilityRuleset
   }
   if (!actor?.system || typeof actor.system !== 'object' || Array.isArray(actor.system)) {
     documentErrors.push('actor.system must be an object');
+  }
+  if (!actor?.publicProfile || typeof actor.publicProfile !== 'object' || Array.isArray(actor.publicProfile)) {
+    documentErrors.push('actor.publicProfile must be an object');
   }
   const systemErrors = actorRules(ruleset).validateSystem(actor?.system, { actor, ruleset });
   return [...documentErrors, ...(Array.isArray(systemErrors) ? systemErrors.map(String) : [])];

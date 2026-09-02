@@ -21,7 +21,11 @@ function geometryFrom(value = {}) {
 }
 
 function preferenceFrom(value = {}) {
-  return { tab: String(value.tab || '').trim() || null, ...geometryFrom(value) };
+  return {
+    tab: String(value.tab || '').trim() || null,
+    interactionMode: value.interactionMode === 'edit' ? 'edit' : 'play',
+    ...geometryFrom(value),
+  };
 }
 
 function readPreferences(storage, storageKey) {
@@ -109,6 +113,7 @@ export function createActorSheetManager({ storage = null, storageKey = DEFAULT_S
       tokenId: normalizedTokenId,
       sceneId: normalizedSceneId,
       tab: String(tab || saved.tab || 'overview'),
+      interactionMode: saved.interactionMode,
       left: saved.left ?? 24 + cascade * 26,
       top: saved.top ?? 72 + cascade * 22,
       width: saved.width,
@@ -125,6 +130,7 @@ export function createActorSheetManager({ storage = null, storageKey = DEFAULT_S
     const record = get(key);
     if (!record) return null;
     if (patch.tab != null && String(patch.tab).trim()) record.tab = String(patch.tab);
+    if (patch.interactionMode != null) record.interactionMode = patch.interactionMode === 'edit' ? 'edit' : 'play';
     Object.assign(record, geometryFrom({ ...record, ...patch }));
     remember(record);
     return record;

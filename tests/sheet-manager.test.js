@@ -71,16 +71,18 @@ test('opening an existing sheet focuses it instead of creating a duplicate', () 
   assert.equal(second.record.tab, 'overview');
 });
 
-test('SheetManager persists only local tab and geometry preferences', () => {
+test('SheetManager persists only local tab, mode, and geometry preferences', () => {
   const storage = memoryStorage();
   const first = createActorSheetManager({ storage, storageKey: 'test-sheet-prefs' });
   const opened = first.open({ actorId: 'pc-1', tab: 'status' }).record;
   first.capture(opened.key, { left: 133, top: 87, width: 712, height: 640 });
+  first.update(opened.key, { interactionMode: 'edit' });
   first.close(opened.key);
 
   const second = createActorSheetManager({ storage, storageKey: 'test-sheet-prefs' });
   const restored = second.open({ actorId: 'pc-1' }).record;
   assert.equal(restored.tab, 'status');
+  assert.equal(restored.interactionMode, 'edit');
   assert.equal(restored.left, 133);
   assert.equal(restored.top, 87);
   assert.equal(restored.width, 712);

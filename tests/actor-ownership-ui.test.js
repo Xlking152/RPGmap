@@ -74,8 +74,10 @@ test('actor ownership UI keeps Token visibility/control semantics separate', () 
   const source = readFileSync(new URL('../src/multiplayer/actor-ownership-ui.js', import.meta.url), 'utf8');
   assert.match(source, /Token 的地图可见性/);
   assert.match(source, /controllerUserIds/);
-  assert.match(source, /data-mp-actor-permission/);
+  assert.match(source, /updateActorOwnership/);
+  assert.match(source, /服务器原子确认/);
   assert.match(source, /actorOwnershipCatalogReady/);
+  assert.doesNotMatch(source, /multiplayer-toolbar|multiplayer-backdrop|dispatchEvent/);
   assert.doesNotMatch(source, /controllerUserIds\s*=/);
   assert.doesNotMatch(source, /visibility\.userIds\s*=/);
 });

@@ -143,7 +143,7 @@ try {
   const cards = await retrySnapshot(() => evaluate(`(()=>{
     const token=id=>document.querySelector('.entity-sheet[data-token-id="'+id+'"]');
     const actor=id=>[...document.querySelectorAll('.entity-sheet[data-actor-id="'+id+'"]')].find(s=>!String(s.dataset.tokenId||''));
-    const info=s=>s?{kind:s.dataset.sheetKind,mode:s.dataset.sheetMode,interaction:s.dataset.sheetInteractionMode,tab:s.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab,key:s.dataset.sheetWindowKey,toggle:Boolean(s.querySelector('[data-sheet-v2-mode-toggle]'))}:null;
+    const info=s=>s?{kind:s.dataset.sheetKind,mode:s.dataset.sheetMode,interaction:s.dataset.sheetInteractionMode,tab:s.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab,key:s.dataset.sheetWindowKey,toggle:Boolean(s.querySelector('[data-sheet-mode-toggle]'))}:null;
     const r={pcToken:info(token('${ids.pcToken}')),npcToken:info(token('${ids.npcToken}')),pcActor:info(actor('${ids.pcActor}')),npcActor:info(actor('${ids.npcActor}'))};
     if(Object.values(r).some(v=>!v)||new Set(Object.values(r).map(v=>v.key)).size!==4)return null;
     if(r.pcToken.kind!=='character'||r.pcToken.tab!=='overview')return null;
@@ -191,7 +191,11 @@ try {
   await evaluate(`document.querySelector('#app').rpgMapApp.entities.openActor('${ids.pcActor}')`);
   const resizeReopen = await retrySnapshot(() => evaluate(`(()=>{const s=[...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.pcActor}"]')].find(n=>!String(n.dataset.tokenId||'')),r=s?.getBoundingClientRect();return r&&Math.abs(r.width-${resizeApplied.actual.width})<=2&&Math.abs(r.height-${resizeApplied.actual.height})<=2?{width:r.width,height:r.height,tab:s.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab}:null;})()`), 'resize survives close and reopen');
 
-  const playEdit = await retrySnapshot(() => evaluate(`(()=>{const s=[...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.pcActor}"]')].find(n=>!String(n.dataset.tokenId||'')),b=s?.querySelector('[data-sheet-v2-mode-toggle]');if(!s||!b||s.dataset.sheetInteractionMode!=='play')return null;b.click();const edit=s.dataset.sheetInteractionMode;b.click();return edit==='edit'&&s.dataset.sheetInteractionMode==='play'?{before:'play',edit,restored:'play'}:null;})()`), 'Character Play/Edit/Play');
+  await retrySnapshot(() => evaluate(`(()=>{const s=[...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.pcActor}"]')].find(n=>!String(n.dataset.tokenId||''));return s?.dataset.sheetInteractionMode==='play'&&s.querySelector('[data-sheet-mode-toggle]')?true:null;})()`), 'Character Play mode');
+  await evaluate(`(()=>{const s=[...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.pcActor}"]')].find(n=>!String(n.dataset.tokenId||''));s?.querySelector('[data-sheet-mode-toggle]')?.click();return true;})()`);
+  await retrySnapshot(() => evaluate(`(()=>{const s=[...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.pcActor}"]')].find(n=>!String(n.dataset.tokenId||''));return s?.dataset.sheetInteractionMode==='edit'?true:null;})()`), 'Character Edit mode');
+  await evaluate(`(()=>{const s=[...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.pcActor}"]')].find(n=>!String(n.dataset.tokenId||''));s?.querySelector('[data-sheet-mode-toggle]')?.click();return true;})()`);
+  const playEdit = await retrySnapshot(() => evaluate(`(()=>{const s=[...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.pcActor}"]')].find(n=>!String(n.dataset.tokenId||''));return s?.dataset.sheetInteractionMode==='play'?{before:'play',edit:'edit',restored:'play'}:null;})()`), 'Character Play mode restored');
 
   await new Promise(resolve=>setTimeout(resolve,300));
   if(failures.length) throw new Error(`Final browser requests failed: ${failures.join('; ')}`);
