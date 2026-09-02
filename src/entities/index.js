@@ -33,10 +33,8 @@ export function createEntitySystem(options = {}) {
       }
 
       function handleTokenDoubleClick(event) {
-        const tokenNode = event.target?.closest?.('.rpg-token-v2');
-        if (!tokenNode) return;
-        const tokenId = tokenNode.querySelector?.('[data-token-id]')?.dataset?.tokenId
-          || api.selection?.getPrimaryTokenId?.();
+        if (!event.target?.closest?.('.rpg-token-v2')) return;
+        const tokenId = api.selection?.getPrimaryTokenId?.();
         if (tokenId) void invoke('openToken', tokenId);
       }
 
