@@ -46,6 +46,24 @@ function Invoke-RpgMapBrowserSmoke {
   throw "Packaged Edge $Mode smoke failed after 2 attempts."
 }
 
+function Invoke-RpgMapSheetBrowserSmoke {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Url
+  )
+
+  for ($attempt = 1; $attempt -le 2; $attempt++) {
+    & node (Join-Path $PSScriptRoot 'sheet-browser-smoke.mjs') $Url ([Math]::Max(45000, $TimeoutSeconds * 1000))
+    if ($LASTEXITCODE -eq 0) { return }
+    if ($attempt -lt 2) {
+      Write-Warning "Packaged Edge Actor-sheet interaction smoke failed on attempt $attempt; retrying once with a fresh profile."
+      Start-Sleep -Seconds 2
+    }
+  }
+
+  throw 'Packaged Edge Actor-sheet interaction smoke failed after 2 attempts.'
+}
+
 Clear-RpgMapSmokeState
 
 # Reserve an ephemeral loopback port instead of assuming 30000 is free on the
@@ -118,6 +136,9 @@ try {
         $browserAttempted = $true
         Invoke-RpgMapBrowserSmoke -Url $hostUrl
         Write-Host '[smoke] World Manager and Lanzhou Runtime passed'
+        Write-Host '[smoke] validating live multi-window Actor/Monster sheet interactions'
+        Invoke-RpgMapSheetBrowserSmoke -Url $hostUrl
+        Write-Host '[smoke] live Actor sheet window isolation, Health, Status and Play/Edit passed'
         Write-Host '[smoke] validating LAN identity, projection, vision and fog authority'
         & node (Join-Path $PSScriptRoot 'lan-vision-smoke.mjs') "http://127.0.0.1:$port" $smokeGmSecret $smokeJoinCode
         if ($LASTEXITCODE -ne 0) { throw 'Packaged LAN vision smoke failed.' }
