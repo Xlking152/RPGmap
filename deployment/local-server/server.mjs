@@ -288,15 +288,17 @@ async function pruneBackups(label) {
   await Promise.all(backups.slice(BACKUP_RETENTION).map(entry => rm(path.join(STORAGE.backupsDir, entry.name), { force: true })));
 }
 
-async function writeJsonWithBackup(filePath, label, value) {
+async function writeJsonWithBackup(filePath, label, value, { backup = true } = {}) {
   const snapshot = JSON.stringify(value, null, 2);
-  try {
-    await stat(filePath);
-    const stamp = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
-    await copyFile(filePath, path.join(STORAGE.backupsDir, `${label}.backup.${stamp}.json`));
-    await pruneBackups(label);
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
+  if (backup) {
+    try {
+      await stat(filePath);
+      const stamp = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
+      await copyFile(filePath, path.join(STORAGE.backupsDir, `${label}.backup.${stamp}.json`));
+      await pruneBackups(label);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
   }
   const temp = `${filePath}.${randomUUID()}.tmp`;
   try {
@@ -401,14 +403,26 @@ if (loadedAccess !== undefined) {
 }
 
 let persistChain = Promise.resolve();
-function persistWorld(snapshot) {
+let lastWorldBackupRevision = Number(world.revision) || 0;
+let lastWorldBackupAt = Date.now();
+function persistWorld(snapshot, { forceBackup = false } = {}) {
   const durable = {
     ...structuredClone(snapshot),
     state: snapshot.state ? stripLegacyFeatureStateProjection(snapshot.state) : snapshot.state,
   };
-  const task = persistChain.catch(() => {}).then(() => writeJsonWithBackup(WORLD_FILE, 'world', durable));
+  const revision = Number(snapshot.revision) || 0;
+  const backup = forceBackup
+    || revision - lastWorldBackupRevision >= 25
+    || Date.now() - lastWorldBackupAt >= 60_000;
+  const task = persistChain.catch(() => {}).then(() => writeJsonWithBackup(WORLD_FILE, 'world', durable, { backup }));
   persistChain = task;
-  return task;
+  return task.then(value => {
+    if (backup) {
+      lastWorldBackupRevision = revision;
+      lastWorldBackupAt = Date.now();
+    }
+    return value;
+  });
 }
 
 let accessPersistChain = Promise.resolve();
@@ -1428,7 +1442,7 @@ server.on('upgrade', (req, socket) => {
         state: incomingState,
         recentStatusOperations: world.recentStatusOperations || [],
       };
-      try { await persistWorld(nextWorld); }
+      try { await persistWorld(nextWorld, { forceBackup: true }); }
       catch (error) { return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'persist_failed', message: `World 未保存：${error.message}` }); }
       world = nextWorld;
       const snapshot = {

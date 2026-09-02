@@ -278,7 +278,9 @@ export function createRpgMapRuntime({
     source = 'world.operation', changeSet = {}, revision = null,
   } = {}) {
     state = normalizeState(nextState);
-    const actorIds = Array.isArray(changeSet.actors) ? changeSet.actors.map(String) : [];
+    const actorIds = Array.isArray(changeSet.actors)
+      ? changeSet.actors.map(String)
+      : [...(changeSet.actors?.upsertIds || []), ...(changeSet.actors?.removeIds || [])].map(String);
     const tokenChanges = Array.isArray(changeSet.tokens) ? changeSet.tokens : [];
     const changedTokenIds = [];
     for (const entry of tokenChanges) {

@@ -76,6 +76,13 @@ const OPERATION_TYPES = new Set([
 ]);
 
 const STATUS_TYPES = new Set([...OPERATION_TYPES].filter(type => type.startsWith('status.')));
+const GRANULAR_OPERATION_TYPES = new Set([
+  'token.move', 'scene.featureState.patch', 'scene.activate',
+  'scene.fog.explore', 'scene.fog.hide', 'scene.fog.reset',
+  'status.apply', 'status.remove', 'status.setStacks', 'status.batch',
+  'status.definition.upsert', 'status.definition.delete', 'status.definition.import',
+  'chat.append', 'chat.clear',
+]);
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -130,6 +137,45 @@ function worldFromState(state) {
     fail('World operation requires initialized World V2', 'world_v2_required');
   }
   return world;
+}
+
+function cloneOperationInput(rawState, operations) {
+  const copyOnWriteTypes = new Set(['token.move', 'scene.featureState.patch', 'scene.activate']);
+  if (operations.some(operation => !copyOnWriteTypes.has(operation.type))) return clone(rawState);
+  const source = object(rawState, 'state');
+  const preferences = { ...object(source.preferences, 'state.preferences') };
+  const rawWorld = object(preferences.worldV2, 'state.preferences.worldV2');
+  const world = { ...rawWorld, scenes: [...array(rawWorld.scenes, 'world.scenes')] };
+  const state = { ...source, preferences };
+  preferences.worldV2 = world;
+  preferences.entitySystem = plainObject(preferences.entitySystem)
+    ? { ...preferences.entitySystem }
+    : preferences.entitySystem;
+  const sceneChanges = new Map();
+  for (const operation of operations) {
+    if (operation.type === 'scene.activate') continue;
+    const sceneId = String(operation.payload?.sceneId || world.activeSceneId || '');
+    const entry = sceneChanges.get(sceneId) || { tokens: false, featureStates: false };
+    if (operation.type === 'token.move') entry.tokens = true;
+    if (operation.type === 'scene.featureState.patch') entry.featureStates = true;
+    sceneChanges.set(sceneId, entry);
+  }
+  for (const [sceneId, changes] of sceneChanges) {
+    const index = world.scenes.findIndex(scene => String(scene?.id ?? '') === sceneId);
+    if (index < 0) continue;
+    const scene = { ...world.scenes[index] };
+    if (changes.tokens) scene.tokens = [...(scene.tokens || [])];
+    if (changes.featureStates) scene.featureStates = { ...(scene.featureStates || {}) };
+    world.scenes[index] = scene;
+  }
+  if ([...sceneChanges.values()].some(change => change.tokens)
+    && Array.isArray(preferences.entitySystem?.tokens)) {
+    preferences.entitySystem.tokens = [...preferences.entitySystem.tokens];
+  }
+  if ([...sceneChanges.values()].some(change => change.featureStates)) {
+    preferences.featureStates = { ...(preferences.featureStates || {}) };
+  }
+  return state;
 }
 
 function activeScene(world) {
@@ -275,6 +321,50 @@ export function projectWorldOperationState(rawState) {
     state.preferences.gridVisible = scene.settings.gridVisible !== false;
   }
   pruneCombatReferences(state);
+  return state;
+}
+
+function projectGranularOperationState(state, operations) {
+  if (operations.some(operation => !GRANULAR_OPERATION_TYPES.has(operation.type))) {
+    return projectWorldOperationState(state);
+  }
+  const world = worldFromState(state);
+  const scene = activeScene(world);
+  state.preferences ||= {};
+  const entity = plainObject(state.preferences.entitySystem) ? state.preferences.entitySystem : {};
+  entity.schemaVersion = STATUS_SCHEMA_VERSION;
+  state.preferences.entitySystem = entity;
+  if (operations.some(operation => operation.type === 'scene.activate')) {
+    entity.tokens = clone(scene.tokens || []);
+    state.markers = clone(scene.markers || []);
+    state.attackAreas = clone(scene.attackAreas || []);
+    state.sceneEvents = clone(scene.sceneEvents || []);
+    state.preferences.featureStates = clone(scene.featureStates || {});
+    if (plainObject(scene.settings) && scene.settings.gridVisible !== undefined) {
+      state.preferences.gridVisible = scene.settings.gridVisible !== false;
+    }
+    pruneCombatReferences(state);
+    return state;
+  }
+  for (const operation of operations) {
+    const payload = operation.payload || {};
+    if (operation.type === 'token.move' && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
+      const token = scene.tokens?.find(item => String(item?.id ?? '') === String(payload.tokenId ?? ''));
+      const index = entity.tokens?.findIndex(item => String(item?.id ?? '') === String(payload.tokenId ?? '')) ?? -1;
+      if (token && index >= 0) entity.tokens[index] = clone(token);
+    }
+    if (operation.type === 'scene.featureState.patch'
+      && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
+      state.preferences.featureStates = plainObject(state.preferences.featureStates)
+        ? state.preferences.featureStates
+        : {};
+      const featureId = String(payload.featureId || '');
+      if (Object.hasOwn(scene.featureStates || {}, featureId)) {
+        state.preferences.featureStates[featureId] = clone(scene.featureStates[featureId]);
+      } else delete state.preferences.featureStates[featureId];
+    }
+  }
+  delete state.preferences.featureInteractions;
   return state;
 }
 
@@ -652,14 +742,13 @@ function applyCanonicalOperation(state, operation, context = {}) {
 }
 
 export function applyWorldOperations(rawState, rawOperations, context = {}) {
-  const state = clone(object(rawState, 'state'));
-  state.preferences = clone(object(state.preferences, 'state.preferences'));
-  worldFromState(state);
   const operations = array(rawOperations, 'operations').map((operation, index) =>
     normalizeWorldOperation(operation, `operations[${index}]`));
   if (!operations.length || operations.length > WORLD_OPERATION_BATCH_LIMIT) {
     fail(`operations must contain 1-${WORLD_OPERATION_BATCH_LIMIT} items`, 'world_operation_limit');
   }
+  const state = cloneOperationInput(rawState, operations);
+  worldFromState(state);
   const results = [];
   for (const operation of operations) {
     if (STATUS_TYPES.has(operation.type)) {
@@ -676,13 +765,114 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
   }
   const world = worldFromState(state);
   world.updatedAt = String(context.now || new Date().toISOString());
-  projectWorldOperationState(state);
+  projectGranularOperationState(state, operations);
+  const changeSet = createOperationChangeSet(operations, results, rawState, state)
+    || createWorldOperationChangeSet(rawState, state);
+  applyFogOperationDirtyBounds(changeSet, operations, context.mapMetrics);
   return {
     state,
     operations: clone(operations),
     results,
-    changeSet: createWorldOperationChangeSet(rawState, state),
+    changeSet,
   };
+}
+
+function createOperationChangeSet(operations, results, beforeState, afterState) {
+  if (operations.some(operation => !GRANULAR_OPERATION_TYPES.has(operation.type))) return null;
+  const beforeWorld = worldFromState(beforeState);
+  const afterWorld = worldFromState(afterState);
+  const actorIds = new Set();
+  const tokenIdsByScene = new Map();
+  const featureIdsByScene = new Map();
+  const fogSceneIds = new Set();
+  const appendedIds = new Set();
+  let chatCleared = false;
+  let statusDefinitionsChanged = false;
+  let activeSceneChanged = false;
+  const activeSceneId = String(afterWorld.activeSceneId || beforeWorld.activeSceneId || '');
+  const addToken = (sceneId, tokenId) => {
+    const scene = String(sceneId || activeSceneId);
+    if (!scene || !tokenId) return;
+    if (!tokenIdsByScene.has(scene)) tokenIdsByScene.set(scene, new Set());
+    tokenIdsByScene.get(scene).add(String(tokenId));
+  };
+  const collectStatusTarget = payload => {
+    if (payload?.type === 'status.batch') {
+      for (const item of payload.operations || []) collectStatusTarget(item);
+      return;
+    }
+    const scope = String(payload?.scope || payload?.target?.scope || '');
+    const targetId = String(payload?.targetId || payload?.target?.targetId || '');
+    if (scope === 'actor' && targetId) actorIds.add(targetId);
+    else if ((scope === 'token' || scope === 'syntheticActor') && targetId) addToken(activeSceneId, targetId);
+  };
+  for (const operation of operations) {
+    const payload = operation.payload || {};
+    if (operation.type === 'token.move') addToken(payload.sceneId, payload.tokenId);
+    else if (operation.type === 'scene.featureState.patch') {
+      const sceneId = String(payload.sceneId || activeSceneId);
+      if (!featureIdsByScene.has(sceneId)) featureIdsByScene.set(sceneId, new Set());
+      featureIdsByScene.get(sceneId).add(String(payload.featureId));
+    } else if (operation.type === 'scene.activate') activeSceneChanged = true;
+    else if (operation.type.startsWith('scene.fog.')) fogSceneIds.add(String(payload.sceneId || activeSceneId));
+    else if (operation.type.startsWith('status.definition.')) statusDefinitionsChanged = true;
+    else if (operation.type.startsWith('status.')) collectStatusTarget({ type: operation.type, ...payload });
+    else if (operation.type === 'chat.clear') chatCleared = true;
+  }
+  for (const result of results || []) if (result?.chatId) appendedIds.add(String(result.chatId));
+  return {
+    actors: { upsertIds: [...actorIds], removeIds: [] },
+    tokens: [...tokenIdsByScene].map(([sceneId, ids]) => ({ sceneId, upsertIds: [...ids], removeIds: [] })),
+    scenes: { upsertIds: [], removeIds: [], activeSceneChanged },
+    featureStates: [...featureIdsByScene].map(([sceneId, ids]) => ({ sceneId, featureIds: [...ids] })),
+    fog: [...fogSceneIds].map(sceneId => ({ sceneId, dirtyBounds: null })),
+    combatChanged: false,
+    chat: { appendedIds: [...appendedIds], cleared: chatCleared },
+    statusDefinitionsChanged,
+  };
+}
+
+function mergeBounds(left, right) {
+  if (!left || !right) return left || right || null;
+  return {
+    minX: Math.min(left.minX, right.minX),
+    minY: Math.min(left.minY, right.minY),
+    maxX: Math.max(left.maxX, right.maxX),
+    maxY: Math.max(left.maxY, right.maxY),
+  };
+}
+
+function fogOperationBounds(operation, mapMetrics = {}) {
+  if (!String(operation?.type || '').startsWith('scene.fog.')) return undefined;
+  if (operation.type === 'scene.fog.reset') return null;
+  const payload = plainObject(operation.payload) ? operation.payload : {};
+  const metersPerUnit = Math.max(0.000001, Number(mapMetrics?.metersPerUnit) || 1);
+  const radius = Math.max(0, Number(payload.radiusMeters) || 0) / metersPerUnit;
+  const points = payload.from && payload.to ? [payload.from, payload.to] : [payload];
+  const values = points.map(point => ({ x: Number(point?.x), y: Number(point?.y) }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (!values.length) return null;
+  return {
+    minX: Math.min(...values.map(point => point.x)) - radius,
+    minY: Math.min(...values.map(point => point.y)) - radius,
+    maxX: Math.max(...values.map(point => point.x)) + radius,
+    maxY: Math.max(...values.map(point => point.y)) + radius,
+  };
+}
+
+function applyFogOperationDirtyBounds(changeSet, operations, mapMetrics) {
+  const byScene = new Map();
+  for (const operation of operations) {
+    const bounds = fogOperationBounds(operation, mapMetrics);
+    if (bounds === undefined) continue;
+    const sceneId = String(operation.payload?.sceneId || '');
+    if (!sceneId) continue;
+    if (bounds === null || byScene.get(sceneId) === null) byScene.set(sceneId, null);
+    else byScene.set(sceneId, mergeBounds(byScene.get(sceneId), bounds));
+  }
+  for (const entry of changeSet.fog || []) {
+    if (byScene.has(String(entry.sceneId))) entry.dirtyBounds = clone(byScene.get(String(entry.sceneId)));
+  }
 }
 
 function diffById(beforeItems = [], afterItems = []) {

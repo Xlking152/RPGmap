@@ -251,3 +251,23 @@ test('World Operation V2 carries Status V4 definition imports through the shared
   assert.equal(applied.state.preferences.worldV2.statusDefinitions.some(item => item.id === 'status-imported'), true);
   assert.equal(applied.changeSet.statusDefinitionsChanged, true);
 });
+
+test('Fog changeSet carries bounded circle and sweep invalidation rectangles', () => {
+  const initial = state();
+  const applied = applyWorldOperations(initial, [
+    { type: 'scene.fog.explore', payload: {
+      sceneId: 'scene-a', partyId: 'party-a', x: 20, y: 30, radiusMeters: 10,
+    } },
+    { type: 'scene.fog.explore', payload: {
+      sceneId: 'scene-a', partyId: 'party-a', from: { x: 40, y: 50 }, to: { x: 60, y: 70 }, radiusMeters: 20,
+    } },
+  ], { mapMetrics: { metersPerUnit: 2 } });
+  assert.deepEqual(applied.changeSet.fog, [{
+    sceneId: 'scene-a', dirtyBounds: { minX: 15, minY: 25, maxX: 70, maxY: 80 },
+  }]);
+
+  const reset = applyWorldOperations(applied.state, [{
+    type: 'scene.fog.reset', payload: { sceneId: 'scene-a', partyId: 'party-a' },
+  }], { mapMetrics: { metersPerUnit: 2 } });
+  assert.deepEqual(reset.changeSet.fog, [{ sceneId: 'scene-a', dirtyBounds: null }]);
+});

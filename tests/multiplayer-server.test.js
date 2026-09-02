@@ -657,6 +657,38 @@ test('generic World operation idempotency survives a LAN server restart', async 
   }
 });
 
+test('LAN atomically persists every revision but rolls World backups every 25 revisions', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Backup GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    await initialized;
+    for (let index = 0; index < 24; index += 1) {
+      await sendWorldOperationsAndWait(gm.ws, {
+        type: 'world.operation', operationId: `backup-move-${index}`, baseRevision: index + 1,
+        operations: [{ type: 'token.move', payload: {
+          sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 10 + index, y: 10,
+        } }],
+      });
+    }
+    assert.deepEqual((await readdir(path.join(runtime.mapDir, 'backups'))).filter(name => name.startsWith('world.backup.')), []);
+    await sendWorldOperationsAndWait(gm.ws, {
+      type: 'world.operation', operationId: 'backup-move-24', baseRevision: 25,
+      operations: [{ type: 'token.move', payload: {
+        sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 40, y: 10,
+      } }],
+    });
+    const backups = (await readdir(path.join(runtime.mapDir, 'backups'))).filter(name => name.startsWith('world.backup.'));
+    assert.equal(backups.length, 1);
+    const durable = JSON.parse(await readFile(path.join(runtime.mapDir, 'world.json'), 'utf8'));
+    assert.equal(durable.revision, 26);
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
 test('clearing shared chat preserves active combat and actor health in LAN World', async () => {
   const runtime = await startServer();
   try {
