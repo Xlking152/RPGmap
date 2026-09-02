@@ -38,7 +38,6 @@ function installStyles(documentNode) {
     .entity-sheet-backdrop{background:transparent!important;pointer-events:none}
     .entity-sheet{position:fixed;left:24px;top:72px;resize:both;pointer-events:auto}
     .entity-sheet-header{cursor:move}
-    .entity-sheet-header :is(input,button,select,textarea,a){cursor:auto}
     @media(max-width:760px){.entity-sheet{left:8px!important;top:8px!important;width:calc(100vw - 16px)!important;height:calc(100vh - 16px)!important;max-height:none;resize:none}}
   `;
   documentNode.head.append(style);
@@ -91,7 +90,6 @@ export function createAppShellUiV2() {
       const toolbar = shell.querySelector('.toolbar');
       const toolbarRight = shell.querySelector('.toolbar-right');
       const tabbar = shell.querySelector('.sidebar .tabbar');
-      const actorPanel = api.uiPanels?.actors;
       const currentPanel = api.uiPanels?.get?.('current');
       const importInput = documentNode.createElement('input');
       importInput.type = 'file';
@@ -103,11 +101,8 @@ export function createAppShellUiV2() {
         const capabilities = api.multiplayer?.getCapabilities?.();
         return capabilities?.connected === true && capabilities.role !== 'gm';
       }
-      function defaultPlayerActorId() {
-        return api.multiplayer?.getStatus?.()?.session?.defaultActorId || null;
-      }
       function openMyActor() {
-        const actorId = defaultPlayerActorId();
+        const actorId = api.multiplayer?.getStatus?.()?.session?.defaultActorId;
         if (!actorId) {
           api.showToast?.('GM 还没有为当前 Player 分配 OWNER 角色', 'info');
           return;
@@ -180,8 +175,8 @@ export function createAppShellUiV2() {
           const empty = documentNode.createElement('div');
           empty.className = 'ui-current-empty';
           empty.textContent = player
-            ? '选择地图上的 Token 查看当前信息；自己的角色卡可从顶部直接打开。'
-            : '选择地图上的 Token 后，这里会显示实例信息与快捷操作。';
+            ? '选择 Token 查看信息；顶部可打开自己的角色卡。'
+            : '选择 Token 后，这里会显示实例信息与快捷操作。';
           currentPanel.append(empty);
           return;
         }
@@ -236,7 +231,6 @@ export function createAppShellUiV2() {
         if (myActorButton) myActorButton.hidden = !player;
         if (exportButton) exportButton.hidden = player;
         if (importButton) importButton.hidden = player;
-        if (player && actorPanel?.classList?.contains('active')) activatePanel('current');
         renderCurrent();
       }
 
@@ -259,7 +253,7 @@ export function createAppShellUiV2() {
       api.setActivePanel?.('current');
       shell.querySelectorAll('[data-ui-panel]').forEach(node => node.classList.toggle('active', node.dataset.uiPanel === 'current'));
       applySessionShell();
-      api.emit?.('ui:shell-ready', { tokenFirst: true, actorPanel: Boolean(actorPanel) });
+      api.emit?.('ui:shell-ready', { tokenFirst: true });
     },
   });
 }
