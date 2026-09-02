@@ -70,18 +70,22 @@ export function createActorSheetV2Decorator() {
       function schedule() {
         if (scheduled || destroyed) return;
         scheduled = true;
-        (windowNode.requestAnimationFrame || windowNode.setTimeout)(decorate);
+        if (windowNode.requestAnimationFrame) windowNode.requestAnimationFrame(decorate);
+        else windowNode.setTimeout(decorate, 0);
+      }
+
+      function handleClick(event) {
+        if (event.target.closest?.('.entity-sheet-tab')) schedule();
       }
 
       const Observer = windowNode.MutationObserver || globalThis.MutationObserver;
       const observer = Observer ? new Observer(schedule) : null;
       observer?.observe(documentNode.body, { childList:true, subtree:true, attributes:true, attributeFilter:['class'] });
-      documentNode.addEventListener('click', event => {
-        if (event.target.closest?.('.entity-sheet-tab')) schedule();
-      });
+      documentNode.addEventListener('click', handleClick);
       api.on?.('app:destroy', () => {
         destroyed = true;
         observer?.disconnect();
+        documentNode.removeEventListener('click', handleClick);
       });
       schedule();
     },
