@@ -9,7 +9,7 @@ export function createSheetWindowBehavior() {
 
       function pointerDown(event) {
         if (windowNode.innerWidth <= 760 || event.button || event.target.closest('input,button,select,textarea,a')) return;
-        const header = event.target.closest('.entity-sheet-backdrop>.entity-sheet>.entity-sheet-header');
+        const header = event.target.closest('.entity-sheet-header');
         if (!header) return;
         const sheet = header.parentElement;
         const rect = sheet.getBoundingClientRect();
