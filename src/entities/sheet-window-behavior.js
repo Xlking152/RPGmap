@@ -1,5 +1,5 @@
 export function createSheetWindowBehavior() {
-  return Object.freeze({
+  return {
     register(api) {
       const documentNode = api.map.getContainer().ownerDocument;
       const windowNode = documentNode.defaultView;
@@ -28,5 +28,5 @@ export function createSheetWindowBehavior() {
       documentNode.addEventListener('pointerup', () => { drag = null; }, options);
       api.on?.('app:destroy', () => abort.abort());
     },
-  });
+  };
 }
