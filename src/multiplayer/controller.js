@@ -365,10 +365,12 @@ export function createMultiplayerController() {
 
       function appendChat({ text, event = 'chat', data = null } = {}) {
         if (!connected) return false;
-        performOperations([{
+        return performOperations([{
           type: 'chat.append', payload: { text, event, data },
-        }], { kind: 'chat' }).catch(error => setMapStatus(`聊天发送失败：${error.message}`));
-        return true;
+        }], { kind: 'chat' }).catch(error => {
+          setMapStatus(`聊天发送失败：${error.message}`);
+          throw error;
+        });
       }
 
       function appendChatAfterWorld({ text, event = 'chat', data = null } = {}) {
