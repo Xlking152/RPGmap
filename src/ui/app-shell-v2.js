@@ -104,10 +104,7 @@ export function createAppShellUiV2() {
         return capabilities?.connected === true && capabilities.role !== 'gm';
       }
       function defaultPlayerActorId() {
-        const preferred = String(api.multiplayer?.getStatus?.()?.session?.defaultActorId || '');
-        if (preferred && api.multiplayer?.getActorAccessLevel?.(preferred) === 'owner') return preferred;
-        return (api.world?.get?.()?.actors || [])
-          .find(actor => api.multiplayer?.getActorAccessLevel?.(actor.id) === 'owner')?.id || null;
+        return api.multiplayer?.getStatus?.()?.session?.defaultActorId || null;
       }
       function openMyActor() {
         const actorId = defaultPlayerActorId();
@@ -125,12 +122,11 @@ export function createAppShellUiV2() {
       }
 
       let library = null;
-      let current = null;
       if (tabbar) {
         tabbar.replaceChildren();
         library = button(documentNode, '角色库', () => activatePanel('actors'), 'ui-sidebar-tab active');
         library.dataset.uiPanel = 'actors';
-        current = button(documentNode, '当前', () => activatePanel('current'), 'ui-sidebar-tab');
+        const current = button(documentNode, '当前', () => activatePanel('current'), 'ui-sidebar-tab');
         current.dataset.uiPanel = 'current';
         tabbar.append(library, current);
       }
