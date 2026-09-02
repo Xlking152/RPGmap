@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { describeHealth as describeHealthView } from '../src/health/model.js';
 import {
   HEALTH_MODE_SIMPLE,
   HEALTH_MODE_WOUND_TRACK,
+  INFINITE_HORROR_HEALTH,
   applySimpleDamage,
   applyWoundDamage,
   createHealthRuntime,
@@ -58,6 +60,19 @@ test('simple hp remains available as a generic mode', () => {
   const state = resolveHealth(runtime, { max: 12, simpleCurrent: 7 });
   assert.equal(state.mode, HEALTH_MODE_SIMPLE);
   assert.equal(state.current, 7);
+});
+
+test('simple hp exposes D&D-style compact current/max while wound tracks stay segmented', () => {
+  const ruleset = { health: INFINITE_HORROR_HEALTH };
+  const simple = resolveHealth(createHealthRuntime({ mode: HEALTH_MODE_SIMPLE, max: 20, simpleCurrent: 20 }), { max: 20 });
+  const simpleView = describeHealthView(simple, { ruleset });
+  assert.equal(simpleView.summary, '20 / 20');
+  assert.equal(simpleView.compactSummary, '20/20');
+
+  const wounds = resolveHealth(createHealthRuntime({ mode: HEALTH_MODE_WOUND_TRACK, max: 20, simpleCurrent: 20 }), { max: 20 });
+  const woundView = describeHealthView(wounds, { ruleset });
+  assert.equal(woundView.compactSummary, '');
+  assert.equal(woundView.segments.length, 4);
 });
 
 test('simple hp with an unconfigured zero maximum is not depleted', () => {
