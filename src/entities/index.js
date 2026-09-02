@@ -34,11 +34,16 @@ export function createEntitySystem(options = {}) {
 
       async function load() {
         if (destroyed) return null;
-        if (!loading) loading = import('../ui/lazy-runtime-tools.js').then(({ createEntityUiTool, createActorSheetV2Decorator }) => {
+        if (!loading) loading = import('../ui/lazy-runtime-tools.js').then(({
+          createEntityUiTool,
+          createActorSheetV2Decorator,
+          createActorSheetWindowCoordinator,
+        }) => {
           if (destroyed) return null;
           actorTabbar?.removeEventListener('click', handleActorTabClick, true);
           mapElement.removeEventListener('dblclick', handleTokenDoubleClick, true);
           createEntityUiTool(options).register(api);
+          createActorSheetWindowCoordinator({ api, documentNode, windowNode });
           createActorSheetV2Decorator().register(api);
           return api.entities;
         });
