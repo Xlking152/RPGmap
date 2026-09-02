@@ -21,10 +21,7 @@ function geometryFrom(value = {}) {
 }
 
 function preferenceFrom(value = {}) {
-  return {
-    tab: String(value.tab || '').trim() || null,
-    ...geometryFrom(value),
-  };
+  return { tab: String(value.tab || '').trim() || null, ...geometryFrom(value) };
 }
 
 function readPreferences(storage, storageKey) {
@@ -33,18 +30,12 @@ function readPreferences(storage, storageKey) {
     const parsed = JSON.parse(storage.getItem(storageKey) || '{}');
     if (parsed?.version !== 1 || !parsed.windows || typeof parsed.windows !== 'object') return {};
     return Object.fromEntries(Object.entries(parsed.windows).map(([key, value]) => [String(key), preferenceFrom(value)]));
-  } catch {
-    return {};
-  }
+  } catch { return {}; }
 }
 
 function writePreferences(storage, storageKey, preferences) {
   if (!storage?.setItem) return;
-  try {
-    storage.setItem(storageKey, JSON.stringify({ version: 1, windows: preferences }));
-  } catch {
-    // UI preferences must never block gameplay when storage is unavailable.
-  }
+  try { storage.setItem(storageKey, JSON.stringify({ version: 1, windows: preferences })); } catch {}
 }
 
 export function actorSheetWindowKey(actorId) {
@@ -57,24 +48,15 @@ export function tokenSheetWindowKey(tokenId) {
   return id ? `token:${id}` : '';
 }
 
-export function createActorSheetManager({
-  storage = null,
-  storageKey = DEFAULT_STORAGE_KEY,
-  baseZIndex = BASE_Z_INDEX,
-} = {}) {
+export function createActorSheetManager({ storage = null, storageKey = DEFAULT_STORAGE_KEY, baseZIndex = BASE_Z_INDEX } = {}) {
   const records = new Map();
   const preferences = readPreferences(storage, storageKey);
   const zBase = Math.max(1, Number(baseZIndex) || BASE_Z_INDEX);
   let zCounter = zBase;
   let activeKey = null;
 
-  function persist() {
-    writePreferences(storage, storageKey, preferences);
-  }
-
-  function get(key) {
-    return records.get(String(key || '')) || null;
-  }
+  const persist = () => writePreferences(storage, storageKey, preferences);
+  const get = key => records.get(String(key || '')) || null;
 
   function nextZ() {
     if (zCounter >= zBase + Z_INDEX_SPAN) {
@@ -109,7 +91,6 @@ export function createActorSheetManager({
       remember(existing);
       return { record: activate(key), created: false };
     }
-
     const saved = preferenceFrom(preferences[key]);
     const cascade = records.size % 7;
     const record = {
@@ -133,19 +114,13 @@ export function createActorSheetManager({
     const record = get(key);
     if (!record) return null;
     if (patch.tab != null && String(patch.tab).trim()) record.tab = String(patch.tab);
-    const geometry = geometryFrom({ ...record, ...patch });
-    Object.assign(record, geometry);
+    Object.assign(record, geometryFrom({ ...record, ...patch }));
     remember(record);
     return record;
   }
 
   function capture(key, rect = {}) {
-    return update(key, {
-      left: rect.left,
-      top: rect.top,
-      width: rect.width,
-      height: rect.height,
-    });
+    return update(key, { left: rect.left, top: rect.top, width: rect.width, height: rect.height });
   }
 
   function close(key = activeKey) {
@@ -153,30 +128,12 @@ export function createActorSheetManager({
     if (!record) return null;
     remember(record);
     records.delete(record.key);
-    if (activeKey === record.key) {
-      const next = [...records.values()].sort((a, b) => b.zIndex - a.zIndex)[0] || null;
-      activeKey = next?.key || null;
-    }
+    if (activeKey === record.key) activeKey = [...records.values()].sort((a, b) => b.zIndex - a.zIndex)[0]?.key || null;
     return record;
   }
 
-  function closeMissing(predicate) {
-    const removed = [];
-    for (const record of [...records.values()]) {
-      if (predicate(record)) continue;
-      removed.push(close(record.key));
-    }
-    return removed.filter(Boolean);
-  }
-
   return Object.freeze({
-    get,
-    open,
-    update,
-    capture,
-    activate,
-    close,
-    closeMissing,
+    get, open, update, capture, activate, close,
     active() { return get(activeKey); },
     activeKey() { return activeKey; },
     list() { return [...records.values()].sort((a, b) => a.zIndex - b.zIndex); },
