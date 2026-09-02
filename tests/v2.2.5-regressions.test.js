@@ -152,5 +152,6 @@ test('selection health HUD stays Ruleset-described and batch edits reuse canonic
   assert.match(selectionHud, /applyHealingToTokenIds/);
   assert.match(selectionHud, /Health Runtime.*Presentation/);
   assert.match(tokenBars, /function upsertToken/);
-  assert.match(tokenBars, /source\.startsWith\('movement:'\)/);
+  assert.match(tokenBars, /\['health:change', 'status:change', 'actor:change'\]/);
+  assert.doesNotMatch(tokenBars, /api\.on\('state:commit'/);
 });

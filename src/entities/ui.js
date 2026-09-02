@@ -394,7 +394,7 @@ export function createEntityUiTool(options = {}) {
                 <div class="entity-card-top">${avatarHtml(actor, api.ruleset)}<div class="entity-card-copy"><strong>${escapeHtml(actor.name)}</strong><small>${escapeHtml(presentation.variantLabel || '无形态')} · ${count ? `${count} 个 Token` : '未放置'}</small></div></div>
                 <div class="entity-card-status">${renderStatusStrip([...statusSnapshot.actorStatuses, ...statusSnapshot.derivedStatuses], { limit: 4, emptyText: '无状态' })}</div>
                 <div class="entity-card-actions">
-                  ${actor.audienceRestricted ? '' : `<button type="button" class="small-button" data-entity-action="open" data-id="${escapeHtml(actor.id)}">角色卡</button>`}
+                  <button type="button" class="small-button" data-entity-action="open" data-id="${escapeHtml(actor.id)}">${actor.audienceRestricted ? '公开摘要' : '角色卡'}</button>
                   ${canPlaceActor ? `<label><input type="checkbox" data-entity-share checked> 共享角色数据</label><button type="button" class="small-button" data-entity-action="place" data-id="${escapeHtml(actor.id)}">放置 Token</button>` : ''}
                   ${canManageStructure && sheetCapabilities.hasVariants && sheetCapabilities.canImportXlsx ? `<button type="button" class="small-button" data-entity-action="add-form" data-id="${escapeHtml(actor.id)}">导入新形态</button>` : ''}${canManageStructure ? `<button type="button" class="small-button danger" data-entity-action="delete" data-id="${escapeHtml(actor.id)}">删除角色</button>` : ''}
                   ${!canEditActor ? '<small>只读</small>' : ''}
@@ -442,6 +442,16 @@ export function createEntityUiTool(options = {}) {
         if (!openActorId) { existing?.remove(); return; }
         const actor = sheetActor();
         if (!actor) { openActorId = null; existing?.remove(); return; }
+        if (actor.audienceRestricted === true) {
+          const typeLabel = ({ pc: 'PC', monster: '怪物', npc: 'NPC', summon: '召唤物', other: '其他' })[actor.type] || '其他';
+          const html = `<div class="entity-sheet-backdrop"><div class="entity-sheet entity-limited-sheet" data-actor-id="${escapeHtml(actor.id)}" data-sheet-mode="limited" role="dialog" aria-modal="true">
+            <header class="entity-sheet-header">${avatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><strong>${escapeHtml(actor.name)}</strong><div class="entity-formbar"><span>${escapeHtml(typeLabel)}</span><strong>LIMITED 公开摘要</strong></div></div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>
+            <main class="entity-sheet-body"><section class="entity-section"><p class="entity-help">该角色仅公开名称、头像与类型。生命、状态、属性、资源、权限和实例数据不可见。</p></section></main>
+          </div></div>`;
+          if (existing) existing.outerHTML = html;
+          else documentNode.body.insertAdjacentHTML('beforeend', html);
+          return;
+        }
         const sheetDescription = describeActorSheet(actor, { ruleset: api.ruleset }) || { variants: [], tabs: [] };
         const sheetCapabilities = actorUiCapabilities(api.ruleset, sheetDescription);
         const tabs = [...(sheetDescription.tabs || []).map(item => [item.id, item.label]), ['status','状态'], ['token','Token']];
@@ -475,10 +485,7 @@ export function createEntityUiTool(options = {}) {
       api.entities = {
         openActor(actorId, tab) {
           const actor = store.actor(actorId);
-          if (!actor || actor.audienceRestricted === true) {
-            api.showToast?.('当前身份无权读取该 Actor 模板卡', 'error');
-            return false;
-          }
+          if (!actor) return false;
           openSheet(actorId, tab, null);
           return true;
         },
@@ -488,10 +495,7 @@ export function createEntityUiTool(options = {}) {
           let resolved = null;
           try { resolved = api.tokens?.resolveActor?.(token.id)?.actor || store.actor(token.actorId); }
           catch { resolved = store.actor(token.actorId); }
-          if (!resolved || resolved.audienceRestricted === true) {
-            api.showToast?.('当前身份无权读取该 Token 的角色卡', 'error');
-            return false;
-          }
+          if (!resolved) return false;
           openSheet(token.actorId, tab, token.id);
           return true;
         },

@@ -132,21 +132,28 @@ export function createHealthTokenBars() {
         return String(event?.detail?.tokenId || event?.detail?.id || '');
       }
 
+      function tokenIdsFromEvent(event) {
+        const detail = event?.detail || {};
+        const ids = new Set([detail.tokenId, detail.id, ...(detail.tokenIds || [])].filter(Boolean).map(String));
+        const actorIds = new Set([detail.actorId, ...(detail.actorIds || [])].filter(Boolean).map(String));
+        if (actorIds.size) {
+          for (const token of api.tokens.list()) if (actorIds.has(String(token.actorId))) ids.add(String(token.id));
+        }
+        return [...ids];
+      }
+
       off.push(api.on('token:create', event => upsertToken(tokenIdFromEvent(event))));
       off.push(api.on('token:move', event => upsertToken(tokenIdFromEvent(event))));
       off.push(api.on('token:delete', event => removeToken(tokenIdFromEvent(event))));
       off.push(api.on('token:size-change', event => upsertToken(tokenIdFromEvent(event))));
-      off.push(api.on('health:change', event => {
-        const ids = event?.detail?.tokenIds || [];
-        if (ids.length) ids.forEach(upsertToken);
-        else scheduleFullRender();
-      }));
+      for (const eventName of ['health:change', 'status:change', 'actor:change']) {
+        off.push(api.on(eventName, event => {
+          const ids = tokenIdsFromEvent(event);
+          if (ids.length) ids.forEach(upsertToken);
+          else scheduleFullRender();
+        }));
+      }
       off.push(api.on('state:import', scheduleFullRender));
-      off.push(api.on('state:commit', event => {
-        const source = String(event?.detail?.source || '');
-        if (source.startsWith('movement:')) return;
-        scheduleFullRender();
-      }));
       off.push(api.on('token:visual-move-start', event => {
         const id = tokenIdFromEvent(event);
         if (!id) return;
