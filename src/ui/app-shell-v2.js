@@ -90,6 +90,7 @@ export function createAppShellUiV2() {
       const toolbar = shell.querySelector('.toolbar');
       const toolbarRight = shell.querySelector('.toolbar-right');
       const tabbar = shell.querySelector('.sidebar .tabbar');
+      const actorPanel = api.uiPanels?.actors;
       const currentPanel = api.uiPanels?.get?.('current');
       const importInput = documentNode.createElement('input');
       importInput.type = 'file';
@@ -231,6 +232,7 @@ export function createAppShellUiV2() {
         if (myActorButton) myActorButton.hidden = !player;
         if (exportButton) exportButton.hidden = player;
         if (importButton) importButton.hidden = player;
+        if (player && actorPanel?.classList?.contains('active')) activatePanel('current');
         renderCurrent();
       }
 
