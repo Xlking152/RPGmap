@@ -279,6 +279,14 @@ export function createStatusController() {
         return perform('status.definition.delete', { definitionId: String(id || '') });
       }
 
+      function importDefinitions(document) {
+        const value = document && typeof document === 'object' && !Array.isArray(document) ? document : {};
+        return perform('status.definition.import', {
+          statusSchemaVersion: value.statusSchemaVersion,
+          definitions: Array.isArray(value.definitions) ? clone(value.definitions) : value.definitions,
+        });
+      }
+
       api.status = {
         getDefinitions: definitions,
         resolve,
@@ -302,6 +310,7 @@ export function createStatusController() {
         applyOperationsToState: applyStatusOperationsToState,
         upsertDefinition,
         deleteDefinition,
+        importDefinitions,
         // Explicit aliases keep map-package integrations readable and preserve
         // compatibility with the first status UI prototype.
         applyStatus: apply,

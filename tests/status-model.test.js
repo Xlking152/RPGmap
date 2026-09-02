@@ -224,6 +224,45 @@ test('offline reducer applies server-shaped operations atomically without copyin
   assert.equal(getStatusDefinitions(applied.state).some(item => item.id === 'status-warded'), true);
 });
 
+test('Status V4 definition import validates atomically and reports every conflict ID', () => {
+  const initial = emptyState();
+  const definitions = [
+    {
+      id: 'status-import-a', name: 'Import A', category: 'buff', scopes: ['actor'], maxStacks: 1,
+      changes: [], capabilities: {}, defaultDuration: { unit: 'turns', value: 2 },
+    },
+    {
+      id: 'status-import-b', name: 'Import B', category: 'neutral', scopes: ['actor'], maxStacks: 1,
+      changes: [], capabilities: { visionPrecision: 'vague' }, defaultDuration: null,
+    },
+  ];
+  const imported = reduceStatusOperation(initial, {
+    type: 'status.definition.import', statusSchemaVersion: STATUS_SCHEMA_VERSION, definitions,
+  });
+  assert.deepEqual(imported.results[0].definitionIds, ['status-import-a', 'status-import-b']);
+  assert.equal(imported.state.statusDefinitions.some(item => item.id === 'status-import-a'), true);
+  assert.deepEqual(initial.statusDefinitions, BUILTIN_STATUS_DEFINITIONS);
+
+  const conflicting = [...definitions, { ...definitions[0] }];
+  assert.throws(
+    () => reduceStatusOperation(imported.state, {
+      type: 'status.definition.import', statusSchemaVersion: STATUS_SCHEMA_VERSION, definitions: conflicting,
+    }),
+    error => error.code === 'status_definition_conflict'
+      && error.conflictIds.includes('status-import-a')
+      && error.conflictIds.includes('status-import-b'),
+  );
+  assert.equal(imported.state.statusDefinitions.filter(item => item.id.startsWith('status-import-')).length, 2);
+
+  assert.throws(
+    () => reduceStatusOperation(initial, {
+      type: 'status.definition.import', statusSchemaVersion: STATUS_SCHEMA_VERSION,
+      definitions: [definitions[0], { ...definitions[1], changes: [{ target: '__proto__.polluted', mode: 'add', value: 1 }] }],
+    }),
+  );
+  assert.equal(initial.statusDefinitions.some(item => item.id === 'status-import-a'), false);
+});
+
 test('definition edits change resolved numeric effects without rewriting Effect instances', () => {
   const initial = emptyState();
   const defined = reduceStatusOperation(initial, {

@@ -342,6 +342,11 @@ export function resolveStatuses(rawEntityState, context = {}) {
 
 function statusError(message, code = 'invalid_status') { const error = new Error(message); error.code = code; return error; }
 function requiredId(value, label) { const result = cleanText(value); if (!result) throw statusError(`${label} is required`); return result; }
+function safeChangeTarget(value) {
+  const target = cleanText(value);
+  if (!target || !/^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/i.test(target)) return false;
+  return !target.split('.').some(segment => ['__proto__', 'prototype', 'constructor'].includes(segment.toLowerCase()));
+}
 function strictDefinition(value) {
   if (!plainObject(value)) throw statusError('definition must be an object');
   const id = requiredId(value.id, 'definition.id');
@@ -351,7 +356,7 @@ function strictDefinition(value) {
   const rawScopes = normalizeScopes(value.scopes ?? value.scope, []);
   if (!rawScopes.length) throw statusError('definition.scopes must include actor or token');
   const rawChanges = Array.isArray(value.changes) ? value.changes : [];
-  if (rawChanges.some(change => !plainObject(change) || !cleanText(change.target) || !STATUS_CHANGE_MODES.has(String(change.mode || 'add')) || !Number.isFinite(Number(change.value)))) throw statusError('definition.changes contains an invalid change');
+  if (rawChanges.some(change => !plainObject(change) || !safeChangeTarget(change.target) || !STATUS_CHANGE_MODES.has(String(change.mode || 'add')) || !Number.isFinite(Number(change.value)))) throw statusError('definition.changes contains an invalid change');
   if (rawScopes.includes('token') && rawChanges.length) throw statusError('Definitions usable by Token cannot modify Actor numeric values', 'status_scope_forbidden');
   const requestedMax = integer(value.maxStacks, 1);
   if (requestedMax > 1 && rawChanges.some(change => String(change.mode || 'add') !== 'add')) throw statusError('Stacking definitions may only use additive changes', 'status_stacking_invalid');
@@ -428,6 +433,29 @@ function applySingleOperation(entityState, message, context) {
     if (referenced) throw statusError('Status definition is still in use', 'status_definition_in_use');
     entityState.statusDefinitions.splice(index, 1);
     return { action: 'definition.delete', definitionId };
+  }
+  if (type === 'status.definition.import') {
+    if (Number(message.statusSchemaVersion) !== STATUS_SCHEMA_VERSION) {
+      throw statusError(`Status schema ${STATUS_SCHEMA_VERSION} is required`, 'status_schema_incompatible');
+    }
+    if (!Array.isArray(message.definitions) || !message.definitions.length) {
+      throw statusError('definitions must be a non-empty array');
+    }
+    if (entityState.statusDefinitions.length + message.definitions.length > MAX_DEFINITIONS) {
+      throw statusError('Too many status definitions', 'status_limit');
+    }
+    const imported = message.definitions.map(strictDefinition);
+    const importedIds = imported.map(definition => definition.id);
+    const duplicateIds = importedIds.filter((id, index) => importedIds.indexOf(id) !== index);
+    const existingIds = new Set(entityState.statusDefinitions.map(definition => String(definition.id)));
+    const conflicts = [...new Set([...duplicateIds, ...importedIds.filter(id => existingIds.has(id))])];
+    if (conflicts.length) {
+      const error = statusError(`Status definition conflicts: ${conflicts.join(', ')}`, 'status_definition_conflict');
+      error.conflictIds = conflicts;
+      throw error;
+    }
+    entityState.statusDefinitions.push(...imported);
+    return { action: 'definition.import', definitionIds: importedIds };
   }
   const { scope, targetId, target } = targetForOperation(entityState, message);
   const definitionId = requiredId(message.statusId ?? message.definitionId, 'statusId');

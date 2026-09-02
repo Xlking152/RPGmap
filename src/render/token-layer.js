@@ -44,7 +44,7 @@ function installStyles(documentNode) {
     .token-v2-label-row { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
     .token-v2-elevation-label { display:inline-flex; align-items:center; min-height:17px; padding:1px 4px; border-radius:4px; color:#eaf6f7; background:rgba(42,67,72,.92); font-size:9px; font-weight:800; line-height:1.2; }
     .token-v2-name-label { font-weight:750; }
-    .rpgmap-token-status-v2-marker { background:transparent !important; border:0 !important; pointer-events:none !important; overflow:visible !important; }
+    .rpgmap-token-status-v2-marker { background:transparent !important; border:0 !important; pointer-events:auto !important; overflow:visible !important; cursor:pointer; }
     .selected-token-summary { position:absolute; right:12px; bottom:max(12px,env(safe-area-inset-bottom)); z-index:1600; width:210px; min-height:92px; box-sizing:border-box; display:flex; align-items:center; gap:11px; padding:10px; border:1px solid rgba(38,60,62,.28); border-radius:8px; background:rgba(248,250,247,.96); box-shadow:0 10px 28px rgba(18,27,29,.24); pointer-events:none; }
     .selected-token-summary[hidden] { display:none !important; }
     .selected-token-summary-portrait { flex:0 0 72px; width:72px; height:72px; display:grid; place-items:center; overflow:hidden; border:3px solid var(--token-color,#3d9b63); border-radius:50%; background:var(--token-color,#3d9b63); color:white; font:800 28px/1 sans-serif; }
@@ -128,11 +128,12 @@ export function createTokenRendererSystem() {
         : windowNode.clearTimeout(id);
       installStyles(documentNode);
       ensurePane(api.map, TOKEN_PANE, 515);
-      ensurePane(api.map, STATUS_PANE, 540, { pointerEvents: 'none' });
+      ensurePane(api.map, STATUS_PANE, 540, { pointerEvents: 'auto' });
 
       const tokenLayer = L.layerGroup([], { pane: TOKEN_PANE }).addTo(api.map);
       const statusLayer = L.layerGroup([], { pane: STATUS_PANE }).addTo(api.map);
       const views = new Map();
+      const statusViews = new Map();
       const visualPoints = new Map();
       const animations = new Map();
       const preparedRoutes = new Map();
@@ -175,27 +176,47 @@ export function createTokenRendererSystem() {
       }
 
       function renderStatuses(models, tokensById) {
-        statusLayer.clearLayers();
+        const visibleStatusIds = new Set();
         for (const model of models) {
           if (model.audienceRestricted) continue;
           if (animations.has(model.id)) continue;
           const token = tokensById.get(model.id);
           if (!token) continue;
           const snapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
-          const html = renderTokenStatusBadges(snapshot.statuses, { limit: 4 });
-          if (!html) continue;
+          const badgeHtml = renderTokenStatusBadges(snapshot.statuses, { limit: 4 });
+          if (!badgeHtml) continue;
+          visibleStatusIds.add(model.id);
+          const html = `<span data-token-id="${escapeHtml(token.id)}">${badgeHtml}</span>`;
           const tokenPixels = renderSize(api, { ...model, selected: false });
-          L.marker(worldToLatLng({ x: model.x, y: model.y }, api.mapPackage.height), {
-            pane: STATUS_PANE,
-            interactive: false,
-            keyboard: false,
-            icon: L.divIcon({
-              className: 'rpgmap-token-status-v2-marker',
-              html,
-              iconSize: [1, 1],
-              iconAnchor: [-(tokenPixels / 2 + 3), tokenPixels / 2],
-            }),
-          }).addTo(statusLayer);
+          const icon = L.divIcon({
+            className: 'rpgmap-token-status-v2-marker',
+            html,
+            iconSize: [1, 1],
+            iconAnchor: [-(tokenPixels / 2 + 3), tokenPixels / 2],
+          });
+          let statusView = statusViews.get(model.id);
+          if (!statusView) {
+            statusView = L.marker(worldToLatLng({ x: model.x, y: model.y }, api.mapPackage.height), {
+              pane: STATUS_PANE,
+              interactive: true,
+              keyboard: false,
+              icon,
+              rpgTokenId: model.id,
+            }).on('click', event => {
+              L.DomEvent.stopPropagation(event);
+              const tokenId = event.target?.options?.rpgTokenId;
+              if (tokenId) void api.statusUi?.openQuickHud?.(tokenId, event.originalEvent || null);
+            }).addTo(statusLayer);
+            statusViews.set(model.id, statusView);
+          } else {
+            statusView.setLatLng(worldToLatLng({ x: model.x, y: model.y }, api.mapPackage.height));
+            statusView.setIcon(icon);
+          }
+        }
+        for (const [tokenId, statusView] of statusViews) {
+          if (visibleStatusIds.has(tokenId)) continue;
+          statusLayer.removeLayer(statusView);
+          statusViews.delete(tokenId);
         }
       }
 
@@ -333,6 +354,12 @@ export function createTokenRendererSystem() {
               api.selection?.replace?.([token.id], token.id);
               api.emit?.('token:select', { id: token.id, tokenId: token.id, actorId: token.actorId });
             });
+            view.on('contextmenu', event => {
+              L.DomEvent.preventDefault(event);
+              L.DomEvent.stopPropagation(event);
+              if (event.originalEvent?.shiftKey) return api.elevation?.openTokenElevationEditor?.(model.id, event.originalEvent);
+              void api.statusUi?.openQuickHud?.(model.id, event.originalEvent || null);
+            });
             views.set(model.id, view);
           }
           moveView(model, view);
@@ -366,6 +393,7 @@ export function createTokenRendererSystem() {
         preparedRoutes.clear();
         tokenLayer.clearLayers();
         statusLayer.clearLayers();
+        statusViews.clear();
         api.map.removeLayer?.(tokenLayer);
         api.map.removeLayer?.(statusLayer);
         summary.remove();

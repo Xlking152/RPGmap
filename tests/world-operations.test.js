@@ -7,6 +7,7 @@ import {
   createWorldOperationPatch,
   deriveWorldOperations,
 } from '../src/world/operations.js';
+import { reduceStatusOperation } from '../src/status/model.js';
 
 function actor(id, current = 10) {
   return { id, name: id, system: { resources: { hp: { current, max: 10 } } }, effects: [], notes: '' };
@@ -226,4 +227,27 @@ test('combat.advance updates turn, round, and Status V4 durations atomically', (
     timestamp: '2026-09-02T00:02:00.000Z', round: 2, turn: 0,
   });
   assert.equal(applied.results[0].expiredCount, 1);
+});
+
+test('World Operation V2 carries Status V4 definition imports through the shared reducer', () => {
+  const initial = state();
+  const applied = applyWorldOperations(initial, [{
+    type: 'status.definition.import',
+    payload: {
+      statusSchemaVersion: 4,
+      definitions: [{
+        id: 'status-imported', name: 'Imported', category: 'neutral', scopes: ['actor'], maxStacks: 1,
+        changes: [], capabilities: {}, defaultDuration: { unit: 'rounds', value: 3 },
+      }],
+    },
+  }], {
+    applyStatus(current, operation, context) {
+      const next = structuredClone(current);
+      const reduced = reduceStatusOperation(next.preferences.entitySystem, operation, context);
+      next.preferences.entitySystem = reduced.state;
+      return { state: next, results: reduced.results };
+    },
+  });
+  assert.equal(applied.state.preferences.worldV2.statusDefinitions.some(item => item.id === 'status-imported'), true);
+  assert.equal(applied.changeSet.statusDefinitionsChanged, true);
 });

@@ -71,6 +71,7 @@ const OPERATION_TYPES = new Set([
   'status.setStacks',
   'status.definition.upsert',
   'status.definition.delete',
+  'status.definition.import',
   'status.batch',
 ]);
 

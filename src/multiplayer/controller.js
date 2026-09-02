@@ -917,6 +917,7 @@ export function createMultiplayerController() {
           if (!activeOperation || String(message.operationId || '') !== String(activeOperation.operationId)) return;
           const error = new Error(message.message || '服务器拒绝了 World 操作');
           error.code = message.code || 'world_operation_denied';
+          if (Array.isArray(message.conflictIds)) error.conflictIds = message.conflictIds.map(String);
           const finish = () => {
             finishOperation(error);
             rejectQueuedOperations(error);

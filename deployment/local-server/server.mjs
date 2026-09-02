@@ -1310,7 +1310,9 @@ server.on('upgrade', (req, socket) => {
         }
         patch = createWorldOperationPatch(world.state, applied.state);
       } catch (error) {
-        return sendWorldOperationDenied(socket, message, error?.code || 'invalid_world_operation', error?.message);
+        return sendWorldOperationDenied(socket, message, error?.code || 'invalid_world_operation', error?.message, {
+          ...(Array.isArray(error?.conflictIds) ? { conflictIds: error.conflictIds.map(String) } : {}),
+        });
       }
 
       const nextRevision = world.revision + 1;

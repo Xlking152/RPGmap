@@ -834,6 +834,51 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
   }
 });
 
+test('LAN Status V4 import is atomic and returns every conflicting definition ID', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Import GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    await initialized;
+
+    const custom = {
+      id: 'status-imported', name: 'Imported', category: 'neutral', scopes: ['actor'], maxStacks: 1,
+      changes: [], capabilities: {}, defaultDuration: { unit: 'turns', value: 2 },
+    };
+    const deniedPromise = waitForMessage(gm.ws, message =>
+      message.type === 'world.operation.denied' && message.operationId === 'status-import-conflict');
+    gm.ws.send(JSON.stringify({
+      type: 'world.operation', operationId: 'status-import-conflict', baseRevision: 1,
+      operations: [{ type: 'status.definition.import', payload: {
+        statusSchemaVersion: STATUS_SCHEMA_VERSION,
+        definitions: [custom, { ...custom }, {
+          ...custom, id: 'status-rooted', name: 'Forged built-in replacement',
+        }],
+      } }],
+    }));
+    const denied = await deniedPromise;
+    assert.equal(denied.code, 'status_definition_conflict');
+    assert.deepEqual(new Set(denied.conflictIds), new Set(['status-imported', 'status-rooted']));
+    assert.equal(denied.revision, 1);
+    const unchanged = await requestWorldSnapshot(gm.ws);
+    assert.equal(unchanged.state.preferences.entitySystem.statusDefinitions.some(item => item.id === custom.id), false);
+
+    const committed = await sendWorldOperationsAndWait(gm.ws, {
+      type: 'world.operation', operationId: 'status-import-ok', baseRevision: 1,
+      operations: [{ type: 'status.definition.import', payload: {
+        statusSchemaVersion: STATUS_SCHEMA_VERSION, definitions: [custom],
+      } }],
+    });
+    assert.equal(committed.committed.revision, 2);
+    const imported = await requestWorldSnapshot(gm.ws);
+    assert.equal(imported.state.preferences.entitySystem.statusDefinitions.some(item => item.id === custom.id), true);
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
 test('failed status persistence does not advance revision, broadcast, or consume idempotency key', async () => {
   const runtime = await startServer();
   try {
