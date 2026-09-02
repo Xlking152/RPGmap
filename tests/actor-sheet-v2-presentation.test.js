@@ -5,6 +5,7 @@ import test from 'node:test';
 const decorator = readFileSync(new URL('../src/entities/sheet-v2-decorator.js', import.meta.url), 'utf8');
 const entityIndex = readFileSync(new URL('../src/entities/index.js', import.meta.url), 'utf8');
 const lazyRuntime = readFileSync(new URL('../src/ui/lazy-runtime-tools.js', import.meta.url), 'utf8');
+const liveUi = readFileSync(new URL('../src/entities/ui-live.js', import.meta.url), 'utf8');
 
 test('Actor Sheet V2 decorates existing Ruleset sheets instead of replacing their data contract', () => {
   assert.match(decorator, /entity-sheet-v2/);
@@ -38,8 +39,11 @@ test('LIMITED, Token instance and read-only states get presentation badges witho
 test('Actor Sheet policy and V2 presentation stay in the lazy Entity UI chunk', () => {
   assert.match(lazyRuntime, /installActorSheetOpenPolicy/);
   assert.match(lazyRuntime, /createActorSheetV2Decorator/);
+  assert.match(lazyRuntime, /ui-live\.js/);
   assert.match(entityIndex, /installActorSheetOpenPolicy\(api\)/);
   assert.match(entityIndex, /createActorSheetV2Decorator\(\)\.register\(api\)/);
-  assert.ok(entityIndex.indexOf('installActorSheetOpenPolicy(api)') < entityIndex.indexOf('createActorSheetWindowCoordinator({'));
+  assert.ok(entityIndex.indexOf('installActorSheetOpenPolicy(api)') < entityIndex.indexOf('createActorSheetV2Decorator().register(api)'));
   assert.ok(entityIndex.indexOf("import('../ui/lazy-runtime-tools.js')") < entityIndex.indexOf('createActorSheetV2Decorator().register(api)'));
+  assert.match(liveUi, /entity-sheet-backdrop entity-sheet-window/);
+  assert.match(liveUi, /aria-modal=\"false\"/);
 });
