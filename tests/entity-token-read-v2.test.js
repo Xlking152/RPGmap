@@ -67,9 +67,9 @@ test('only an explicitly configured Entity UI store exposes canonical Token read
   assert.equal(editorStore.token('token-b').id, 'token-b');
 });
 
-test('canonical Token read mode is explicit in Entity UI and no longer uses a dynamic registration scope', async () => {
+test('canonical Token read mode is explicit in live Entity UI and no longer uses a dynamic registration scope', async () => {
   const storeSource = await readFile(new URL('../src/entities/store.js', import.meta.url), 'utf8');
-  const uiSource = await readFile(new URL('../src/entities/ui.js', import.meta.url), 'utf8');
+  const uiSource = await readFile(new URL('../src/entities/ui-live.js', import.meta.url), 'utf8');
   const indexSource = await readFile(new URL('../src/entities/index.js', import.meta.url), 'utf8');
 
   assert.match(storeSource, /constructor\(api, \{ canonicalTokenReads = false \} = \{\}\)/);
@@ -83,7 +83,7 @@ test('canonical Token read mode is explicit in Entity UI and no longer uses a dy
 
 test('Entity editor Token reads have no direct Character-position dependency', async () => {
   const controllerSource = await readFile(new URL('../src/entities/token-controller.js', import.meta.url), 'utf8');
-  const uiSource = await readFile(new URL('../src/entities/ui.js', import.meta.url), 'utf8');
+  const uiSource = await readFile(new URL('../src/entities/ui-live.js', import.meta.url), 'utf8');
   assert.match(controllerSource, /api\.tokens\.list\?\.\(\)/);
   assert.match(controllerSource, /api\.tokens\.get\(/);
   assert.doesNotMatch(controllerSource, /state\.characters|preferences\.entitySystem/);
