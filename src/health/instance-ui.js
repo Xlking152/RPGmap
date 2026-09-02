@@ -1,4 +1,4 @@
-import { describeHealth, healthOperationPresentation } from './model.js';
+import { describeHealth, healthModeOptions, healthOperationPresentation } from './model.js';
 
 const STYLE_ID = 'rpgmap-ruleset-health-instance-ui-style';
 
@@ -18,7 +18,8 @@ function installStyles(documentNode) {
     .marker-instance-health-fields { grid-column:2/-1; display:grid; grid-template-columns:repeat(auto-fit,minmax(72px,1fr)); gap:6px; width:100%; }
     .marker-instance-health-field { display:grid; grid-template-columns:auto minmax(44px,1fr); align-items:center; gap:4px; min-width:0; font-size:10px; color:#617073; }
     .marker-instance-health-field > span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .marker-instance-health-field input { min-width:0; height:30px; padding:4px 6px !important; }
+    .marker-instance-health-field input,.marker-instance-health-field select { min-width:0; height:30px; padding:4px 6px !important; box-sizing:border-box; }
+    .marker-instance-health-mode { grid-column:span 2; }
     .marker-instance-health-summary { grid-column:2/-1; color:#687477; }
     .marker-health-batch { display:grid; gap:6px; padding-top:2px; border-top:1px solid rgba(70,90,90,.12); }
     .marker-health-batch-row { display:grid; grid-template-columns:70px minmax(92px,1fr) auto; gap:6px; align-items:center; }
@@ -55,6 +56,12 @@ function fieldHtml(field, tokenId, disabled) {
   const max = Number.isFinite(Number(field.max)) ? ` max="${Number(field.max)}"` : '';
   const step = Number.isFinite(Number(field.step)) ? Number(field.step) : 1;
   return `<span class="marker-instance-health-field"><span title="${escapeHtml(field.label || field.id)}">${escapeHtml(field.label || field.id)}</span><input type="number"${min}${max} step="${step}" value="${escapeHtml(field.value ?? 0)}" data-ruleset-health-field="${escapeHtml(field.id)}" data-token-id="${escapeHtml(tokenId)}" ${disabled ? 'disabled' : ''}></span>`;
+}
+
+function modeHtml(api, state, tokenId, disabled) {
+  const options = healthModeOptions({ ruleset: api.ruleset });
+  if (options.length < 2) return '';
+  return `<label class="marker-instance-health-field marker-instance-health-mode"><span>生命模式</span><select data-ruleset-health-mode data-token-id="${escapeHtml(tokenId)}" ${disabled ? 'disabled' : ''}>${options.map(option => `<option value="${escapeHtml(option.id)}" ${String(option.id) === String(state?.mode) ? 'selected' : ''}>${escapeHtml(option.label || option.id)}</option>`).join('')}</select></label>`;
 }
 
 function operationTypeControl(operation, ruleset) {
@@ -128,7 +135,11 @@ export function createHealthInstanceUi() {
           row.querySelectorAll('[data-marker-instance-health]').forEach(input => input.remove());
           const controlled = canControlToken(api, token);
           const fields = editableFields(presentation.view);
-          const signature = JSON.stringify(fields.map(field => [field.id, field.label, field.value, field.min, field.max]));
+          const modeControl = modeHtml(api, presentation.state, tokenId, !controlled);
+          const signature = JSON.stringify([
+            presentation.state?.mode,
+            ...fields.map(field => [field.id, field.label, field.value, field.min, field.max]),
+          ]);
           let host = row.querySelector('[data-ruleset-health-fields]');
           if (!host) {
             host = documentNode.createElement('span');
@@ -139,8 +150,9 @@ export function createHealthInstanceUi() {
           }
           if (host.dataset.signature !== signature) {
             host.dataset.signature = signature;
-            host.innerHTML = fields.length
-              ? fields.map(field => fieldHtml(field, tokenId, !controlled)).join('')
+            const fieldControls = fields.map(field => fieldHtml(field, tokenId, !controlled)).join('');
+            host.innerHTML = modeControl || fieldControls
+              ? `${modeControl}${fieldControls}`
               : '<span class="marker-health-batch-generic">当前规则未提供可编辑生命字段</span>';
           }
 
@@ -182,7 +194,7 @@ export function createHealthInstanceUi() {
           healthLine.dataset.rulesetHealthSummary = '';
           body.append(healthLine);
         }
-        const nextText = `生命 ${presentation.view.summary || '—'}`;
+        const nextText = `生命 ${presentation.view.compactSummary || presentation.view.summary || '—'}`;
         if (healthLine.textContent !== nextText) healthLine.textContent = nextText;
       }
 
@@ -201,6 +213,23 @@ export function createHealthInstanceUi() {
       }
 
       markerPanel?.addEventListener('change', async event => {
+        const modeSelect = event.target.closest?.('[data-ruleset-health-mode]');
+        if (modeSelect) {
+          const tokenId = String(modeSelect.dataset.tokenId || '');
+          const token = tokenById(api, tokenId);
+          if (!token) return;
+          modeSelect.disabled = true;
+          try {
+            await api.health.setMode(token.actorId, modeSelect.value, { tokenId });
+            api.showToast?.('生命模式已更新', 'success');
+          } catch (error) {
+            api.showToast?.(error?.message || String(error), 'error');
+          } finally {
+            modeSelect.disabled = false;
+            scheduleDecorate();
+          }
+          return;
+        }
         const input = event.target.closest?.('[data-ruleset-health-field]');
         if (!input) return;
         const tokenId = String(input.dataset.tokenId || '');

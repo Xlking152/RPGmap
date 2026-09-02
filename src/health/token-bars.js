@@ -25,8 +25,9 @@ function installStyles(documentNode) {
   style.id = STYLE_ID;
   style.textContent = `
     .rpgmap-healthbar-marker { background:transparent !important; border:0 !important; pointer-events:none !important; }
-    .rpgmap-token-healthbar { width:46px; height:7px; display:flex; overflow:hidden; border:1px solid rgba(20,28,28,.72); border-radius:4px; background:rgba(25,30,30,.5); box-shadow:0 1px 3px rgba(0,0,0,.45); }
+    .rpgmap-token-healthbar { position:relative; width:46px; height:10px; display:flex; overflow:hidden; border:1px solid rgba(20,28,28,.72); border-radius:4px; background:rgba(25,30,30,.5); box-shadow:0 1px 3px rgba(0,0,0,.45); }
     .rpgmap-token-healthbar > span { height:100%; min-width:0; }
+    .rpgmap-token-healthbar-value { position:absolute; inset:0; display:grid; place-items:center; color:#fff; font:800 8px/10px system-ui,sans-serif; letter-spacing:.1px; text-shadow:0 1px 2px #000,0 0 2px #000; }
   `;
   documentNode.head.append(style);
 }
@@ -43,7 +44,9 @@ function barHtml(health, ruleset) {
   const view = describeHealth(health, { ruleset });
   const pct = value => Math.max(0, Math.min(100, (Number(value) || 0) / max * 100));
   const segments = (view.segments || []).map(item => segment(pct(item.value), item.color, item.label)).join('');
-  return segments ? `<div class="rpgmap-token-healthbar" title="${escapeHtml(view.summary)}">${segments}</div>` : '';
+  const compact = String(view.compactSummary || '').trim();
+  if (!segments && !compact) return '';
+  return `<div class="rpgmap-token-healthbar" title="${escapeHtml(view.summary)}">${segments}${compact ? `<b class="rpgmap-token-healthbar-value">${escapeHtml(compact)}</b>` : ''}</div>`;
 }
 
 export function createHealthTokenBars() {
@@ -103,7 +106,7 @@ export function createHealthTokenBars() {
           icon: L.divIcon({
             className: 'rpgmap-healthbar-marker',
             html: html.replace('class="rpgmap-token-healthbar"', `class="rpgmap-token-healthbar" style="width:${barWidth}px"`),
-            iconSize: [barWidth, 7],
+            iconSize: [barWidth, 10],
             iconAnchor: [barWidth / 2, -(tokenPixels / 2 + 6)],
           }),
         }).addTo(layer);
