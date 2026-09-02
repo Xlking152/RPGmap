@@ -2,6 +2,10 @@ import { createMultiplayerController } from './controller.js';
 
 export { multiplayerSocketUrl, isLocalHost, sanitizeMultiplayerName, normalizeRequestedRole } from './protocol.js';
 export { createMultiplayerController } from './controller.js';
+export { createMultiplayerSessionStorage } from './session.js';
+export { createOperationQueue } from './operation-queue.js';
+export { hasWorldOperationRevisionGap, shouldApplyOwnServerSnapshot } from './revision.js';
+export { createOperationId, parseTransportMessage, sendTransportMessage } from './transport.js';
 
 export function createMultiplayerSystem(options = {}) {
   const controller = createMultiplayerController(options);

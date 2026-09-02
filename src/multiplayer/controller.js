@@ -4,13 +4,12 @@ import {
   applyWorldOperationPatch,
   deriveWorldOperations,
 } from '../world/operations.js';
+import { escapeMultiplayerHtml as escapeHtml } from './access-ui.js';
+import { createMultiplayerSessionStorage } from './session.js';
+import { createOperationId, parseTransportMessage, sendTransportMessage } from './transport.js';
+import { hasWorldOperationRevisionGap, shouldApplyOwnServerSnapshot } from './revision.js';
 
 const STYLE_ID = 'rpgmap-multiplayer-style';
-const STORAGE_PREFIX = 'rpgmap:multiplayer:';
-
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[ch]);
-}
 
 function installStyles(documentNode) {
   if (documentNode.getElementById(STYLE_ID)) return;
@@ -64,10 +63,6 @@ function installStyles(documentNode) {
   documentNode.head.append(style);
 }
 
-function parseMessage(event) {
-  try { return JSON.parse(String(event.data)); } catch { return null; }
-}
-
 export function isWorldOperationChannelBusy(state = {}) {
   return Boolean(
     state.applyingRemote || state.remoteApplyPending || state.inFlight || state.pendingPush
@@ -77,21 +72,7 @@ export function isWorldOperationChannelBusy(state = {}) {
   );
 }
 
-export function hasWorldOperationRevisionGap(message, currentRevision) {
-  const baseRevision = message?.baseRevision;
-  const nextRevision = message?.revision;
-  const current = currentRevision;
-  return !Number.isSafeInteger(baseRevision)
-    || !Number.isSafeInteger(nextRevision)
-    || !Number.isSafeInteger(current)
-    || baseRevision !== current
-    || nextRevision !== baseRevision + 1;
-}
-
-export function shouldApplyOwnServerSnapshot(message) {
-  const reason = String(message?.reason || '');
-  return reason === 'chat.append' || reason === 'chat.clear';
-}
+export { hasWorldOperationRevisionGap, shouldApplyOwnServerSnapshot } from './revision.js';
 
 export function createMultiplayerController() {
   return {
@@ -102,6 +83,7 @@ export function createMultiplayerController() {
       const toolbar = shell.querySelector?.('.toolbar-right');
       if (!toolbar) return;
       installStyles(documentNode);
+      const sessionStorage = createMultiplayerSessionStorage(documentNode.defaultView?.localStorage);
 
       let socket = null;
       let connected = false;
@@ -137,11 +119,7 @@ export function createMultiplayerController() {
       let remoteApplyPending = 0;
       let remoteEpoch = 0;
 
-      function operationId(prefix = 'operation') {
-        const value = globalThis.crypto?.randomUUID?.()
-          || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-        return `${prefix}-${value}`;
-      }
+      const operationId = createOperationId;
 
       const button = documentNode.createElement('button');
       button.type = 'button';
@@ -159,18 +137,16 @@ export function createMultiplayerController() {
 
       function defaultRole() { return isLocalHost(documentNode.defaultView?.location) ? 'gm' : 'player'; }
       function saved(key, fallback = '') {
-        try { return localStorage.getItem(STORAGE_PREFIX + key) ?? fallback; } catch { return fallback; }
+        return sessionStorage.get(key, fallback);
       }
       function save(key, value) {
-        try { localStorage.setItem(STORAGE_PREFIX + key, String(value)); } catch {}
+        sessionStorage.set(key, value);
       }
       function removeSaved(key) {
-        try { localStorage.removeItem(STORAGE_PREFIX + key); } catch {}
+        sessionStorage.remove(key);
       }
       function clearSavedIdentity() {
-        removeSaved('userId');
-        removeSaved('authToken');
-        removeSaved('playerKey');
+        sessionStorage.clearIdentity();
       }
       function actorName(actorId) {
         if (!actorId) return '未分配';
@@ -356,9 +332,7 @@ export function createMultiplayerController() {
       }
 
       function send(message) {
-        if (!socket || socket.readyState !== WebSocket.OPEN) return false;
-        socket.send(JSON.stringify(message));
-        return true;
+        return sendTransportMessage(socket, message);
       }
 
       function flushDeferredChat() {
@@ -765,7 +739,7 @@ export function createMultiplayerController() {
       }
 
       function handleMessage(event) {
-        const message = parseMessage(event);
+        const message = parseTransportMessage(event);
         if (!message) return;
 
         if (message.type === 'identity.bound') {

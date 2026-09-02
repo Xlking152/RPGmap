@@ -45,6 +45,19 @@ import {
   projectStateForAudience,
   serverRuleset,
 } from './ruleset-authority.mjs';
+import {
+  networkUrls as listNetworkUrls,
+  safePublicPath as resolvePublicPath,
+  sendJson,
+  servePublicFile,
+} from './http-runtime.mjs';
+import {
+  attachFrameReader as attachWebSocketReader,
+  closeSocket as closeWebSocket,
+  hasSameOrigin as requestHasSameOrigin,
+  sendSocket as sendWebSocket,
+  websocketAccept,
+} from './websocket-runtime.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '0.0.0.0';
@@ -159,23 +172,11 @@ function encodeFrame(payload, opcode = 0x1) {
 }
 
 function sendSocket(socket, message) {
-  if (socket.destroyed) return false;
-  try {
-    socket.write(encodeFrame(JSON.stringify(message)));
-    return true;
-  } catch {
-    return false;
-  }
+  return sendWebSocket(socket, message);
 }
 
 function closeSocket(socket, code = 1000, reason = '') {
-  if (socket.destroyed) return;
-  const reasonBytes = Buffer.from(String(reason).slice(0, 120));
-  const payload = Buffer.allocUnsafe(2 + reasonBytes.length);
-  payload.writeUInt16BE(code, 0);
-  reasonBytes.copy(payload, 2);
-  try { socket.write(encodeFrame(payload, 0x8)); } catch {}
-  socket.end();
+  return closeWebSocket(socket, code, reason);
 }
 
 function attachFrameReader(socket, onText, onClose) {
@@ -889,22 +890,22 @@ function refreshOnlineUser(userId) {
 
 const server = http.createServer(async (req, res) => {
   try {
-    if (!['GET', 'HEAD'].includes(req.method || 'GET')) return json(res, 405, { error: 'method_not_allowed' });
-    if (req.url === '/api/health') return json(res, 200, { status: 'ok', app: version.app || 'RPGmap', version: packageVersion, mode: version.serverMode || 'multiplayer', multiplayer: multiplayerInfo(), world: worldBootstrapInfo() });
-    if (req.url === '/api/version') return json(res, 200, version);
-    if (req.url === '/api/multiplayer') return json(res, 200, multiplayerInfo());
+    if (!['GET', 'HEAD'].includes(req.method || 'GET')) return sendJson(res, 405, { error: 'method_not_allowed' });
+    if (req.url === '/api/health') return sendJson(res, 200, { status: 'ok', app: version.app || 'RPGmap', version: packageVersion, mode: version.serverMode || 'multiplayer', multiplayer: multiplayerInfo(), world: worldBootstrapInfo() });
+    if (req.url === '/api/version') return sendJson(res, 200, version);
+    if (req.url === '/api/multiplayer') return sendJson(res, 200, multiplayerInfo());
 
-    const candidate = safePublicPath(req.url || '/');
-    if (!candidate) return json(res, 400, { error: 'bad_path' });
+    const candidate = resolvePublicPath(PUBLIC_DIR, req.url || '/');
+    if (!candidate) return sendJson(res, 400, { error: 'bad_path' });
     try {
-      await serveFile(req, res, candidate);
+      await servePublicFile(req, res, candidate);
     } catch (error) {
       if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error;
-      await serveFile(req, res, path.join(PUBLIC_DIR, 'index.html'));
+      await servePublicFile(req, res, path.join(PUBLIC_DIR, 'index.html'));
     }
   } catch (error) {
     console.error('[RPGmap] request failed:', error);
-    if (!res.headersSent) json(res, 500, { error: 'internal_server_error' });
+    if (!res.headersSent) sendJson(res, 500, { error: 'internal_server_error' });
     else res.end();
   }
 });
@@ -918,13 +919,13 @@ server.on('upgrade', (req, socket) => {
   if (pathname !== '/ws') return socket.destroy();
   const key = req.headers['sec-websocket-key'];
   if (!key || String(req.headers.upgrade || '').toLowerCase() !== 'websocket') return socket.destroy();
-  if (!hasSameOrigin(req)) return socket.destroy();
+  if (!requestHasSameOrigin(req, { allowMissingOrigin: TEST_ALLOW_MISSING_ORIGIN })) return socket.destroy();
 
   socket.write([
     'HTTP/1.1 101 Switching Protocols',
     'Upgrade: websocket',
     'Connection: Upgrade',
-    `Sec-WebSocket-Accept: ${wsAccept(key)}`,
+    `Sec-WebSocket-Accept: ${websocketAccept(key)}`,
     '\r\n',
   ].join('\r\n'));
 
@@ -941,7 +942,7 @@ server.on('upgrade', (req, socket) => {
     }
   };
 
-  attachFrameReader(socket, text => {
+  attachWebSocketReader(socket, text => {
     messageChain = messageChain.then(async () => {
     let message;
     try { message = JSON.parse(text); }
@@ -1537,7 +1538,7 @@ server.on('upgrade', (req, socket) => {
       console.error('[RPGmap] websocket message rejected:', error);
       if (!socket.destroyed) sendSocket(socket, { type: 'error', code: 'request_failed', message: '请求未完成，服务器保持运行。' });
     });
-  }, cleanup);
+  }, cleanup, { maxPayload: MAX_WS_PAYLOAD });
 });
 
 server.listen(PORT, HOST, () => {
@@ -1548,7 +1549,7 @@ server.listen(PORT, HOST, () => {
   console.log(` RPGmap Multiplayer Server  |  ${packageVersion}`);
   console.log('============================================================');
   console.log(` Local     : http://127.0.0.1:${actualPort}`);
-  for (const url of networkUrls(actualPort)) console.log(` Network   : ${url}`);
+  for (const url of listNetworkUrls(actualPort)) console.log(` Network   : ${url}`);
   console.log(` World     : ${WORLD_ID} · revision ${world.revision}`);
   console.log(` Users     : ${access.users.length} persistent Player identities`);
   console.log(` Map Root  : ${MAP_DIR}`);
