@@ -40,6 +40,24 @@ test('same Token id in different Scenes remains two different windows', () => {
   ]);
 });
 
+test('tabs and geometry stay isolated between simultaneously open live windows', () => {
+  const manager = createActorSheetManager();
+  const actor = manager.open({ actorId: 'boss', tab: 'overview' }).record;
+  const firstToken = manager.open({ actorId: 'boss', tokenId: 'boss-1', sceneId: 'scene-a', tab: 'combat' }).record;
+  const secondToken = manager.open({ actorId: 'boss', tokenId: 'boss-2', sceneId: 'scene-a', tab: 'status' }).record;
+
+  manager.update(firstToken.key, { tab: 'token', left: 180, top: 120, width: 640, height: 520 });
+  manager.capture(secondToken.key, { left: 420, top: 160, width: 700, height: 580 });
+
+  assert.equal(manager.get(actor.key).tab, 'overview');
+  assert.equal(manager.get(firstToken.key).tab, 'token');
+  assert.equal(manager.get(firstToken.key).left, 180);
+  assert.equal(manager.get(firstToken.key).width, 640);
+  assert.equal(manager.get(secondToken.key).tab, 'status');
+  assert.equal(manager.get(secondToken.key).left, 420);
+  assert.equal(manager.get(secondToken.key).width, 700);
+});
+
 test('opening an existing sheet focuses it instead of creating a duplicate', () => {
   const manager = createActorSheetManager();
   const first = manager.open({ actorId: 'boss', tokenId: 'boss-1', sceneId: 'scene-a', tab: 'overview' });
