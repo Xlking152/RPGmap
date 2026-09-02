@@ -41,22 +41,13 @@ export function createEntitySystem(options = {}) {
       }
 
       function handleCharacterSheetKey(event) {
-        if (event.defaultPrevented || event.repeat || event.isComposing
+        if (event.defaultPrevented || event.code !== 'KeyC'
           || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
-          || event.key?.toLowerCase() !== 'c'
           || event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
         const tokenId = api.selection?.getPrimaryTokenId?.();
-        const caps = api.multiplayer?.getCapabilities?.();
-        const actorId = !tokenId && caps?.connected === true && caps.role !== 'gm'
-          ? api.multiplayer?.getStatus?.()?.session?.defaultActorId || null
-          : null;
-        if (!tokenId && !actorId) return;
+        if (!tokenId) return;
         event.preventDefault();
-        const sheet = documentNode.querySelector?.('.entity-sheet');
-        const same = tokenId
-          ? String(sheet?.dataset?.tokenId || '') === String(tokenId)
-          : !sheet?.dataset?.tokenId && String(sheet?.dataset?.actorId || '') === String(actorId);
-        void invoke(same ? 'closeSheet' : tokenId ? 'openToken' : 'openActor', tokenId || actorId);
+        void invoke('openToken', tokenId);
       }
 
       api.entities = {
