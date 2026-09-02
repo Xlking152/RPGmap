@@ -30,11 +30,14 @@ test('plain C opens only the primary selected Token sheet', () => {
   assert.doesNotMatch(entityIndex, /getSelectedTokenIds\?\.\(\).*forEach/s);
 });
 
-test('Actor sheets become map-friendly draggable and resizable desktop windows', () => {
+test('Actor sheets become managed map-friendly draggable and resizable desktop windows', () => {
   assert.match(appShell, /\.entity-sheet-backdrop\{[^}]*pointer-events:none/);
   assert.match(appShell, /\.entity-sheet\{[^}]*resize:both;pointer-events:auto/);
   assert.match(entityIndex, /documentNode\.addEventListener\('pointerdown', pointerDown,/);
-  assert.match(entityIndex, /drag = \{ sheet, x:/);
+  assert.match(entityIndex, /const key = String\(sheet\.dataset\.sheetWindowKey \|\| ''\)/);
+  assert.match(entityIndex, /api\.entities\?\.focusSheet\?\.\(key\)/);
+  assert.match(entityIndex, /drag = \{ sheet, key, x:/);
+  assert.match(entityIndex, /api\.entities\?\.captureSheetGeometry\?\.\(key, sheet\.getBoundingClientRect\(\)\)/);
 });
 
 test('window behavior is installed before the heavy Entity UI is lazily loaded', () => {
