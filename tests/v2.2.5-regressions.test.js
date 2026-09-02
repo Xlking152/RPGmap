@@ -4,13 +4,13 @@ import { readFileSync } from 'node:fs';
 import { createMovementFastPathSystem } from '../src/movement/fast-path.js';
 import { userControlsToken, currentCombatTokenId } from '../deployment/local-server/access-control.mjs';
 
-const movementController = readFileSync(new URL('../src/movement/controller-v5.js', import.meta.url), 'utf8');
+const movementController = readFileSync(new URL('../src/movement/controller.js', import.meta.url), 'utf8');
 const movementIndex = readFileSync(new URL('../src/movement/index.js', import.meta.url), 'utf8');
 const multiplayerIndex = readFileSync(new URL('../src/multiplayer/index.js', import.meta.url), 'utf8');
 const serverAccess = readFileSync(new URL('../deployment/local-server/access-control.mjs', import.meta.url), 'utf8');
 const healthIndex = readFileSync(new URL('../src/health/index.js', import.meta.url), 'utf8');
 const selectionHud = readFileSync(new URL('../src/health/selection-hud.js', import.meta.url), 'utf8');
-const tokenBars = readFileSync(new URL('../src/health/token-bars-v2.js', import.meta.url), 'utf8');
+const tokenBars = readFileSync(new URL('../src/health/token-bars.js', import.meta.url), 'utf8');
 
 function token(id, actorId, x, y) {
   return {
@@ -134,7 +134,7 @@ test('movement fast path validates once per direct commit and reuses same-contex
 });
 
 test('Movement V5 uses RAF preview updates, persistent Leaflet preview objects, and coalesced WASD segments', () => {
-  assert.match(movementIndex, /createMovementControllerV5/);
+  assert.match(movementIndex, /createMovementController/);
   assert.match(movementIndex, /createMovementFastPathSystem/);
   assert.match(movementController, /requestAnimationFrame/);
   assert.match(movementController, /previewLine\.setLatLngs/);
@@ -144,7 +144,7 @@ test('Movement V5 uses RAF preview updates, persistent Leaflet preview objects, 
 });
 
 test('selection health HUD stays Ruleset-described and batch edits reuse canonical health operations', () => {
-  assert.match(healthIndex, /createHealthTokenBarsV2/);
+  assert.match(healthIndex, /createHealthTokenBars/);
   assert.match(healthIndex, /createHealthSelectionHud/);
   assert.match(selectionHud, /describeHealth\(health, \{ ruleset: api\.ruleset \}\)/);
   assert.match(selectionHud, /entry\?\.view\?\.title/);
@@ -152,5 +152,6 @@ test('selection health HUD stays Ruleset-described and batch edits reuse canonic
   assert.match(selectionHud, /applyHealingToTokenIds/);
   assert.match(selectionHud, /Health Runtime.*Presentation/);
   assert.match(tokenBars, /function upsertToken/);
-  assert.match(tokenBars, /source\.startsWith\('movement:'\)/);
+  assert.match(tokenBars, /\['health:change', 'status:change', 'actor:change'\]/);
+  assert.doesNotMatch(tokenBars, /api\.on\('state:commit'/);
 });

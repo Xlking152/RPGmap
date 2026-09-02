@@ -45,17 +45,30 @@ export function normalizeTokenVisibility(raw, { actor = null, legacyHidden = fal
 
 export function normalizeTokenVision(raw, { actor = null } = {}) {
   const source = object(raw);
-  const override = source.rangeOverrideMeters;
-  const parsedOverride = Number(override);
-  const rangeOverrideMeters = override === null || override === undefined || override === ''
-    ? null
-    : Math.max(0, Number.isFinite(parsedOverride) ? parsedOverride : 0);
-  return {
+  const normalizeRange = value => {
+    if (value === null || value === undefined || value === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  };
+  const legacy = normalizeRange(source.rangeOverrideMeters);
+  const preciseRangeOverrideMeters = Object.hasOwn(source, 'preciseRangeOverrideMeters')
+    ? normalizeRange(source.preciseRangeOverrideMeters)
+    : legacy;
+  let vagueRangeOverrideMeters = Object.hasOwn(source, 'vagueRangeOverrideMeters')
+    ? normalizeRange(source.vagueRangeOverrideMeters)
+    : legacy;
+  if (preciseRangeOverrideMeters !== null && vagueRangeOverrideMeters !== null) {
+    vagueRangeOverrideMeters = Math.max(preciseRangeOverrideMeters, vagueRangeOverrideMeters);
+  }
+  const result = {
     ...clone(source),
     enabled: source.enabled !== false && Boolean(actor),
-    rangeOverrideMeters,
+    preciseRangeOverrideMeters,
+    vagueRangeOverrideMeters,
     overrideUserIds: normalizeUserIds(source.overrideUserIds),
   };
+  delete result.rangeOverrideMeters;
+  return result;
 }
 
 export function normalizeTokenAccess(raw = {}, { actor = null } = {}) {

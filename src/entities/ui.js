@@ -47,6 +47,23 @@ function installStyles(documentNode) {
     .entity-card-actions { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
     .entity-card-actions label { display:inline-flex; gap:5px; align-items:center; }
     .entity-card-actions input[type="number"] { width:72px; }
+    .token-config { padding:0; overflow:hidden; }
+    .token-config > .entity-card-top { padding:10px 10px 2px; }
+    .token-config-tabs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border-bottom:1px solid #dce3e0; }
+    .token-config-tabs button { min-width:0; border:0; border-top:1px solid #dce3e0; padding:9px 4px; background:#eef3ef; color:#526366; cursor:pointer; font-weight:750; }
+    .token-config-tabs button.active { color:#176d76; background:#fff; box-shadow:inset 0 -3px #176d76; }
+    .token-config-body { padding:10px; min-width:0; }
+    .token-config-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; align-items:end; }
+    .token-config-grid label { min-width:0; display:grid; gap:4px; color:#526366; font-size:12px; }
+    .token-config-grid input:not([type="checkbox"]), .token-config-grid select { width:100%; min-width:0; box-sizing:border-box; }
+    .token-config-grid select[multiple] { min-height:64px; }
+    .token-config-check { display:flex !important; align-items:center; align-self:center; }
+    .token-config-feedback { grid-column:1/-1; }
+    .token-config-feedback.pending { color:#785d14; }
+    .token-config-feedback.confirmed { color:#247346; }
+    .token-config-feedback.error { color:#a12f2f; }
+    .token-config-advanced { display:grid; gap:9px; }
+    .token-config-advanced pre { max-height:180px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
     .entity-sheet-backdrop { position:fixed; inset:0; z-index:4200; background:rgba(18,23,24,.48); display:grid; place-items:center; padding:24px; }
     .entity-sheet { width:min(880px,94vw); max-height:90vh; overflow:auto; background:#f8faf7; border:1px solid rgba(40,70,70,.3); border-radius:14px; box-shadow:0 20px 60px rgba(0,0,0,.28); }
     .entity-sheet-header { position:sticky; top:0; z-index:3; display:flex; align-items:center; gap:14px; padding:14px 16px; background:rgba(248,250,247,.97); border-bottom:1px solid rgba(40,70,70,.18); }
@@ -88,7 +105,7 @@ function installStyles(documentNode) {
     .entity-template-runtime-readonly [data-form-select],
     .entity-template-runtime-readonly [data-sheet-action="cycle-form"] { pointer-events:none; opacity:.55; }
     @keyframes entity-indicator { 0%{opacity:0;transform:translate(-50%,-6px)} 15%,75%{opacity:1;transform:translate(-50%,0)} 100%{opacity:0;transform:translate(-50%,-8px)} }
-    @media (max-width:760px) { .entity-grid{grid-template-columns:1fr 1fr}.entity-sheet-backdrop{padding:8px}.entity-resource{grid-template-columns:1fr auto auto}.entity-resource .entity-resource-edit{grid-column:1/-1} }
+    @media (max-width:760px) { .entity-grid{grid-template-columns:1fr 1fr}.entity-sheet-backdrop{padding:8px}.entity-resource{grid-template-columns:1fr auto auto}.entity-resource .entity-resource-edit{grid-column:1/-1}.token-config-grid{grid-template-columns:1fr}.token-config-feedback{grid-column:1}.token-config-tabs button{font-size:12px;padding-inline:2px} }
   `;
   documentNode.head.append(style);
 }
@@ -377,7 +394,7 @@ export function createEntityUiTool(options = {}) {
                 <div class="entity-card-top">${avatarHtml(actor, api.ruleset)}<div class="entity-card-copy"><strong>${escapeHtml(actor.name)}</strong><small>${escapeHtml(presentation.variantLabel || '无形态')} · ${count ? `${count} 个 Token` : '未放置'}</small></div></div>
                 <div class="entity-card-status">${renderStatusStrip([...statusSnapshot.actorStatuses, ...statusSnapshot.derivedStatuses], { limit: 4, emptyText: '无状态' })}</div>
                 <div class="entity-card-actions">
-                  ${actor.audienceRestricted ? '' : `<button type="button" class="small-button" data-entity-action="open" data-id="${escapeHtml(actor.id)}">角色卡</button>`}
+                  <button type="button" class="small-button" data-entity-action="open" data-id="${escapeHtml(actor.id)}">${actor.audienceRestricted ? '公开摘要' : '角色卡'}</button>
                   ${canPlaceActor ? `<label><input type="checkbox" data-entity-share checked> 共享角色数据</label><button type="button" class="small-button" data-entity-action="place" data-id="${escapeHtml(actor.id)}">放置 Token</button>` : ''}
                   ${canManageStructure && sheetCapabilities.hasVariants && sheetCapabilities.canImportXlsx ? `<button type="button" class="small-button" data-entity-action="add-form" data-id="${escapeHtml(actor.id)}">导入新形态</button>` : ''}${canManageStructure ? `<button type="button" class="small-button danger" data-entity-action="delete" data-id="${escapeHtml(actor.id)}">删除角色</button>` : ''}
                   ${!canEditActor ? '<small>只读</small>' : ''}
@@ -425,6 +442,16 @@ export function createEntityUiTool(options = {}) {
         if (!openActorId) { existing?.remove(); return; }
         const actor = sheetActor();
         if (!actor) { openActorId = null; existing?.remove(); return; }
+        if (actor.audienceRestricted === true) {
+          const typeLabel = ({ pc: 'PC', monster: '怪物', npc: 'NPC', summon: '召唤物', other: '其他' })[actor.type] || '其他';
+          const html = `<div class="entity-sheet-backdrop"><div class="entity-sheet entity-limited-sheet" data-actor-id="${escapeHtml(actor.id)}" data-sheet-mode="limited" role="dialog" aria-modal="true">
+            <header class="entity-sheet-header">${avatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><strong>${escapeHtml(actor.name)}</strong><div class="entity-formbar"><span>${escapeHtml(typeLabel)}</span><strong>LIMITED 公开摘要</strong></div></div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>
+            <main class="entity-sheet-body"><section class="entity-section"><p class="entity-help">该角色仅公开名称、头像与类型。生命、状态、属性、资源、权限和实例数据不可见。</p></section></main>
+          </div></div>`;
+          if (existing) existing.outerHTML = html;
+          else documentNode.body.insertAdjacentHTML('beforeend', html);
+          return;
+        }
         const sheetDescription = describeActorSheet(actor, { ruleset: api.ruleset }) || { variants: [], tabs: [] };
         const sheetCapabilities = actorUiCapabilities(api.ruleset, sheetDescription);
         const tabs = [...(sheetDescription.tabs || []).map(item => [item.id, item.label]), ['status','状态'], ['token','Token']];
@@ -458,10 +485,7 @@ export function createEntityUiTool(options = {}) {
       api.entities = {
         openActor(actorId, tab) {
           const actor = store.actor(actorId);
-          if (!actor || actor.audienceRestricted === true) {
-            api.showToast?.('当前身份无权读取该 Actor 模板卡', 'error');
-            return false;
-          }
+          if (!actor) return false;
           openSheet(actorId, tab, null);
           return true;
         },
@@ -471,10 +495,7 @@ export function createEntityUiTool(options = {}) {
           let resolved = null;
           try { resolved = api.tokens?.resolveActor?.(token.id)?.actor || store.actor(token.actorId); }
           catch { resolved = store.actor(token.actorId); }
-          if (!resolved || resolved.audienceRestricted === true) {
-            api.showToast?.('当前身份无权读取该 Token 的角色卡', 'error');
-            return false;
-          }
+          if (!resolved) return false;
           openSheet(token.actorId, tab, token.id);
           return true;
         },

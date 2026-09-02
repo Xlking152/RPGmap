@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const movementIndex = await readFile(new URL('../src/movement/index.js', import.meta.url), 'utf8');
-const ghostRenderer = await readFile(new URL('../src/movement/ghost-renderer-v2.js', import.meta.url), 'utf8');
+const ghostRenderer = await readFile(new URL('../src/movement/ghost-renderer.js', import.meta.url), 'utf8');
 const tokenRenderer = await readFile(new URL('../src/render/token-layer.js', import.meta.url), 'utf8');
 
 test('V2 movement system restores endpoint Token ghost without legacy Character runtime', () => {
-  assert.match(movementIndex, /createMovementGhostRendererV2\(\)\.register\(api\)/);
+  assert.match(movementIndex, /createMovementGhostRenderer\(\)\.register\(api\)/);
   assert.match(ghostRenderer, /createTokenGhostDescriptor/);
   assert.match(ghostRenderer, /isMovementEndpointLayer/);
   assert.match(ghostRenderer, /api\.tokens\.resolveActor/);

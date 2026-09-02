@@ -2,6 +2,7 @@ import { normalizeActorClassification } from '../actor/classification.js';
 import { normalizeTokenAccess } from '../token/access.js';
 import { normalizeFogState } from '../vision/fog.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
+import { normalizeEntityStatusState, STATUS_SCHEMA_VERSION } from '../status/model.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -11,23 +12,25 @@ function plainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-export function migrateWorldSchema3State(rawState) {
+export function migrateWorldSchema3State(rawState, { statusDefinitions = null } = {}) {
   const state = clone(rawState);
   const world = state?.preferences?.worldV2;
   if (!plainObject(world)) return Object.freeze({ state, migrated: false, fromSchemaVersion: null });
   const schemaVersion = Number(world.schemaVersion);
-  if (schemaVersion === 3) return Object.freeze({ state, migrated: false, fromSchemaVersion: 3 });
-  if (schemaVersion !== 2) {
+  if (![2, 3].includes(schemaVersion)) {
     const error = new Error(`World schema ${world.schemaVersion ?? '(missing)'} is incompatible`);
     error.code = 'world_schema_incompatible';
     throw error;
   }
 
+  const before = JSON.stringify(state);
   world.actors = (Array.isArray(world.actors) ? world.actors : []).map(rawActor => {
     const actor = clone(rawActor);
-    const classification = normalizeActorClassification(actor, { legacy: true });
-    actor.type = classification.type;
-    actor.partyId = classification.partyId;
+    if (schemaVersion === 2) {
+      const classification = normalizeActorClassification(actor, { legacy: true });
+      actor.type = classification.type;
+      actor.partyId = classification.partyId;
+    }
     return actor;
   });
   const actors = new Map(world.actors.map(actor => [String(actor?.id ?? ''), actor]));
@@ -47,6 +50,40 @@ export function migrateWorldSchema3State(rawState) {
     scene.fog = normalizeFogState(scene.fog);
     return scene;
   });
+  const configuredDefinitions = Array.isArray(statusDefinitions) ? statusDefinitions : [];
+  const configuredIds = new Set(configuredDefinitions.map(definition => String(definition?.id || '')));
+  const persistedDefinitions = Array.isArray(world.statusDefinitions) ? world.statusDefinitions : [];
+  const definitions = configuredDefinitions.length
+    ? [
+      ...configuredDefinitions.map(definition => ({ ...clone(definition), builtIn: true })),
+      ...persistedDefinitions.filter(definition => !configuredIds.has(String(definition?.id || '')))
+        .map(definition => ({ ...clone(definition), builtIn: false })),
+    ]
+    : persistedDefinitions;
+  const allTokens = world.scenes.flatMap(scene => scene.tokens || []);
+  const normalizedStatus = normalizeEntityStatusState({
+    schemaVersion: state.preferences?.entitySystem?.schemaVersion || 3,
+    statusDefinitions: definitions,
+    actors: world.actors,
+    tokens: allTokens,
+  });
+  world.actors = normalizedStatus.actors;
+  world.statusDefinitions = normalizedStatus.statusDefinitions;
+  const tokensById = new Map(normalizedStatus.tokens.map(token => [String(token.id), token]));
+  world.scenes = world.scenes.map(scene => ({
+    ...scene,
+    tokens: (scene.tokens || []).map(token => clone(tokensById.get(String(token.id)) || token)),
+  }));
   world.schemaVersion = 3;
-  return Object.freeze({ state, migrated: true, fromSchemaVersion: 2 });
+  state.preferences ||= {};
+  const activeScene = world.scenes.find(scene => String(scene.id) === String(world.activeSceneId)) || world.scenes[0];
+  state.preferences.entitySystem = {
+    ...(plainObject(state.preferences.entitySystem) ? state.preferences.entitySystem : {}),
+    schemaVersion: STATUS_SCHEMA_VERSION,
+    actors: clone(world.actors),
+    tokens: clone(activeScene?.tokens || []),
+    statusDefinitions: clone(world.statusDefinitions),
+  };
+  const migrated = before !== JSON.stringify(state);
+  return Object.freeze({ state, migrated, fromSchemaVersion: schemaVersion });
 }

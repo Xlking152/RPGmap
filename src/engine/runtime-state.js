@@ -122,7 +122,9 @@ export function validateRuntimeState(raw, { mapPackage, ruleset } = {}) {
     assertPersistedWorldV2(source.preferences[WORLD_STATE_KEY], {
       acceptedSchemaVersions: [2, WORLD_SCHEMA_VERSION],
     });
-    source = migrateWorldSchema3State(migrateLegacySceneFeatureStates(source).state).state;
+    source = migrateWorldSchema3State(migrateLegacySceneFeatureStates(source).state, {
+      statusDefinitions: ruleset?.statuses?.definitions,
+    }).state;
   }
   const mapId = hasCanonicalWorld ? metadata.id : String(source.mapId ?? metadata.id).trim();
   const mapVersion = hasCanonicalWorld ? metadata.version : String(source.mapVersion ?? metadata.version).trim();

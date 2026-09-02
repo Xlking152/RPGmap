@@ -1271,9 +1271,8 @@ function normalizeArtAssets(artAssets = {}) {
   });
 }
 
-export function createLanzhouMapPackage(artAssets = {}) {
+export function createLanzhouMapData(artAssets = {}) {
   const normalizedArtAssets = normalizeArtAssets(artAssets);
-  const createSvg = () => createLanzhouSvg(normalizedArtAssets);
   return Object.freeze({
     id: BUILT_IN_LANZHOU_MAP.id,
     title: BUILT_IN_LANZHOU_MAP.title,
@@ -1322,9 +1321,17 @@ export function createLanzhouMapPackage(artAssets = {}) {
       }),
     ]),
     artAssets: normalizedArtAssets,
+  });
+}
+
+export function createLanzhouMapPackage(artAssets = {}) {
+  const normalizedArtAssets = normalizeArtAssets(artAssets);
+  const createSvg = () => createLanzhouSvg(normalizedArtAssets);
+  return Object.freeze({
+    ...createLanzhouMapData(normalizedArtAssets),
     svg: createSvg(),
     createSvg,
   });
 }
 
-export const lanzhouMapPackage = createLanzhouMapPackage();
+export const lanzhouMapPackage = /* @__PURE__ */ createLanzhouMapPackage();

@@ -50,6 +50,6 @@ test('explicit migration load may repair and persist the normalized Entity proje
 
   assert.equal(commits.length, 1);
   assert.equal(commits[0].options.source, 'entities:migration');
-  assert.equal(commits[0].next.preferences.entitySystem.schemaVersion, 3);
+  assert.equal(commits[0].next.preferences.entitySystem.schemaVersion, 4);
   assert.ok(commits[0].next.preferences.entitySystem.actors[0].system);
 });

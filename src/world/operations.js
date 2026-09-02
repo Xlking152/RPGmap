@@ -25,6 +25,7 @@ import {
 } from '../vision/fog.js';
 import { migrateWorldSchema3State } from './migration.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
+import { advanceStatusDurations, STATUS_SCHEMA_VERSION } from '../status/model.js';
 
 export {
   assertFeatureStatePatch,
@@ -34,7 +35,7 @@ export {
   migrateWorldSchema3State,
 };
 
-export const WORLD_OPERATION_SCHEMA_VERSION = 1;
+export const WORLD_OPERATION_SCHEMA_VERSION = 2;
 export const WORLD_OPERATION_BATCH_LIMIT = 64;
 export const WORLD_OPERATION_CACHE_LIMIT = 512;
 
@@ -62,15 +63,26 @@ const OPERATION_TYPES = new Set([
   'scene.fog.reset',
   'scene.fog.hide',
   'combat.replace',
+  'combat.advance',
+  'chat.append',
+  'chat.clear',
   'status.apply',
   'status.remove',
   'status.setStacks',
   'status.definition.upsert',
   'status.definition.delete',
+  'status.definition.import',
   'status.batch',
 ]);
 
 const STATUS_TYPES = new Set([...OPERATION_TYPES].filter(type => type.startsWith('status.')));
+const GRANULAR_OPERATION_TYPES = new Set([
+  'token.move', 'scene.featureState.patch', 'scene.activate',
+  'scene.fog.explore', 'scene.fog.hide', 'scene.fog.reset',
+  'status.apply', 'status.remove', 'status.setStacks', 'status.batch',
+  'status.definition.upsert', 'status.definition.delete', 'status.definition.import',
+  'chat.append', 'chat.clear',
+]);
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -125,6 +137,45 @@ function worldFromState(state) {
     fail('World operation requires initialized World V2', 'world_v2_required');
   }
   return world;
+}
+
+function cloneOperationInput(rawState, operations) {
+  const copyOnWriteTypes = new Set(['token.move', 'scene.featureState.patch', 'scene.activate']);
+  if (operations.some(operation => !copyOnWriteTypes.has(operation.type))) return clone(rawState);
+  const source = object(rawState, 'state');
+  const preferences = { ...object(source.preferences, 'state.preferences') };
+  const rawWorld = object(preferences.worldV2, 'state.preferences.worldV2');
+  const world = { ...rawWorld, scenes: [...array(rawWorld.scenes, 'world.scenes')] };
+  const state = { ...source, preferences };
+  preferences.worldV2 = world;
+  preferences.entitySystem = plainObject(preferences.entitySystem)
+    ? { ...preferences.entitySystem }
+    : preferences.entitySystem;
+  const sceneChanges = new Map();
+  for (const operation of operations) {
+    if (operation.type === 'scene.activate') continue;
+    const sceneId = String(operation.payload?.sceneId || world.activeSceneId || '');
+    const entry = sceneChanges.get(sceneId) || { tokens: false, featureStates: false };
+    if (operation.type === 'token.move') entry.tokens = true;
+    if (operation.type === 'scene.featureState.patch') entry.featureStates = true;
+    sceneChanges.set(sceneId, entry);
+  }
+  for (const [sceneId, changes] of sceneChanges) {
+    const index = world.scenes.findIndex(scene => String(scene?.id ?? '') === sceneId);
+    if (index < 0) continue;
+    const scene = { ...world.scenes[index] };
+    if (changes.tokens) scene.tokens = [...(scene.tokens || [])];
+    if (changes.featureStates) scene.featureStates = { ...(scene.featureStates || {}) };
+    world.scenes[index] = scene;
+  }
+  if ([...sceneChanges.values()].some(change => change.tokens)
+    && Array.isArray(preferences.entitySystem?.tokens)) {
+    preferences.entitySystem.tokens = [...preferences.entitySystem.tokens];
+  }
+  if ([...sceneChanges.values()].some(change => change.featureStates)) {
+    preferences.featureStates = { ...(preferences.featureStates || {}) };
+  }
+  return state;
 }
 
 function activeScene(world) {
@@ -234,7 +285,15 @@ function applyStatusProjectionToWorld(state) {
   const world = worldFromState(state);
   const entity = state.preferences?.entitySystem;
   if (!plainObject(entity)) return state;
-  if (Array.isArray(entity.actors)) world.actors = clone(entity.actors);
+  const actors = mapById(entity.actors || []);
+  world.actors = (world.actors || []).map(actor => {
+    const projected = actors.get(String(actor.id));
+    if (!projected) return actor;
+    return {
+      ...actor,
+      effects: clone(Array.isArray(projected.effects) ? projected.effects : []),
+    };
+  });
   if (Array.isArray(entity.statusDefinitions)) world.statusDefinitions = clone(entity.statusDefinitions);
   const scene = activeScene(world);
   const tokens = mapById(entity.tokens || []);
@@ -248,7 +307,7 @@ export function projectWorldOperationState(rawState) {
   const scene = activeScene(world);
   state.preferences ||= {};
   const entity = plainObject(state.preferences.entitySystem) ? state.preferences.entitySystem : {};
-  entity.schemaVersion = Math.max(3, Number(entity.schemaVersion) || 0);
+  entity.schemaVersion = STATUS_SCHEMA_VERSION;
   entity.actors = clone(world.actors || []);
   entity.tokens = clone(scene.tokens || []);
   entity.statusDefinitions = clone(world.statusDefinitions || []);
@@ -262,6 +321,50 @@ export function projectWorldOperationState(rawState) {
     state.preferences.gridVisible = scene.settings.gridVisible !== false;
   }
   pruneCombatReferences(state);
+  return state;
+}
+
+function projectGranularOperationState(state, operations) {
+  if (operations.some(operation => !GRANULAR_OPERATION_TYPES.has(operation.type))) {
+    return projectWorldOperationState(state);
+  }
+  const world = worldFromState(state);
+  const scene = activeScene(world);
+  state.preferences ||= {};
+  const entity = plainObject(state.preferences.entitySystem) ? state.preferences.entitySystem : {};
+  entity.schemaVersion = STATUS_SCHEMA_VERSION;
+  state.preferences.entitySystem = entity;
+  if (operations.some(operation => operation.type === 'scene.activate')) {
+    entity.tokens = clone(scene.tokens || []);
+    state.markers = clone(scene.markers || []);
+    state.attackAreas = clone(scene.attackAreas || []);
+    state.sceneEvents = clone(scene.sceneEvents || []);
+    state.preferences.featureStates = clone(scene.featureStates || {});
+    if (plainObject(scene.settings) && scene.settings.gridVisible !== undefined) {
+      state.preferences.gridVisible = scene.settings.gridVisible !== false;
+    }
+    pruneCombatReferences(state);
+    return state;
+  }
+  for (const operation of operations) {
+    const payload = operation.payload || {};
+    if (operation.type === 'token.move' && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
+      const token = scene.tokens?.find(item => String(item?.id ?? '') === String(payload.tokenId ?? ''));
+      const index = entity.tokens?.findIndex(item => String(item?.id ?? '') === String(payload.tokenId ?? '')) ?? -1;
+      if (token && index >= 0) entity.tokens[index] = clone(token);
+    }
+    if (operation.type === 'scene.featureState.patch'
+      && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
+      state.preferences.featureStates = plainObject(state.preferences.featureStates)
+        ? state.preferences.featureStates
+        : {};
+      const featureId = String(payload.featureId || '');
+      if (Object.hasOwn(scene.featureStates || {}, featureId)) {
+        state.preferences.featureStates[featureId] = clone(scene.featureStates[featureId]);
+      } else delete state.preferences.featureStates[featureId];
+    }
+  }
+  delete state.preferences.featureInteractions;
   return state;
 }
 
@@ -561,18 +664,91 @@ function applyCanonicalOperation(state, operation, context = {}) {
     return { action: type };
   }
 
+  if (type === 'combat.advance') {
+    const combatSystem = plainObject(state.preferences.combatSystem)
+      ? state.preferences.combatSystem
+      : null;
+    const combat = combatSystem?.combat;
+    if (!plainObject(combat) || combat.state !== 'active' || !Array.isArray(combat.combatants) || !combat.combatants.length) {
+      fail('combat.advance requires active Combat', 'combat_not_active');
+    }
+    const previousRound = Math.max(1, Math.floor(Number(combat.round) || 1));
+    combat.turnIndex = Math.max(0, Math.floor(Number(combat.turnIndex) || 0)) + 1;
+    if (combat.turnIndex >= combat.combatants.length) {
+      combat.turnIndex = 0;
+      combat.round = previousRound + 1;
+    } else combat.round = previousRound;
+    combat.turnOrigin = null;
+    const scene = activeScene(world);
+    const advanced = advanceStatusDurations({
+      schemaVersion: 4,
+      actors: world.actors || [],
+      tokens: scene.tokens || [],
+      statusDefinitions: world.statusDefinitions || [],
+    }, {
+      roundAdvanced: combat.round > previousRound,
+      now: String(context.now || new Date().toISOString()),
+      round: combat.round,
+      turn: combat.turnIndex,
+    });
+    world.actors = advanced.state.actors;
+    scene.tokens = advanced.state.tokens;
+    world.statusDefinitions = advanced.state.statusDefinitions;
+    return {
+      action: type,
+      round: combat.round,
+      turnIndex: combat.turnIndex,
+      expiredCount: advanced.expiredEffectIds.length,
+    };
+  }
+
+  if (type === 'chat.append') {
+    const text = String(payload.text || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 4_000);
+    if (!text) fail('chat.append requires non-empty text', 'invalid_chat');
+    const createMessage = typeof context.createChatMessage === 'function'
+      ? context.createChatMessage
+      : input => ({
+        id: String(context.randomId?.() || `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`),
+        type: String(input.event || 'chat'),
+        text: input.text,
+        createdAt: String(context.now || new Date().toISOString()),
+        sender: clone(context.sender || { id: 'offline', name: '本地 GM', role: 'gm' }),
+        data: plainObject(input.data) ? clone(input.data) : null,
+      });
+    const message = object(createMessage({
+      text,
+      event: String(payload.event || 'chat'),
+      data: plainObject(payload.data) ? clone(payload.data) : null,
+    }), 'chat message');
+    identifier(message.id, 'chat.id');
+    state.preferences.chatSystem = plainObject(state.preferences.chatSystem)
+      ? state.preferences.chatSystem
+      : { schemaVersion: 1, messages: [] };
+    const messages = Array.isArray(state.preferences.chatSystem.messages)
+      ? state.preferences.chatSystem.messages
+      : [];
+    messages.push(clone(message));
+    if (messages.length > 500) messages.splice(0, messages.length - 500);
+    state.preferences.chatSystem.messages = messages;
+    return { action: type, chatId: String(message.id) };
+  }
+
+  if (type === 'chat.clear') {
+    state.preferences.chatSystem = { schemaVersion: 1, messages: [] };
+    return { action: type };
+  }
+
   fail(`Unsupported World operation: ${type}`, 'unknown_world_operation');
 }
 
 export function applyWorldOperations(rawState, rawOperations, context = {}) {
-  const state = clone(object(rawState, 'state'));
-  state.preferences = clone(object(state.preferences, 'state.preferences'));
-  worldFromState(state);
   const operations = array(rawOperations, 'operations').map((operation, index) =>
     normalizeWorldOperation(operation, `operations[${index}]`));
   if (!operations.length || operations.length > WORLD_OPERATION_BATCH_LIMIT) {
     fail(`operations must contain 1-${WORLD_OPERATION_BATCH_LIMIT} items`, 'world_operation_limit');
   }
+  const state = cloneOperationInput(rawState, operations);
+  worldFromState(state);
   const results = [];
   for (const operation of operations) {
     if (STATUS_TYPES.has(operation.type)) {
@@ -585,13 +761,118 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
       results.push(...(Array.isArray(applied.results) ? clone(applied.results) : []));
     } else {
       results.push(applyCanonicalOperation(state, operation, context));
-      projectWorldOperationState(state);
     }
   }
   const world = worldFromState(state);
   world.updatedAt = String(context.now || new Date().toISOString());
-  projectWorldOperationState(state);
-  return { state, operations: clone(operations), results };
+  projectGranularOperationState(state, operations);
+  const changeSet = createOperationChangeSet(operations, results, rawState, state)
+    || createWorldOperationChangeSet(rawState, state);
+  applyFogOperationDirtyBounds(changeSet, operations, context.mapMetrics);
+  return {
+    state,
+    operations: clone(operations),
+    results,
+    changeSet,
+  };
+}
+
+function createOperationChangeSet(operations, results, beforeState, afterState) {
+  if (operations.some(operation => !GRANULAR_OPERATION_TYPES.has(operation.type))) return null;
+  const beforeWorld = worldFromState(beforeState);
+  const afterWorld = worldFromState(afterState);
+  const actorIds = new Set();
+  const tokenIdsByScene = new Map();
+  const featureIdsByScene = new Map();
+  const fogSceneIds = new Set();
+  const appendedIds = new Set();
+  let chatCleared = false;
+  let statusDefinitionsChanged = false;
+  let activeSceneChanged = false;
+  const activeSceneId = String(afterWorld.activeSceneId || beforeWorld.activeSceneId || '');
+  const addToken = (sceneId, tokenId) => {
+    const scene = String(sceneId || activeSceneId);
+    if (!scene || !tokenId) return;
+    if (!tokenIdsByScene.has(scene)) tokenIdsByScene.set(scene, new Set());
+    tokenIdsByScene.get(scene).add(String(tokenId));
+  };
+  const collectStatusTarget = payload => {
+    if (payload?.type === 'status.batch') {
+      for (const item of payload.operations || []) collectStatusTarget(item);
+      return;
+    }
+    const scope = String(payload?.scope || payload?.target?.scope || '');
+    const targetId = String(payload?.targetId || payload?.target?.targetId || '');
+    if (scope === 'actor' && targetId) actorIds.add(targetId);
+    else if ((scope === 'token' || scope === 'syntheticActor') && targetId) addToken(activeSceneId, targetId);
+  };
+  for (const operation of operations) {
+    const payload = operation.payload || {};
+    if (operation.type === 'token.move') addToken(payload.sceneId, payload.tokenId);
+    else if (operation.type === 'scene.featureState.patch') {
+      const sceneId = String(payload.sceneId || activeSceneId);
+      if (!featureIdsByScene.has(sceneId)) featureIdsByScene.set(sceneId, new Set());
+      featureIdsByScene.get(sceneId).add(String(payload.featureId));
+    } else if (operation.type === 'scene.activate') activeSceneChanged = true;
+    else if (operation.type.startsWith('scene.fog.')) fogSceneIds.add(String(payload.sceneId || activeSceneId));
+    else if (operation.type.startsWith('status.definition.')) statusDefinitionsChanged = true;
+    else if (operation.type.startsWith('status.')) collectStatusTarget({ type: operation.type, ...payload });
+    else if (operation.type === 'chat.clear') chatCleared = true;
+  }
+  for (const result of results || []) if (result?.chatId) appendedIds.add(String(result.chatId));
+  return {
+    actors: { upsertIds: [...actorIds], removeIds: [] },
+    tokens: [...tokenIdsByScene].map(([sceneId, ids]) => ({ sceneId, upsertIds: [...ids], removeIds: [] })),
+    scenes: { upsertIds: [], removeIds: [], activeSceneChanged },
+    featureStates: [...featureIdsByScene].map(([sceneId, ids]) => ({ sceneId, featureIds: [...ids] })),
+    fog: [...fogSceneIds].map(sceneId => ({ sceneId, dirtyBounds: null })),
+    combatChanged: false,
+    chat: { appendedIds: [...appendedIds], cleared: chatCleared },
+    statusDefinitionsChanged,
+  };
+}
+
+function mergeBounds(left, right) {
+  if (!left || !right) return left || right || null;
+  return {
+    minX: Math.min(left.minX, right.minX),
+    minY: Math.min(left.minY, right.minY),
+    maxX: Math.max(left.maxX, right.maxX),
+    maxY: Math.max(left.maxY, right.maxY),
+  };
+}
+
+function fogOperationBounds(operation, mapMetrics = {}) {
+  if (!String(operation?.type || '').startsWith('scene.fog.')) return undefined;
+  if (operation.type === 'scene.fog.reset') return null;
+  const payload = plainObject(operation.payload) ? operation.payload : {};
+  const metersPerUnit = Math.max(0.000001, Number(mapMetrics?.metersPerUnit) || 1);
+  const radius = Math.max(0, Number(payload.radiusMeters) || 0) / metersPerUnit;
+  const points = payload.from && payload.to ? [payload.from, payload.to] : [payload];
+  const values = points.map(point => ({ x: Number(point?.x), y: Number(point?.y) }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (!values.length) return null;
+  return {
+    minX: Math.min(...values.map(point => point.x)) - radius,
+    minY: Math.min(...values.map(point => point.y)) - radius,
+    maxX: Math.max(...values.map(point => point.x)) + radius,
+    maxY: Math.max(...values.map(point => point.y)) + radius,
+  };
+}
+
+function applyFogOperationDirtyBounds(changeSet, operations, mapMetrics) {
+  const byScene = new Map();
+  for (const operation of operations) {
+    const bounds = fogOperationBounds(operation, mapMetrics);
+    if (bounds === undefined) continue;
+    const sceneId = String(operation.payload?.sceneId || '');
+    if (!sceneId) continue;
+    if (bounds === null || byScene.get(sceneId) === null) byScene.set(sceneId, null);
+    else byScene.set(sceneId, mergeBounds(byScene.get(sceneId), bounds));
+  }
+  for (const entry of changeSet.fog || []) {
+    if (byScene.has(String(entry.sceneId))) entry.dirtyBounds = clone(byScene.get(String(entry.sceneId)));
+  }
 }
 
 function diffById(beforeItems = [], afterItems = []) {
@@ -623,6 +904,70 @@ function sceneContent(scene) {
     attackAreas: clone(scene?.attackAreas || []),
     sceneEvents: clone(scene?.sceneEvents || []),
     settings: clone(scene?.settings || {}),
+  };
+}
+
+function changedIds(beforeItems = [], afterItems = []) {
+  const diff = diffById(beforeItems, afterItems);
+  return {
+    upsertIds: diff.upsert.map(item => String(item.id)),
+    removeIds: diff.remove.map(String),
+  };
+}
+
+function chatMessages(state) {
+  const messages = state?.preferences?.chatSystem?.messages;
+  return Array.isArray(messages) ? messages : [];
+}
+
+export function createWorldOperationChangeSet(beforeState, afterState) {
+  const beforeWorld = worldFromState(beforeState);
+  const afterWorld = worldFromState(afterState);
+  const beforeScenes = mapById(beforeWorld.scenes);
+  const afterScenes = mapById(afterWorld.scenes);
+  const tokens = [];
+  const featureStates = [];
+  const fog = [];
+  for (const [sceneId, scene] of afterScenes) {
+    const previous = beforeScenes.get(sceneId);
+    const tokenChanges = changedIds(previous?.tokens || [], scene.tokens || []);
+    if (tokenChanges.upsertIds.length || tokenChanges.removeIds.length) tokens.push({ sceneId, ...tokenChanges });
+    const featureChanges = changedIds(
+      Object.entries(previous?.featureStates || {}).map(([id, state]) => ({ id, state })),
+      Object.entries(scene.featureStates || {}).map(([id, state]) => ({ id, state })),
+    );
+    const featureIds = [...new Set([...featureChanges.upsertIds, ...featureChanges.removeIds])];
+    if (featureIds.length) featureStates.push({ sceneId, featureIds });
+    if (!same(previous?.fog, scene.fog)) fog.push({ sceneId, dirtyBounds: null });
+  }
+  for (const [sceneId, scene] of beforeScenes) {
+    if (afterScenes.has(sceneId)) continue;
+    const removeIds = (scene.tokens || []).map(token => String(token.id));
+    if (removeIds.length) tokens.push({ sceneId, upsertIds: [], removeIds });
+  }
+  const beforeChat = chatMessages(beforeState);
+  const afterChat = chatMessages(afterState);
+  const beforeChatIds = new Set(beforeChat.map(message => String(message?.id || '')));
+  const appendedIds = afterChat
+    .filter(message => !beforeChatIds.has(String(message?.id || '')))
+    .map(message => String(message.id));
+  const cleared = beforeChat.length > 0 && afterChat.length === 0;
+  const sceneChanges = changedIds(
+    (beforeWorld.scenes || []).map(sceneMetadata),
+    (afterWorld.scenes || []).map(sceneMetadata),
+  );
+  return {
+    actors: changedIds(beforeWorld.actors || [], afterWorld.actors || []),
+    tokens,
+    scenes: {
+      ...sceneChanges,
+      activeSceneChanged: String(beforeWorld.activeSceneId || '') !== String(afterWorld.activeSceneId || ''),
+    },
+    featureStates,
+    fog,
+    combatChanged: !same(beforeState?.preferences?.combatSystem, afterState?.preferences?.combatSystem),
+    chat: { appendedIds, cleared },
+    statusDefinitionsChanged: !same(beforeWorld.statusDefinitions, afterWorld.statusDefinitions),
   };
 }
 
@@ -665,6 +1010,9 @@ export function createWorldOperationPatch(beforeState, afterState) {
   }
   if (!same(beforeState?.preferences?.combatSystem, afterState?.preferences?.combatSystem)) {
     patch.combatSystem = clone(afterState?.preferences?.combatSystem || { schemaVersion: 1, combat: null });
+  }
+  if (!same(beforeState?.preferences?.chatSystem, afterState?.preferences?.chatSystem)) {
+    patch.chatSystem = clone(afterState?.preferences?.chatSystem || { schemaVersion: 1, messages: [] });
   }
   if (!same(beforeState?.preferences?.audienceVision, afterState?.preferences?.audienceVision)) {
     patch.audienceVision = afterState?.preferences?.audienceVision === undefined
@@ -730,6 +1078,7 @@ export function applyWorldOperationPatch(rawState, rawPatch) {
     }
   }
   if (patch.combatSystem !== undefined) state.preferences.combatSystem = clone(patch.combatSystem);
+  if (patch.chatSystem !== undefined) state.preferences.chatSystem = clone(patch.chatSystem);
   if (patch.audienceVision === null) delete state.preferences.audienceVision;
   else if (patch.audienceVision !== undefined) state.preferences.audienceVision = clone(object(patch.audienceVision, 'audienceVision'));
   return projectWorldOperationState(state);

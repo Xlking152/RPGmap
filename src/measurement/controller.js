@@ -16,7 +16,7 @@ function button(documentNode, label, className) {
   return node;
 }
 
-export function createRulerControllerV2() {
+export function createRulerController() {
   return Object.freeze({
     register(api) {
       if (!api.tokens?.get || !api.selection) throw new Error('Ruler V2 requires canonical Token Runtime');

@@ -44,7 +44,7 @@ function installStyles(documentNode) {
     .token-v2-label-row { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
     .token-v2-elevation-label { display:inline-flex; align-items:center; min-height:17px; padding:1px 4px; border-radius:4px; color:#eaf6f7; background:rgba(42,67,72,.92); font-size:9px; font-weight:800; line-height:1.2; }
     .token-v2-name-label { font-weight:750; }
-    .rpgmap-token-status-v2-marker { background:transparent !important; border:0 !important; pointer-events:none !important; overflow:visible !important; }
+    .rpgmap-token-status-v2-marker { background:transparent !important; border:0 !important; pointer-events:auto !important; overflow:visible !important; cursor:pointer; }
     .selected-token-summary { position:absolute; right:12px; bottom:max(12px,env(safe-area-inset-bottom)); z-index:1600; width:210px; min-height:92px; box-sizing:border-box; display:flex; align-items:center; gap:11px; padding:10px; border:1px solid rgba(38,60,62,.28); border-radius:8px; background:rgba(248,250,247,.96); box-shadow:0 10px 28px rgba(18,27,29,.24); pointer-events:none; }
     .selected-token-summary[hidden] { display:none !important; }
     .selected-token-summary-portrait { flex:0 0 72px; width:72px; height:72px; display:grid; place-items:center; overflow:hidden; border:3px solid var(--token-color,#3d9b63); border-radius:50%; background:var(--token-color,#3d9b63); color:white; font:800 28px/1 sans-serif; }
@@ -128,11 +128,13 @@ export function createTokenRendererSystem() {
         : windowNode.clearTimeout(id);
       installStyles(documentNode);
       ensurePane(api.map, TOKEN_PANE, 515);
-      ensurePane(api.map, STATUS_PANE, 540, { pointerEvents: 'none' });
+      ensurePane(api.map, STATUS_PANE, 540, { pointerEvents: 'auto' });
 
       const tokenLayer = L.layerGroup([], { pane: TOKEN_PANE }).addTo(api.map);
       const statusLayer = L.layerGroup([], { pane: STATUS_PANE }).addTo(api.map);
       const views = new Map();
+      const statusViews = new Map();
+      const models = new Map();
       const visualPoints = new Map();
       const animations = new Map();
       const preparedRoutes = new Map();
@@ -174,34 +176,50 @@ export function createTokenRendererSystem() {
         if (emitEnd) api.emit?.('token:visual-move-end', { id, tokenId: id, point: visualPoints.get(id) || null });
       }
 
-      function renderStatuses(models, tokensById) {
-        statusLayer.clearLayers();
-        for (const model of models) {
-          if (model.audienceRestricted) continue;
-          if (animations.has(model.id)) continue;
-          const token = tokensById.get(model.id);
-          if (!token) continue;
-          const snapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
-          const html = renderTokenStatusBadges(snapshot.statuses, { limit: 4 });
-          if (!html) continue;
-          const tokenPixels = renderSize(api, { ...model, selected: false });
-          L.marker(worldToLatLng({ x: model.x, y: model.y }, api.mapPackage.height), {
-            pane: STATUS_PANE,
-            interactive: false,
-            keyboard: false,
-            icon: L.divIcon({
-              className: 'rpgmap-token-status-v2-marker',
-              html,
-              iconSize: [1, 1],
-              iconAnchor: [-(tokenPixels / 2 + 3), tokenPixels / 2],
-            }),
+      function removeStatus(tokenId) {
+        const id = String(tokenId || '');
+        const view = statusViews.get(id);
+        if (view) statusLayer.removeLayer(view);
+        statusViews.delete(id);
+      }
+
+      function renderStatus(model, token) {
+        if (!model || !token || model.audienceRestricted || animations.has(model.id)) {
+          removeStatus(model?.id || token?.id);
+          return;
+        }
+        const snapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
+        const badgeHtml = renderTokenStatusBadges(snapshot.statuses, { limit: 4 });
+        if (!badgeHtml) {
+          removeStatus(model.id);
+          return;
+        }
+        const tokenPixels = renderSize(api, { ...model, selected: false });
+        const icon = L.divIcon({
+          className: 'rpgmap-token-status-v2-marker',
+          html: `<span data-token-id="${escapeHtml(token.id)}">${badgeHtml}</span>`,
+          iconSize: [1, 1],
+          iconAnchor: [-(tokenPixels / 2 + 3), tokenPixels / 2],
+        });
+        let view = statusViews.get(model.id);
+        if (!view) {
+          view = L.marker(worldToLatLng(model, api.mapPackage.height), {
+            pane: STATUS_PANE, interactive: true, keyboard: false, icon, rpgTokenId: model.id,
+          }).on('click', event => {
+            L.DomEvent.stopPropagation(event);
+            const tokenId = event.target?.options?.rpgTokenId;
+            if (tokenId) void api.statusUi?.openQuickHud?.(tokenId, event.originalEvent || null);
           }).addTo(statusLayer);
+          statusViews.set(model.id, view);
+        } else {
+          view.setLatLng(worldToLatLng(model, api.mapPackage.height));
+          view.setIcon(icon);
         }
       }
 
-      function renderSummary(models) {
+      function renderSummary() {
         const primaryId = String(api.selection?.getPrimaryTokenId?.() || '');
-        const model = models.find(item => item.id === primaryId) || models.find(item => item.selected) || null;
+        const model = models.get(primaryId) || [...models.values()].find(item => item.selected) || null;
         if (!model) {
           summary.hidden = true;
           summary.replaceChildren();
@@ -254,7 +272,7 @@ export function createTokenRendererSystem() {
           animations.delete(motion.id);
           motion.frame = null;
           api.emit?.('token:visual-move-end', { id: motion.id, tokenId: motion.id, point: motion.target });
-          render();
+          renderToken(motion.id);
         };
         motion.frame = requestFrame(step);
       }
@@ -297,64 +315,97 @@ export function createTokenRendererSystem() {
         beginSegment(motion, first);
       }
 
+      function removeToken(tokenId) {
+        const id = String(tokenId || '');
+        cancelMotion(id, { emitEnd: true });
+        const view = views.get(id);
+        if (view) tokenLayer.removeLayer(view);
+        views.delete(id);
+        models.delete(id);
+        visualPoints.delete(id);
+        preparedRoutes.delete(id);
+        removeStatus(id);
+      }
+
+      function renderToken(tokenId, { summary: updateSummary = true } = {}) {
+        if (destroyed) return;
+        const id = String(tokenId || '');
+        const token = api.tokens.get?.(id);
+        const model = token ? resolveModel(token) : null;
+        if (!model) {
+          removeToken(id);
+          if (updateSummary) renderSummary();
+          return;
+        }
+        models.set(id, model);
+        let view = views.get(id);
+        if (!view) {
+          const point = normalizeTokenPoint(model);
+          view = L.marker(worldToLatLng(point, api.mapPackage.height), {
+            icon: tokenIcon(api, model), keyboard: true, pane: TOKEN_PANE,
+            title: model.showName ? model.name : 'Token', rpgTokenId: id,
+          }).addTo(tokenLayer);
+          visualPoints.set(id, point);
+          view.on('click', event => {
+            L.DomEvent.stopPropagation(event);
+            const current = models.get(id);
+            if (current?.audienceVisibility === 'vague') return;
+            const selected = api.tokens.get(id);
+            if (!selected) return;
+            api.selection?.replace?.([id], id);
+            api.emit?.('token:select', { id, tokenId: id, actorId: selected.actorId });
+          });
+          view.on('contextmenu', event => {
+            L.DomEvent.preventDefault(event);
+            L.DomEvent.stopPropagation(event);
+            if (event.originalEvent?.shiftKey) return api.elevation?.openTokenElevationEditor?.(id, event.originalEvent);
+            void api.statusUi?.openQuickHud?.(id, event.originalEvent || null);
+          });
+          views.set(id, view);
+        }
+        moveView(model, view);
+        view.setIcon(tokenIcon(api, model));
+        view.options.title = model.showName ? model.name : 'Token';
+        setTooltip(api, documentNode, view, model);
+        renderStatus(model, token);
+        if (updateSummary) renderSummary();
+      }
+
       function render() {
         if (destroyed) return;
         const tokens = api.tokens.list();
-        const tokensById = new Map(tokens.map(token => [String(token.id), token]));
-        const models = tokens.map(resolveModel).filter(Boolean);
-        const visibleIds = new Set(models.map(model => model.id));
+        const live = new Set(tokens.map(token => String(token.id)));
+        for (const id of [...views.keys()]) if (!live.has(id)) removeToken(id);
+        for (const token of tokens) renderToken(token.id, { summary: false });
+        renderSummary();
+      }
 
-        for (const [id, view] of views) {
-          if (visibleIds.has(id)) continue;
-          cancelMotion(id, { emitEnd: true });
-          tokenLayer.removeLayer(view);
-          views.delete(id);
-          visualPoints.delete(id);
-          preparedRoutes.delete(id);
+      function renderEventTokens(event) {
+        const detail = event?.detail || {};
+        const ids = new Set([detail.tokenId, detail.id, ...(detail.tokenIds || [])].filter(Boolean).map(String));
+        const actorIds = new Set([detail.actorId, ...(detail.actorIds || [])].filter(Boolean).map(String));
+        if (actorIds.size) {
+          for (const token of api.tokens.list()) if (actorIds.has(String(token.actorId))) ids.add(String(token.id));
         }
-
-        for (const model of models) {
-          let view = views.get(model.id);
-          if (!view) {
-            const point = normalizeTokenPoint(model);
-            view = L.marker(worldToLatLng(point, api.mapPackage.height), {
-              icon: tokenIcon(api, model),
-              keyboard: true,
-              pane: TOKEN_PANE,
-              title: model.showName ? model.name : 'Token',
-              rpgTokenId: model.id,
-            }).addTo(tokenLayer);
-            visualPoints.set(model.id, point);
-            view.on('click', event => {
-              L.DomEvent.stopPropagation(event);
-              if (model.audienceVisibility === 'vague') return;
-              const token = api.tokens.get(model.id);
-              if (!token) return;
-              api.selection?.replace?.([token.id], token.id);
-              api.emit?.('token:select', { id: token.id, tokenId: token.id, actorId: token.actorId });
-            });
-            views.set(model.id, view);
-          }
-          moveView(model, view);
-          view.setIcon(tokenIcon(api, model));
-          view.options.title = model.showName ? model.name : 'Token';
-          setTooltip(api, documentNode, view, model);
-        }
-        renderStatuses(models, tokensById);
-        renderSummary(models);
+        if (!ids.size) return render();
+        for (const id of ids) renderToken(id, { summary: false });
+        renderSummary();
       }
 
       const selectionOff = api.selection?.subscribe?.(snapshot => {
+        const previous = selectedIds;
         selectedIds = new Set((snapshot?.ids || []).map(String));
-        render();
+        const changed = new Set([...previous, ...selectedIds]);
+        for (const id of changed) renderToken(id, { summary: false });
+        renderSummary();
       });
       if (selectionOff) off.push(selectionOff);
 
       for (const eventName of [
         'token:create', 'token:delete', 'token:move', 'token:size-change',
-        'token:property-change', 'status:change', 'state:import', 'state:saved',
-      ]) off.push(api.on(eventName, render));
-      off.push(api.on('state:commit', render));
+        'token:property-change', 'actor:change', 'health:change', 'status:change',
+      ]) off.push(api.on(eventName, renderEventTokens));
+      for (const eventName of ['state:import', 'scene:activate']) off.push(api.on(eventName, render));
 
       api.map.on('zoomend', render);
       api.map.on('resize', render);
@@ -366,6 +417,7 @@ export function createTokenRendererSystem() {
         preparedRoutes.clear();
         tokenLayer.clearLayers();
         statusLayer.clearLayers();
+        statusViews.clear();
         api.map.removeLayer?.(tokenLayer);
         api.map.removeLayer?.(statusLayer);
         summary.remove();

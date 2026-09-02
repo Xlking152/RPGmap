@@ -34,7 +34,12 @@ function worldWithVisionOverride(rangeOverrideMeters = 3100) {
         elevationFt: 0,
         controllerUserIds: [],
         visibility: { mode: 'party', userIds: [] },
-        vision: { enabled: true, rangeOverrideMeters, overrideUserIds: [] },
+        vision: {
+          enabled: true,
+          preciseRangeOverrideMeters: rangeOverrideMeters,
+          vagueRangeOverrideMeters: rangeOverrideMeters,
+          overrideUserIds: [],
+        },
         locked: false,
         showName: true,
         effects: [],
@@ -76,8 +81,20 @@ test('ordinary objects keep the 256-key hostile-input limit', () => {
 });
 
 test('Token vision overrides are no longer normalized or validated back to 120 m', () => {
-  assert.equal(normalizeTokenVision({ rangeOverrideMeters: 3100 }, { actor: { id: 'actor-scout' } }).rangeOverrideMeters, 3100);
+  assert.deepEqual(normalizeTokenVision({ rangeOverrideMeters: 3100 }, { actor: { id: 'actor-scout' } }), {
+    enabled: true,
+    preciseRangeOverrideMeters: 3100,
+    vagueRangeOverrideMeters: 3100,
+    overrideUserIds: [],
+  });
   const world = worldWithVisionOverride(3100);
   assert.doesNotThrow(() => assertPersistedWorldV2(world));
   assert.doesNotThrow(() => assertWorldV2(world));
+});
+
+test('Token vague vision cannot be smaller than its precise vision', () => {
+  const world = worldWithVisionOverride(80);
+  world.scenes[0].tokens[0].vision.vagueRangeOverrideMeters = 40;
+  assert.throws(() => assertPersistedWorldV2(world), /vague range cannot be smaller/);
+  assert.throws(() => assertWorldV2(world), /vague range cannot be smaller/);
 });

@@ -1,10 +1,7 @@
-import { worldToLatLng } from '../engine/geometry.js';
-import { tokenDiameterMeters } from '../elevation/model.js';
+import { STATUS_SCHEMA_VERSION } from './model.js';
 import {
-  Activity, Anchor, Ban, Bomb, Building2, CircleAlert, CircleDot, CircleSlash,
-  DoorClosed, Droplet, Eye, EyeOff, Flame, Footprints, Ghost, HeartPulse,
-  LockKeyhole, Moon, Shield, ShieldAlert, Skull, Snowflake, Sparkles, Swords,
-  Star, TriangleAlert, UnlockKeyhole, Waves,
+  Activity, Anchor, CircleAlert, CircleDot, CircleSlash, Droplet, EyeOff,
+  Flame, Ghost, Moon, Skull, Sparkles, TriangleAlert,
 } from 'lucide';
 
 const STATUS_STYLE_ID = 'rpgmap-status-ui-style';
@@ -12,9 +9,7 @@ const STATUS_STYLE_ID = 'rpgmap-status-ui-style';
 const CATEGORY_LABELS = Object.freeze({
   buff: 'Buff',
   debuff: 'Debuff',
-  trait: '特征',
-  status: '状态',
-  condition: '状态',
+  neutral: '中性',
   derived: '派生',
 });
 
@@ -29,38 +24,18 @@ const IMPORTANT_STATUS_PATTERNS = Object.freeze([
 const LUCIDE_STATUS_ICONS = Object.freeze({
   activity: Activity,
   anchor: Anchor,
-  ban: Ban,
-  bomb: Bomb,
-  building: Building2,
-  'building-2': Building2,
   'circle-alert': CircleAlert,
   'circle-dot': CircleDot,
   'circle-slash': CircleSlash,
-  'door-closed': DoorClosed,
   droplet: Droplet,
-  eye: Eye,
   'eye-off': EyeOff,
   flame: Flame,
-  footprints: Footprints,
   ghost: Ghost,
-  'heart-pulse': HeartPulse,
-  lock: LockKeyhole,
-  'lock-keyhole': LockKeyhole,
   moon: Moon,
-  shield: Shield,
-  'shield-alert': ShieldAlert,
   skull: Skull,
-  snowflake: Snowflake,
   sparkles: Sparkles,
-  star: Star,
-  swords: Swords,
   'triangle-alert': TriangleAlert,
-  unlock: UnlockKeyhole,
-  'unlock-keyhole': UnlockKeyhole,
-  waves: Waves,
 });
-const LUCIDE_STATUS_ICON_NAMES = Object.freeze(Object.keys(LUCIDE_STATUS_ICONS));
-
 export function escapeStatusHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -95,7 +70,7 @@ function iconAttribute(value) {
 
 function statusIconHtml(status) {
   const name = String(status?.icon || '').trim().toLowerCase();
-  const icon = LUCIDE_STATUS_ICONS[name];
+  const icon = LUCIDE_STATUS_ICONS[name] || (name ? CircleDot : null);
   if (!icon) return escapeStatusHtml(statusGlyph(status));
   const children = icon.map(([tag, attributes]) => `<${tag} ${Object.entries(attributes || {})
     .map(([key, value]) => `${key}="${iconAttribute(value)}"`).join(' ')}></${tag}>`).join('');
@@ -125,7 +100,7 @@ function normalizeDefinition(definition) {
     description: String(definition.description || ''),
     icon: String(definition.icon || 'circle-dot'),
     color: safeColor(definition.color),
-    category: String(definition.category || 'status'),
+    category: ['buff', 'debuff'].includes(String(definition.category)) ? String(definition.category) : 'neutral',
     maxStacks: Math.max(1, Math.min(99, Math.floor(Number(definition.maxStacks) || 1))),
     scopes,
     builtIn: Boolean(definition.builtIn ?? definition.builtin ?? definition.system),
@@ -210,6 +185,7 @@ function statusTitle(status) {
   if (status.enabled === false) pieces.push('已停用');
   if (status.stacks > 1) pieces.push(`${status.stacks} 层`);
   if (status.note) pieces.push(`备注：${status.note}`);
+  if (status.duration) pieces.push(`剩余 ${status.duration.remaining} ${status.duration.unit === 'rounds' ? '轮' : '回合'}`);
   if (status.description) pieces.push(status.description);
   if (status.derived) pieces.push('由 Actor 数据自动派生');
   return pieces.join(' · ');
@@ -278,12 +254,12 @@ function statusCards(statuses, { canManage, pendingKeys, scope, targetId } = {})
       <b>${status.stacks}</b>
       <button type="button" class="small-button" data-status-action="increment" data-status-scope="${escapeStatusHtml(actualScope)}" data-status-target="${escapeStatusHtml(actualTarget)}" data-status-definition="${escapeStatusHtml(status.definitionId)}" data-status-stacks="${status.stacks}" data-status-max="${status.maxStacks}" ${pending || status.stacks >= status.maxStacks ? 'disabled' : ''}>+</button>
       <button type="button" class="small-button" data-status-action="toggle" data-status-scope="${escapeStatusHtml(actualScope)}" data-status-target="${escapeStatusHtml(actualTarget)}" data-status-definition="${escapeStatusHtml(status.definitionId)}" data-status-stacks="${status.stacks}" data-status-enabled="${status.enabled !== false}" ${pending ? 'disabled' : ''}>${status.enabled === false ? '启用' : '停用'}</button>
-      <button type="button" class="small-button" data-status-action="note" data-status-scope="${escapeStatusHtml(actualScope)}" data-status-target="${escapeStatusHtml(actualTarget)}" data-status-definition="${escapeStatusHtml(status.definitionId)}" data-status-stacks="${status.stacks}" data-status-note="${escapeStatusHtml(status.note || '')}" ${pending ? 'disabled' : ''}>备注</button>
+      <button type="button" class="small-button" data-status-action="details" data-status-scope="${escapeStatusHtml(actualScope)}" data-status-target="${escapeStatusHtml(actualTarget)}" data-status-definition="${escapeStatusHtml(status.definitionId)}" data-status-label="${escapeStatusHtml(status.label)}" data-status-max="${status.maxStacks}" data-status-stacks="${status.stacks}" data-status-enabled="${status.enabled !== false}" data-status-note="${escapeStatusHtml(status.note || '')}" data-status-duration="${escapeStatusHtml(JSON.stringify(status.duration || null))}" ${pending ? 'disabled' : ''}>详情</button>
       <button type="button" class="small-button danger" data-status-action="remove" data-status-scope="${escapeStatusHtml(actualScope)}" data-status-target="${escapeStatusHtml(actualTarget)}" data-status-definition="${escapeStatusHtml(status.definitionId)}" ${pending ? 'disabled' : ''}>移除</button>
     </span>` : `<small class="status-readonly">${status.derived ? '自动派生' : '仅 GM 可修改'}</small>`;
     return `<article class="status-card${pending ? ' pending' : ''}${status.enabled === false ? ' disabled' : ''}" style="--status-color:${safeColor(status.color)}">
       <span class="status-card-icon" aria-hidden="true">${statusIconHtml(status)}</span>
-      <span class="status-card-copy"><strong>${escapeStatusHtml(status.label)}${status.enabled === false ? ' · 已停用' : ''}</strong><small>${escapeStatusHtml(CATEGORY_LABELS[status.category] || status.category)}${status.description ? ` · ${escapeStatusHtml(status.description)}` : ''}${status.note ? ` · 备注：${escapeStatusHtml(status.note)}` : ''}</small>${pending ? '<em>正在等待服务器确认…</em>' : ''}</span>
+      <span class="status-card-copy"><strong>${escapeStatusHtml(status.label)}${status.enabled === false ? ' · 已停用' : ''}</strong><small>${escapeStatusHtml(CATEGORY_LABELS[status.category] || status.category)}${status.duration ? ` · 剩余 ${status.duration.remaining} ${status.duration.unit === 'rounds' ? '轮' : '回合'}` : ''}${status.description ? ` · ${escapeStatusHtml(status.description)}` : ''}${status.note ? ` · 备注：${escapeStatusHtml(status.note)}` : ''}</small>${pending ? '<em>正在等待服务器确认…</em>' : ''}</span>
       ${controls}
     </article>`;
   }).join('')}</div>`;
@@ -330,7 +306,7 @@ export function renderActorStatusSheet({ api, actor, tokens = [], allTokens = to
       ${tokens.length ? `<div class="status-token-checklist">${tokens.map(token => `<label><input type="checkbox" data-status-token-target value="${escapeStatusHtml(token.id)}" ${defaultTargets.includes(token) ? 'checked' : ''}>${escapeStatusHtml(token.id)}</label>`).join('')}</div>` : '<small>当前 Actor 没有 Token。</small>'}
       <label class="status-map-selection"><input type="checkbox" data-status-use-map-selection ${selectedTargets.length ? 'checked' : 'disabled'}> 使用地图当前选中的 ${selectedTargets.length} 个 Token${selectedTargets.length > 1 ? '（批量）' : ''}</label>
     </div>
-    ${canManageDefinitions ? `<div class="status-definition-actions"><button type="button" class="small-button" data-status-action="definition-new" ${pendingDefinition ? 'disabled' : ''}>+ 自定义状态</button><small>自定义状态只允许白名单机械能力，不执行脚本。</small></div>` : ''}
+    ${canManageDefinitions ? `<div class="status-definition-actions"><button type="button" class="small-button" data-status-action="definition-new" ${pendingDefinition ? 'disabled' : ''}>+ 自定义状态</button><button type="button" class="small-button" data-status-action="definition-import" ${pendingDefinition ? 'disabled' : ''}>导入 JSON</button><button type="button" class="small-button" data-status-action="definition-export">导出 JSON</button><small>自定义状态只允许白名单机械能力，不执行脚本。</small></div>` : ''}
     ${canManageDefinitions && definitions.filter(definition => !definition.builtIn).length ? `<details><summary>管理自定义定义</summary><div class="status-definition-list">${definitions.filter(definition => !definition.builtIn).map(definition => {
       const pending = pendingKeys.has(`definition:${definition.id}`);
       return `<div class="${pending ? 'pending' : ''}"><span>${escapeStatusHtml(definition.label)}${pending ? ' · 等待确认…' : ''}</span><button type="button" class="small-button" data-status-action="definition-edit" data-status-definition="${escapeStatusHtml(definition.id)}" ${pending ? 'disabled' : ''}>编辑</button><button type="button" class="small-button danger" data-status-action="definition-delete" data-status-definition="${escapeStatusHtml(definition.id)}" ${pending ? 'disabled' : ''}>删除</button></div>`;
@@ -350,30 +326,20 @@ export function parseStatusDefinitionChanges(value) {
   });
 }
 
-function capabilityOption(value, expected, label) {
-  return `<option value="${expected}" ${String(value) === expected ? 'selected' : ''}>${label}</option>`;
+function parseDurationData(value) {
+  try {
+    const duration = JSON.parse(String(value || 'null'));
+    return duration && ['turns', 'rounds'].includes(String(duration.unit)) ? duration : null;
+  } catch { return null; }
 }
 
-function definitionChangesText(changes = []) {
-  return (Array.isArray(changes) ? changes : []).map(change => `${String(change?.target || '').trim()} | ${String(change?.mode || 'add').trim()} | ${Number(change?.value) || 0}`).join('\n');
-}
-
-export function renderStatusDefinitionEditor(definition = null) {
-  const current = definition || {};
-  const capabilities = current.capabilities || {};
-  const isEdit = Boolean(current.id);
-  const category = String(current.category || 'status');
-  const scopes = new Set(Array.isArray(current.scopes) ? current.scopes.map(String) : ['actor']);
-  const selectedIcon = LUCIDE_STATUS_ICONS[String(current.icon || '').toLowerCase()] ? String(current.icon).toLowerCase() : 'circle-dot';
-  const capabilitySelect = (name, value) => `<select name="${name}">${capabilityOption(value, '', '继承默认')}${capabilityOption(value, 'true', '允许')}${capabilityOption(value, 'false', '禁止')}</select>`;
-  return `<div class="status-definition-backdrop" data-status-definition-editor><form class="status-definition-dialog" data-status-definition-form data-status-definition-id="${escapeStatusHtml(current.id || '')}" role="dialog" aria-modal="true">
-    <header><div><h2>${isEdit ? '编辑自定义状态' : '新建自定义状态'}</h2><p>只保存白名单字段和机械能力；不会执行脚本。</p></div><button type="button" class="small-button" data-status-action="definition-close">关闭</button></header>
-    <div class="status-definition-grid"><label>稳定 ID<input name="id" maxlength="160" value="${escapeStatusHtml(current.id || '')}" ${isEdit ? 'readonly' : ''} required></label><label>显示名称<input name="name" maxlength="120" value="${escapeStatusHtml(current.label || current.name || '')}" required></label><label>分类<select name="category"><option value="status" ${category === 'status' || category === 'condition' ? 'selected' : ''}>状态</option><option value="buff" ${category === 'buff' ? 'selected' : ''}>Buff</option><option value="debuff" ${category === 'debuff' ? 'selected' : ''}>Debuff</option><option value="trait" ${category === 'trait' ? 'selected' : ''}>特征</option></select></label><label>Lucide 图标<select name="icon">${LUCIDE_STATUS_ICON_NAMES.map(name => `<option value="${name}" ${selectedIcon === name ? 'selected' : ''}>${name}</option>`).join('')}</select></label><label>颜色<input name="color" type="color" value="${safeColor(current.color)}"></label><label>最大叠加层数<input name="maxStacks" type="number" min="1" max="99" value="${Math.max(1, Number(current.maxStacks) || 1)}"></label></div>
-    <label>说明<textarea name="description" maxlength="4000" rows="2">${escapeStatusHtml(current.description || '')}</textarea></label>
-    <fieldset><legend>可作用范围</legend><label><input type="checkbox" name="scopes" value="actor" ${scopes.has('actor') ? 'checked' : ''}> Actor</label><label><input type="checkbox" name="scopes" value="token" ${scopes.has('token') ? 'checked' : ''}> Token</label></fieldset>
-    <fieldset class="status-capability-grid"><legend>机械能力</legend><label>移动 ${capabilitySelect('canMove', capabilities.canMove == null ? '' : String(capabilities.canMove))}</label><label>互动 ${capabilitySelect('canInteract', capabilities.canInteract == null ? '' : String(capabilities.canInteract))}</label><label>战斗行动 ${capabilitySelect('canActInCombat', capabilities.canActInCombat == null ? '' : String(capabilities.canActInCombat))}</label><label><input type="checkbox" name="collisionBypassStructure" ${capabilities.collisionBypassGroups?.includes?.('structure') ? 'checked' : ''}> 可穿越建筑阻挡</label></fieldset>
-    <label>数值变化<textarea name="changes" rows="3">${escapeStatusHtml(definitionChangesText(current.changes))}</textarea><small>Token 范围不能包含数值变化。</small></label>
-    <footer><button type="button" class="small-button" data-status-action="definition-close">取消</button><button type="submit" class="small-button primary">保存并等待服务器确认</button></footer>
+export function renderStatusDetailEditor(actionNode) {
+  const duration = parseDurationData(actionNode?.dataset?.statusDuration);
+  return `<div class="status-definition-backdrop" data-status-detail-editor><form class="status-definition-dialog status-detail-dialog" data-status-detail-form data-status-scope="${escapeStatusHtml(actionNode?.dataset?.statusScope || 'actor')}" data-status-target="${escapeStatusHtml(actionNode?.dataset?.statusTarget || '')}" data-status-definition="${escapeStatusHtml(actionNode?.dataset?.statusDefinition || '')}" role="dialog" aria-modal="true">
+    <header><div><h2>${escapeStatusHtml(actionNode?.dataset?.statusLabel || '状态详情')}</h2><p>修改层数、启用状态、备注和持续时间。</p></div><button type="button" class="small-button" data-status-action="detail-close">关闭</button></header>
+    <div class="status-definition-grid"><label>层数<input name="stacks" type="number" min="1" max="${Math.max(1, Number(actionNode?.dataset?.statusMax) || 1)}" value="${Math.max(1, Number(actionNode?.dataset?.statusStacks) || 1)}"></label><label>状态<select name="enabled"><option value="true" ${actionNode?.dataset?.statusEnabled !== 'false' ? 'selected' : ''}>启用</option><option value="false" ${actionNode?.dataset?.statusEnabled === 'false' ? 'selected' : ''}>停用</option></select></label><label>持续单位<select name="durationUnit"><option value="">保持现状</option><option value="turns" ${duration?.unit === 'turns' ? 'selected' : ''}>回合</option><option value="rounds" ${duration?.unit === 'rounds' ? 'selected' : ''}>轮</option></select></label><label>剩余数量<input name="durationValue" type="number" min="1" max="10000" value="${duration?.remaining || ''}"></label></div>
+    <label>备注<textarea name="note" maxlength="4000" rows="3">${escapeStatusHtml(actionNode?.dataset?.statusNote || '')}</textarea></label>
+    <footer><button type="button" class="small-button danger" data-status-action="detail-remove">移除</button><button type="submit" class="small-button primary">保存并等待服务器确认</button></footer>
   </form></div>`;
 }
 
@@ -419,13 +385,54 @@ export function createStatusUiController({ api, documentNode, getContext, render
     return false;
   }
   function closeDefinitionEditor() { documentNode?.querySelector?.('[data-status-definition-editor]')?.remove(); }
-  function openDefinitionEditor(definitionId = null) {
+  function closeDetailEditor() { documentNode?.querySelector?.('[data-status-detail-editor]')?.remove(); }
+  let definitionEditorModule = null;
+  async function openDefinitionEditor(definitionId = null) {
     if (!requireDefinitionManager()) return;
     const definition = definitionId ? statusDefinitions(api).find(item => String(item.id) === String(definitionId)) : null;
     if (definition?.builtIn) { notify('内置状态定义不可编辑'); return; }
+    definitionEditorModule ||= import('../ui/lazy-runtime-tools.js');
+    const { renderStatusDefinitionEditor } = await definitionEditorModule;
     closeDefinitionEditor();
     documentNode?.body?.insertAdjacentHTML('beforeend', renderStatusDefinitionEditor(definition));
     documentNode?.querySelector?.('[data-status-definition-form] input[name="name"]')?.focus?.();
+  }
+  function openDetailEditor(actionNode) {
+    closeDetailEditor();
+    documentNode?.body?.insertAdjacentHTML('beforeend', renderStatusDetailEditor(actionNode));
+  }
+  function exportDefinitions() {
+    const definitions = statusDefinitions(api).filter(definition => !definition.builtIn).map(definition => {
+      const value = structuredClone(definition);
+      delete value.label;
+      delete value.builtIn;
+      return value;
+    });
+    const blob = new Blob([JSON.stringify({ statusSchemaVersion: STATUS_SCHEMA_VERSION, definitions }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = documentNode.createElement('a');
+    anchor.href = url;
+    anchor.download = `rpgmap-status-definitions-v${STATUS_SCHEMA_VERSION}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+  function importDefinitions() {
+    if (!requireDefinitionManager()) return;
+    const input = documentNode.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.hidden = true;
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      input.remove();
+      if (!file) return;
+      await perform('definition:import', async () => {
+        const value = JSON.parse(await file.text());
+        return statusApiCall(api, 'importDefinitions', value);
+      }, '状态定义已完整导入');
+    }, { once: true });
+    documentNode.body.append(input);
+    input.click();
   }
   const contextTokens = context => Array.isArray(context?.allTokens) ? context.allTokens : Array.isArray(context?.tokens) ? context.tokens : [];
   function selectedMapTargets(context) {
@@ -499,9 +506,25 @@ export function createStatusUiController({ api, documentNode, getContext, render
     const action = actionNode.dataset.statusAction;
     event.preventDefault();
     if (action === 'definition-close') closeDefinitionEditor();
-    else if (action === 'definition-new') openDefinitionEditor();
-    else if (action === 'definition-edit') openDefinitionEditor(actionNode.dataset.statusDefinition);
+    else if (action === 'detail-close') closeDetailEditor();
+    else if (action === 'detail-remove') {
+      const form = actionNode.closest('[data-status-detail-form]');
+      if (form) {
+        mutateStatus({ dataset: {
+          statusScope: form.dataset.statusScope,
+          statusTarget: form.dataset.statusTarget,
+          statusDefinition: form.dataset.statusDefinition,
+          statusStacks: '1',
+        } }, 'remove');
+        closeDetailEditor();
+      }
+    }
+    else if (action === 'definition-new') void openDefinitionEditor();
+    else if (action === 'definition-edit') void openDefinitionEditor(actionNode.dataset.statusDefinition);
     else if (action === 'definition-delete') deleteDefinition(actionNode.dataset.statusDefinition);
+    else if (action === 'definition-import') importDefinitions();
+    else if (action === 'definition-export') exportDefinitions();
+    else if (action === 'details') openDetailEditor(actionNode);
     else if (action === 'palette-submit') submitPalette(actionNode);
     else if (['increment', 'decrement', 'toggle', 'note', 'remove'].includes(action)) mutateStatus(actionNode, action);
     else return false;
@@ -521,6 +544,30 @@ export function createStatusUiController({ api, documentNode, getContext, render
     return true;
   }
   function handleSubmit(event) {
+    const detailForm = event.target?.closest?.('[data-status-detail-form]');
+    if (detailForm) {
+      event.preventDefault();
+      if (!requireMutation()) return true;
+      const values = new FormData(detailForm);
+      const scope = String(detailForm.dataset.statusScope || 'actor');
+      const targetId = String(detailForm.dataset.statusTarget || '');
+      const definitionId = String(detailForm.dataset.statusDefinition || '');
+      const payload = {
+        scope,
+        targetId,
+        definitionId,
+        stacks: Math.max(1, Math.floor(Number(values.get('stacks')) || 1)),
+        enabled: String(values.get('enabled')) !== 'false',
+        note: String(values.get('note') || '').trim(),
+      };
+      const durationUnit = String(values.get('durationUnit') || '');
+      const durationValue = Math.floor(Number(values.get('durationValue')) || 0);
+      if (durationUnit && durationValue > 0) payload.duration = { unit: durationUnit, initial: durationValue, remaining: durationValue };
+      void perform(statusMutationKey(scope, targetId, definitionId), () => statusApiCall(api, 'setStacks', payload), '状态详情已保存').then(result => {
+        if (result) closeDetailEditor();
+      });
+      return true;
+    }
     const form = event.target?.closest?.('[data-status-definition-form]');
     if (!form) return false;
     event.preventDefault();
@@ -544,7 +591,11 @@ export function createStatusUiController({ api, documentNode, getContext, render
         if (value === 'true' || value === 'false') capabilities[key] = value === 'true';
       }
       if (values.get('collisionBypassStructure')) capabilities.collisionBypassGroups = ['structure'];
-      const definition = { id, name, label: name, description: String(values.get('description') || '').trim(), icon: String(values.get('icon') || '').trim(), color: safeColor(values.get('color')), category: String(values.get('category') || 'status'), scopes, maxStacks, changes, capabilities };
+      if (values.get('visionPrecision') === 'vague') capabilities.visionPrecision = 'vague';
+      const durationUnit = String(values.get('defaultDurationUnit') || '');
+      const durationValue = Math.floor(Number(values.get('defaultDurationValue')) || 0);
+      const defaultDuration = durationUnit && durationValue > 0 ? { unit: durationUnit, value: durationValue } : null;
+      const definition = { id, name, description: String(values.get('description') || '').trim(), icon: String(values.get('icon') || '').trim(), color: safeColor(values.get('color')), category: String(values.get('category') || 'neutral'), scopes, maxStacks, changes, capabilities, defaultDuration };
       const submit = form.querySelector('[type="submit"]');
       if (submit) { submit.disabled = true; submit.textContent = '正在等待服务器确认…'; }
       void perform(`definition:${id}`, async () => { const result = await statusApiCall(api, 'upsertDefinition', definition, { actorId: context.actor?.id }); closeDefinitionEditor(); return result; }, '状态定义已获服务器确认').then(() => {
@@ -553,13 +604,7 @@ export function createStatusUiController({ api, documentNode, getContext, render
     } catch (error) { reportError(error); }
     return true;
   }
-  return { pendingKeys, handleClick, handleChange, handleSubmit, closeDefinitionEditor };
-}
-
-function ensureStatusPane(map) {
-  let pane = map.getPane?.('statusBadgePane');
-  if (!pane) pane = map.createPane?.('statusBadgePane');
-  if (pane) { pane.style.zIndex = '540'; pane.style.pointerEvents = 'none'; }
+  return { pendingKeys, handleClick, handleChange, handleSubmit, closeDefinitionEditor, closeDetailEditor };
 }
 
 export function createStatusUiSystem() {
@@ -567,41 +612,19 @@ export function createStatusUiSystem() {
     register(api) {
       const documentNode = api.map.getContainer().ownerDocument || document;
       installStatusUiStyles(documentNode);
-      let destroyed = false;
-      let badgeLayer = null;
-      let renderBadges = () => {};
-      const requestRender = () => renderBadges();
-      for (const eventName of ['status:change', 'token:create', 'token:delete', 'token:move', 'token:property-change', 'elevation:token-change', 'state:commit', 'state:import']) api.on?.(eventName, requestRender);
-      api.on?.('app:destroy', () => {
-        destroyed = true;
-        if (badgeLayer) api.map.removeLayer?.(badgeLayer);
-        api.map.off?.('zoomend', requestRender);
+      let quickHud = null;
+      let quickHudPromise = null;
+      api.statusUi = Object.freeze({
+        async openQuickHud(tokenId, point = null) {
+          if (!quickHudPromise) quickHudPromise = import('../ui/lazy-runtime-tools.js').then(({ createQuickStatusHud }) => {
+            quickHud = createQuickStatusHud({ api, documentNode });
+            return quickHud;
+          });
+          return (await quickHudPromise).open(tokenId, point);
+        },
+        closeQuickHud() { quickHud?.close?.(); },
       });
-      void import('./leaflet-badges.js').then(({ createStatusBadgeLayer, addStatusBadgeMarker }) => {
-        if (destroyed) return;
-        ensureStatusPane(api.map);
-        badgeLayer = createStatusBadgeLayer(api.map);
-        renderBadges = () => {
-          if (destroyed || !badgeLayer) return;
-          badgeLayer.clearLayers();
-          const tokens = typeof api.tokens?.list === 'function' ? api.tokens.list() : [];
-          const origin = api.map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, api.mapPackage.height));
-          const unit = api.map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 0 }, api.mapPackage.height));
-          const pixelsPerMeter = Math.hypot(unit.x - origin.x, unit.y - origin.y) || 1;
-          for (const token of tokens) {
-            if (!token || token.hidden === true || token.placement !== 'map') continue;
-            const x = Number(token.x); const y = Number(token.y);
-            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-            const snapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
-            const html = renderTokenStatusBadges(snapshot.statuses, { limit: 4 });
-            if (!html) continue;
-            const tokenPixels = Math.max(18, Math.min(144, tokenDiameterMeters(token) * pixelsPerMeter));
-            addStatusBadgeMarker(badgeLayer, { latLng: worldToLatLng({ x, y }, api.mapPackage.height), html, tokenPixels });
-          }
-        };
-        api.map.on?.('zoomend', requestRender);
-        renderBadges();
-      }).catch(error => console.error('[RPGmap Status UI] map badges failed', error));
+      api.on?.('app:destroy', () => quickHud?.destroy?.());
       queueMicrotask(() => api.emit?.('status:change', { source: 'status-ui-ready' }));
     },
   };
@@ -662,6 +685,18 @@ export function installStatusUiStyles(documentNode) {
     .status-definition-dialog fieldset label { display:flex; align-items:center; gap:5px; }
     .status-definition-dialog fieldset input { width:auto; }
     .status-definition-dialog footer { justify-content:flex-end; }
+    .status-quick-hud { position:fixed; z-index:5550; width:min(320px,calc(100vw - 16px)); max-height:min(420px,calc(100vh - 16px)); overflow:auto; box-sizing:border-box; padding:10px; border:1px solid rgba(45,70,70,.28); border-radius:8px; background:#f8faf7; box-shadow:0 16px 46px rgba(0,0,0,.3); display:grid; gap:9px; }
+    .status-quick-hud header,.status-quick-hud footer { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .status-quick-hud header div { display:grid; }
+    .status-quick-hud header small { color:#718083; }
+    .status-quick-hud header button { border:0; background:transparent; font-size:22px; cursor:pointer; }
+    .status-quick-group h3,.status-quick-derived h3 { margin:0 0 5px; font-size:12px; }
+    .status-quick-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px; }
+    .status-quick-grid button { min-width:0; display:flex; justify-content:space-between; gap:5px; padding:7px; border:1px solid color-mix(in srgb,var(--status-color) 45%,#d8dfdc); border-left:4px solid var(--status-color); border-radius:6px; background:#fff; cursor:pointer; }
+    .status-quick-grid button[data-state="enabled"] { background:color-mix(in srgb,var(--status-color) 13%,#fff); }
+    .status-quick-grid button[data-state="disabled"] { opacity:.58; }
+    .status-quick-grid button span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .status-quick-grid button small { color:#718083; flex:0 0 auto; }
     .rpgmap-status-badge-marker { border:0 !important; background:transparent !important; pointer-events:none !important; overflow:visible !important; }
     .token-status-badges { display:flex; gap:2px; width:max-content; filter:drop-shadow(0 1px 2px rgba(0,0,0,.55)); }
     .token-status-badge { --status-color:#59686b; position:relative; display:grid; place-items:center; width:18px; height:18px; box-sizing:border-box; border:1px solid rgba(255,255,255,.9); border-radius:50%; background:var(--status-color); color:#fff; font-size:9px; font-weight:900; line-height:1; }

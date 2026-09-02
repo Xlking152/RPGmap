@@ -7,6 +7,7 @@ import {
   createWorldOperationPatch,
   deriveWorldOperations,
 } from '../src/world/operations.js';
+import { reduceStatusOperation } from '../src/status/model.js';
 
 function actor(id, current = 10) {
   return { id, name: id, system: { resources: { hp: { current, max: 10 } } }, effects: [], notes: '' };
@@ -193,4 +194,80 @@ test('Status and Effect operations use the injected reducer in offline and serve
     { id: 'effect-a', definitionId: 'focused', stacks: 1, enabled: true },
   ]);
   assert.equal(applied.results[0].action, 'apply');
+});
+
+test('combat.advance updates turn, round, and Status V4 durations atomically', () => {
+  const initial = state();
+  const definition = {
+    id: 'status-timed', name: 'Timed', category: 'debuff', scopes: ['actor'], maxStacks: 1,
+    changes: [], capabilities: {}, defaultDuration: { unit: 'rounds', value: 1 },
+  };
+  initial.preferences.worldV2.statusDefinitions = [definition];
+  initial.preferences.worldV2.actors[0].effects = [{
+    id: 'effect-timed', definitionId: 'status-timed', stacks: 1, enabled: true,
+    duration: { unit: 'rounds', initial: 1, remaining: 1 },
+  }];
+  initial.preferences.combatSystem.combat = {
+    id: 'combat-a', state: 'active', round: 1, turnIndex: 1,
+    combatants: [
+      { id: 'combatant-a', tokenId: 'token-a', actorId: 'actor-a' },
+      { id: 'combatant-b', tokenId: 'token-b', actorId: 'actor-b' },
+    ],
+  };
+  const applied = applyWorldOperations(initial, [{ type: 'combat.advance', payload: {} }], {
+    now: '2026-09-02T00:02:00.000Z',
+  });
+  const combat = applied.state.preferences.combatSystem.combat;
+  const effect = applied.state.preferences.worldV2.actors[0].effects[0];
+  assert.equal(combat.round, 2);
+  assert.equal(combat.turnIndex, 0);
+  assert.equal(effect.duration.remaining, 0);
+  assert.equal(effect.enabled, false);
+  assert.deepEqual(effect.expiredAt, {
+    timestamp: '2026-09-02T00:02:00.000Z', round: 2, turn: 0,
+  });
+  assert.equal(applied.results[0].expiredCount, 1);
+});
+
+test('World Operation V2 carries Status V4 definition imports through the shared reducer', () => {
+  const initial = state();
+  const applied = applyWorldOperations(initial, [{
+    type: 'status.definition.import',
+    payload: {
+      statusSchemaVersion: 4,
+      definitions: [{
+        id: 'status-imported', name: 'Imported', category: 'neutral', scopes: ['actor'], maxStacks: 1,
+        changes: [], capabilities: {}, defaultDuration: { unit: 'rounds', value: 3 },
+      }],
+    },
+  }], {
+    applyStatus(current, operation, context) {
+      const next = structuredClone(current);
+      const reduced = reduceStatusOperation(next.preferences.entitySystem, operation, context);
+      next.preferences.entitySystem = reduced.state;
+      return { state: next, results: reduced.results };
+    },
+  });
+  assert.equal(applied.state.preferences.worldV2.statusDefinitions.some(item => item.id === 'status-imported'), true);
+  assert.equal(applied.changeSet.statusDefinitionsChanged, true);
+});
+
+test('Fog changeSet carries bounded circle and sweep invalidation rectangles', () => {
+  const initial = state();
+  const applied = applyWorldOperations(initial, [
+    { type: 'scene.fog.explore', payload: {
+      sceneId: 'scene-a', partyId: 'party-a', x: 20, y: 30, radiusMeters: 10,
+    } },
+    { type: 'scene.fog.explore', payload: {
+      sceneId: 'scene-a', partyId: 'party-a', from: { x: 40, y: 50 }, to: { x: 60, y: 70 }, radiusMeters: 20,
+    } },
+  ], { mapMetrics: { metersPerUnit: 2 } });
+  assert.deepEqual(applied.changeSet.fog, [{
+    sceneId: 'scene-a', dirtyBounds: { minX: 15, minY: 25, maxX: 70, maxY: 80 },
+  }]);
+
+  const reset = applyWorldOperations(applied.state, [{
+    type: 'scene.fog.reset', payload: { sceneId: 'scene-a', partyId: 'party-a' },
+  }], { mapMetrics: { metersPerUnit: 2 } });
+  assert.deepEqual(reset.changeSet.fog, [{ sceneId: 'scene-a', dirtyBounds: null }]);
 });

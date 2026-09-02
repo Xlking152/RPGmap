@@ -35,9 +35,9 @@ test('application chrome keeps the restrained neutral, river and brick palette',
   assert.match(styles, /\.section \{[\s\S]*?border-bottom: 1px solid var\(--line\);/);
   assert.doesNotMatch(styles, /linear-gradient/i);
   assert.equal(packageJson.dependencies.lucide, '1.30.0');
-  assert.equal(packageJson.version, '2.2.6');
-  assert.match(indexSource, /application-version" content="2\.2\.6"/);
-  assert.match(indexSource, /RPGmap 2\.2\.6/);
+  assert.equal(packageJson.version, '2.3.0');
+  assert.match(indexSource, /application-version" content="2\.3\.0"/);
+  assert.match(indexSource, /RPGmap 2\.3\.0/);
 });
 
 test('production registry splits the built-in map and large vendors without suppressing chunk warnings', () => {
@@ -75,11 +75,15 @@ test('Token placement owns the map click directly through the canonical Entity c
   assert.doesNotMatch(tokenControllerSource, /api\.placeCharacter|api\.repositionCharacter|character:create|character:move|state\.characters/);
 });
 
-test('restricted audience records cannot open Actor or Token sheets through UI entry points', () => {
-  assert.match(entityUiSource, /actor\.audienceRestricted === true/);
-  assert.match(entityUiSource, /resolved\.audienceRestricted === true/);
+test('restricted audience records open a dedicated LIMITED summary instead of the full sheet', () => {
+  assert.match(entityUiSource, /data-sheet-mode="limited"/);
+  assert.match(entityUiSource, /LIMITED 公开摘要/);
+  assert.match(entityUiSource, /仅公开名称、头像与类型/);
+  assert.doesNotMatch(entityUiSource, /无权读取该 Actor 模板卡/);
+  assert.doesNotMatch(entityUiSource, /无权读取该 Token 的角色卡/);
   assert.match(entityUiSource, /api\.entities\.openToken\(token\.id, openTab\)/);
-  assert.match(markerSource, /actor\.audienceRestricted === true/);
+  assert.match(markerSource, /actor\.audienceRestricted === true \? '公开摘要' : '模板卡'/);
+  assert.match(appShellSource, /view\.actor\.audienceRestricted \? '公开摘要' : '角色卡'/);
 });
 
 test('destruction rendering separates buildings, pontoon bridges and wall breaches', () => {

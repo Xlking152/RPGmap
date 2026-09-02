@@ -203,7 +203,7 @@ export function createAppShellUiV2() {
           actions.append(button(documentNode, '离开 Feature', () => void api.movement?.exitFeature?.(token.id), 'small-button primary'));
         }
         actions.append(button(documentNode, '高度', event => api.elevation?.openTokenElevationEditor?.(token.id, event), 'small-button'));
-        if (view.actor?.id && !view.actor.audienceRestricted) actions.append(button(documentNode, '角色卡', () => api.entities?.openToken?.(token.id), 'small-button'));
+        if (view.actor?.id) actions.append(button(documentNode, view.actor.audienceRestricted ? '公开摘要' : '角色卡', () => api.entities?.openToken?.(token.id), 'small-button'));
         card.append(actions);
         currentPanel.append(card);
       }
@@ -212,7 +212,7 @@ export function createAppShellUiV2() {
       const renderAll = () => { renderCurrent(); };
       const selectionOff = api.selection.subscribe?.(renderCurrent);
       if (selectionOff) off.push(selectionOff);
-      for (const eventName of ['token:create', 'token:delete', 'token:move', 'token:property-change', 'elevation:token-change', 'status:change', 'state:commit', 'state:import']) {
+      for (const eventName of ['token:create', 'token:delete', 'token:move', 'token:property-change', 'elevation:token-change', 'actor:change', 'health:change', 'status:change', 'state:import']) {
         off.push(api.on?.(eventName, renderAll));
       }
       off.push(api.on?.('tool:change', event => {
@@ -224,7 +224,8 @@ export function createAppShellUiV2() {
         importInput.remove();
       }));
 
-      api.setActivePanel?.(actorPanel ? 'actors' : 'current');
+      api.setActivePanel?.('current');
+      shell.querySelectorAll('[data-ui-panel]').forEach(node => node.classList.toggle('active', node.dataset.uiPanel === 'current'));
       renderAll();
       api.emit?.('ui:shell-ready', { tokenFirst: true, actorPanel: Boolean(actorPanel) });
     },

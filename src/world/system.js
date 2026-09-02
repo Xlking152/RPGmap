@@ -8,7 +8,7 @@ import {
 } from './model.js';
 import { pruneProjectedWorldReferences } from './references.js';
 import { assertWorldRuleset } from './validation.js';
-import { reduceStatusOperation } from '../status/model.js';
+import { reduceStatusOperation, STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { applyWorldOperations, deriveWorldOperations } from './operations.js';
 
 function clone(value) {
@@ -169,7 +169,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       }
 
       api.world = {
-        schemaVersion: 3,
+        schemaVersion: STATUS_SCHEMA_VERSION,
         get: snapshot,
         getActiveScene() { return clone(activeWorldScene(snapshot())); },
         listScenes() { return clone(snapshot().scenes); },

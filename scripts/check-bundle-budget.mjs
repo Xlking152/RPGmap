@@ -40,20 +40,19 @@ const allJs = allFiles.filter(file => file.endsWith('.js'));
 const allCss = allFiles.filter(file => file.endsWith('.css'));
 const sum = async files => (await Promise.all(files.map(gzipSize))).reduce((total, value) => total + value, 0);
 
-// v2.1.6 is the formal feature baseline for v2.2.0. Vision/Fog belongs to the
-// lazy Map Runtime, so the World Manager payload may not grow. The complete
-// application may grow by at most 10% for the new Runtime capability.
+// v2.2.6 is the formal baseline for v2.3.0. The World Manager entry may not
+// grow, while the complete JavaScript payload must shrink by at least 2%.
 const baseline = Object.freeze({
-  commit: '55ee22d45985edd27f7a2262fea287764296fcfc',
-  version: '2.1.6',
-  initialJsGzip: 47000,
-  totalJsGzip: 233952,
+  commit: 'f8d144053d30d096b658d0163703d21e6c1b76f8',
+  version: '2.2.6',
+  initialJsGzip: 11775,
+  totalJsGzip: 256689,
   totalCssGzip: 7076,
 });
 const limits = Object.freeze({
   initialJsGzip: baseline.initialJsGzip,
-  totalJsGzip: Math.floor(baseline.totalJsGzip * 1.10),
-  totalCssGzip: Math.floor(baseline.totalCssGzip * 1.10),
+  totalJsGzip: 251555,
+  totalCssGzip: Math.floor(baseline.totalCssGzip * 1.05),
 });
 const measured = {
   initialJsGzip: await sum(initialJs),

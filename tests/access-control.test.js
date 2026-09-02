@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  ACCESS_SCHEMA_VERSION,
   createBoundUser,
   createClaimableUser,
   bindWithPlayerKey,
@@ -10,6 +11,7 @@ import {
   verifyPlayerKey,
   verifyUserCredential,
 } from '../deployment/local-server/access-control.mjs';
+import { canPermission } from '../src/permissions/model.js';
 import { assertWorldState } from '../deployment/local-server/world-schema.mjs';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 import { migrateTestStateToWorldV3 } from './helpers/world-v3.js';
@@ -110,6 +112,32 @@ test('access normalization never exposes raw credentials and keeps default Actor
   }] });
   assert.equal(normalized.users[0].defaultActorId, null);
   assert.equal(normalized.users[0].ownership['actor-a'], 'observer');
+  assert.equal(normalized.schemaVersion, ACCESS_SCHEMA_VERSION);
+});
+
+test('Access Schema 4 preserves LIMITED and enforces the shared action matrix', () => {
+  const normalized = normalizeAccessState({ schemaVersion: 3, users: [{
+    id: 'u-limited', name: 'Limited', ownership: { 'actor-a': 'limited' },
+  }] });
+  assert.equal(normalized.users[0].ownership['actor-a'], 'limited');
+  assert.equal(canPermission('actor.list', { role: 'player', actorAccess: 'limited' }), true);
+  assert.equal(canPermission('actor.viewLimited', { role: 'player', actorAccess: 'limited' }), true);
+  assert.equal(canPermission('actor.view', { role: 'player', actorAccess: 'limited' }), false);
+  assert.equal(canPermission('actor.view', { role: 'player', actorAccess: 'observer' }), true);
+  assert.equal(canPermission('actor.edit', { role: 'player', actorAccess: 'observer' }), false);
+  assert.equal(canPermission('actor.edit', { role: 'player', actorAccess: 'owner' }), true);
+
+  const token = { id: 'token-a', actorId: 'actor-a', controllerUserIds: ['u-limited'], locked: false };
+  assert.equal(canPermission('token.control', {
+    role: 'player', userId: 'u-limited', actorAccess: 'none', token,
+  }), true);
+  assert.equal(canPermission('token.move', {
+    role: 'player', userId: 'u-limited', actorAccess: 'none', token,
+    activeCombatTokenId: 'token-b', statusCapabilities: { canMove: true },
+  }), false);
+  assert.equal(canPermission('token.editAccess', {
+    role: 'player', userId: 'u-limited', actorAccess: 'owner', token,
+  }), false);
 });
 
 test('access normalization preserves formal monster placement grants', () => {

@@ -4,7 +4,7 @@ import { tokenDiameterMeters } from '../elevation/model.js';
 import { describeHealth } from './model.js';
 
 const PANE = 'healthBarPane';
-const STYLE_ID = 'rpgmap-token-healthbar-style';
+const STYLE_ID = 'rpgmap-token-healthbar-v2-style';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[ch]);
@@ -51,69 +51,136 @@ export function createHealthTokenBars() {
     register(api) {
       if (!api.tokens?.list) throw new Error('Token health bars require canonical Token Runtime V2');
       const documentNode = api.map.getContainer().ownerDocument || document;
+      const windowNode = documentNode.defaultView || globalThis;
+      const requestFrame = callback => windowNode.requestAnimationFrame
+        ? windowNode.requestAnimationFrame(callback)
+        : windowNode.setTimeout(callback, 16);
+      const cancelFrame = id => windowNode.cancelAnimationFrame
+        ? windowNode.cancelAnimationFrame(id)
+        : windowNode.clearTimeout(id);
       ensurePane(api.map);
       installStyles(documentNode);
       const layer = L.layerGroup([], { pane: PANE }).addTo(api.map);
+      const markers = new Map();
       const movingTokenIds = new Set();
+      let fullRenderFrame = null;
       let destroyed = false;
       const off = [];
 
-      function render() {
-        if (destroyed) return;
-        layer.clearLayers();
-        for (const token of api.tokens.list()) {
-          if (token?.hidden === true || token?.placement !== 'map') continue;
-          if (movingTokenIds.has(String(token.id)) || api.renderer?.isTokenMoving?.(token.id)) continue;
-          const x = Number(token.x);
-          const y = Number(token.y);
-          if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-          const health = api.health?.resolveToken?.(token.id);
-          const html = barHtml(health, api.ruleset);
-          if (!html) continue;
-          const origin = api.map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, api.mapPackage.height));
-          const unit = api.map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 0 }, api.mapPackage.height));
-          const tokenPixels = Math.max(18, Math.min(144, tokenDiameterMeters(token) * (Math.hypot(unit.x - origin.x, unit.y - origin.y) || 1)));
-          const barWidth = Math.max(28, Math.min(160, tokenPixels * 1.1));
-          L.marker(worldToLatLng({ x, y }, api.mapPackage.height), {
-            pane: PANE,
-            interactive: false,
-            keyboard: false,
-            icon: L.divIcon({
-              className: 'rpgmap-healthbar-marker',
-              html: html.replace('class="rpgmap-token-healthbar"', `class="rpgmap-token-healthbar" style="width:${barWidth}px"`),
-              iconSize: [barWidth, 7],
-              iconAnchor: [barWidth / 2, -(tokenPixels / 2 + 6)],
-            }),
-          }).addTo(layer);
-        }
+      function pixelsPerMeter() {
+        const origin = api.map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, api.mapPackage.height));
+        const unit = api.map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 0 }, api.mapPackage.height));
+        return Math.hypot(unit.x - origin.x, unit.y - origin.y) || 1;
       }
 
-      for (const eventName of ['token:create', 'token:move', 'token:delete', 'state:import', 'state:saved', 'health:change', 'token:size-change']) {
-        off.push(api.on(eventName, render));
+      function removeToken(tokenId) {
+        const id = String(tokenId || '');
+        const marker = markers.get(id);
+        if (marker) layer.removeLayer(marker);
+        markers.delete(id);
       }
-      off.push(api.on('state:commit', render));
+
+      function upsertToken(tokenId) {
+        if (destroyed) return;
+        const id = String(tokenId || '');
+        if (!id) return;
+        removeToken(id);
+        const token = api.tokens.get?.(id);
+        if (!token || token.hidden === true || token.placement !== 'map') return;
+        if (movingTokenIds.has(id) || api.renderer?.isTokenMoving?.(id)) return;
+        const x = Number(token.x);
+        const y = Number(token.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        const health = api.health?.resolveToken?.(id);
+        const html = barHtml(health, api.ruleset);
+        if (!html) return;
+        const tokenPixels = Math.max(18, Math.min(144, tokenDiameterMeters(token) * pixelsPerMeter()));
+        const barWidth = Math.max(28, Math.min(160, tokenPixels * 1.1));
+        const marker = L.marker(worldToLatLng({ x, y }, api.mapPackage.height), {
+          pane: PANE,
+          interactive: false,
+          keyboard: false,
+          icon: L.divIcon({
+            className: 'rpgmap-healthbar-marker',
+            html: html.replace('class="rpgmap-token-healthbar"', `class="rpgmap-token-healthbar" style="width:${barWidth}px"`),
+            iconSize: [barWidth, 7],
+            iconAnchor: [barWidth / 2, -(tokenPixels / 2 + 6)],
+          }),
+        }).addTo(layer);
+        markers.set(id, marker);
+      }
+
+      function renderAll() {
+        fullRenderFrame = null;
+        if (destroyed) return;
+        const live = new Set();
+        for (const token of api.tokens.list()) {
+          const id = String(token?.id || '');
+          if (!id) continue;
+          live.add(id);
+          upsertToken(id);
+        }
+        for (const id of [...markers.keys()]) if (!live.has(id)) removeToken(id);
+      }
+
+      function scheduleFullRender() {
+        if (destroyed || fullRenderFrame !== null) return;
+        fullRenderFrame = requestFrame(renderAll);
+      }
+
+      function tokenIdFromEvent(event) {
+        return String(event?.detail?.tokenId || event?.detail?.id || '');
+      }
+
+      function tokenIdsFromEvent(event) {
+        const detail = event?.detail || {};
+        const ids = new Set([detail.tokenId, detail.id, ...(detail.tokenIds || [])].filter(Boolean).map(String));
+        const actorIds = new Set([detail.actorId, ...(detail.actorIds || [])].filter(Boolean).map(String));
+        if (actorIds.size) {
+          for (const token of api.tokens.list()) if (actorIds.has(String(token.actorId))) ids.add(String(token.id));
+        }
+        return [...ids];
+      }
+
+      off.push(api.on('token:create', event => upsertToken(tokenIdFromEvent(event))));
+      off.push(api.on('token:move', event => upsertToken(tokenIdFromEvent(event))));
+      off.push(api.on('token:delete', event => removeToken(tokenIdFromEvent(event))));
+      off.push(api.on('token:size-change', event => upsertToken(tokenIdFromEvent(event))));
+      for (const eventName of ['health:change', 'status:change', 'actor:change']) {
+        off.push(api.on(eventName, event => {
+          const ids = tokenIdsFromEvent(event);
+          if (ids.length) ids.forEach(upsertToken);
+          else scheduleFullRender();
+        }));
+      }
+      off.push(api.on('state:import', scheduleFullRender));
       off.push(api.on('token:visual-move-start', event => {
-        const id = String(event.detail?.tokenId || event.detail?.id || '');
-        if (id) movingTokenIds.add(id);
-        render();
+        const id = tokenIdFromEvent(event);
+        if (!id) return;
+        movingTokenIds.add(id);
+        removeToken(id);
       }));
       off.push(api.on('token:visual-move-end', event => {
-        const id = String(event.detail?.tokenId || event.detail?.id || '');
-        if (id) movingTokenIds.delete(id);
-        render();
+        const id = tokenIdFromEvent(event);
+        if (!id) return;
+        movingTokenIds.delete(id);
+        upsertToken(id);
       }));
-      api.map.on('zoomend', render);
-      api.map.on('resize', render);
+      api.map.on('zoomend', scheduleFullRender);
+      api.map.on('resize', scheduleFullRender);
       off.push(api.on('app:destroy', () => {
         destroyed = true;
+        if (fullRenderFrame !== null) cancelFrame(fullRenderFrame);
+        fullRenderFrame = null;
         movingTokenIds.clear();
-        api.map.off('zoomend', render);
-        api.map.off('resize', render);
+        markers.clear();
+        api.map.off('zoomend', scheduleFullRender);
+        api.map.off('resize', scheduleFullRender);
         layer.clearLayers();
         api.map.removeLayer?.(layer);
         off.splice(0).forEach(dispose => dispose?.());
       }));
-      render();
+      renderAll();
     },
   };
 }

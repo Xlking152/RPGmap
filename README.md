@@ -1,6 +1,6 @@
 # RPGmap
 
-RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.2.6**，提供 World/Scene 管理、Actor 模板与 Token 实例、地图移动与测距、生命/伤势、状态、战斗、聊天、权限投影、侦测与隐身、战争迷雾，以及 Windows 本机/局域网多人运行包。
+RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.3.0**，提供 World/Scene 管理、Actor 模板与 Token 实例、分段移动与测距、生命/伤势、Status V4、战斗、折叠聊天、四级权限投影、精确/模糊侦测、隐身与战争迷雾，以及 Windows 本机/局域网多人运行包。
 
 内置的“北宋兰州城”是复杂 Reference MapPackage，用于验证建筑、城墙、城门、桥梁、水体、破坏、洪水、导航和 29 张 WebP 美术资源能够通过通用 Core 运行。
 
@@ -9,7 +9,7 @@ RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前�
 正式 Windows Release：
 
 1. 安装 Node.js `20.19+` 或 `22.12+`。
-2. 下载并解压 `RPGmap-v2.2.6.zip`。
+2. 下载并解压 `RPGmap-v2.3.0.zip`。
 3. 双击 `start-rpgmap.bat`。
 4. GM 使用启动窗口中的 Local URL 与 GM Secret；同一局域网的 Player 使用 LAN URL 与 Join Code。
 
@@ -22,11 +22,11 @@ RPGmap 仅面向本机和可信局域网，不应直接暴露到公网。World�
 - World Manager：先选择或创建 World，再按其 Ruleset 与 Active Scene 加载地图。
 - Scene/MapPackage：同一地图可建立多个 Scene，Feature State 与 Token 相互隔离。
 - Actor/Token：Actor 是可复用模板；PC 可使用 Linked Token，怪物、NPC 与召唤物强制使用 Unlinked Token，并在各自 `actorDelta` 中独立保存生命、伤势、状态、资源和当前形态。
-- 地图工具：选择、框选、直接拖动、碰撞、测距和高度。v2.2.5 使用 Movement V5：拖拽预览由 `requestAnimationFrame` 合帧并复用 Leaflet 图层，普通直线移动走单次路径校验 fast path；连续同方向 WASD 会合并为较少的移动事务，导航网格按真正影响碰撞的上下文做小型共享缓存。群组拖动仍保持相对队形并原子提交。
+- 地图工具：选择、框选、直接拖动、碰撞、测距和高度。普通拖放提交直线路线；`Ctrl`/`Cmd` 进入分段规划，支持点击或 `F` 添加路径点、右键或 `Alt+F` 撤销、`Enter` 确认和 `Esc` 取消。连续 WASD 合并为有界事务，群组拖动保持相对队形并原子提交。
 - 规则系统：Infinite Horror Actor、Health、B/L/A 伤势、Status/Effect、Damage/Healing；侦测分为精确与模糊范围，并结合明暗环境、暗视等感官能力计算。
 - 生命与批量操作：生命展示与可编辑字段由当前 Ruleset 的 Health Presentation 决定。Infinite Horror 在实例抽屉显示完好/B/L/A 伤势与对应编辑字段；普通 HP 或 DND 类规则可只显示 `current/max`。批量伤害/恢复也从 Ruleset 提供的伤害类型、恢复类型和标签生成。地图右下角保持紧凑的 Primary Token 大头像、名称、实例类型和 Ruleset 生命摘要，不再用大尺寸多选编辑 HUD 遮挡地图。
 - 战斗与聊天：先攻、回合权限、共享聊天与系统日志；当前战斗者离开本回合起点后，会保留不可交互的回合起点幻影直到下一回合。普通 Player 在战斗中只能移动当前回合的 Token 实例，不能通过同 Actor 模板的其他 Token 绕过 Combat Turn Lock；GM 可按需要调整多个 Token。
-- Local/LAN：服务器权威 operation、revision、幂等、Actor/Token 控制权、Combat Turn Lock、按用户裁剪的 AudienceProjection 与滚动备份。怪物/NPC/召唤物实例优先使用 `controllerUserIds` 的 Token-first 控制权；PC 仍可由 Actor OWNER 获得控制。
+- Local/LAN：Operation Protocol V2 统一 Token、Actor、Status、Chat、Health、Combat、Feature 与 Fog 写入，使用 revision、幂等、原子写盘和 Audience-safe patch/changeSet。权限区分 NONE、LIMITED、OBSERVER、OWNER 与 Token 控制权；怪物/NPC/召唤物实例使用 `controllerUserIds` 的 Token-first 控制权。
 - 视野与迷雾：玩家选择自己控制的 Token 作为唯一实时视野来源；视野圆心始终跟随该 Token 的最新权威坐标，精确与模糊范围实际看过的 5 米网格区域按 Scene 与队伍持久化共享，GM 可重置或重新隐藏。显式导入或实例覆盖的侦测距离按 Ruleset 原值运行，不再被 Fog 的 120 m 实现上限截断；Fog operation 接受更大半径，并仅把栅格计算裁剪到当前地图实际可覆盖范围。未配置侦测时的自动默认范围仍遵循 Infinite Horror 自身的 `20–120m` fallback 规则。
 - 隐身与可见性：Token 支持公开、队伍、仅 GM 和指定用户；隐身 Token 仅向 GM、控制者、队友及明确授权用户以半透明形式投影。
 - 其他指示物：陷阱、目标点、区域和注释使用轻量 Marker；指示物库分别提供怪物、NPC 与其他模板区域，怪物/NPC 可从各自 XLSX 入口导入，并可在当前 Scene 实例抽屉中逐个检查 Ruleset 生命字段与状态，并执行批量状态、批量伤害和批量恢复。怪物、NPC 与召唤物的 Actor 状态写入其 Synthetic Actor Token 的 `actorDelta.effects`，不会修改模板或同模板的其他实例。
@@ -55,7 +55,9 @@ Scene
 - Ruleset 拥有 `Actor.system`、派生、展示与规则操作。
 - MapPackage 描述地图尺寸、SVG/资产、Feature、Capability 与 Navigation，不保存 Campaign 状态。
 - World schema 3 是持久化权威；Entity/UI/compatibility projection 与玩家 AudienceProjection 只能只读生成，不能覆盖服务器 World。
-- 普通多人写入使用 operation schema 1；完整 World 只用于初始化、快照、显式导入和恢复。
+- 普通多人写入使用 operation schema 2；完整 World 只用于初始化、显式恢复/导入、revision 缺口、Audience 身份变化和跨 MapPackage Scene。
+
+v2.3.0 将联机写入统一到 Operation Protocol V2，并用细粒度 Audience-safe patch/changeSet 更新 Token、状态、聊天和 Fog；Status schema 与 Access schema 升至 4。新增四区 Token 实例配置、LIMITED 公开摘要、右键快捷状态 HUD、服务器权威持续时间、折叠聊天 composer、恢复完整的 Ctrl/Cmd 分段移动，以及 normal/dim/dark 下的精确/模糊感知。兰州地图的数据和 SVG 改为选择地图后才加载的编译资源；相对 v2.2.6，World reducer 三项中位数均降低超过 25%，三会话 LAN p95 降低超过 30%，总 JS gzip 降低至少 2%。
 
 v2.2.6 将实例生命管理完全收敛到 Ruleset Health Presentation：怪物/NPC/召唤物实例抽屉动态读取 Ruleset 的生命摘要、可编辑字段、伤害类型和恢复类型，Core 不再识别 B/L/A 或其他私有生命体系。地图多选时恢复紧凑的 Primary Token 大头像摘要；Infinite Horror 可显示完好/B/L/A，而普通 HP/DND 类规则可自然显示 `20/20` 一类数值生命。
 
@@ -84,6 +86,8 @@ v2.1.6 增加 Group Token Movement：多选 Token 只作为一次临时移动上
 ```bash
 npm ci --no-audit --no-fund
 npm test
+npm run benchmark
+npm run benchmark:lan
 npm run build
 npm run check:bundle
 npm run package:local-server

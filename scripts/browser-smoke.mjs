@@ -232,7 +232,14 @@ try {
     const manifest = await response.json();
     const entry = manifest['src/map-package/default-map.js'];
     const assets = (entry?.assets || []).filter(file => file.endsWith('.webp'));
+    const runtimeAssets = [
+      manifest['reference/maps/lanzhou/runtime.json']?.file,
+      manifest['reference/maps/lanzhou/runtime.svg']?.file,
+    ];
     if (assets.length !== 29) throw new Error('expected 29 Lanzhou WebP assets, got ' + assets.length);
+    if (runtimeAssets.some(file => !file) || runtimeAssets.some(file => !(entry?.assets || []).includes(file))) {
+      throw new Error('Lanzhou runtime JSON/SVG assets are missing from the default MapPackage');
+    }
     const sizes = await Promise.all(assets.map(async file => {
       const assetResponse = await fetch('./' + file, { cache: 'no-store' });
       if (!assetResponse.ok) throw new Error(file + ' returned ' + assetResponse.status);
@@ -243,7 +250,23 @@ try {
       if (!bytes) throw new Error(file + ' is empty');
       return bytes;
     }));
-    return { count: sizes.length, bytes: sizes.reduce((sum, value) => sum + value, 0) };
+    const runtimeSizes = await Promise.all(runtimeAssets.map(async file => {
+      const assetResponse = await fetch('./' + file, { cache: 'no-store' });
+      if (!assetResponse.ok) throw new Error(file + ' returned ' + assetResponse.status);
+      const expectedType = file.endsWith('.json') ? 'application/json' : 'image/svg+xml';
+      if (!String(assetResponse.headers.get('content-type') || '').startsWith(expectedType)) {
+        throw new Error(file + ' has invalid content type');
+      }
+      const bytes = (await assetResponse.arrayBuffer()).byteLength;
+      if (!bytes) throw new Error(file + ' is empty');
+      return bytes;
+    }));
+    return {
+      count: sizes.length,
+      bytes: sizes.reduce((sum, value) => sum + value, 0),
+      runtimeCount: runtimeSizes.length,
+      runtimeBytes: runtimeSizes.reduce((sum, value) => sum + value, 0),
+    };
   })()`);
   await new Promise(resolve => setTimeout(resolve, 750));
   const visualState = await evaluate(`({
@@ -279,7 +302,7 @@ try {
   }
   if (failures.length) throw new Error(`Browser requests failed: ${failures.join('; ')}`);
   if (exceptions.length) throw new Error(`Browser runtime errors: ${exceptions.join('; ')}`);
-  for (const pattern of [/\/assets\/ruleset-[^/]+\.js$/, /\/assets\/map-runtime-[^/]+\.js$/, /\/assets\/default-map-[^/]+\.js$/, /\.webp$/]) {
+  for (const pattern of [/\/assets\/ruleset-[^/]+\.js$/, /\/assets\/map-runtime-[^/]+\.js$/, /\/assets\/default-map-[^/]+\.js$/, /\/assets\/runtime-[^/]+\.json$/, /\/assets\/runtime-[^/]+\.svg$/, /\.webp$/]) {
     if (!responses.some(url => pattern.test(url))) {
       throw new Error(`Browser did not load required Runtime asset: ${pattern}; visual=${JSON.stringify(visualState)}; responses=${JSON.stringify(responses.slice(-20))}`);
     }

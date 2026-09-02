@@ -24,8 +24,10 @@ const EXPECTED_ROOT_ENTRIES = [
   'access-control.mjs',
   'app',
   'docs',
+  'http-runtime.mjs',
   'launcher.mjs',
   'map',
+  'permissions-model.mjs',
   'portable-storage.mjs',
   'ruleset-authority.mjs',
   'server.mjs',
@@ -35,6 +37,7 @@ const EXPECTED_ROOT_ENTRIES = [
   'world-operations.mjs',
   'world-schema.mjs',
   'world-v2.mjs',
+  'websocket-runtime.mjs',
 ];
 
 function fail(message) {
@@ -79,12 +82,30 @@ for (const file of EXPECTED_ROOT_ENTRIES.filter(name => name.endsWith('.mjs') ||
 }
 if (rootEntries.filter(name => name.toLowerCase().endsWith('.bat')).length !== 1) fail('package must contain exactly one BAT');
 
+for (const file of rootEntries.filter(name => name.endsWith('.mjs'))) {
+  const source = await readFile(path.join(root, file), 'utf8');
+  const specifiers = [
+    ...source.matchAll(/(?:import|export)\s+(?:[^'";]*?\s+from\s+)?['"](\.[^'"]+)['"]/g),
+    ...source.matchAll(/import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g),
+  ].map(match => match[1]);
+  for (const specifier of specifiers) {
+    const target = path.resolve(root, path.dirname(file), specifier);
+    if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+      fail(`${file} imports outside the package root: ${specifier}`);
+    }
+    const info = await stat(target).catch(() => null);
+    if (!info?.isFile()) fail(`${file} imports missing package module: ${specifier}`);
+  }
+}
+
 const version = JSON.parse(await readFile(path.join(root, 'VERSION.json'), 'utf8'));
 if (version.version !== packageJson.version || version.releaseTag !== `v${packageJson.version}`) {
   fail(`VERSION.json does not match package version ${packageJson.version}`);
 }
 if (version.worldSchema !== 3) fail(`VERSION.json worldSchema must be 3, received ${version.worldSchema}`);
-if (version.operationSchema !== 1) fail(`VERSION.json operationSchema must be 1, received ${version.operationSchema}`);
+if (version.operationSchema !== 2) fail(`VERSION.json operationSchema must be 2, received ${version.operationSchema}`);
+if (version.statusSchema !== 4) fail(`VERSION.json statusSchema must be 4, received ${version.statusSchema}`);
+if (version.accessSchema !== 4) fail(`VERSION.json accessSchema must be 4, received ${version.accessSchema}`);
 if (!/^[0-9a-f]{40}$/i.test(String(version.commit || ''))) fail('VERSION.json commit must be a full Git commit');
 if (expectedCommit && String(version.commit).toLowerCase() !== expectedCommit) {
   fail(`VERSION.json commit ${version.commit} does not match ${expectedCommit}`);
@@ -95,9 +116,13 @@ const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 const htmlEntry = manifest['index.html'];
 const runtimeEntry = manifest['src/runtime/map-runtime.js'];
 const defaultMapEntry = manifest['src/map-package/default-map.js'];
+const lanzhouDataEntry = manifest['reference/maps/lanzhou/runtime.json'];
+const lanzhouSvgEntry = manifest['reference/maps/lanzhou/runtime.svg'];
 if (!htmlEntry?.isEntry) fail('manifest is missing index.html entry');
 if (!runtimeEntry?.isDynamicEntry) fail('manifest is missing dynamic Map Runtime entry');
 if (!defaultMapEntry?.isDynamicEntry) fail('manifest is missing dynamic Lanzhou MapPackage entry');
+if (!lanzhouDataEntry?.file?.endsWith('.json')) fail('manifest is missing Lanzhou runtime data');
+if (!lanzhouSvgEntry?.file?.endsWith('.svg')) fail('manifest is missing Lanzhou runtime SVG');
 for (const key of ['src/runtime/map-runtime.js', 'src/map-package/default-map.js']) {
   if (!(htmlEntry.dynamicImports || []).includes(key)) fail(`index.html does not dynamically import ${key}`);
 }
@@ -124,6 +149,10 @@ const defaultAssets = new Set((defaultMapEntry.assets || []).filter(file => file
 if (defaultAssets.size !== 29) fail(`default MapPackage references ${defaultAssets.size} WebP assets instead of 29`);
 for (const [, record] of lanzhouSources) {
   if (!defaultAssets.has(record.file)) fail(`default MapPackage does not reference ${record.file}`);
+  await requireFile(`app/${record.file}`);
+}
+for (const record of [lanzhouDataEntry, lanzhouSvgEntry]) {
+  if (!(defaultMapEntry.assets || []).includes(record.file)) fail(`default MapPackage does not reference ${record.file}`);
   await requireFile(`app/${record.file}`);
 }
 
@@ -161,4 +190,5 @@ console.log(JSON.stringify({
   sha256: archiveHash,
   manifestRecords: visited.size,
   lanzhouWebpAssets: lanzhouSources.length,
+  lanzhouRuntimeAssets: [lanzhouDataEntry.file, lanzhouSvgEntry.file],
 }, null, 2));

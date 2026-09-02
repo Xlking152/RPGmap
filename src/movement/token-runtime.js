@@ -237,7 +237,9 @@ export function createMovementTokenRuntimeSystem() {
         const multiplayer = api.multiplayer?.getStatus?.() || null;
         const role = multiplayer?.session?.role || multiplayer?.role || 'offline';
         if (role !== 'gm' && role !== 'offline') {
-          if (api.multiplayer?.canControlToken?.(token.id) === false) {
+          if (api.permissions?.can
+            ? !api.permissions.can('token.control', { token, tokenId: token.id })
+            : api.multiplayer?.canControlToken?.(token.id) === false) {
             return movementFailure('movement_permission_denied', '当前身份没有该 Token 的移动权限');
           }
           const activeTokenId = activeCombatTokenId(api);

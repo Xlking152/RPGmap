@@ -95,11 +95,13 @@ export function createHealthController() {
       }
 
       function canEditActor(actorId) {
+        if (api.permissions?.can) return api.permissions.can('actor.edit', { actorId });
         const capabilities = api.multiplayer?.getCapabilities?.();
         return !capabilities || capabilities.canEditActor?.(actorId) !== false;
       }
 
       function canControlToken(tokenId, actorId) {
+        if (api.permissions?.can) return api.permissions.can('token.editHealth', { tokenId, actorId });
         const multiplayer = api.multiplayer;
         if (!multiplayer?.getStatus?.()?.connected) return true;
         if (typeof multiplayer.canControlToken === 'function') return multiplayer.canControlToken(tokenId) === true;

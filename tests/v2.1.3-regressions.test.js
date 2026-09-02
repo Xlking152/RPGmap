@@ -16,11 +16,12 @@ test('Select mode owns direct Feature inspection without a duplicate Inspect too
 });
 
 test('chat composer acknowledges successful sends and clears only after the transport accepted them', () => {
-  assert.match(chatController, /const sent = appendAfterWorld\?\.\(\{ text, event, data \}\) === true/);
+  assert.match(chatController, /const result = appendAfterWorld\?\.\(\{ text, event, data \}\)/);
   assert.match(chatController, /if \(sent === false\) return;/);
+  assert.match(chatController, /await Promise\.resolve\(sent\)/);
   assert.match(chatController, /input\.value = '';/);
   assert.match(chatController, /input\.focus\(\);/);
-  assert.match(chatController, /消息已发送 · 等待服务器同步/);
+  assert.match(chatController, /消息发送失败/);
 });
 
 test('Token-bound attack areas keep the live anchor but preview and damage use a resolved free snapshot', () => {

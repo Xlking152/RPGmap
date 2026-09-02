@@ -1,4 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import {
+  STATUS_SCHEMA_VERSION,
+  normalizeEntityStatusState,
+  reduceStatusOperation,
+  resolveStatusCapabilities,
+} from '../../src/status/model.js';
+
+export { STATUS_SCHEMA_VERSION };
 
 export const STATUS_LIMITS = Object.freeze({
   maxDefinitions: 128,
@@ -21,8 +29,8 @@ const STATUS_MESSAGE_TYPES = new Set([
 ]);
 const SCOPES = new Set(['actor', 'token', 'syntheticActor']);
 const CHANGE_MODES = new Set(['add', 'set', 'multiply', 'min', 'max']);
-const CAPABILITY_KEYS = new Set(['canMove', 'canInteract', 'canActInCombat', 'collisionBypassGroups', 'visibility']);
-const CATEGORIES = new Set(['buff', 'debuff', 'trait', 'status']);
+const CAPABILITY_KEYS = new Set(['canMove', 'canInteract', 'canActInCombat', 'collisionBypassGroups', 'visibility', 'visionPrecision']);
+const CATEGORIES = new Set(['buff', 'debuff', 'neutral', 'trait', 'status']);
 const DEFINITION_OWNED_EFFECT_KEYS = Object.freeze([
   'name', 'label', 'description', 'icon', 'color', 'category', 'scope', 'scopes',
   'maxStacks', 'capabilities', 'statusId', 'changes',
@@ -162,6 +170,14 @@ export function assertStatusDefinition(value, label = 'status definition') {
   if (capabilities.visibility !== undefined && capabilities.visibility !== 'invisible') {
     fail(`${label}.capabilities.visibility must be invisible`);
   }
+  if (capabilities.visionPrecision !== undefined && capabilities.visionPrecision !== 'vague') {
+    fail(`${label}.capabilities.visionPrecision must be vague`);
+  }
+  if (definition.defaultDuration !== undefined && definition.defaultDuration !== null) {
+    const duration = object(definition.defaultDuration, `${label}.defaultDuration`);
+    if (!['turns', 'rounds'].includes(String(duration.unit))) fail(`${label}.defaultDuration.unit is invalid`);
+    integer(duration.value, `${label}.defaultDuration.value`, 1, 10_000);
+  }
   if (capabilities.collisionBypassGroups !== undefined) {
     const groups = array(capabilities.collisionBypassGroups, `${label}.capabilities.collisionBypassGroups`, 4);
     if (groups.some(group => group !== 'structure') || new Set(groups).size !== groups.length) {
@@ -198,6 +214,12 @@ export function assertStatusInstance(value, label, { definitions, scope, legacy 
   if (effect.createdAt !== undefined) text(effect.createdAt, `${label}.createdAt`, { required: true, max: 80 });
   if (effect.source !== undefined && effect.source !== null && (typeof effect.source !== 'object' || Array.isArray(effect.source))) {
     fail(`${label}.source must be an object or null`);
+  }
+  if (effect.duration !== undefined) {
+    const duration = object(effect.duration, `${label}.duration`);
+    if (!['turns', 'rounds'].includes(String(duration.unit))) fail(`${label}.duration.unit is invalid`);
+    const initial = integer(duration.initial, `${label}.duration.initial`, 1, 10_000);
+    integer(duration.remaining, `${label}.duration.remaining`, 0, initial);
   }
   return effect;
 }
@@ -245,7 +267,7 @@ function normalizedDefinition(input) {
   value.description = text(value.description ?? '', 'definition.description');
   value.icon = text(value.icon ?? 'circle-dot', 'definition.icon', { required: true, max: 120 });
   value.color = text(value.color || '#64748b', 'definition.color', { max: 32 });
-  value.category = text(value.category || 'status', 'definition.category', { max: 24 });
+  value.category = text(value.category || 'neutral', 'definition.category', { max: 24 });
   value.scopes = [...new Set(array(value.scopes ?? ['actor'], 'definition.scopes', 2).map(String))];
   value.maxStacks = integer(value.maxStacks ?? 1, 'definition.maxStacks', 1, STATUS_LIMITS.maxStacks);
   value.changes = array(value.changes ?? [], 'definition.changes', STATUS_LIMITS.maxChangesPerDefinition).map(change => ({
@@ -273,7 +295,7 @@ function sourceFor(message, context) {
 function applyOne(state, message, context) {
   const entities = entityState(state);
   entities.statusDefinitions ||= [];
-  entities.schemaVersion = Math.max(3, Number(entities.schemaVersion) || 0);
+  entities.schemaVersion = STATUS_SCHEMA_VERSION;
   const type = String(message?.type || '');
 
   if (type === 'status.definition.upsert') {
@@ -368,24 +390,15 @@ export function applyStatusMessage(state, message, context = {}) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) fail('World is not initialized', 'world_uninitialized');
   const next = structuredClone(state);
   const now = context.now || new Date().toISOString();
-  const localContext = { ...context, now };
-  let results;
-  if (message?.type === 'status.batch') {
-    const operations = array(message.operations, 'status.batch.operations', STATUS_LIMITS.maxBatchOperations);
-    if (!operations.length) fail('status.batch.operations cannot be empty');
-    results = operations.map((operation, index) => {
-      const item = object(operation, `status.batch.operations[${index}]`);
-      if (!STATUS_MESSAGE_TYPES.has(String(item.type)) || String(item.type).startsWith('status.definition.')) {
-        fail(`status.batch.operations[${index}].type is not allowed`);
-      }
-      return applyOne(next, item, localContext);
-    });
-  } else {
-    if (!STATUS_MESSAGE_TYPES.has(String(message?.type))) fail('Unknown status message', 'unknown_message');
-    results = [applyOne(next, message, localContext)];
-  }
+  const entities = entityState(next);
+  const reduced = reduceStatusOperation(normalizeEntityStatusState(entities), message, {
+    now,
+    idFactory: () => randomUUID(),
+    source: sourceFor(message || {}, { ...context, now }),
+  });
+  next.preferences.entitySystem = reduced.state;
   assertStatusState(entityState(next));
-  return { state: next, results };
+  return { state: next, results: reduced.results };
 }
 
 export function isStatusMessage(message) {

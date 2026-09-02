@@ -17,7 +17,12 @@ function token(id, x, y, elevationFt = 0) {
     diameterMeters: 1, rotation: 0, elevationFt,
     controllerUserIds: [],
     visibility: { mode: 'party', userIds: [] },
-    vision: { enabled: true, rangeOverrideMeters: null, overrideUserIds: [] },
+    vision: {
+      enabled: true,
+      preciseRangeOverrideMeters: null,
+      vagueRangeOverrideMeters: null,
+      overrideUserIds: [],
+    },
     locked: false, showName: true, effects: [],
   };
 }
@@ -122,7 +127,7 @@ function permissionState({ combat = false } = {}) {
   const value = {
     version: 2, mapId: 'test',
     preferences: {
-      entitySystem: { schemaVersion: 3, actors: [actor()], tokens: canonicalTokens, statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS) },
+      entitySystem: { schemaVersion: 4, actors: [actor()], tokens: canonicalTokens, statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS) },
       chatSystem: { messages: [] },
       combatSystem: { combat: combat ? {
         id: 'combat', state: 'active', round: 1, turnIndex: 0,
@@ -156,14 +161,14 @@ test('Player may group-move owned Tokens outside Combat but not during active Co
 
 test('v2.1.6 keeps group movement transient, Token-first and render-only outside canonical commit', async () => {
   const [controller, runtime, ghost, renderer] = await Promise.all([
-    readFile(new URL('../src/movement/controller-v3.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/movement/controller.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/movement/token-runtime.js', import.meta.url), 'utf8'),
-    readFile(new URL('../src/movement/ghost-renderer-v2.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/movement/ghost-renderer.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/render/token-layer.js', import.meta.url), 'utf8'),
   ]);
   assert.match(controller, /getSelectedTokenIds/);
-  assert.match(controller, /groupMovement: true/);
-  assert.match(controller, /findGroupSegment/);
+  assert.match(controller, /members\.length > 1/);
+  assert.match(controller, /planTokenGroupMove/);
   assert.match(runtime, /source: 'movement:group'/);
   assert.match(runtime, /planTokenGroupMove/);
   assert.match(ghost, /getGroupPreviewMembers/);

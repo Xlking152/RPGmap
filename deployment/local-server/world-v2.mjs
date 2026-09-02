@@ -1,4 +1,4 @@
-import { assertStatusState } from './status-operations.mjs';
+import { assertStatusState, STATUS_SCHEMA_VERSION } from './status-operations.mjs';
 import { assertFeatureStatePatch, isPlainObject } from './world-operations.mjs';
 
 const ACTOR_TYPES = new Set(['pc', 'monster', 'npc', 'summon', 'other']);
@@ -80,7 +80,7 @@ export function synchronizeWorldV2Mirror(state) {
       : {};
     state.preferences.entitySystem = {
       ...structuredClone(entity),
-      schemaVersion: Math.max(3, Number(entity.schemaVersion) || 0),
+      schemaVersion: STATUS_SCHEMA_VERSION,
       actors: structuredClone(Array.isArray(world.actors) ? world.actors : []),
       statusDefinitions: structuredClone(Array.isArray(world.statusDefinitions) ? world.statusDefinitions : []),
       tokens: structuredClone(Array.isArray(scene.tokens) ? scene.tokens : []),
@@ -133,8 +133,15 @@ function assertTokenAccess(token, actor, label) {
   stringIds(visibility.userIds, `${label}.visibility.userIds`);
   const vision = object(token.vision, `${label}.vision`);
   if (typeof vision.enabled !== 'boolean') fail(`${label}.vision.enabled must be boolean`);
-  if (vision.rangeOverrideMeters !== null && (!Number.isFinite(Number(vision.rangeOverrideMeters))
-    || Number(vision.rangeOverrideMeters) < 0)) fail(`${label}.vision.rangeOverrideMeters is invalid`);
+  for (const field of ['preciseRangeOverrideMeters', 'vagueRangeOverrideMeters']) {
+    if (vision[field] !== null && (!Number.isFinite(Number(vision[field]))
+      || Number(vision[field]) < 0)) fail(`${label}.vision.${field} is invalid`);
+  }
+  if (vision.preciseRangeOverrideMeters !== null && vision.vagueRangeOverrideMeters !== null
+    && Number(vision.vagueRangeOverrideMeters) < Number(vision.preciseRangeOverrideMeters)) {
+    fail(`${label}.vision vague range cannot be smaller than precise range`);
+  }
+  if (Object.hasOwn(vision, 'rangeOverrideMeters')) fail(`${label}.vision.rangeOverrideMeters is legacy-only`);
   stringIds(vision.overrideUserIds, `${label}.vision.overrideUserIds`);
   if (Object.hasOwn(token, 'hidden')) fail(`${label}.hidden is legacy-only`, 'legacy_token_hidden_forbidden');
 }
@@ -200,7 +207,7 @@ export function assertWorldV2(value) {
         const resolved = syntheticActor(baseActor, token.actorDelta);
         try {
           assertStatusState({
-            schemaVersion: 3,
+            schemaVersion: STATUS_SCHEMA_VERSION,
             statusDefinitions: structuredClone(statusDefinitions),
             actors: [resolved],
             tokens: [],

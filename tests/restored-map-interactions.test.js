@@ -8,7 +8,7 @@ import { featureAtMapLatLng } from '../src/interaction/map-inspector.js';
 import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
 
 const movementIndex = await readFile(new URL('../src/movement/index.js', import.meta.url), 'utf8');
-const movementController = await readFile(new URL('../src/movement/controller-v5.js', import.meta.url), 'utf8');
+const movementController = await readFile(new URL('../src/movement/controller.js', import.meta.url), 'utf8');
 const featureInspector = await readFile(new URL('../src/interaction/map-inspector.js', import.meta.url), 'utf8');
 
 test('direct map inspection resolves an inspectable Feature from Leaflet coordinates', () => {
@@ -26,7 +26,7 @@ test('map inspector uses Runtime tool state and supports both browse and inspect
 
 test('Movement system activates the RAF document-drag and coalesced-keyboard controller', () => {
   assert.match(movementIndex, /createMovementFastPathSystem\(\)\.register\(api\)/);
-  assert.match(movementIndex, /createMovementControllerV5\(\{ settings \}\)\.register\(api\)/);
+  assert.match(movementIndex, /createMovementController\(\{ settings \}\)\.register\(api\)/);
   assert.match(movementController, /documentNode\.addEventListener\('pointermove', pointerMove, true\)/);
   assert.match(movementController, /documentNode\.addEventListener\('pointerup', pointerUp, true\)/);
   assert.match(movementController, /documentNode\.addEventListener\('pointercancel', pointerCancel, true\)/);

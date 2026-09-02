@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  STATUS_SCHEMA_VERSION,
+  advanceStatusDurations,
   getStatusDefinitions,
   normalizeEntityStatusState,
   reduceStatusOperation,
@@ -49,6 +51,8 @@ function emptyState() {
 test('built-in definitions use the server IDs and spirit bypasses only structures', () => {
   assert.deepEqual(BUILTIN_STATUS_DEFINITIONS.map(definition => definition.id), [
     'status-invisible', 'status-spirit', 'status-rooted', 'status-incapacitated',
+    'status-strengthened', 'status-weakened', 'status-poisoned', 'status-burning',
+    'status-bleeding', 'status-blinded',
   ]);
   const spirit = BUILTIN_STATUS_DEFINITIONS.find(definition => definition.id === 'status-spirit');
   assert.deepEqual(spirit.capabilities.collisionBypassGroups, ['structure']);
@@ -67,7 +71,7 @@ test('legacy Actor effects migrate deterministically to custom definitions and r
 
   const first = normalizeEntityStatusState(legacy);
   const second = normalizeEntityStatusState(legacy);
-  assert.equal(first.schemaVersion, 3);
+  assert.equal(first.schemaVersion, STATUS_SCHEMA_VERSION);
   assert.equal(first.statusDefinitions.length, BUILTIN_STATUS_DEFINITIONS.length + 1);
   assert.deepEqual(first.statusDefinitions, second.statusDefinitions);
   assert.equal(first.actors[0].effects[0].id, 'old-bonus');
@@ -220,6 +224,45 @@ test('offline reducer applies server-shaped operations atomically without copyin
   assert.equal(getStatusDefinitions(applied.state).some(item => item.id === 'status-warded'), true);
 });
 
+test('Status V4 definition import validates atomically and reports every conflict ID', () => {
+  const initial = emptyState();
+  const definitions = [
+    {
+      id: 'status-import-a', name: 'Import A', category: 'buff', scopes: ['actor'], maxStacks: 1,
+      changes: [], capabilities: {}, defaultDuration: { unit: 'turns', value: 2 },
+    },
+    {
+      id: 'status-import-b', name: 'Import B', category: 'neutral', scopes: ['actor'], maxStacks: 1,
+      changes: [], capabilities: { visionPrecision: 'vague' }, defaultDuration: null,
+    },
+  ];
+  const imported = reduceStatusOperation(initial, {
+    type: 'status.definition.import', statusSchemaVersion: STATUS_SCHEMA_VERSION, definitions,
+  });
+  assert.deepEqual(imported.results[0].definitionIds, ['status-import-a', 'status-import-b']);
+  assert.equal(imported.state.statusDefinitions.some(item => item.id === 'status-import-a'), true);
+  assert.deepEqual(initial.statusDefinitions, BUILTIN_STATUS_DEFINITIONS);
+
+  const conflicting = [...definitions, { ...definitions[0] }];
+  assert.throws(
+    () => reduceStatusOperation(imported.state, {
+      type: 'status.definition.import', statusSchemaVersion: STATUS_SCHEMA_VERSION, definitions: conflicting,
+    }),
+    error => error.code === 'status_definition_conflict'
+      && error.conflictIds.includes('status-import-a')
+      && error.conflictIds.includes('status-import-b'),
+  );
+  assert.equal(imported.state.statusDefinitions.filter(item => item.id.startsWith('status-import-')).length, 2);
+
+  assert.throws(
+    () => reduceStatusOperation(initial, {
+      type: 'status.definition.import', statusSchemaVersion: STATUS_SCHEMA_VERSION,
+      definitions: [definitions[0], { ...definitions[1], changes: [{ target: '__proto__.polluted', mode: 'add', value: 1 }] }],
+    }),
+  );
+  assert.equal(initial.statusDefinitions.some(item => item.id === 'status-import-a'), false);
+});
+
 test('definition edits change resolved numeric effects without rewriting Effect instances', () => {
   const initial = emptyState();
   const defined = reduceStatusOperation(initial, {
@@ -266,4 +309,41 @@ test('status normalization preserves custom definition and Effect extension meta
   const normalized = normalizeEntityStatusState(state);
   assert.deepEqual(normalized.statusDefinitions[0].extension, { provider: 'test-module' });
   assert.deepEqual(normalized.actors[0].effects[0].extension, { expiresAtRound: 4 });
+});
+
+test('Status V4 durations pause while disabled, expire authoritatively, and reset on re-enable', () => {
+  const source = emptyState();
+  source.statusDefinitions = structuredClone(BUILTIN_STATUS_DEFINITIONS);
+  const applied = reduceStatusOperation(source, {
+    type: 'status.apply', scope: 'actor', targetId: 'actor-1', statusId: 'status-poisoned',
+  }, { now: '2026-09-02T00:00:00.000Z', idFactory: () => 'effect-poisoned' });
+  assert.deepEqual(applied.state.actors[0].effects[0].duration, {
+    unit: 'turns', initial: 3, remaining: 3,
+  });
+
+  applied.state.actors[0].effects[0].enabled = false;
+  const paused = advanceStatusDurations(applied.state, { round: 1, turn: 1 });
+  assert.equal(paused.state.actors[0].effects[0].duration.remaining, 3);
+
+  paused.state.actors[0].effects[0].enabled = true;
+  const first = advanceStatusDurations(paused.state, { round: 1, turn: 2 });
+  const second = advanceStatusDurations(first.state, { round: 1, turn: 3 });
+  const expired = advanceStatusDurations(second.state, {
+    now: '2026-09-02T00:01:00.000Z', round: 2, turn: 0,
+  });
+  const effect = expired.state.actors[0].effects[0];
+  assert.equal(effect.duration.remaining, 0);
+  assert.equal(effect.enabled, false);
+  assert.deepEqual(effect.expiredAt, {
+    timestamp: '2026-09-02T00:01:00.000Z', round: 2, turn: 0,
+  });
+
+  const reenabled = reduceStatusOperation(expired.state, {
+    type: 'status.setStacks', scope: 'actor', targetId: 'actor-1',
+    statusId: 'status-poisoned', stacks: 1, enabled: true,
+  });
+  assert.deepEqual(reenabled.state.actors[0].effects[0].duration, {
+    unit: 'turns', initial: 3, remaining: 3,
+  });
+  assert.equal(reenabled.state.actors[0].effects[0].expiredAt, undefined);
 });

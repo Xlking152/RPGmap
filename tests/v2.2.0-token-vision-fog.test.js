@@ -375,6 +375,38 @@ test('vague detection projects only an anonymous quantized outline without canon
   assert.deepEqual(projectedWorld.scenes[0].attackAreas, []);
 });
 
+test('blinded vision downgrades the entire precise range to anonymous vague detection', () => {
+  const scout = actor({ id: 'pc-blinded-scout', type: 'pc', partyId: 'party-a' });
+  scout.system.forms[0].detection = {
+    configured: true, preciseRangeMeters: 60, vagueRangeMeters: 100, senses: {},
+  };
+  scout.effects = [{ id: 'effect-blinded', definitionId: 'status-blinded', stacks: 1, enabled: true }];
+  const hostile = actor({ id: 'npc-blinded-target', name: 'Hidden Identity', type: 'npc', partyId: 'party-b' });
+  const current = state({
+    actors: [scout, hostile],
+    tokens: [
+      token({ id: 'blinded-scout-token', actorId: scout.id, x: 10, y: 10 }),
+      token({
+        id: 'blinded-hostile-token', actorId: hostile.id, actorLink: false, x: 30, y: 10,
+        actorDelta: infiniteHorrorRuleset.actor.instances.createDelta(hostile),
+        visibility: { mode: 'public', userIds: [] },
+      }),
+    ],
+  });
+  const projected = projectStateForAudience(current, {
+    role: 'player', userId: 'player-a',
+    user: { id: 'player-a', ownership: { [scout.id]: 'owner' } },
+    visionSourceTokenId: 'blinded-scout-token', ruleset: infiniteHorrorRuleset,
+    mapMetrics: { metersPerUnit: 1 },
+  });
+  assert.equal(projected.preferences.audienceVision.source.preciseRangeMeters, 0);
+  assert.equal(projected.preferences.audienceVision.source.vagueRangeMeters, 100);
+  const outline = projected.preferences.worldV2.scenes[0].tokens.find(item => item.audienceVisibility === 'vague');
+  assert.ok(outline);
+  assert.notEqual(outline.id, 'blinded-hostile-token');
+  assert.equal(projected.preferences.worldV2.actors.some(item => item.id === hostile.id), false);
+});
+
 test('controlling one NPC does not grant visibility to its entire hostile party', () => {
   const controlled = actor({ id: 'npc-controlled', type: 'npc', partyId: 'hostile-party' });
   const sibling = actor({ id: 'npc-sibling', type: 'npc', partyId: 'hostile-party' });
@@ -416,6 +448,21 @@ test('placement grants expose only a restricted Actor template catalog entry', (
   assert.equal(entry.audienceRestricted, true);
   assert.deepEqual(entry.system, {});
   assert.deepEqual(entry.effects, []);
+});
+
+test('LIMITED ownership exposes only the legal Actor summary', () => {
+  const template = actor({ id: 'limited-npc', name: 'Limited NPC', type: 'npc', partyId: null });
+  template.notes = 'private notes';
+  const projected = projectStateForAudience(state({ actors: [template], tokens: [] }), {
+    role: 'player', userId: 'player-limited',
+    user: { id: 'player-limited', ownership: { 'limited-npc': 'limited' } },
+    ruleset: infiniteHorrorRuleset,
+  });
+  const entry = projected.preferences.worldV2.actors.find(item => item.id === 'limited-npc');
+  assert.equal(entry.audienceRestricted, true);
+  assert.equal(entry.name, 'Limited NPC');
+  assert.deepEqual(entry.system, {});
+  assert.equal(entry.notes, undefined);
 });
 
 test('public and party Markers do not disclose controller or explicit-user access lists', () => {

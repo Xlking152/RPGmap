@@ -27,6 +27,18 @@ function exploredRows(fog, partyIds) {
   return new Map([...byRow].map(([row, spans]) => [row, mergeSpans(spans)]));
 }
 
+function mergeDirtyBounds(left, right) {
+  if (left === null || right === null) return null;
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    minX: Math.min(Number(left.minX), Number(right.minX)),
+    minY: Math.min(Number(left.minY), Number(right.minY)),
+    maxX: Math.max(Number(left.maxX), Number(right.maxX)),
+    maxY: Math.max(Number(left.maxY), Number(right.maxY)),
+  };
+}
+
 function runtimeScene(api) {
   const world = api.getState?.()?.preferences?.worldV2;
   return world?.scenes?.find(scene => String(scene?.id ?? '') === String(world?.activeSceneId ?? '')) || null;
@@ -58,21 +70,31 @@ export function createVisionFogSystem() {
       const pane = api.map.getPane?.(FOG_PANE) || api.map.createPane(FOG_PANE);
       pane.style.zIndex = '510';
       pane.style.pointerEvents = 'none';
-      const canvas = documentNode.createElement('canvas');
-      canvas.className = 'rpgmap-vision-fog-canvas';
-      canvas.setAttribute('aria-hidden', 'true');
-      canvas.style.position = 'absolute';
-      canvas.style.pointerEvents = 'none';
-      pane.append(canvas);
+      const createCanvas = (layer, blendMode = '') => {
+        const canvas = documentNode.createElement('canvas');
+        canvas.className = `rpgmap-vision-fog-canvas rpgmap-vision-fog-${layer}`;
+        canvas.dataset.fogLayer = layer;
+        canvas.setAttribute('aria-hidden', 'true');
+        canvas.style.position = 'absolute';
+        canvas.style.pointerEvents = 'none';
+        if (blendMode) canvas.style.mixBlendMode = blendMode;
+        pane.append(canvas);
+        return canvas;
+      };
+      const saturationCanvas = createCanvas('saturation', 'saturation');
+      const darknessCanvas = createCanvas('darkness');
+      const canvases = [saturationCanvas, darknessCanvas];
       let localSourceTokenId = null;
       let lastLocalVision = null;
       let localExploreChain = Promise.resolve();
       let connectedClearPending = false;
       let renderFrame = 0;
+      let pendingDirtyBounds;
+      let lastVisionSignature = '';
       const off = [];
 
       function removeOverlay() {
-        canvas.remove();
+        canvases.forEach(canvas => canvas.remove());
       }
 
       function localVisionSubject() {
@@ -86,11 +108,20 @@ export function createVisionFogSystem() {
         const description = api.ruleset?.vision?.describe?.(resolved, {
           token, scene, lighting: scene?.settings?.lighting || 'normal',
         }) || {};
-        const rangeMeters = token.vision?.rangeOverrideMeters ?? description.rangeMeters;
-        const preciseRangeMeters = Number(rangeMeters) || 0;
-        const vagueRangeMeters = token.vision?.rangeOverrideMeters == null
+        const legacyOverride = token.vision?.rangeOverrideMeters;
+        const preciseOverride = token.vision?.preciseRangeOverrideMeters ?? legacyOverride;
+        const vagueOverride = token.vision?.vagueRangeOverrideMeters ?? legacyOverride;
+        let preciseRangeMeters = preciseOverride === null || preciseOverride === undefined
+          ? Number(description.preciseRangeMeters ?? description.rangeMeters) || 0
+          : Number(preciseOverride) || 0;
+        let vagueRangeMeters = vagueOverride === null || vagueOverride === undefined
           ? Math.max(preciseRangeMeters, Number(description.vagueRangeMeters ?? preciseRangeMeters) || 0)
-          : preciseRangeMeters;
+          : Math.max(preciseRangeMeters, Number(vagueOverride) || 0);
+        const capabilities = api.status?.resolveCapabilities?.({ tokenId: token.id }) || {};
+        if (capabilities.visionPrecision === 'vague') {
+          vagueRangeMeters = Math.max(vagueRangeMeters, preciseRangeMeters);
+          preciseRangeMeters = 0;
+        }
         return {
           sceneId: String(scene.id), tokenId: String(token.id),
           x: Number(token.x), y: Number(token.y), rangeMeters: preciseRangeMeters,
@@ -165,45 +196,59 @@ export function createVisionFogSystem() {
       }
 
       function synchronizeLocalVision() {
-        if (api.multiplayer?.getStatus?.()?.connected || !localSourceTokenId) return;
+        if (api.multiplayer?.getStatus?.()?.connected || !localSourceTokenId) return false;
         const subject = localVisionSubject();
         if (!subject) {
           localSourceTokenId = null;
           lastLocalVision = null;
           api.emit?.('vision:source-change', { tokenId: null });
-          return;
+          return true;
         }
         const previous = lastLocalVision;
         const moved = previous
           && previous.tokenId === subject.tokenId
           && previous.sceneId === subject.sceneId
           && (previous.x !== subject.x || previous.y !== subject.y);
+        const changed = JSON.stringify(previous) !== JSON.stringify(subject);
         lastLocalVision = subject;
         if (moved) queueLocalExploration(subject, previous).catch(error => api.showToast?.(error.message, 'error'));
+        return changed;
       }
 
-      function render() {
+      function visionSignature() {
+        const audience = liveVisionState();
+        return JSON.stringify({ source: audience?.source || null, partyIds: audience?.partyIds || [] });
+      }
+
+      function render(dirtyBounds = null) {
         const audience = liveVisionState();
         if (!audience) {
-          canvas.hidden = true;
+          canvases.forEach(canvas => { canvas.hidden = true; });
+          lastVisionSignature = '';
           return;
         }
         const scene = runtimeScene(api);
         if (!scene) return;
-        canvas.hidden = false;
+        canvases.forEach(canvas => { canvas.hidden = false; });
         const size = api.map.getSize();
         const dpr = Math.max(1, Math.min(2, Number(documentNode.defaultView?.devicePixelRatio) || 1));
-        if (canvas.width !== Math.ceil(size.x * dpr) || canvas.height !== Math.ceil(size.y * dpr)) {
-          canvas.width = Math.ceil(size.x * dpr);
-          canvas.height = Math.ceil(size.y * dpr);
-          canvas.style.width = `${size.x}px`;
-          canvas.style.height = `${size.y}px`;
+        let resized = false;
+        for (const canvas of canvases) {
+          if (canvas.width !== Math.ceil(size.x * dpr) || canvas.height !== Math.ceil(size.y * dpr)) {
+            resized = true;
+            canvas.width = Math.ceil(size.x * dpr);
+            canvas.height = Math.ceil(size.y * dpr);
+            canvas.style.width = `${size.x}px`;
+            canvas.style.height = `${size.y}px`;
+          }
         }
         const origin = api.map.containerPointToLayerPoint([0, 0]);
-        canvas.style.transform = `translate3d(${origin.x}px,${origin.y}px,0)`;
-        const context = canvas.getContext('2d');
-        context.setTransform(dpr, 0, 0, dpr, 0, 0);
-        context.clearRect(0, 0, size.x, size.y);
+        canvases.forEach(canvas => { canvas.style.transform = `translate3d(${origin.x}px,${origin.y}px,0)`; });
+        const saturation = saturationCanvas.getContext('2d');
+        const darkness = darknessCanvas.getContext('2d');
+        for (const context of [saturation, darkness]) {
+          context.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
         const fog = normalizeFogState(scene.fog);
         const metersPerUnit = Math.max(0.000001, Number(api.mapPackage?.metersPerUnit) || 1);
         const cellUnits = FOG_CELL_SIZE_METERS / metersPerUnit;
@@ -216,7 +261,27 @@ export function createVisionFogSystem() {
             width: Math.abs(second.x - first.x), height: Math.abs(second.y - first.y),
           };
         };
-        const drawExplored = () => {
+        const clip = dirtyBounds && !resized
+          ? worldRect(
+              Number(dirtyBounds.minX), Number(dirtyBounds.minY),
+              Number(dirtyBounds.maxX) - Number(dirtyBounds.minX),
+              Number(dirtyBounds.maxY) - Number(dirtyBounds.minY),
+            )
+          : null;
+        for (const context of [saturation, darkness]) {
+          context.save();
+          if (clip) {
+            const x = Math.max(0, Math.floor(clip.x) - 2);
+            const y = Math.max(0, Math.floor(clip.y) - 2);
+            const width = Math.min(size.x - x, Math.ceil(clip.width) + 4);
+            const height = Math.min(size.y - y, Math.ceil(clip.height) + 4);
+            context.beginPath();
+            context.rect(x, y, Math.max(0, width), Math.max(0, height));
+            context.clip();
+            context.clearRect(x, y, Math.max(0, width), Math.max(0, height));
+          } else context.clearRect(0, 0, size.x, size.y);
+        }
+        const drawExplored = context => {
           for (const [row, spans] of rows) {
             for (const [start, end] of spans) {
               const rect = worldRect(start * cellUnits, Number(row) * cellUnits, (end - start + 1) * cellUnits, cellUnits);
@@ -225,7 +290,7 @@ export function createVisionFogSystem() {
           }
         };
         const source = audience.source;
-        const drawCurrentCircle = rawRange => {
+        const drawCurrentCircle = (context, rawRange) => {
           const range = Number(rawRange) || 0;
           if (!source || range <= 0) return;
           const center = api.map.latLngToContainerPoint(worldToLatLng({ x: Number(source.x), y: Number(source.y) }, api.mapPackage.height));
@@ -238,29 +303,46 @@ export function createVisionFogSystem() {
           context.fill();
         };
 
-        context.globalCompositeOperation = 'source-over';
-        context.fillStyle = 'rgba(8,12,14,0.96)';
-        context.fillRect(0, 0, size.x, size.y);
-        context.globalCompositeOperation = 'destination-out';
-        context.fillStyle = '#000';
-        drawExplored();
-        drawCurrentCircle(source?.vagueRangeMeters ?? source?.rangeMeters);
-        context.globalCompositeOperation = 'source-over';
-        context.fillStyle = 'rgba(18,25,27,0.62)';
-        drawExplored();
-        drawCurrentCircle(source?.vagueRangeMeters ?? source?.rangeMeters);
-        context.globalCompositeOperation = 'destination-out';
-        context.fillStyle = '#000';
-        drawCurrentCircle(source?.preciseRangeMeters ?? source?.rangeMeters);
-        context.globalCompositeOperation = 'source-over';
+        saturation.globalCompositeOperation = 'source-over';
+        saturation.fillStyle = '#7f7f7f';
+        saturation.fillRect(0, 0, size.x, size.y);
+        saturation.globalCompositeOperation = 'destination-out';
+        saturation.fillStyle = '#000';
+        drawCurrentCircle(saturation, source?.preciseRangeMeters ?? source?.rangeMeters);
+        saturation.globalCompositeOperation = 'source-over';
+
+        darkness.globalCompositeOperation = 'source-over';
+        darkness.fillStyle = 'rgba(5,8,10,0.975)';
+        darkness.fillRect(0, 0, size.x, size.y);
+        darkness.globalCompositeOperation = 'destination-out';
+        darkness.fillStyle = '#000';
+        drawExplored(darkness);
+        drawCurrentCircle(darkness, source?.vagueRangeMeters ?? source?.rangeMeters);
+        darkness.globalCompositeOperation = 'source-over';
+        darkness.fillStyle = 'rgba(11,16,18,0.82)';
+        drawExplored(darkness);
+        darkness.fillStyle = 'rgba(15,22,24,0.56)';
+        drawCurrentCircle(darkness, source?.vagueRangeMeters ?? source?.rangeMeters);
+        darkness.globalCompositeOperation = 'destination-out';
+        darkness.fillStyle = '#000';
+        drawCurrentCircle(darkness, source?.preciseRangeMeters ?? source?.rangeMeters);
+        darkness.globalCompositeOperation = 'source-over';
+        lastVisionSignature = visionSignature();
+        saturation.restore();
+        darkness.restore();
       }
 
-      function scheduleRender() {
+      function scheduleRender(dirtyBounds = null) {
+        pendingDirtyBounds = pendingDirtyBounds === undefined
+          ? dirtyBounds
+          : mergeDirtyBounds(pendingDirtyBounds, dirtyBounds);
         if (renderFrame) return;
         const requestFrame = documentNode.defaultView?.requestAnimationFrame || (callback => setTimeout(callback, 16));
         renderFrame = requestFrame(() => {
           renderFrame = 0;
-          render();
+          const bounds = pendingDirtyBounds;
+          pendingDirtyBounds = undefined;
+          render(bounds);
         });
       }
 
@@ -314,7 +396,13 @@ export function createVisionFogSystem() {
         api.vision.setSource(tokenId).catch(error => api.showToast?.(error.message, 'error'));
       });
       if (typeof unsubscribeSelection === 'function') off.push(unsubscribeSelection);
-      for (const eventName of ['state:commit', 'state:import', 'scene:activate']) {
+      const disposeCommit = api.on?.('state:commit', detail => {
+        const changed = synchronizeLocalVision();
+        clearUnavailableConnectedSource();
+        if (changed || /fog|vision|scene|import/i.test(String(detail?.source || ''))) scheduleRender();
+      });
+      if (typeof disposeCommit === 'function') off.push(disposeCommit);
+      for (const eventName of ['state:import', 'scene:activate']) {
         const dispose = api.on?.(eventName, () => {
           synchronizeLocalVision();
           clearUnavailableConnectedSource();
@@ -322,20 +410,26 @@ export function createVisionFogSystem() {
         });
         if (typeof dispose === 'function') off.push(dispose);
       }
-      for (const eventName of ['state:saved', 'vision:source-change']) {
-        const dispose = api.on?.(eventName, scheduleRender);
-        if (typeof dispose === 'function') off.push(dispose);
-      }
+      const disposeSource = api.on?.('vision:source-change', () => scheduleRender(null));
+      if (typeof disposeSource === 'function') off.push(disposeSource);
+      const disposeStatus = api.on?.('status:change', () => {
+        synchronizeLocalVision();
+        if (visionSignature() !== lastVisionSignature) scheduleRender();
+      });
+      if (typeof disposeStatus === 'function') off.push(disposeStatus);
+      const disposeFog = api.on?.('fog:change', detail => scheduleRender(detail?.dirtyBounds ?? null));
+      if (typeof disposeFog === 'function') off.push(disposeFog);
       const disposeCapabilities = api.on?.('multiplayer:capabilities', () => {
         clearUnavailableConnectedSource();
         scheduleRender();
       });
       if (typeof disposeCapabilities === 'function') off.push(disposeCapabilities);
-      api.map.on?.('move zoom resize viewreset', scheduleRender);
+      const scheduleViewportRender = () => scheduleRender(null);
+      api.map.on?.('move zoom resize viewreset', scheduleViewportRender);
       render();
       api.on?.('app:destroy', () => {
         off.forEach(dispose => dispose());
-        api.map.off?.('move zoom resize viewreset', scheduleRender);
+        api.map.off?.('move zoom resize viewreset', scheduleViewportRender);
         if (renderFrame) {
           const cancelFrame = documentNode.defaultView?.cancelAnimationFrame || clearTimeout;
           cancelFrame(renderFrame);
