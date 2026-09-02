@@ -33,8 +33,10 @@ function installStyles(documentNode) {
     .runtime-v2-shell .ui-token-meta { display:grid; grid-template-columns:1fr 1fr; gap:7px; font-size:12px; color:#536164; }
     .runtime-v2-shell .ui-token-meta div { padding:7px 8px; border-radius:7px; background:#f1f4f2; }
     .runtime-v2-shell .ui-current-empty { padding:24px 10px; text-align:center; color:#718083; line-height:1.6; }
+    .runtime-v2-shell .ui-current-empty .ui-actions { justify-content:center; margin-top:10px; }
     .runtime-v2-shell .ui-actions { display:flex; flex-wrap:wrap; gap:6px; }
     .runtime-v2-shell .ui-file-input { display:none; }
+    .runtime-v2-shell[data-session-shell="player"] [data-gm-shell-only] { display:none !important; }
   `;
   documentNode.head.append(style);
 }
@@ -94,17 +96,42 @@ export function createAppShellUiV2() {
       importInput.className = 'ui-file-input';
       shell.append(importInput);
 
+      function sessionRole() {
+        const capabilities = api.multiplayer?.getCapabilities?.();
+        if (!capabilities?.connected) return 'gm';
+        return capabilities.role === 'gm' ? 'gm' : 'player';
+      }
+      function playerShell() { return sessionRole() === 'player'; }
+      function defaultPlayerActorId() {
+        const status = api.multiplayer?.getStatus?.() || {};
+        const preferred = String(status.session?.defaultActorId || status.permissions?.defaultActorId || '');
+        if (preferred && api.multiplayer?.getActorAccessLevel?.(preferred) === 'owner') return preferred;
+        const actors = api.world?.get?.()?.actors || [];
+        return actors.find(actor => api.multiplayer?.getActorAccessLevel?.(actor.id) === 'owner')?.id || null;
+      }
+      function openMyActor() {
+        const actorId = defaultPlayerActorId();
+        if (!actorId) {
+          api.showToast?.('GM 还没有为当前 Player 分配 OWNER 角色', 'info');
+          return;
+        }
+        void api.entities?.openActor?.(actorId);
+      }
+
       function activatePanel(name) {
         api.setActivePanel?.(name);
         shell.querySelectorAll('[data-ui-panel]').forEach(node => node.classList.toggle('active', node.dataset.uiPanel === name));
         if (name === 'current') renderCurrent();
       }
 
+      let library = null;
+      let current = null;
       if (tabbar) {
         tabbar.replaceChildren();
-        const library = button(documentNode, '角色库', () => activatePanel('actors'), 'ui-sidebar-tab active');
+        library = button(documentNode, '角色库', () => activatePanel('actors'), 'ui-sidebar-tab active');
         library.dataset.uiPanel = 'actors';
-        const current = button(documentNode, '当前', () => activatePanel('current'), 'ui-sidebar-tab');
+        library.dataset.gmShellOnly = 'true';
+        current = button(documentNode, '当前', () => activatePanel('current'), 'ui-sidebar-tab');
         current.dataset.uiPanel = 'current';
         tabbar.append(library, current);
       }
@@ -114,6 +141,7 @@ export function createAppShellUiV2() {
         toolbar?.querySelectorAll('[data-main-tool]').forEach(node => node.classList.toggle('active', node.dataset.mainTool === tool));
       }
 
+      let myActorButton = null;
       if (toolbar) {
         toolbar.replaceChildren();
         // Select/browse mode already owns direct Feature inspection through the
@@ -123,14 +151,23 @@ export function createAppShellUiV2() {
         select.classList.add('active');
         const range = button(documentNode, '范围', () => { setMainTool('aoe'); activatePanel('areas'); });
         range.dataset.mainTool = 'aoe';
-        toolbar.append(select, range);
+        myActorButton = button(documentNode, '我的角色卡', openMyActor);
+        myActorButton.hidden = true;
+        myActorButton.dataset.playerShellOnly = 'true';
+        toolbar.append(select, range, myActorButton);
       }
 
+      let exportButton = null;
+      let importButton = null;
       if (toolbarRight) {
         toolbarRight.replaceChildren();
+        exportButton = button(documentNode, '导出', () => api.downloadState?.());
+        exportButton.dataset.gmShellOnly = 'true';
+        importButton = button(documentNode, '导入', () => importInput.click());
+        importButton.dataset.gmShellOnly = 'true';
         toolbarRight.append(
-          button(documentNode, '导出', () => api.downloadState?.()),
-          button(documentNode, '导入', () => importInput.click()),
+          exportButton,
+          importButton,
           button(documentNode, '回到底图', () => api.resetView?.()),
         );
       }
@@ -150,12 +187,21 @@ export function createAppShellUiV2() {
       function renderCurrent() {
         if (!currentPanel) return;
         currentPanel.replaceChildren();
+        const player = playerShell();
         const tokenId = api.selection.getPrimaryTokenId?.();
         const token = tokenId ? api.tokens.get(tokenId) : null;
         if (!token) {
           const empty = documentNode.createElement('div');
           empty.className = 'ui-current-empty';
-          empty.textContent = '选择地图上的 Token 后，这里会显示实例信息与快捷操作。';
+          empty.textContent = player
+            ? '选择地图上的 Token 查看当前信息，或直接打开自己的角色卡。'
+            : '选择地图上的 Token 后，这里会显示实例信息与快捷操作。';
+          if (player) {
+            const actions = documentNode.createElement('div');
+            actions.className = 'ui-actions';
+            actions.append(button(documentNode, '打开我的角色卡', openMyActor, 'small-button primary'));
+            empty.append(actions);
+          }
           currentPanel.append(empty);
           return;
         }
@@ -185,27 +231,37 @@ export function createAppShellUiV2() {
 
         const meta = documentNode.createElement('div');
         meta.className = 'ui-token-meta';
-        for (const text of [
-          `棋子 ID ${token.id}`,
-          `角色 ID ${token.actorId}`,
-          locationLabel(token),
-          `高度 ${Number(token.elevationFt || 0)} ft`,
-        ]) {
+        const metaRows = player
+          ? [locationLabel(token), `高度 ${Number(token.elevationFt || 0)} ft`]
+          : [`棋子 ID ${token.id}`, `角色 ID ${token.actorId}`, locationLabel(token), `高度 ${Number(token.elevationFt || 0)} ft`];
+        for (const text of metaRows) {
           const item = documentNode.createElement('div'); item.textContent = text; meta.append(item);
         }
         card.append(meta);
 
         const actions = documentNode.createElement('div');
         actions.className = 'ui-actions';
-        if (token.placement === 'map') {
+        const canControl = !player || api.multiplayer?.canControlToken?.(token.id) === true;
+        if (canControl && token.placement === 'map') {
           actions.append(button(documentNode, '移动', () => api.movementUi?.begin?.(token.id), 'small-button primary'));
-        } else if (token.placement === 'feature') {
+        } else if (canControl && token.placement === 'feature') {
           actions.append(button(documentNode, '离开 Feature', () => void api.movement?.exitFeature?.(token.id), 'small-button primary'));
         }
-        actions.append(button(documentNode, '高度', event => api.elevation?.openTokenElevationEditor?.(token.id, event), 'small-button'));
+        if (canControl) actions.append(button(documentNode, '高度', event => api.elevation?.openTokenElevationEditor?.(token.id, event), 'small-button'));
         if (view.actor?.id) actions.append(button(documentNode, view.actor.audienceRestricted ? '公开摘要' : '角色卡', () => api.entities?.openToken?.(token.id), 'small-button'));
         card.append(actions);
         currentPanel.append(card);
+      }
+
+      function applySessionShell() {
+        const player = playerShell();
+        shell.dataset.sessionShell = player ? 'player' : 'gm';
+        if (library) library.hidden = player;
+        if (myActorButton) myActorButton.hidden = !player;
+        if (exportButton) exportButton.hidden = player;
+        if (importButton) importButton.hidden = player;
+        if (player && actorPanel?.classList?.contains('active')) activatePanel('current');
+        renderCurrent();
       }
 
       const off = [];
@@ -215,6 +271,7 @@ export function createAppShellUiV2() {
       for (const eventName of ['token:create', 'token:delete', 'token:move', 'token:property-change', 'elevation:token-change', 'actor:change', 'health:change', 'status:change', 'state:import']) {
         off.push(api.on?.(eventName, renderAll));
       }
+      off.push(api.on?.('multiplayer:capabilities', applySessionShell));
       off.push(api.on?.('tool:change', event => {
         const tool = event.detail?.tool || api.getTool?.();
         toolbar?.querySelectorAll('[data-main-tool]').forEach(node => node.classList.toggle('active', node.dataset.mainTool === tool));
@@ -226,6 +283,7 @@ export function createAppShellUiV2() {
 
       api.setActivePanel?.('current');
       shell.querySelectorAll('[data-ui-panel]').forEach(node => node.classList.toggle('active', node.dataset.uiPanel === 'current'));
+      applySessionShell();
       renderAll();
       api.emit?.('ui:shell-ready', { tokenFirst: true, actorPanel: Boolean(actorPanel) });
     },
