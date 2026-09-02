@@ -30,6 +30,16 @@ test('SheetManager gives Actor templates and Scene Token instances independent w
   ]);
 });
 
+test('same Token id in different Scenes remains two different windows', () => {
+  const manager = createActorSheetManager();
+  manager.open({ actorId: 'boss', tokenId: 'boss-1', sceneId: 'scene-a' });
+  manager.open({ actorId: 'boss', tokenId: 'boss-1', sceneId: 'scene-b' });
+  assert.deepEqual(manager.list().map(item => item.key), [
+    'scene:scene-a:token:boss-1',
+    'scene:scene-b:token:boss-1',
+  ]);
+});
+
 test('opening an existing sheet focuses it instead of creating a duplicate', () => {
   const manager = createActorSheetManager();
   const first = manager.open({ actorId: 'boss', tokenId: 'boss-1', sceneId: 'scene-a', tab: 'overview' });
@@ -68,16 +78,21 @@ test('closing the focused window leaves the highest remaining sheet as fallback'
   assert.equal(manager.list().at(-1)?.key, token.key);
 });
 
-test('lazy Entity UI installs the multi-window coordinator after the canonical UI owns open APIs', () => {
+test('lazy Entity UI uses live per-window contexts without archived DOM promotion', () => {
   const entityIndex = readFileSync(new URL('../src/entities/index.js', import.meta.url), 'utf8');
   const lazyTools = readFileSync(new URL('../src/ui/lazy-runtime-tools.js', import.meta.url), 'utf8');
-  const coordinator = readFileSync(new URL('../src/entities/sheet-window-coordinator.js', import.meta.url), 'utf8');
-  const uiRegister = entityIndex.indexOf('createEntityUiTool(options).register(api)');
-  const managerRegister = entityIndex.indexOf('createActorSheetWindowCoordinator({ api, documentNode, windowNode })');
-  assert.ok(uiRegister >= 0 && managerRegister > uiRegister);
-  assert.match(lazyTools, /createActorSheetWindowCoordinator/);
-  assert.match(coordinator, /api\.entities = Object\.freeze\(\{[\s\S]*openActor,[\s\S]*openToken\s*\}\);/);
-  assert.match(coordinator, /data-sheet-manager-static/);
-  assert.match(coordinator, /sheetSceneId/);
-  assert.match(coordinator, /storageKey: `rpgmap\.ui\.actor-sheets\.v1\.\$\{worldId\}`/);
+  const liveUi = readFileSync(new URL('../src/entities/ui-live.js', import.meta.url), 'utf8');
+
+  assert.match(lazyTools, /createEntityUiTool.*ui-live\.js/);
+  assert.doesNotMatch(lazyTools, /createActorSheetWindowCoordinator/);
+  assert.doesNotMatch(entityIndex, /createActorSheetWindowCoordinator/);
+  assert.match(entityIndex, /captureSheetGeometry/);
+  assert.match(liveUi, /createActorSheetManager/);
+  assert.match(liveUi, /data-sheet-window-key/);
+  assert.match(liveUi, /function resolveSheetRecord\(record\)/);
+  assert.match(liveUi, /function renderSheetRecord\(record\)/);
+  assert.match(liveUi, /function renderAllSheets\(\)/);
+  assert.match(liveUi, /performCanonicalRuntimeOperation\(operation, \{[\s\S]*record = null/);
+  assert.doesNotMatch(liveUi, /let openActorId|let openTokenId|let openTab/);
+  assert.doesNotMatch(liveUi, /cloneNode\(|data-sheet-manager-static|archiveLive|promote\(/);
 });
