@@ -48,19 +48,18 @@ export function tokenSheetWindowKey(tokenId) {
   return id ? `token:${id}` : '';
 }
 
-export function createActorSheetManager({ storage = null, storageKey = DEFAULT_STORAGE_KEY, baseZIndex = BASE_Z_INDEX } = {}) {
+export function createActorSheetManager({ storage = null, storageKey = DEFAULT_STORAGE_KEY } = {}) {
   const records = new Map();
   const preferences = readPreferences(storage, storageKey);
-  const zBase = Math.max(1, Number(baseZIndex) || BASE_Z_INDEX);
-  let zCounter = zBase;
+  let zCounter = BASE_Z_INDEX;
   let activeKey = null;
 
   const persist = () => writePreferences(storage, storageKey, preferences);
   const get = key => records.get(String(key || '')) || null;
 
   function nextZ() {
-    if (zCounter >= zBase + Z_INDEX_SPAN) {
-      zCounter = zBase;
+    if (zCounter >= BASE_Z_INDEX + Z_INDEX_SPAN) {
+      zCounter = BASE_Z_INDEX;
       for (const record of [...records.values()].sort((a, b) => a.zIndex - b.zIndex)) record.zIndex = ++zCounter;
     }
     return ++zCounter;
@@ -134,8 +133,6 @@ export function createActorSheetManager({ storage = null, storageKey = DEFAULT_S
 
   return Object.freeze({
     get, open, update, capture, activate, close,
-    active() { return get(activeKey); },
-    activeKey() { return activeKey; },
     list() { return [...records.values()].sort((a, b) => a.zIndex - b.zIndex); },
     size() { return records.size; },
   });
