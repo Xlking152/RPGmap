@@ -31,8 +31,8 @@ test('placement adapter writes through canonical Token create/move and never Cha
   assert.doesNotMatch(source, /placeCharacter\s*\(|repositionCharacter\s*\(/);
 });
 
-test('Entity UI calls canonical placement directly and startup no longer registers a placement bridge', async () => {
-  const ui = withoutComments(await readFile(fileURLToPath(new URL('../src/entities/ui.js', import.meta.url)), 'utf8'));
+test('live Entity UI calls canonical placement directly and startup no longer registers a placement bridge', async () => {
+  const ui = withoutComments(await readFile(fileURLToPath(new URL('../src/entities/ui-live.js', import.meta.url)), 'utf8'));
   const main = withoutComments(await readFile(fileURLToPath(new URL('../src/main.js', import.meta.url)), 'utf8'));
   const index = withoutComments(await readFile(fileURLToPath(new URL('../src/token/index.js', import.meta.url)), 'utf8'));
 

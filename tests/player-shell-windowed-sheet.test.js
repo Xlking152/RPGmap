@@ -30,11 +30,25 @@ test('plain C opens only the primary selected Token sheet', () => {
   assert.doesNotMatch(entityIndex, /getSelectedTokenIds\?\.\(\).*forEach/s);
 });
 
-test('Actor sheets become map-friendly draggable and resizable desktop windows', () => {
+test('Actor sheets become managed map-friendly draggable and resizable desktop windows', () => {
   assert.match(appShell, /\.entity-sheet-backdrop\{[^}]*pointer-events:none/);
   assert.match(appShell, /\.entity-sheet\{[^}]*resize:both;pointer-events:auto/);
   assert.match(entityIndex, /documentNode\.addEventListener\('pointerdown', pointerDown,/);
-  assert.match(entityIndex, /drag = \{ sheet, x:/);
+  assert.match(entityIndex, /function focusWindowFromEvent\(event\)/);
+  assert.match(entityIndex, /dataset\?\.sheetWindowKey/);
+  assert.match(entityIndex, /api\.entities\?\.focusSheet\?\.\(key\)/);
+  assert.match(entityIndex, /drag = \{ sheet, key, x:/);
+  assert.match(entityIndex, /let geometryPointer = null/);
+  assert.match(entityIndex, /geometryPointer = sheet && key \? \{ sheet, key \} : null/);
+  assert.match(entityIndex, /const target = drag \|\| geometryPointer/);
+  assert.match(entityIndex, /api\.entities\?\.captureSheetGeometry\?\.\(target\.key, target\.sheet\.getBoundingClientRect\(\)\)/);
+  assert.match(entityIndex, /addEventListener\('pointercancel', pointerCancel/);
+});
+
+test('keyboard focus and form submission resolve the live window before sheet handlers run', () => {
+  assert.match(entityIndex, /addEventListener\('focusin', focusWindowFromEvent/);
+  assert.match(entityIndex, /addEventListener\('submit', focusWindowFromEvent, captureOptions\)/);
+  assert.match(entityIndex, /const captureOptions = \{ capture: true, signal: abort\.signal \}/);
 });
 
 test('window behavior is installed before the heavy Entity UI is lazily loaded', () => {

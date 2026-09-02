@@ -119,7 +119,7 @@ test('Feature occupant views use canonical Token placement and resolved Syntheti
 test('Entity deletion and Feature occupant paths have no Character-storage bridge', async () => {
   const deleteCore = await readFile(new URL('../src/entities/canonical-delete.js', import.meta.url), 'utf8');
   const controller = await readFile(new URL('../src/entities/token-controller.js', import.meta.url), 'utf8');
-  const entityUi = await readFile(new URL('../src/entities/ui.js', import.meta.url), 'utf8');
+  const entityUi = await readFile(new URL('../src/entities/ui-live.js', import.meta.url), 'utf8');
   const entityIndex = await readFile(new URL('../src/entities/index.js', import.meta.url), 'utf8');
   const featureView = await readFile(new URL('../src/entities/feature-token-view.js', import.meta.url), 'utf8');
 

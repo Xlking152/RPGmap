@@ -8,17 +8,27 @@ export function createEntitySystem(options = {}) {
       const actorTabbar = shell.querySelector('.sidebar .tabbar');
       const abort = new AbortController();
       const dragOptions = { signal: abort.signal };
+      const captureOptions = { capture: true, signal: abort.signal };
       let loading = null;
       let destroyed = false;
       let drag = null;
+      let geometryPointer = null;
+
+      function focusWindowFromEvent(event) {
+        const sheet = event.target?.closest?.('.entity-sheet');
+        const key = String(sheet?.dataset?.sheetWindowKey || '');
+        if (key) api.entities?.focusSheet?.(key);
+        return { sheet, key };
+      }
 
       function pointerDown(event) {
+        const { sheet, key } = focusWindowFromEvent(event);
+        geometryPointer = sheet && key ? { sheet, key } : null;
         if (windowNode.innerWidth <= 760 || event.button || event.target.closest('input,button,select,textarea,a')) return;
         const header = event.target.closest('.entity-sheet-header');
-        if (!header) return;
-        const sheet = header.parentElement;
+        if (!header || !sheet) return;
         const rect = sheet.getBoundingClientRect();
-        drag = { sheet, x: event.clientX - rect.left, y: event.clientY - rect.top };
+        drag = { sheet, key, x: event.clientX - rect.left, y: event.clientY - rect.top };
         event.preventDefault();
       }
 
@@ -28,17 +38,40 @@ export function createEntitySystem(options = {}) {
         drag.sheet.style.top = `${Math.max(8, Math.min(windowNode.innerHeight - 56, event.clientY - drag.y))}px`;
       }
 
+      function pointerUp() {
+        const target = drag || geometryPointer;
+        drag = null;
+        geometryPointer = null;
+        if (!target?.sheet?.isConnected || !target.key) return;
+        api.entities?.captureSheetGeometry?.(target.key, target.sheet.getBoundingClientRect());
+      }
+
+      function pointerCancel() {
+        drag = null;
+        geometryPointer = null;
+      }
+
       documentNode.addEventListener('pointerdown', pointerDown, dragOptions);
       documentNode.addEventListener('pointermove', pointerMove, dragOptions);
-      documentNode.addEventListener('pointerup', () => { drag = null; }, dragOptions);
+      documentNode.addEventListener('pointerup', pointerUp, dragOptions);
+      documentNode.addEventListener('pointercancel', pointerCancel, dragOptions);
+      documentNode.addEventListener('focusin', focusWindowFromEvent, dragOptions);
+      // Capture submit before the lazy sheet runtime consumes it so keyboard-only
+      // form submission always resolves against the form's own live window.
+      documentNode.addEventListener('submit', focusWindowFromEvent, captureOptions);
 
       async function load() {
         if (destroyed) return null;
-        if (!loading) loading = import('../ui/lazy-runtime-tools.js').then(({ createEntityUiTool, createActorSheetV2Decorator }) => {
+        if (!loading) loading = import('../ui/lazy-runtime-tools.js').then(({
+          createEntityUiTool,
+          createActorSheetV2Decorator,
+          installActorSheetOpenPolicy,
+        }) => {
           if (destroyed) return null;
           actorTabbar?.removeEventListener('click', handleActorTabClick, true);
           mapElement.removeEventListener('dblclick', handleTokenDoubleClick, true);
           createEntityUiTool(options).register(api);
+          installActorSheetOpenPolicy(api);
           createActorSheetV2Decorator().register(api);
           return api.entities;
         });

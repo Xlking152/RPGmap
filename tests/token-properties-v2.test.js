@@ -109,7 +109,7 @@ test('Entity Token controller owns property edits without Character or Entity pr
 test('startup no longer registers the Token property bridge', async () => {
   const main = withoutComments(await readFile(fileURLToPath(new URL('../src/main.js', import.meta.url)), 'utf8'));
   const tokenIndex = withoutComments(await readFile(fileURLToPath(new URL('../src/token/index.js', import.meta.url)), 'utf8'));
-  const entityUi = withoutComments(await readFile(fileURLToPath(new URL('../src/entities/ui.js', import.meta.url)), 'utf8'));
+  const entityUi = withoutComments(await readFile(fileURLToPath(new URL('../src/entities/ui-live.js', import.meta.url)), 'utf8'));
 
   assert.doesNotMatch(main, /createTokenPropertyUiSystem/);
   assert.doesNotMatch(tokenIndex, /createTokenPropertyUiSystem|property-ui/);

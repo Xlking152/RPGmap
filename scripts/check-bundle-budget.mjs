@@ -41,10 +41,11 @@ const allCss = allFiles.filter(file => file.endsWith('.css'));
 const sum = async files => (await Promise.all(files.map(gzipSize))).reduce((total, value) => total + value, 0);
 
 // Rebase after the merged Player/GM shell + windowed Actor sheet foundation (#45).
-// That merge consumed the previous post-v2.3.0 allowance almost exactly, so new
-// feature work is measured from the shipped foundation rather than silently
-// inheriting the already-spent headroom. Percentage allowances stay unchanged:
-// 0.1% for entry hash/chunk-reference noise, 1.5% total JS, and 5% total CSS.
+// Keep the initial-load guard deliberately tight because it affects every startup.
+// Lazy feature chunks, however, are allowed more room while the Actor/Monster/NPC
+// sheet workspace is being completed; they load only when those tools are opened.
+// This keeps bundle checks useful without making implementation file size a design
+// constraint for the sheet rebuild.
 const baseline = Object.freeze({
   commit: '6b7fcfcd962df6a2f4c12e44cfa32937942633ea',
   version: '2.3.0',
@@ -54,7 +55,7 @@ const baseline = Object.freeze({
 });
 const limits = Object.freeze({
   initialJsGzip: Math.floor(baseline.initialJsGzip * 1.001),
-  totalJsGzip: Math.floor(baseline.totalJsGzip * 1.015),
+  totalJsGzip: Math.floor(baseline.totalJsGzip * 1.05),
   totalCssGzip: Math.floor(baseline.totalCssGzip * 1.05),
 });
 const measured = {

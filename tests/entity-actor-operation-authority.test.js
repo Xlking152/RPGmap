@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('ordinary Actor editor writes use the canonical World operation port', () => {
-  const source = readFileSync(path.join(ROOT, 'src/entities/ui.js'), 'utf8');
+  const source = readFileSync(path.join(ROOT, 'src/entities/ui-live.js'), 'utf8');
   assert.match(source, /upsertCanonicalActor/);
   assert.doesNotMatch(source, /entityState\(\)\.actors\.push/);
   assert.doesNotMatch(source, /persistAndRender/);
@@ -21,7 +21,7 @@ test('ordinary Actor editor writes use the canonical World operation port', () =
 
 
 test('Actor editor reloads canonical projection after failed World writes', () => {
-  const source = readFileSync(path.join(ROOT, 'src/entities/ui.js'), 'utf8');
+  const source = readFileSync(path.join(ROOT, 'src/entities/ui-live.js'), 'utf8');
   assert.match(source, /catch \(error\)[\s\S]*canonical Actor update failed/);
   assert.match(source, /finally \{[\s\S]*store\.load\(\{ migrateLegacy: false, dropMarkers: false \}\)/);
   assert.match(source, /if \(!await persistActorAndRender\(actor, \{ source: 'entities:actor\.create' \}\)\) return/);

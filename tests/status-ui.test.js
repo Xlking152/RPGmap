@@ -116,8 +116,8 @@ test('custom definition change editor accepts only the white-listed line format'
   assert.throws(() => parseStatusDefinitionChanges('resources.hp.max | script | 2'), /数值变化第 1 行无效/);
 });
 
-test('status UI is wired into Actor cards, Token inspector and app startup', () => {
-  const entityUi = readFileSync(new URL('../src/entities/ui.js', import.meta.url), 'utf8');
+test('status UI is wired into live Actor cards, Token inspector and app startup', () => {
+  const entityUi = readFileSync(new URL('../src/entities/ui-live.js', import.meta.url), 'utf8');
   const appShell = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
   const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
   const mapRuntime = readFileSync(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
@@ -125,7 +125,7 @@ test('status UI is wired into Actor cards, Token inspector and app startup', () 
   const lazyTools = readFileSync(new URL('../src/ui/lazy-runtime-tools.js', import.meta.url), 'utf8');
   const quickHud = readFileSync(new URL('../src/status/quick-hud.js', import.meta.url), 'utf8');
   const tokenLayer = readFileSync(new URL('../src/render/token-layer.js', import.meta.url), 'utf8');
-  assert.match(entityUi, /\['status','状态'\]/);
+  assert.match(entityUi, /\['status', '状态'\]/);
   assert.match(entityUi, /class="status-title-band"/);
   assert.match(entityUi, /class="entity-card-status"/);
   assert.match(entityUi, /status:change/);
