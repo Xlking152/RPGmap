@@ -261,7 +261,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
   const observer = Observer ? new Observer(scheduleReconcile) : null;
   observer?.observe(documentNode.body, { childList: true, subtree: true });
 
-  api.entities = Object.freeze({ ...entityApi, openActor, openToken, sheetManager: manager });
+  api.entities = Object.freeze({ ...entityApi, openActor, openToken });
 
   api.on?.('token:delete', event => {
     const key = tokenSheetWindowKey(event.detail?.tokenId || event.detail?.id);
@@ -278,6 +278,4 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     documentNode.removeEventListener('focusin', activateEventSheet, true);
     documentNode.removeEventListener('pointerup', handleGeometryEnd, true);
   });
-
-  return manager;
 }
