@@ -82,21 +82,17 @@ function assertSchema3Token(token, actor, label) {
   const vision = object(token.vision, `${label}.vision`);
   if (typeof vision.enabled !== 'boolean') fail(`${label}.vision.enabled must be boolean`);
   const legacyRange = Object.hasOwn(vision, 'rangeOverrideMeters');
-  const splitRange = Object.hasOwn(vision, 'preciseRangeOverrideMeters')
-    || Object.hasOwn(vision, 'vagueRangeOverrideMeters');
-  if (legacyRange && splitRange) fail(`${label}.vision cannot mix legacy and split range overrides`);
-  if (legacyRange) {
-    if (vision.rangeOverrideMeters !== null && (!Number.isFinite(Number(vision.rangeOverrideMeters))
-      || Number(vision.rangeOverrideMeters) < 0)) fail(`${label}.vision.rangeOverrideMeters is invalid`);
-  } else {
-    for (const field of ['preciseRangeOverrideMeters', 'vagueRangeOverrideMeters']) {
-      if (vision[field] !== null && (!Number.isFinite(Number(vision[field]))
-        || Number(vision[field]) < 0)) fail(`${label}.vision.${field} is invalid`);
-    }
-    if (vision.preciseRangeOverrideMeters !== null && vision.vagueRangeOverrideMeters !== null
-      && Number(vision.vagueRangeOverrideMeters) < Number(vision.preciseRangeOverrideMeters)) {
-      fail(`${label}.vision vague range cannot be smaller than precise range`);
-    }
+  if (legacyRange && (Object.hasOwn(vision, 'preciseRangeOverrideMeters')
+    || Object.hasOwn(vision, 'vagueRangeOverrideMeters'))) fail(`${label}.vision mixes range formats`);
+  for (const field of legacyRange
+    ? ['rangeOverrideMeters']
+    : ['preciseRangeOverrideMeters', 'vagueRangeOverrideMeters']) {
+    const value = Number(vision[field]);
+    if (vision[field] !== null && (!Number.isFinite(value) || value < 0)) fail(`${label}.vision range is invalid`);
+  }
+  if (!legacyRange && vision.preciseRangeOverrideMeters !== null && vision.vagueRangeOverrideMeters !== null
+    && Number(vision.vagueRangeOverrideMeters) < Number(vision.preciseRangeOverrideMeters)) {
+    fail(`${label}.vision vague range cannot be smaller than precise range`);
   }
   stringIds(vision.overrideUserIds, `${label}.vision.overrideUserIds`);
   if (Object.hasOwn(token, 'hidden')) fail(`${label}.hidden is legacy-only`, 'legacy_token_hidden_forbidden');

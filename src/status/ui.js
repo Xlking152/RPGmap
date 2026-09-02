@@ -1,9 +1,7 @@
 import { STATUS_SCHEMA_VERSION } from './model.js';
 import {
-  Activity, Anchor, Ban, Bomb, Building2, CircleAlert, CircleDot, CircleSlash,
-  DoorClosed, Droplet, Eye, EyeOff, Flame, Footprints, Ghost, HeartPulse,
-  LockKeyhole, Moon, Shield, ShieldAlert, Skull, Snowflake, Sparkles, Swords,
-  Star, TriangleAlert, UnlockKeyhole, Waves,
+  Activity, Anchor, CircleAlert, CircleDot, CircleSlash, Droplet, EyeOff,
+  Flame, Ghost, Moon, Skull, Sparkles, TriangleAlert,
 } from 'lucide';
 
 const STATUS_STYLE_ID = 'rpgmap-status-ui-style';
@@ -26,35 +24,17 @@ const IMPORTANT_STATUS_PATTERNS = Object.freeze([
 const LUCIDE_STATUS_ICONS = Object.freeze({
   activity: Activity,
   anchor: Anchor,
-  ban: Ban,
-  bomb: Bomb,
-  building: Building2,
-  'building-2': Building2,
   'circle-alert': CircleAlert,
   'circle-dot': CircleDot,
   'circle-slash': CircleSlash,
-  'door-closed': DoorClosed,
   droplet: Droplet,
-  eye: Eye,
   'eye-off': EyeOff,
   flame: Flame,
-  footprints: Footprints,
   ghost: Ghost,
-  'heart-pulse': HeartPulse,
-  lock: LockKeyhole,
-  'lock-keyhole': LockKeyhole,
   moon: Moon,
-  shield: Shield,
-  'shield-alert': ShieldAlert,
   skull: Skull,
-  snowflake: Snowflake,
   sparkles: Sparkles,
-  star: Star,
-  swords: Swords,
   'triangle-alert': TriangleAlert,
-  unlock: UnlockKeyhole,
-  'unlock-keyhole': UnlockKeyhole,
-  waves: Waves,
 });
 export function escapeStatusHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -90,7 +70,7 @@ function iconAttribute(value) {
 
 function statusIconHtml(status) {
   const name = String(status?.icon || '').trim().toLowerCase();
-  const icon = LUCIDE_STATUS_ICONS[name];
+  const icon = LUCIDE_STATUS_ICONS[name] || (name ? CircleDot : null);
   if (!icon) return escapeStatusHtml(statusGlyph(status));
   const children = icon.map(([tag, attributes]) => `<${tag} ${Object.entries(attributes || {})
     .map(([key, value]) => `${key}="${iconAttribute(value)}"`).join(' ')}></${tag}>`).join('');
@@ -411,7 +391,7 @@ export function createStatusUiController({ api, documentNode, getContext, render
     if (!requireDefinitionManager()) return;
     const definition = definitionId ? statusDefinitions(api).find(item => String(item.id) === String(definitionId)) : null;
     if (definition?.builtIn) { notify('内置状态定义不可编辑'); return; }
-    definitionEditorModule ||= import('./definition-editor.js');
+    definitionEditorModule ||= import('../ui/lazy-runtime-tools.js');
     const { renderStatusDefinitionEditor } = await definitionEditorModule;
     closeDefinitionEditor();
     documentNode?.body?.insertAdjacentHTML('beforeend', renderStatusDefinitionEditor(definition));
@@ -636,7 +616,7 @@ export function createStatusUiSystem() {
       let quickHudPromise = null;
       api.statusUi = Object.freeze({
         async openQuickHud(tokenId, point = null) {
-          if (!quickHudPromise) quickHudPromise = import('./quick-hud.js').then(({ createQuickStatusHud }) => {
+          if (!quickHudPromise) quickHudPromise = import('../ui/lazy-runtime-tools.js').then(({ createQuickStatusHud }) => {
             quickHud = createQuickStatusHud({ api, documentNode });
             return quickHud;
           });

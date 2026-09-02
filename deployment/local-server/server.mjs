@@ -34,7 +34,6 @@ import {
 import {
   applyWorldOperations,
   assertWorldOperationMessage,
-  createWorldOperationChangeSet,
   createWorldOperationPatch,
   migrateLegacySceneFeatureStates,
   migrateWorldSchema3State,
@@ -553,16 +552,54 @@ function projectResultsForSession(results, projectedState, session) {
     return true;
   }).map(result => structuredClone(result));
 }
-function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId }) {
+function audienceChangeSetFromPatch(patch, afterProjection, canonical = {}) {
+  const worldPatch = patch?.world || {};
+  const scenes = worldPatch.scenes || {};
+  const ids = values => (values || []).map(value => String(value?.id ?? value));
+  const dirtyFog = new Map((canonical.fog || []).map(entry => [String(entry.sceneId), entry.dirtyBounds ?? null]));
+  const visibleChatIds = new Set((afterProjection?.preferences?.chatSystem?.messages || []).map(message => String(message?.id || '')));
+  return {
+    actors: {
+      upsertIds: ids(worldPatch.actors?.upsert),
+      removeIds: ids(worldPatch.actors?.remove),
+    },
+    tokens: (scenes.tokens || []).map(entry => ({
+      sceneId: String(entry.sceneId),
+      upsertIds: ids(entry.upsert),
+      removeIds: ids(entry.remove),
+    })),
+    scenes: {
+      upsertIds: ids(scenes.upsert),
+      removeIds: ids(scenes.remove),
+      activeSceneChanged: worldPatch.activeSceneId !== undefined,
+    },
+    featureStates: (scenes.featureStates || []).map(entry => ({
+      sceneId: String(entry.sceneId),
+      featureIds: [...ids(entry.upsert), ...ids(entry.remove)],
+    })),
+    fog: (scenes.fog || []).map(entry => ({
+      sceneId: String(entry.sceneId),
+      dirtyBounds: dirtyFog.get(String(entry.sceneId)) ?? null,
+    })),
+    combatChanged: patch?.combatSystem !== undefined,
+    chat: {
+      appendedIds: (canonical.chat?.appendedIds || []).map(String).filter(id => visibleChatIds.has(id)),
+      cleared: Boolean(canonical.chat?.cleared && patch?.chatSystem !== undefined),
+    },
+    statusDefinitionsChanged: worldPatch.statusDefinitions !== undefined,
+  };
+}
+function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, changeSet }) {
   for (const [socket, session] of sessions) {
     if (session.role !== 'gm' && session.identityStatus !== 'active') continue;
     const beforeProjection = session.audienceProjection || audienceStateFor(session, beforeState);
     const afterProjection = audienceStateFor(session, afterState);
-    session.audienceProjection = structuredClone(afterProjection);
+    session.audienceProjection = afterProjection;
+    const patch = createWorldOperationPatch(beforeProjection, afterProjection);
     sendSocket(socket, {
       type: 'world.operation.committed', operationId, baseRevision, revision, updatedAt,
-      patch: createWorldOperationPatch(beforeProjection, afterProjection),
-      changeSet: createWorldOperationChangeSet(beforeProjection, afterProjection),
+      patch,
+      changeSet: audienceChangeSetFromPatch(patch, afterProjection, changeSet),
       results: projectResultsForSession(results, afterProjection, session),
       originSessionId,
       audienceRevision: session.audienceRevision,
@@ -572,7 +609,7 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
 function sendAudienceSnapshot(socket, session, reason = 'audience.changed') {
   session.audienceRevision += 1;
   const state = audienceStateFor(session);
-  session.audienceProjection = structuredClone(state);
+  session.audienceProjection = state;
   return sendSocket(socket, {
     type: 'audience.snapshot',
     audienceRevision: session.audienceRevision,
@@ -1274,7 +1311,6 @@ server.on('upgrade', (req, socket) => {
       }
 
       let applied;
-      let patch;
       try {
         const now = new Date().toISOString();
         const authorizedOperations = authorizeOperations(session, envelope.operations);
@@ -1322,7 +1358,6 @@ server.on('upgrade', (req, socket) => {
           error.code = 'state_too_large';
           throw error;
         }
-        patch = createWorldOperationPatch(world.state, applied.state);
       } catch (error) {
         return sendWorldOperationDenied(socket, message, error?.code || 'invalid_world_operation', error?.message, {
           ...(Array.isArray(error?.conflictIds) ? { conflictIds: error.conflictIds.map(String) } : {}),
@@ -1360,8 +1395,9 @@ server.on('upgrade', (req, socket) => {
         updatedAt: world.updatedAt,
         results: applied.results,
         originSessionId: session.id,
+        changeSet: applied.changeSet,
       });
-      const originProjection = audienceStateFor(session);
+      const originProjection = session.audienceProjection || audienceStateFor(session);
       sendSocket(socket, {
         type: 'world.operation.ack',
         operationId: envelope.operationId,
@@ -1369,7 +1405,9 @@ server.on('upgrade', (req, socket) => {
         results: projectResultsForSession(applied.results, originProjection, session),
         duplicate: false,
       });
-      broadcastAccessSnapshots();
+      if (envelope.operations.some(operation => operation.type === 'actor.upsert' || operation.type === 'actor.delete')) {
+        broadcastAccessSnapshots();
+      }
       return;
     }
 

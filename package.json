@@ -12,6 +12,8 @@
     "check:bundle": "node scripts/check-bundle-budget.mjs",
     "check:package": "node scripts/verify-package.mjs",
     "benchmark": "node scripts/performance-benchmark.mjs",
+    "benchmark:lan": "node scripts/lan-performance-benchmark.mjs",
+    "generate:lanzhou-runtime": "node scripts/generate-lanzhou-runtime-svg.mjs",
     "test": "node --test tests/*.test.js",
     "test:xlsx": "node scripts/test-xlsx-import.mjs",
     "package:local-server": "node scripts/package-local-server.mjs"

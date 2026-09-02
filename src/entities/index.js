@@ -10,7 +10,7 @@ export function createEntitySystem(options = {}) {
 
       async function load() {
         if (destroyed) return null;
-        if (!loading) loading = import('./ui.js').then(({ createEntityUiTool }) => {
+        if (!loading) loading = import('../ui/lazy-runtime-tools.js').then(({ createEntityUiTool }) => {
           if (destroyed) return null;
           actorTabbar?.removeEventListener('click', handleActorTabClick, true);
           mapElement.removeEventListener('dblclick', handleTokenDoubleClick, true);

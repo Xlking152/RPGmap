@@ -84,7 +84,9 @@ await writeFile(path.join(root, 'VERSION.json'), `${JSON.stringify({
   app: 'RPGmap', version, releaseTag: `v${version}`,
   commit: await sourceCommit(),
   worldSchema: 3,
-  operationSchema: 1,
+  operationSchema: 2,
+  statusSchema: 4,
+  accessSchema: 4,
   serverMode: 'multiplayer', platform: 'windows', storageMode: 'portable-map-root-server-authoritative',
   launcherMode: 'local-lan-v2', defaultPort: 30000,
 }, null, 2)}\n`);

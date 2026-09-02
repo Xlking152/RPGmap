@@ -122,6 +122,7 @@ test('status UI is wired into Actor cards, Token inspector and app startup', () 
   const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
   const mapRuntime = readFileSync(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
   const statusUi = readFileSync(new URL('../src/status/ui.js', import.meta.url), 'utf8');
+  const lazyTools = readFileSync(new URL('../src/ui/lazy-runtime-tools.js', import.meta.url), 'utf8');
   const quickHud = readFileSync(new URL('../src/status/quick-hud.js', import.meta.url), 'utf8');
   const tokenLayer = readFileSync(new URL('../src/render/token-layer.js', import.meta.url), 'utf8');
   assert.match(entityUi, /\['status','状态'\]/);
@@ -131,7 +132,8 @@ test('status UI is wired into Actor cards, Token inspector and app startup', () 
   assert.match(appShell, /class="ui-status-summary"/);
   assert.match(appShell, /status:change/);
   assert.match(appShell, /tokenId/);
-  assert.match(statusUi, /import\('\.\/quick-hud\.js'\)/);
+  assert.match(statusUi, /import\('\.\.\/ui\/lazy-runtime-tools\.js'\)/);
+  assert.match(lazyTools, /createQuickStatusHud/);
   assert.match(quickHud, /api\.status\.applyBatch\(operations\)/);
   assert.match(quickHud, /\['buff', 'debuff', 'neutral'\]/);
   assert.match(tokenLayer, /renderTokenStatusBadges\(snapshot\.statuses, \{ limit: 4 \}\)/);
