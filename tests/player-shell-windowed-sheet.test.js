@@ -9,7 +9,7 @@ const sheetWindow = readFileSync(new URL('../src/entities/sheet-window-behavior.
 test('connected Player shell hides GM World controls and exposes one direct owned-Actor entry', () => {
   assert.match(appShell, /capabilities\?\.connected === true && capabilities\.role !== 'gm'/);
   assert.match(appShell, /我的角色卡/);
-  assert.match(appShell, /getActorAccessLevel\?\.\(preferred\) === 'owner'/);
+  assert.match(appShell, /session\?\.defaultActorId/);
   assert.match(appShell, /library\.hidden = player/);
   assert.match(appShell, /exportButton\.hidden = player/);
   assert.match(appShell, /importButton\.hidden = player/);
