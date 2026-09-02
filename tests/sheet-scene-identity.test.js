@@ -23,10 +23,12 @@ test('the same Token id from two Scenes can own two independent sheet records', 
   assert.notEqual(first.record.key, second.record.key);
 });
 
-test('Token sheet coordinator carries the active Scene into managed Token records', () => {
-  const source = readFileSync(new URL('../src/entities/sheet-window-coordinator.js', import.meta.url), 'utf8');
-  assert.match(source, /currentSceneId/);
-  assert.match(source, /sceneId:\s*normalizedSceneId/);
-  assert.match(source, /sheet\.dataset\.sheetSceneId/);
-  assert.match(source, /tokenSheetWindowKey\(sceneId, tokenId\)/);
+test('live Token sheets capture the active Scene and refuse cross-Scene rebinding', () => {
+  const source = readFileSync(new URL('../src/entities/ui-live.js', import.meta.url), 'utf8');
+  assert.match(source, /function activeSceneId\(api\)/);
+  assert.match(source, /const sceneId = tokenId \? activeSceneId\(api\) : null/);
+  assert.match(source, /sheetManager\.open\(\{ actorId, tokenId, sceneId, tab \}\)/);
+  assert.match(source, /id\(record\.sceneId\) !== activeSceneId\(api\)/);
+  assert.match(source, /data-scene-id=/);
+  assert.doesNotMatch(source, /sheet-window-coordinator|archiveLive|promote\(/);
 });
