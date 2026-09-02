@@ -23,12 +23,11 @@ test('Player current card removes technical IDs and mutation buttons for uncontr
   assert.match(appShell, /if \(canControl\) actions\.append\(button\(documentNode, '高度'/);
 });
 
-test('plain C toggles the primary selected Token sheet and Player falls back to the assigned Actor', () => {
-  assert.match(entityIndex, /event\.key\?\.toLowerCase\(\) !== 'c'/);
+test('plain C opens only the primary selected Token sheet', () => {
+  assert.match(entityIndex, /event\.code !== 'KeyC'/);
   assert.match(entityIndex, /event\.shiftKey \|\| event\.ctrlKey \|\| event\.metaKey \|\| event\.altKey/);
   assert.match(entityIndex, /api\.selection\?\.getPrimaryTokenId\?\.\(\)/);
-  assert.match(entityIndex, /session\?\.defaultActorId/);
-  assert.match(entityIndex, /same \? 'closeSheet' : tokenId \? 'openToken' : 'openActor'/);
+  assert.match(entityIndex, /invoke\('openToken', tokenId\)/);
   assert.doesNotMatch(entityIndex, /getSelectedTokenIds\?\.\(\).*forEach/s);
 });
 
