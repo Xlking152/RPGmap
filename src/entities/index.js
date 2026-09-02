@@ -33,9 +33,30 @@ export function createEntitySystem(options = {}) {
       }
 
       function handleTokenDoubleClick(event) {
-        if (!event.target?.closest?.('.rpg-token-v2')) return;
-        const tokenId = api.selection?.getPrimaryTokenId?.();
+        const tokenNode = event.target?.closest?.('.rpg-token-v2');
+        if (!tokenNode) return;
+        const tokenId = tokenNode.querySelector?.('[data-token-id]')?.dataset?.tokenId
+          || api.selection?.getPrimaryTokenId?.();
         if (tokenId) void invoke('openToken', tokenId);
+      }
+
+      function handleCharacterSheetKey(event) {
+        if (event.defaultPrevented || event.repeat || event.isComposing
+          || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
+          || event.key?.toLowerCase() !== 'c'
+          || event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
+        const tokenId = api.selection?.getPrimaryTokenId?.();
+        const caps = api.multiplayer?.getCapabilities?.();
+        const actorId = !tokenId && caps?.connected === true && caps.role !== 'gm'
+          ? api.multiplayer?.getStatus?.()?.session?.defaultActorId || null
+          : null;
+        if (!tokenId && !actorId) return;
+        event.preventDefault();
+        const sheet = documentNode.querySelector?.('.entity-sheet');
+        const same = tokenId
+          ? String(sheet?.dataset?.tokenId || '') === String(tokenId)
+          : !sheet?.dataset?.tokenId && String(sheet?.dataset?.actorId || '') === String(actorId);
+        void invoke(same ? 'closeSheet' : tokenId ? 'openToken' : 'openActor', tokenId || actorId);
       }
 
       api.entities = {
@@ -49,10 +70,12 @@ export function createEntitySystem(options = {}) {
       };
       actorTabbar?.addEventListener('click', handleActorTabClick, true);
       mapElement.addEventListener('dblclick', handleTokenDoubleClick, true);
+      documentNode.addEventListener('keydown', handleCharacterSheetKey, true);
       api.on?.('app:destroy', () => {
         destroyed = true;
         actorTabbar?.removeEventListener('click', handleActorTabClick, true);
         mapElement.removeEventListener('dblclick', handleTokenDoubleClick, true);
+        documentNode.removeEventListener('keydown', handleCharacterSheetKey, true);
       });
     },
   };
