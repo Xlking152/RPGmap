@@ -3,16 +3,18 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createTokenViewModel } from '../src/render/token-view-model.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
-import { classifyNewImportedActor } from '../src/entities/ui.js';
+import { classifyNewImportedActor } from '../src/entities/sheet-renderer.js';
 
-const [runtimeSource, shellSource, markerSource, entitySource, rendererSource, tokenControllerSource] = await Promise.all([
+const [runtimeSource, shellSource, markerSource, liveEntitySource, sheetRendererSource, rendererSource, tokenControllerSource] = await Promise.all([
   readFile(new URL('../src/engine/runtime.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/marker/system.js', import.meta.url), 'utf8'),
-  readFile(new URL('../src/entities/ui.js', import.meta.url), 'utf8'),
+  readFile(new URL('../src/entities/ui-live.js', import.meta.url), 'utf8'),
+  readFile(new URL('../src/entities/sheet-renderer.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/render/token-layer.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/entities/token-controller.js', import.meta.url), 'utf8'),
 ]);
+const entitySource = `${liveEntitySource}\n${sheetRendererSource}`;
 
 test('v2.2.1 removes the Layers surface, keeps grid rendering on, and reserves four equal sidebar tabs', () => {
   assert.doesNotMatch(runtimeSource, /data-panel="layers"/);
@@ -30,7 +32,7 @@ test('Token instance configuration uses four responsive groups and dual inherite
   assert.match(tokenControllerSource, /vagueRangeOverrideMeters/);
   assert.match(entitySource, /token-config-feedback/);
   assert.match(entitySource, /grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/);
-  assert.match(entitySource, /@media \(max-width:760px\)[\s\S]*token-config-grid\{grid-template-columns:1fr\}/);
+  assert.match(entitySource, /@media\(max-width:760px\)[\s\S]*token-config-grid\{grid-template-columns:1fr\}/);
 });
 
 test('Actor and Marker libraries separate PC templates from independent non-PC instances', () => {
