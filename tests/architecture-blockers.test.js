@@ -4,7 +4,7 @@ import { prepareRuleset } from '../src/ruleset/contract.js';
 import { RulesetRegistry } from '../src/ruleset/registry.js';
 import { getActiveRuleset, rulesetRegistry, setActiveRuleset } from '../src/ruleset/index.js';
 import { hasWorldOperationRevisionGap, isWorldOperationChannelBusy, shouldApplyOwnServerSnapshot } from '../src/multiplayer/controller.js';
-import { actorUiCapabilities } from '../src/entities/ui.js';
+import { actorUiCapabilities } from '../src/entities/sheet-renderer.js';
 import { renderActorHealthPanel } from '../src/health/sheet-extension.js';
 import { synchronizeWorldV2FromRuntimeState } from '../src/world/model.js';
 import { synchronizeWorldV2Mirror } from '../deployment/local-server/world-v2.mjs';
