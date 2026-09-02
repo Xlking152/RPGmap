@@ -8,18 +8,24 @@ export function createEntitySystem(options = {}) {
       const actorTabbar = shell.querySelector('.sidebar .tabbar');
       const abort = new AbortController();
       const dragOptions = { signal: abort.signal };
+      const captureOptions = { capture: true, signal: abort.signal };
       let loading = null;
       let destroyed = false;
       let drag = null;
 
+      function focusWindowFromEvent(event) {
+        const sheet = event.target?.closest?.('.entity-sheet');
+        const key = String(sheet?.dataset?.sheetWindowKey || '');
+        if (key) api.entities?.focusSheet?.(key);
+        return { sheet, key };
+      }
+
       function pointerDown(event) {
+        const { sheet, key } = focusWindowFromEvent(event);
         if (windowNode.innerWidth <= 760 || event.button || event.target.closest('input,button,select,textarea,a')) return;
         const header = event.target.closest('.entity-sheet-header');
-        if (!header) return;
-        const sheet = header.parentElement;
+        if (!header || !sheet) return;
         const rect = sheet.getBoundingClientRect();
-        const key = String(sheet.dataset.sheetWindowKey || '');
-        if (key) api.entities?.focusSheet?.(key);
         drag = { sheet, key, x: event.clientX - rect.left, y: event.clientY - rect.top };
         event.preventDefault();
       }
@@ -40,6 +46,10 @@ export function createEntitySystem(options = {}) {
       documentNode.addEventListener('pointerdown', pointerDown, dragOptions);
       documentNode.addEventListener('pointermove', pointerMove, dragOptions);
       documentNode.addEventListener('pointerup', pointerUp, dragOptions);
+      documentNode.addEventListener('focusin', focusWindowFromEvent, dragOptions);
+      // Capture submit before the lazy sheet runtime consumes it so keyboard-only
+      // form submission always resolves against the form's own live window.
+      documentNode.addEventListener('submit', focusWindowFromEvent, captureOptions);
 
       async function load() {
         if (destroyed) return null;
