@@ -35,6 +35,11 @@ function installStyles(documentNode) {
     .runtime-v2-shell .ui-current-empty { padding:24px 10px; text-align:center; color:#718083; line-height:1.6; }
     .runtime-v2-shell .ui-actions { display:flex; flex-wrap:wrap; gap:6px; }
     .runtime-v2-shell .ui-file-input { display:none; }
+    .entity-sheet-backdrop{background:transparent!important;display:block!important;padding:0!important;pointer-events:none!important}
+    .entity-sheet-backdrop>.entity-sheet{position:fixed;left:24px;top:72px;width:min(880px,calc(100vw - 48px));min-width:360px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);margin:0;overflow:auto;resize:both;pointer-events:auto}
+    .entity-sheet-backdrop>.entity-sheet>.entity-sheet-header{cursor:move}
+    .entity-sheet-backdrop>.entity-sheet>.entity-sheet-header :is(input,button,select,textarea,a){cursor:auto}
+    @media(max-width:760px){.entity-sheet-backdrop>.entity-sheet{left:8px!important;top:8px!important;width:calc(100vw - 16px)!important;height:calc(100vh - 16px)!important;min-width:0;max-width:none;max-height:none;resize:none}.entity-sheet-backdrop>.entity-sheet>.entity-sheet-header{cursor:auto}}
   `;
   documentNode.head.append(style);
 }
