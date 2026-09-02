@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,7 +18,7 @@ function edgePath() {
       ['Microsoft', 'Edge SxS', 'Application', 'msedge.exe'],
     ]) {
       const candidate = path.join(root, ...suffix);
-      try { if (process.getBuiltinModule('fs').existsSync(candidate)) return candidate; } catch {}
+      if (existsSync(candidate)) return candidate;
     }
   }
   throw new Error('Microsoft Edge executable was not found');
@@ -51,9 +52,9 @@ const edge = spawn(edgePath(), [
   `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, targetUrl,
 ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
 let edgeError = '';
+let browserClosed = false;
 edge.stderr.setEncoding('utf8');
 edge.stderr.on('data', chunk => { edgeError += chunk; });
-let browserClosed = false;
 
 try {
   const deadline = Date.now() + timeoutMs;
@@ -65,55 +66,46 @@ try {
 
   const socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('Edge CDP WebSocket open timed out')), 5_000);
-    socket.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
-    socket.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Edge CDP WebSocket failed')); }, { once: true });
+    const timer = setTimeout(() => reject(new Error('Edge CDP WebSocket open timed out')), 5_000);
+    socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
+    socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('Edge CDP WebSocket failed')); }, { once: true });
   });
 
   let nextId = 1;
   const pending = new Map();
   const failures = [];
   const exceptions = [];
-  const rejectPending = message => {
-    for (const { reject, timeout } of pending.values()) { clearTimeout(timeout); reject(new Error(message)); }
-    pending.clear();
-  };
-  socket.addEventListener('close', () => rejectPending('Edge CDP WebSocket closed'));
-  socket.addEventListener('error', () => rejectPending('Edge CDP WebSocket failed'));
   socket.addEventListener('message', event => {
     const message = JSON.parse(String(event.data));
     if (message.id && pending.has(message.id)) {
-      const { resolve, reject, timeout } = pending.get(message.id);
+      const item = pending.get(message.id);
       pending.delete(message.id);
-      clearTimeout(timeout);
-      if (message.error) reject(new Error(message.error.message)); else resolve(message.result);
-      return;
+      clearTimeout(item.timer);
+      return message.error ? item.reject(new Error(message.error.message)) : item.resolve(message.result);
     }
-    if (message.method === 'Network.loadingFailed' && message.params?.errorText !== 'net::ERR_ABORTED') {
-      failures.push(message.params?.errorText || 'request failed');
-    }
-    if (message.method === 'Network.responseReceived' && Number(message.params?.response?.status) >= 400) {
-      failures.push(`${message.params.response.status} ${message.params.response.url}`);
-    }
+    if (message.method === 'Network.loadingFailed' && message.params?.errorText !== 'net::ERR_ABORTED') failures.push(message.params?.errorText || 'request failed');
+    if (message.method === 'Network.responseReceived' && Number(message.params?.response?.status) >= 400) failures.push(`${message.params.response.status} ${message.params.response.url}`);
     if (message.method === 'Runtime.exceptionThrown') {
       const detail = message.params?.exceptionDetails;
       exceptions.push(detail?.exception?.description || detail?.text || 'runtime exception');
     }
     if (message.method === 'Runtime.consoleAPICalled' && message.params?.type === 'error') {
-      const rendered = (message.params.args || []).map(argument => (
-        argument.value ?? argument.unserializableValue ?? argument.description ?? ''
-      )).filter(Boolean).join(' ');
-      exceptions.push(rendered || 'browser console error');
+      const text = (message.params.args || []).map(arg => arg.value ?? arg.unserializableValue ?? arg.description ?? '').filter(Boolean).join(' ');
+      exceptions.push(text || 'browser console error');
     }
-    if (message.method === 'Log.entryAdded' && message.params?.entry?.level === 'error') {
-      exceptions.push(message.params.entry.text || 'browser log error');
-    }
+    if (message.method === 'Log.entryAdded' && message.params?.entry?.level === 'error') exceptions.push(message.params.entry.text || 'browser log error');
   });
+  const rejectPending = message => {
+    for (const item of pending.values()) { clearTimeout(item.timer); item.reject(new Error(message)); }
+    pending.clear();
+  };
+  socket.addEventListener('close', () => rejectPending('Edge CDP WebSocket closed'));
+  socket.addEventListener('error', () => rejectPending('Edge CDP WebSocket failed'));
 
   const send = (method, params = {}) => new Promise((resolve, reject) => {
     const id = nextId++;
-    const timeout = setTimeout(() => { pending.delete(id); reject(new Error(`Edge CDP command timed out: ${method}`)); }, 7_500);
-    pending.set(id, { resolve, reject, timeout });
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Edge CDP command timed out: ${method}`)); }, 7_500);
+    pending.set(id, { resolve, reject, timer });
     socket.send(JSON.stringify({ id, method, params }));
   });
   const evaluate = async expression => {
@@ -125,31 +117,33 @@ try {
     return result.result?.value;
   };
 
-  await Promise.all([send('Runtime.enable'), send('Network.enable'), send('Log.enable')]);
-  await retry(() => evaluate(`(() => {
+  await Promise.all([send('Runtime.enable'), send('Network.enable'), send('Log.enable'), send('Page.enable')]);
+
+  // The GM page exposes api.world before the WebSocket welcome and initial
+  // authoritative snapshot finish. Seeding before this point would take the
+  // offline branch and the subsequent initial snapshot would overwrite it.
+  const ready = await retry(() => evaluate(`(() => {
     const api = document.querySelector('#app')?.rpgMapApp;
-    return Boolean(api?.world?.performOperations && api?.tokens?.resolveActor && api?.entities?.openToken);
-  })()`), 'RPGmap live runtime', deadline);
+    const mp = api?.multiplayer?.getStatus?.();
+    const status = document.querySelector('[data-role="map-status"]')?.textContent || '';
+    return api?.world?.performOperations && api?.tokens?.resolveActor && api?.entities?.openToken
+      && mp?.connected === true && mp?.session?.role === 'gm' && mp?.permissions?.worldWrite === true
+      && /^联机同步完成/.test(status)
+      ? { revision: mp.revision, status }
+      : null;
+  })()`), 'authoritative GM runtime after initial sync', deadline);
 
   const ids = Object.freeze({ actor: 'smoke-sheet-monster', a: 'smoke-sheet-monster-a', b: 'smoke-sheet-monster-b' });
-  const snapshot = async label => evaluate(`(() => {
+  const snapshot = label => evaluate(`(() => {
     const api = document.querySelector('#app')?.rpgMapApp;
+    const mp = api?.multiplayer?.getStatus?.();
     return {
-      label: ${JSON.stringify(label)},
+      label: ${JSON.stringify(label)}, multiplayer: mp ? { connected: mp.connected, revision: mp.revision, role: mp.session?.role, worldWrite: mp.permissions?.worldWrite } : null,
       activeSceneId: api?.world?.get?.()?.activeSceneId || null,
-      tokens: ['${ids.a}', '${ids.b}'].map(id => {
-        const token = api?.tokens?.get?.(id);
-        return token ? { id: token.id, actorId: token.actorId, actorLink: token.actorLink } : null;
-      }),
+      tokens: ['${ids.a}', '${ids.b}'].map(id => { const token = api?.tokens?.get?.(id); return token ? { id: token.id, actorId: token.actorId, actorLink: token.actorLink } : null; }),
       actor: (api?.world?.get?.()?.actors || []).find(actor => String(actor?.id) === '${ids.actor}') || null,
       records: api?.entities?.listOpenSheets?.() || [],
-      sheets: [...document.querySelectorAll('.entity-sheet')].map(sheet => ({
-        key: sheet.dataset.sheetWindowKey || '', actorId: sheet.dataset.actorId || '',
-        tokenId: sheet.dataset.tokenId || '', sceneId: sheet.dataset.sceneId || '',
-        mode: sheet.dataset.sheetMode || '', kind: sheet.dataset.sheetKind || '',
-        tab: sheet.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab || '',
-        title: sheet.querySelector('.entity-sheet-title')?.textContent?.trim()?.slice(0, 120) || '',
-      })),
+      sheets: [...document.querySelectorAll('.entity-sheet')].map(sheet => ({ key: sheet.dataset.sheetWindowKey || '', actorId: sheet.dataset.actorId || '', tokenId: sheet.dataset.tokenId || '', sceneId: sheet.dataset.sceneId || '', mode: sheet.dataset.sheetMode || '', kind: sheet.dataset.sheetKind || '', tab: sheet.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab || '' })),
       mapStatus: document.querySelector('[data-role="map-status"]')?.textContent || '',
     };
   })()`);
@@ -161,30 +155,28 @@ try {
   const setup = await evaluate(`(async () => {
     const api = document.querySelector('#app').rpgMapApp;
     const actorId = '${ids.actor}', tokenA = '${ids.a}', tokenB = '${ids.b}';
-    const existing = (api.world.get().actors || []).some(actor => String(actor.id) === actorId);
-    if (existing) await api.world.performOperations([{ type: 'actor.delete', payload: { actorId } }], { source: 'smoke:sheets:reset' });
+    if ((api.world.get().actors || []).some(actor => String(actor.id) === actorId)) {
+      await api.world.performOperations([{ type: 'actor.delete', payload: { actorId } }], { source: 'smoke:sheets:reset' });
+    }
     const created = api.ruleset.actor.createFromImport({
-      formName: 'Smoke Form', identity: { name: 'Smoke Monster' }, description: {},
-      resources: { hp: { max: 20 } }, attributes: [], checks: { skills: [], saves: [] },
-      badStatuses: [], combat: { attacks: [], defenses: [] }, detection: {},
+      formName: 'Smoke Form', identity: { name: 'Smoke Monster' }, description: {}, resources: { hp: { max: 20 } },
+      attributes: [], checks: { skills: [], saves: [] }, badStatuses: [], combat: { attacks: [], defenses: [] }, detection: {},
       tokenAppearance: { color: '#3d9b63', scale: 1 }, source: { type: 'manual' },
     }, { actorId, name: 'Smoke Monster' });
     const actor = { ...created, id: actorId, name: 'Smoke Monster', type: 'monster', partyId: null, effects: [] };
     const sceneId = api.world.get().activeSceneId;
-    await api.world.performOperations([
+    const commit = await api.world.performOperations([
       { type: 'actor.upsert', payload: { actor } },
       { type: 'token.create', payload: { sceneId, token: { id: tokenA, actorId, actorLink: false, placement: 'map', x: 80, y: 80, diameterMeters: 1, visibility: { mode: 'public', userIds: [] }, effects: [] } } },
       { type: 'token.create', payload: { sceneId, token: { id: tokenB, actorId, actorLink: false, placement: 'map', x: 100, y: 80, diameterMeters: 1, visibility: { mode: 'public', userIds: [] }, effects: [] } } },
     ], { source: 'smoke:sheets:setup' });
-    for (let attempt = 0; attempt < 40 && (!api.tokens.get(tokenA) || !api.tokens.get(tokenB)); attempt++) {
-      await new Promise(resolve => setTimeout(resolve, 50));
-    }
-    const openedA = await api.entities.openToken(tokenA);
+    const present = Boolean(api.tokens.get(tokenA) && api.tokens.get(tokenB) && api.world.get().actors.some(item => String(item.id) === actorId));
+    const openedA = present ? await api.entities.openToken(tokenA) : false;
     await new Promise(resolve => setTimeout(resolve, 50));
-    const openedB = await api.entities.openToken(tokenB);
-    return { actorId, tokenA, tokenB, sceneId, openedA, openedB };
+    const openedB = present ? await api.entities.openToken(tokenB) : false;
+    return { actorId, tokenA, tokenB, sceneId, commit, present, openedA, openedB, revision: api.multiplayer.getStatus().revision };
   })()`);
-  if (!setup?.openedA || !setup?.openedB) throw new Error(`openToken returned false; snapshot=${JSON.stringify(await snapshot('openToken result'))}`);
+  if (!setup?.present || !setup.openedA || !setup.openedB) throw new Error(`authoritative fixture/openToken failed: ${JSON.stringify(setup)}; snapshot=${JSON.stringify(await snapshot('fixture setup'))}`);
 
   const opened = await retryWithSnapshot(() => evaluate(`(() => {
     const api = document.querySelector('#app').rpgMapApp;
@@ -192,18 +184,14 @@ try {
     const sheets = wanted.map(tokenId => document.querySelector('.entity-sheet[data-token-id="' + tokenId + '"]'));
     if (sheets.some(sheet => !sheet)) return null;
     const records = api.entities.listOpenSheets?.() || [];
-    if (!wanted.every(tokenId => records.some(record => String(record.tokenId) === tokenId))) return null;
     const tabs = sheets.map(sheet => sheet.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab || '');
     const keys = sheets.map(sheet => sheet.dataset.sheetWindowKey || '');
-    if (new Set(keys).size !== 2) return null;
-    if (tabs.some(tab => tab !== 'combat')) throw new Error('Monster/Summon first-open tab is not combat: ' + JSON.stringify(tabs));
+    if (!wanted.every(tokenId => records.some(record => String(record.tokenId) === tokenId)) || new Set(keys).size !== 2) return null;
+    if (tabs.some(tab => tab !== 'combat')) throw new Error('Monster first-open tab is not combat: ' + JSON.stringify(tabs));
     return { tabs, keys, count: records.length };
   })()`), 'two independently live Monster Token sheets on Combat');
 
-  const dragBefore = await evaluate(`Object.fromEntries(['${ids.a}','${ids.b}'].map(tokenId => {
-    const rect = document.querySelector('.entity-sheet[data-token-id="' + tokenId + '"]').getBoundingClientRect();
-    return [tokenId, { left: rect.left, top: rect.top }];
-  }))`);
+  const dragBefore = await evaluate(`Object.fromEntries(['${ids.a}','${ids.b}'].map(tokenId => { const rect = document.querySelector('.entity-sheet[data-token-id="' + tokenId + '"]').getBoundingClientRect(); return [tokenId, { left: rect.left, top: rect.top }]; }))`);
   await evaluate(`(() => {
     const header = document.querySelector('.entity-sheet[data-token-id="${ids.b}"] .entity-sheet-header');
     const rect = header.getBoundingClientRect();
@@ -248,8 +236,7 @@ try {
   await retryWithSnapshot(() => evaluate(`(() => {
     const api = document.querySelector('#app').rpgMapApp;
     const a = api.health.resolveToken('${ids.a}'), b = api.health.resolveToken('${ids.b}');
-    return JSON.stringify(a) !== ${JSON.stringify(JSON.stringify(healthBefore.a))}
-      && JSON.stringify(b) === ${JSON.stringify(JSON.stringify(healthBefore.b))} ? true : null;
+    return JSON.stringify(a) !== ${JSON.stringify(JSON.stringify(healthBefore.a))} && JSON.stringify(b) === ${JSON.stringify(JSON.stringify(healthBefore.b))} ? true : null;
   })()`), 'Health mutation isolated to originating Token sheet');
 
   await evaluate(`document.querySelector('.entity-sheet[data-token-id="${ids.a}"] [data-sheet-tab="status"]').click()`);
@@ -267,8 +254,7 @@ try {
     const api = document.querySelector('#app').rpgMapApp;
     const a = api.status.resolve({ actorId: '${ids.actor}', tokenId: '${ids.a}' });
     const b = api.status.resolve({ actorId: '${ids.actor}', tokenId: '${ids.b}' });
-    const allA = [...(a.actorStatuses||[]), ...(a.tokenStatuses||[])];
-    const allB = [...(b.actorStatuses||[]), ...(b.tokenStatuses||[])];
+    const allA = [...(a.actorStatuses||[]), ...(a.tokenStatuses||[])], allB = [...(b.actorStatuses||[]), ...(b.tokenStatuses||[])];
     const aHas = allA.some(status => String(status.definitionId) === '${statusChoice.definitionId}');
     const bHas = allB.some(status => String(status.definitionId) === '${statusChoice.definitionId}');
     return aHas && !bHas ? { definitionId: '${statusChoice.definitionId}', aCount: allA.length, bCount: allB.length } : null;
@@ -277,10 +263,7 @@ try {
   await evaluate(`document.querySelector('.entity-sheet[data-token-id="${ids.a}"] [data-sheet-action="close"]').click()`);
   await retryWithSnapshot(() => evaluate(`!document.querySelector('.entity-sheet[data-token-id="${ids.a}"]')`), 'Token A sheet close');
   await evaluate(`document.querySelector('#app').rpgMapApp.entities.openToken('${ids.a}')`);
-  const restoreAudit = await retryWithSnapshot(() => evaluate(`(() => {
-    const tab = document.querySelector('.entity-sheet[data-token-id="${ids.a}"] .entity-sheet-tab.active')?.dataset.sheetTab;
-    return tab === 'status' ? { tab } : null;
-  })()`), 'per-World tab restoration after close and reopen');
+  const restoreAudit = await retryWithSnapshot(() => evaluate(`(() => { const tab = document.querySelector('.entity-sheet[data-token-id="${ids.a}"] .entity-sheet-tab.active')?.dataset.sheetTab; return tab === 'status' ? { tab } : null; })()`), 'per-World tab restoration after close and reopen');
 
   await evaluate(`document.querySelector('#app').rpgMapApp.entities.openActor('${ids.actor}')`);
   const playEditAudit = await retryWithSnapshot(() => evaluate(`(() => {
@@ -290,10 +273,7 @@ try {
     const before = sheet.dataset.sheetInteractionMode; toggle.click();
     return before === 'play' && sheet.dataset.sheetInteractionMode === 'edit' ? { before, after: sheet.dataset.sheetInteractionMode } : null;
   })()`), 'Actor template Play/Edit toggle');
-  await evaluate(`(() => {
-    const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || ''));
-    sheet?.querySelector('[data-sheet-v2-mode-toggle]')?.click(); return true;
-  })()`);
+  await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); sheet?.querySelector('[data-sheet-v2-mode-toggle]')?.click(); return true; })()`);
 
   if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
     const directory = path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR);
@@ -305,9 +285,8 @@ try {
   if (failures.length) throw new Error(`Actor sheet browser requests failed: ${failures.join('; ')}`);
   if (exceptions.length) throw new Error(`Actor sheet browser runtime errors: ${exceptions.join('; ')}`);
 
-  console.log(JSON.stringify({ liveSheets: opened, drag: dragAudit, tabs: tabAudit,
-    health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true },
-    status: statusAudit, restored: restoreAudit, playEdit: playEditAudit }));
+  console.log(JSON.stringify({ ready, fixtureRevision: setup.revision, liveSheets: opened, drag: dragAudit, tabs: tabAudit,
+    health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit }));
   await send('Browser.close');
   browserClosed = true;
 } catch (error) {
@@ -316,8 +295,8 @@ try {
   if (!browserClosed && edge.exitCode === null) edge.kill('SIGKILL');
   if (edge.exitCode === null) {
     await new Promise(resolve => {
-      const timeout = setTimeout(resolve, 2_000);
-      edge.once('exit', () => { clearTimeout(timeout); resolve(); });
+      const timer = setTimeout(resolve, 2_000);
+      edge.once('exit', () => { clearTimeout(timer); resolve(); });
     });
   }
   await rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
