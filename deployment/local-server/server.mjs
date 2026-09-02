@@ -38,7 +38,6 @@ import {
   migrateLegacySceneFeatureStates,
   migrateWorldSchema3State,
   projectWorldOperationState,
-  stripLegacyFeatureStateProjection,
   WORLD_OPERATION_SCHEMA_VERSION,
 } from './world-operations.mjs';
 import {
@@ -287,8 +286,8 @@ async function pruneBackups(label) {
   await Promise.all(backups.slice(BACKUP_RETENTION).map(entry => rm(path.join(STORAGE.backupsDir, entry.name), { force: true })));
 }
 
-async function writeJsonWithBackup(filePath, label, value, { backup = true } = {}) {
-  const snapshot = JSON.stringify(value, null, 2);
+async function writeJsonWithBackup(filePath, label, value, { backup = true, serialized = null } = {}) {
+  const snapshot = typeof serialized === 'string' ? serialized : JSON.stringify(value, null, 2);
   if (backup) {
     try {
       await stat(filePath);
@@ -405,15 +404,34 @@ let persistChain = Promise.resolve();
 let lastWorldBackupRevision = Number(world.revision) || 0;
 let lastWorldBackupAt = Date.now();
 function persistWorld(snapshot, { forceBackup = false } = {}) {
+  const state = snapshot.state ? {
+    ...snapshot.state,
+    preferences: { ...(snapshot.state.preferences || {}) },
+  } : snapshot.state;
+  if (state?.preferences) {
+    delete state.preferences.featureStates;
+    delete state.preferences.featureInteractions;
+  }
   const durable = {
-    ...structuredClone(snapshot),
-    state: snapshot.state ? stripLegacyFeatureStateProjection(snapshot.state) : snapshot.state,
+    ...snapshot,
+    state,
   };
+  const serialized = JSON.stringify(durable);
+  if (Buffer.byteLength(serialized) > MAX_WS_PAYLOAD) {
+    const error = new Error('World state is too large');
+    error.code = 'state_too_large';
+    return Promise.reject(error);
+  }
   const revision = Number(snapshot.revision) || 0;
   const backup = forceBackup
     || revision - lastWorldBackupRevision >= 25
     || Date.now() - lastWorldBackupAt >= 60_000;
-  const task = persistChain.catch(() => {}).then(() => writeJsonWithBackup(WORLD_FILE, 'world', durable, { backup }));
+  const task = persistChain.catch(() => {}).then(() => writeJsonWithBackup(
+    WORLD_FILE,
+    'world',
+    durable,
+    { backup, serialized },
+  ));
   persistChain = task;
   return task.then(value => {
     if (backup) {
@@ -503,6 +521,10 @@ function broadcastWorld(message, exceptSocket = null) {
 }
 function audienceStateFor(session, state = world.state) {
   if (!state) return null;
+  if (session.role === 'gm' && !session.visionSourceTokenId) {
+    assertWorldState(state);
+    return state;
+  }
   if (!session.audienceOpaqueIds) session.audienceOpaqueIds = new Map();
   const opaqueIdFor = (kind, rawId) => {
     const key = `${String(kind)}:${String(rawId)}`;
@@ -1353,11 +1375,6 @@ server.on('upgrade', (req, socket) => {
           },
         });
         assertWorldState(applied.state);
-        if (Buffer.byteLength(JSON.stringify(applied.state)) > MAX_WS_PAYLOAD) {
-          const error = new Error('World state is too large');
-          error.code = 'state_too_large';
-          throw error;
-        }
       } catch (error) {
         return sendWorldOperationDenied(socket, message, error?.code || 'invalid_world_operation', error?.message, {
           ...(Array.isArray(error?.conflictIds) ? { conflictIds: error.conflictIds.map(String) } : {}),
@@ -1379,7 +1396,9 @@ server.on('upgrade', (req, socket) => {
       };
       try { await persistWorld(nextWorld); }
       catch (error) {
-        return sendWorldOperationDenied(socket, message, 'persist_failed', `World 操作未保存：${error.message}`);
+        const code = error?.code === 'state_too_large' ? error.code : 'persist_failed';
+        const description = code === 'state_too_large' ? error.message : `World 操作未保存：${error.message}`;
+        return sendWorldOperationDenied(socket, message, code, description);
       }
 
       const baseRevision = world.revision;

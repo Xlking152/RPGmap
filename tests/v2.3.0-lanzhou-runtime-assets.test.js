@@ -38,3 +38,12 @@ test('LAN operation broadcasts derive audience change sets from cropped patches'
   assert.doesNotMatch(server, /createWorldOperationChangeSet\(beforeProjection, afterProjection\)/);
   assert.match(server, /operation\.type === 'actor\.upsert' \|\| operation\.type === 'actor\.delete'/);
 });
+
+test('LAN persistence and GM projection avoid redundant full-world cloning', async () => {
+  const server = await read('deployment/local-server/server.mjs');
+  const persistence = server.slice(server.indexOf('function persistWorld('), server.indexOf('let accessPersistChain'));
+  assert.match(persistence, /const serialized = JSON\.stringify\(durable\)/);
+  assert.match(persistence, /\{ backup, serialized \}/);
+  assert.doesNotMatch(persistence, /structuredClone\(snapshot\)/);
+  assert.match(server, /session\.role === 'gm' && !session\.visionSourceTokenId/);
+});
