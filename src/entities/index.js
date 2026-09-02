@@ -5,9 +5,9 @@ export function createEntitySystem(options = {}) {
       const documentNode = mapElement.ownerDocument || document;
       const windowNode = documentNode.defaultView;
       const shell = mapElement.closest('.app-shell') || documentNode;
-      const actorTabbar = shell.querySelector?.('.sidebar .tabbar');
+      const actorTabbar = shell.querySelector('.sidebar .tabbar');
       const abort = new AbortController();
-      const dragOptions = { capture: true, signal: abort.signal };
+      const dragOptions = { signal: abort.signal };
       let loading = null;
       let destroyed = false;
       let drag = null;
@@ -61,10 +61,9 @@ export function createEntitySystem(options = {}) {
       function handleCharacterSheetKey(event) {
         if (event.code !== 'KeyC'
           || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
-          || event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
+          || event.target?.closest?.('input,textarea,select,[contenteditable]')) return;
         const tokenId = api.selection?.getPrimaryTokenId?.();
-        if (!tokenId) return;
-        void invoke('openToken', tokenId);
+        if (tokenId) void invoke('openToken', tokenId);
       }
 
       api.entities = {
@@ -73,7 +72,6 @@ export function createEntitySystem(options = {}) {
         openToken: (...args) => invoke('openToken', ...args),
         placeActor: (...args) => invoke('placeActor', ...args),
         requestImport: (...args) => invoke('requestImport', ...args),
-        closeSheet: (...args) => invoke('closeSheet', ...args),
       };
       actorTabbar?.addEventListener('click', handleActorTabClick, true);
       mapElement.addEventListener('dblclick', handleTokenDoubleClick, true);
