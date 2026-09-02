@@ -1,5 +1,6 @@
 const DEFAULT_STORAGE_KEY = 'rpgmap.ui.actor-sheets.v1';
-const BASE_Z_INDEX = 4300;
+const BASE_Z_INDEX = 4210;
+const Z_INDEX_SPAN = 70;
 
 function finite(value) {
   const number = Number(value);
@@ -63,7 +64,8 @@ export function createActorSheetManager({
 } = {}) {
   const records = new Map();
   const preferences = readPreferences(storage, storageKey);
-  let zCounter = Math.max(1, Number(baseZIndex) || BASE_Z_INDEX);
+  const zBase = Math.max(1, Number(baseZIndex) || BASE_Z_INDEX);
+  let zCounter = zBase;
   let activeKey = null;
 
   function persist() {
@@ -74,11 +76,18 @@ export function createActorSheetManager({
     return records.get(String(key || '')) || null;
   }
 
+  function nextZ() {
+    if (zCounter >= zBase + Z_INDEX_SPAN) {
+      zCounter = zBase;
+      for (const record of [...records.values()].sort((a, b) => a.zIndex - b.zIndex)) record.zIndex = ++zCounter;
+    }
+    return ++zCounter;
+  }
+
   function activate(key) {
     const record = get(key);
     if (!record) return null;
-    zCounter += 1;
-    record.zIndex = zCounter;
+    record.zIndex = nextZ();
     activeKey = record.key;
     return record;
   }
@@ -112,7 +121,7 @@ export function createActorSheetManager({
       top: saved.top ?? 72 + cascade * 22,
       width: saved.width,
       height: saved.height,
-      zIndex: ++zCounter,
+      zIndex: nextZ(),
     };
     records.set(key, record);
     activeKey = key;
