@@ -24,10 +24,10 @@ test('Player current card removes technical IDs and mutation buttons for uncontr
 });
 
 test('Actor sheets become map-friendly draggable and resizable desktop windows', () => {
-  assert.match(sheetWindow, /\.entity-sheet-backdrop\{[^}]*pointer-events:none\s*!important/);
-  assert.match(sheetWindow, /\.entity-sheet-backdrop>\.entity-sheet\{[^}]*resize:both;pointer-events:auto/);
+  assert.match(appShell, /\.entity-sheet-backdrop\{[^}]*pointer-events:none\s*!important/);
+  assert.match(appShell, /\.entity-sheet-backdrop>\.entity-sheet\{[^}]*resize:both;pointer-events:auto/);
   assert.match(sheetWindow, /documentNode\.addEventListener\('pointerdown', pointerDown, true\)/);
-  assert.match(sheetWindow, /sheet\.style\.zIndex = String\(\+\+zSerial\)/);
+  assert.match(sheetWindow, /drag = \{ sheet, x:/);
 });
 
 test('window behavior registers before the heavy Entity UI is lazily loaded', () => {
