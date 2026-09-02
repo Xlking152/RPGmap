@@ -47,6 +47,23 @@ function installStyles(documentNode) {
     .entity-card-actions { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
     .entity-card-actions label { display:inline-flex; gap:5px; align-items:center; }
     .entity-card-actions input[type="number"] { width:72px; }
+    .token-config { padding:0; overflow:hidden; }
+    .token-config > .entity-card-top { padding:10px 10px 2px; }
+    .token-config-tabs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border-bottom:1px solid #dce3e0; }
+    .token-config-tabs button { min-width:0; border:0; border-top:1px solid #dce3e0; padding:9px 4px; background:#eef3ef; color:#526366; cursor:pointer; font-weight:750; }
+    .token-config-tabs button.active { color:#176d76; background:#fff; box-shadow:inset 0 -3px #176d76; }
+    .token-config-body { padding:10px; min-width:0; }
+    .token-config-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; align-items:end; }
+    .token-config-grid label { min-width:0; display:grid; gap:4px; color:#526366; font-size:12px; }
+    .token-config-grid input:not([type="checkbox"]), .token-config-grid select { width:100%; min-width:0; box-sizing:border-box; }
+    .token-config-grid select[multiple] { min-height:64px; }
+    .token-config-check { display:flex !important; align-items:center; align-self:center; }
+    .token-config-feedback { grid-column:1/-1; }
+    .token-config-feedback.pending { color:#785d14; }
+    .token-config-feedback.confirmed { color:#247346; }
+    .token-config-feedback.error { color:#a12f2f; }
+    .token-config-advanced { display:grid; gap:9px; }
+    .token-config-advanced pre { max-height:180px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
     .entity-sheet-backdrop { position:fixed; inset:0; z-index:4200; background:rgba(18,23,24,.48); display:grid; place-items:center; padding:24px; }
     .entity-sheet { width:min(880px,94vw); max-height:90vh; overflow:auto; background:#f8faf7; border:1px solid rgba(40,70,70,.3); border-radius:14px; box-shadow:0 20px 60px rgba(0,0,0,.28); }
     .entity-sheet-header { position:sticky; top:0; z-index:3; display:flex; align-items:center; gap:14px; padding:14px 16px; background:rgba(248,250,247,.97); border-bottom:1px solid rgba(40,70,70,.18); }
@@ -88,7 +105,7 @@ function installStyles(documentNode) {
     .entity-template-runtime-readonly [data-form-select],
     .entity-template-runtime-readonly [data-sheet-action="cycle-form"] { pointer-events:none; opacity:.55; }
     @keyframes entity-indicator { 0%{opacity:0;transform:translate(-50%,-6px)} 15%,75%{opacity:1;transform:translate(-50%,0)} 100%{opacity:0;transform:translate(-50%,-8px)} }
-    @media (max-width:760px) { .entity-grid{grid-template-columns:1fr 1fr}.entity-sheet-backdrop{padding:8px}.entity-resource{grid-template-columns:1fr auto auto}.entity-resource .entity-resource-edit{grid-column:1/-1} }
+    @media (max-width:760px) { .entity-grid{grid-template-columns:1fr 1fr}.entity-sheet-backdrop{padding:8px}.entity-resource{grid-template-columns:1fr auto auto}.entity-resource .entity-resource-edit{grid-column:1/-1}.token-config-grid{grid-template-columns:1fr}.token-config-feedback{grid-column:1}.token-config-tabs button{font-size:12px;padding-inline:2px} }
   `;
   documentNode.head.append(style);
 }

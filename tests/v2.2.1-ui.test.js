@@ -5,12 +5,13 @@ import { createTokenViewModel } from '../src/render/token-view-model.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { classifyNewImportedActor } from '../src/entities/ui.js';
 
-const [runtimeSource, shellSource, markerSource, entitySource, rendererSource] = await Promise.all([
+const [runtimeSource, shellSource, markerSource, entitySource, rendererSource, tokenControllerSource] = await Promise.all([
   readFile(new URL('../src/engine/runtime.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/marker/system.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/entities/ui.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/render/token-layer.js', import.meta.url), 'utf8'),
+  readFile(new URL('../src/entities/token-controller.js', import.meta.url), 'utf8'),
 ]);
 
 test('v2.2.1 removes the Layers surface, keeps grid rendering on, and reserves four equal sidebar tabs', () => {
@@ -19,6 +20,17 @@ test('v2.2.1 removes the Layers surface, keeps grid rendering on, and reserves f
   assert.doesNotMatch(runtimeSource, /preferences\?\.gridVisible === false/);
   assert.match(shellSource, /grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/);
   assert.doesNotMatch(entitySource, /\[data-panel="markers"\]\s*\{\s*display:\s*none/);
+});
+
+test('Token instance configuration uses four responsive groups and dual inherited vision ranges', () => {
+  assert.match(tokenControllerSource, /\['basic','基础'\],\['vision','视野'\],\['permissions','权限'\],\['advanced','高级'\]/);
+  assert.match(tokenControllerSource, /data-token-vision-precise/);
+  assert.match(tokenControllerSource, /data-token-vision-vague/);
+  assert.match(tokenControllerSource, /preciseRangeOverrideMeters/);
+  assert.match(tokenControllerSource, /vagueRangeOverrideMeters/);
+  assert.match(entitySource, /token-config-feedback/);
+  assert.match(entitySource, /grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/);
+  assert.match(entitySource, /@media \(max-width:760px\)[\s\S]*token-config-grid\{grid-template-columns:1fr\}/);
 });
 
 test('Actor and Marker libraries separate PC templates from independent non-PC instances', () => {
