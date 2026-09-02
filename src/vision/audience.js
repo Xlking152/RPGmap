@@ -77,6 +77,13 @@ function tokenInvisible(token, actor, definitions) {
   });
 }
 
+function tokenVisionPrecision(token, actor, definitions) {
+  return effectsForToken(token, actor).some(effect => effect?.enabled !== false
+    && definitions.get(String(effect?.definitionId ?? ''))?.capabilities?.visionPrecision === 'vague')
+    ? 'vague'
+    : 'precise';
+}
+
 function authorizedForPrivateData(token, actor, context, parties) {
   return tokenControlled(token, actor, context)
     || ids(token?.visibility?.userIds).has(context.userId)
@@ -102,10 +109,16 @@ function currentVision(world, context, actors) {
   const vagueRangeMeters = vagueOverride === null || vagueOverride === undefined
     ? Math.max(preciseRangeMeters, Number(description.vagueRangeMeters ?? preciseRangeMeters) || 0)
     : Math.max(preciseRangeMeters, Number(vagueOverride) || 0);
+  const definitions = new Map((world.statusDefinitions || []).map(item => [String(item?.id ?? ''), item]));
+  const effectivePreciseRangeMeters = tokenVisionPrecision(token, actor, definitions) === 'vague'
+    ? 0
+    : preciseRangeMeters;
   if (token.vision?.enabled === false || vagueRangeMeters <= 0) return null;
   return {
     tokenId: String(token.id), x: Number(token.x), y: Number(token.y),
-    rangeMeters: preciseRangeMeters, preciseRangeMeters, vagueRangeMeters,
+    rangeMeters: effectivePreciseRangeMeters,
+    preciseRangeMeters: effectivePreciseRangeMeters,
+    vagueRangeMeters: Math.max(effectivePreciseRangeMeters, vagueRangeMeters),
     senses: clone(description.senses || {}), lighting: description.lighting || 'normal',
   };
 }

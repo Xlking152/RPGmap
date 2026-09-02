@@ -74,8 +74,8 @@ export function resolveInfiniteHorrorDetection({ form, runtime, perception = nul
     vagueRangeMeters = Math.max(vagueRangeMeters, preciseRangeMeters);
     preciseRangeMeters = 0;
   } else if (normalizedLighting === 'dark' && !senses.darkvision) {
+    vagueRangeMeters = Math.max(vagueRangeMeters, preciseRangeMeters);
     preciseRangeMeters = 0;
-    vagueRangeMeters = 0;
   }
 
   return Object.freeze({
