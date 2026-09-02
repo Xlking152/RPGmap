@@ -286,6 +286,21 @@ async function pruneBackups(label) {
   await Promise.all(backups.slice(BACKUP_RETENTION).map(entry => rm(path.join(STORAGE.backupsDir, entry.name), { force: true })));
 }
 
+async function renameAtomicWithRetry(source, target, attempts = 6) {
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await rename(source, target);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!['EPERM', 'EACCES', 'EBUSY'].includes(error?.code) || attempt === attempts - 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, 15 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
 async function writeJsonWithBackup(filePath, label, value, { backup = true, serialized = null } = {}) {
   const snapshot = typeof serialized === 'string' ? serialized : JSON.stringify(value, null, 2);
   if (backup) {
@@ -301,7 +316,7 @@ async function writeJsonWithBackup(filePath, label, value, { backup = true, seri
   const temp = `${filePath}.${randomUUID()}.tmp`;
   try {
     await writeFile(temp, snapshot, 'utf8');
-    await rename(temp, filePath);
+    await renameAtomicWithRetry(temp, filePath);
   } catch (error) {
     await rm(temp, { force: true }).catch(() => {});
     throw error;
@@ -449,6 +464,7 @@ function persistAccess(snapshot = access) {
   // If the atomic disk write fails, restore the last durable record before the
   // serialized message queue accepts another request.
   const rollback = structuredClone(lastPersistedAccess);
+  if (snapshot === access) snapshot.revision = Math.max(0, Number(snapshot.revision) || 0) + 1;
   const task = accessPersistChain.then(() => writeJsonWithBackup(ACCESS_FILE, 'users', snapshot));
   accessPersistChain = task.catch(() => {});
   return task.then(() => {
@@ -830,6 +846,9 @@ function authorizeOperations(session, operations) {
       if (payload.actor.type !== current.type || payload.actor.partyId !== current.partyId) {
         operationDenied('actor_classification_gm_only', 'Only the GM can change Actor classification or party');
       }
+      if (JSON.stringify(payload.actor.publicProfile ?? null) !== JSON.stringify(current.publicProfile ?? null)) {
+        operationDenied('actor_public_profile_gm_only', 'Only the GM can edit the public Actor profile');
+      }
       return value;
     }
     if (value.type === 'chat.append') {
@@ -892,6 +911,7 @@ function accessSnapshotFor(session) {
   });
   return {
     type: 'access.snapshot',
+    revision: Math.max(0, Number(access.revision) || 0),
     canManage: gm,
     selfUserId: session.userId || null,
     users,
@@ -1151,6 +1171,51 @@ server.on('upgrade', (req, socket) => {
       refreshOnlineUser(user.id);
       broadcastPresence();
       broadcastAccessSnapshots();
+      return;
+    }
+
+    if (message?.type === 'access.actor-ownership.update') {
+      const operationId = String(message.operationId || '').trim().slice(0, 160);
+      const deny = (code, detail) => sendSocket(socket, {
+        type: 'access.actor-ownership.denied', operationId, code, message: detail,
+        revision: Math.max(0, Number(access.revision) || 0),
+      });
+      if (session.role !== 'gm') return deny('gm_only', '只有 GM 可以管理 Actor 权限');
+      if (!operationId) return deny('operation_id_required', '权限更新缺少 operationId');
+      if (Number(message.baseRevision) !== Math.max(0, Number(access.revision) || 0)) {
+        return deny('access_revision_conflict', '权限目录已变化，请刷新后重试');
+      }
+      const actorId = String(message.actorId || '').trim().slice(0, 160);
+      const knownActors = new Set(actorCatalogFromWorld(world.state).map(actor => String(actor.id)));
+      if (!actorId || !knownActors.has(actorId)) return deny('actor_not_found', 'Actor 不存在或权限目录尚未同步');
+      const changes = Array.isArray(message.changes) ? message.changes : [];
+      if (!changes.length || changes.length > 128) return deny('invalid_changes', '权限更新必须包含 1-128 项变化');
+      const next = structuredClone(access);
+      const changedUserIds = new Set();
+      for (const change of changes) {
+        const userId = String(change?.userId || '').trim();
+        const level = String(change?.level || 'none').toLowerCase();
+        const user = next.users.find(item => String(item.id) === userId);
+        if (!user) return deny('user_not_found', `Player User ${userId || '(missing)'} 不存在`);
+        if (!Object.values(OWNERSHIP).includes(level)) return deny('invalid_ownership', `无效 Actor 权限：${level}`);
+        if (String(user.defaultActorId || '') === actorId && level !== OWNERSHIP.OWNER) {
+          return deny('default_actor_owner_required', `${user.name} 的默认角色必须保持 OWNER`);
+        }
+        if (level === OWNERSHIP.NONE) delete user.ownership[actorId];
+        else user.ownership[actorId] = level;
+        user.updatedAt = new Date().toISOString();
+        changedUserIds.add(userId);
+      }
+      next.revision = Math.max(0, Number(access.revision) || 0) + 1;
+      await persistAccess(next);
+      access = next;
+      for (const userId of changedUserIds) refreshOnlineUser(userId);
+      broadcastAccessSnapshots();
+      sendSocket(socket, {
+        type: 'access.actor-ownership.ack', operationId, actorId,
+        revision: access.revision,
+        results: changes.map(change => ({ userId: String(change.userId), level: String(change.level).toLowerCase() })),
+      });
       return;
     }
 

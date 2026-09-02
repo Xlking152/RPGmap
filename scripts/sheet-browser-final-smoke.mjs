@@ -201,7 +201,7 @@ try {
     const info = sheet => ({
       kind: sheet.dataset.sheetKind || '', mode: sheet.dataset.sheetMode || '', interactionMode: sheet.dataset.sheetInteractionMode || '',
       tab: sheet.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab || '', key: sheet.dataset.sheetWindowKey || '',
-      toggle: Boolean(sheet.querySelector('[data-sheet-v2-mode-toggle]')),
+      toggle: Boolean(sheet.querySelector('[data-sheet-mode-toggle]')),
     });
     const result = { pcToken: info(pcToken), npcToken: info(npcToken), pcActor: info(pcActor), npcActor: info(npcActor) };
     if (result.pcToken.kind !== 'character' || result.pcToken.tab !== 'overview') return null;
@@ -294,15 +294,15 @@ try {
       : null;
   })()`), 'resized geometry survives close and reopen');
 
-  const playEdit = await retryWithSnapshot(() => evaluate(`(() => {
+  await retryWithSnapshot(() => evaluate(`(() => {
     const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.pcActor}"]')].find(node => !String(node.dataset.tokenId || ''));
-    const toggle = sheet?.querySelector('[data-sheet-v2-mode-toggle]');
-    if (!sheet || !toggle || sheet.dataset.sheetInteractionMode !== 'play') return null;
-    toggle.click();
-    const after = sheet.dataset.sheetInteractionMode;
-    toggle.click();
-    return after === 'edit' && sheet.dataset.sheetInteractionMode === 'play' ? { before:'play', edit:after, restored:sheet.dataset.sheetInteractionMode } : null;
-  })()`), 'Character Actor Play/Edit/Play');
+    const toggle = sheet?.querySelector('[data-sheet-mode-toggle]');
+    return sheet?.dataset.sheetInteractionMode === 'play' && toggle ? true : null;
+  })()`), 'Character Actor Play mode');
+  await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.pcActor}"]')].find(node => !String(node.dataset.tokenId || '')); sheet?.querySelector('[data-sheet-mode-toggle]')?.click(); return true; })()`);
+  await retryWithSnapshot(() => evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.pcActor}"]')].find(node => !String(node.dataset.tokenId || '')); return sheet?.dataset.sheetInteractionMode === 'edit' ? true : null; })()`), 'Character Actor Edit mode');
+  await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.pcActor}"]')].find(node => !String(node.dataset.tokenId || '')); sheet?.querySelector('[data-sheet-mode-toggle]')?.click(); return true; })()`);
+  const playEdit = await retryWithSnapshot(() => evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.pcActor}"]')].find(node => !String(node.dataset.tokenId || '')); return sheet?.dataset.sheetInteractionMode === 'play' ? { before:'play', edit:'edit', restored:'play' } : null; })()`), 'Character Actor Play mode restored');
 
   await new Promise(resolve => setTimeout(resolve, 400));
   if (failures.length) throw new Error(`Final sheet browser requests failed: ${failures.join('; ')}`);

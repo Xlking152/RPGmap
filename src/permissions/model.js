@@ -36,8 +36,10 @@ export function canPermission(action, context = {}) {
     case 'actor.view': return actorAccessAtLeast(actorAccess, ACTOR_ACCESS.OBSERVER);
     case 'actor.edit':
     case 'actor.delete': return actorAccess === ACTOR_ACCESS.OWNER;
+    case 'actor.editPublicProfile': return false;
     case 'token.view': return context.tokenVisible !== false;
     case 'token.control': return controlled;
+    case 'token.edit': return controlled;
     case 'token.move':
       return controlled && context.token?.locked !== true
         && context.statusCapabilities?.canMove !== false

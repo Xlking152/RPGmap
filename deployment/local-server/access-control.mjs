@@ -175,7 +175,7 @@ function normalizePlacementGrants(raw) {
     markerKinds: clean(source.markerKinds, MARKER_KINDS),
   };
 }
-export function createAccessState() { return { schemaVersion: ACCESS_SCHEMA_VERSION, users: [] }; }
+export function createAccessState() { return { schemaVersion: ACCESS_SCHEMA_VERSION, revision: 0, users: [] }; }
 export function normalizeOwnership(raw) {
   const result = {};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return result;
@@ -209,7 +209,11 @@ export function normalizeAccessState(raw) {
       updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString(),
     });
   }
-  return { schemaVersion: ACCESS_SCHEMA_VERSION, users };
+  return {
+    schemaVersion: ACCESS_SCHEMA_VERSION,
+    revision: Number.isSafeInteger(Number(source.revision)) && Number(source.revision) >= 0 ? Number(source.revision) : 0,
+    users,
+  };
 }
 function baseUser({ name, defaultActorId = null, ownership = {}, placementGrants = {} } = {}) {
   const normalizedOwnership = normalizeOwnership(ownership);

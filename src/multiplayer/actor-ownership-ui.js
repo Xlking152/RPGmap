@@ -81,55 +81,12 @@ function canManageActorOwnership(api) {
   return Boolean(status?.connected && status?.session?.role === 'gm' && status?.access?.canManage === true);
 }
 
-function findUserForm(controllerOverlay, userId) {
-  return [...(controllerOverlay?.querySelectorAll?.('[data-mp-user-form]') || [])]
-    .find(form => String(form.dataset?.userId || '') === String(userId)) || null;
-}
-
-function findActorPermissionSelect(form, actorId) {
-  return [...(form?.querySelectorAll?.('[data-mp-actor-permission]') || [])]
-    .find(select => String(select.dataset?.mpActorPermission || '') === String(actorId)) || null;
-}
-
-/**
- * The access controller remains the single WebSocket writer for users.json.
- * Until it exposes a public access mutation method, reuse its already validated
- * dashboard submit path instead of opening a second socket or duplicating auth.
- */
-export function submitActorOwnershipChanges(documentNode, changes = []) {
-  if (!changes.length) return 0;
-  const toolbar = documentNode?.querySelector?.('.multiplayer-toolbar');
-  const controllerOverlay = documentNode?.querySelector?.('.multiplayer-backdrop');
-  if (!toolbar || !controllerOverlay) throw new Error('联机权限控制器尚未初始化');
-
-  const wasHidden = controllerOverlay.hidden === true;
-  const previousVisibility = controllerOverlay.style.visibility;
-  if (wasHidden) controllerOverlay.style.visibility = 'hidden';
-  toolbar.click();
-
-  const EventCtor = documentNode.defaultView?.Event || globalThis.Event;
-  let submitted = 0;
-  try {
-    for (const change of changes) {
-      const form = findUserForm(controllerOverlay, change.userId);
-      const select = findActorPermissionSelect(form, change.actorId);
-      if (!form || !select) throw new Error(`无法找到 Player ${change.userId} 的 Actor 权限表单`);
-      select.value = normalizeLevel(change.level);
-      form.dispatchEvent(new EventCtor('submit', { bubbles: true, cancelable: true }));
-      submitted += 1;
-    }
-  } finally {
-    if (wasHidden) {
-      const close = controllerOverlay.querySelector?.('[data-mp-close]');
-      if (close) close.click();
-      else {
-        controllerOverlay.hidden = true;
-        controllerOverlay.style.display = 'none';
-      }
-    }
-    controllerOverlay.style.visibility = previousVisibility;
+export function submitActorOwnershipChanges(api, actorId, changes = []) {
+  if (!changes.length) return Promise.resolve({ unchanged: true, results: [] });
+  if (typeof api?.multiplayer?.updateActorOwnership !== 'function') {
+    return Promise.reject(new Error('联机权限控制器尚未初始化'));
   }
-  return submitted;
+  return api.multiplayer.updateActorOwnership({ actorId, changes });
 }
 
 function levelOptions(selected) {
@@ -153,6 +110,7 @@ export function createActorOwnershipUi() {
       let actorId = null;
       let feedback = '';
       let feedbackError = false;
+      let busy = false;
 
       function statusAccess() {
         return api.multiplayer?.getStatus?.()?.access || { users: [], actors: [], canManage: false };
@@ -169,6 +127,7 @@ export function createActorOwnershipUi() {
         actorId = null;
         feedback = '';
         feedbackError = false;
+        busy = false;
         overlay.hidden = true;
         overlay.replaceChildren();
       }
@@ -187,9 +146,9 @@ export function createActorOwnershipUi() {
           ${notice ? `<div class="actor-ownership-feedback ${feedbackError ? 'error' : ''}">${escapeHtml(notice)}</div>` : ''}
           <div class="actor-ownership-list">${rows.length ? rows.map(row => `<label class="actor-ownership-row">
             <span class="actor-ownership-user"><span class="actor-ownership-online ${row.online ? 'on' : ''}"></span><span class="actor-ownership-user-copy"><strong>${escapeHtml(row.name)}</strong><small>${row.online ? '在线' : '离线'}${row.disabled ? ' · 已禁用' : ''}</small>${row.defaultActor ? '<span class="actor-ownership-badge">默认角色 · 必须 OWNER</span>' : ''}</span></span>
-            <select data-actor-ownership-user="${escapeHtml(row.userId)}" ${row.defaultActor ? 'disabled' : ''}>${levelOptions(row.level)}</select>
+            <select data-actor-ownership-user="${escapeHtml(row.userId)}" ${row.defaultActor || busy ? 'disabled' : ''}>${levelOptions(row.level)}</select>
           </label>`).join('') : '<div class="actor-ownership-feedback">还没有正式 Player User。请先在“联机 / Users”中创建或批准玩家。</div>'}</div>
-          <div class="actor-ownership-actions"><button type="button" data-actor-ownership-refresh>刷新</button><button type="button" data-actor-ownership-close>取消</button><button type="submit" class="primary" ${rows.length && catalogReady ? '' : 'disabled'}>保存权限</button></div>
+          <div class="actor-ownership-actions"><button type="button" data-actor-ownership-refresh ${busy ? 'disabled' : ''}>刷新</button><button type="button" data-actor-ownership-close>取消</button><button type="submit" class="primary" ${rows.length && catalogReady && !busy ? '' : 'disabled'}>${busy ? '等待服务器确认…' : '保存权限'}</button></div>
         </form>`;
         overlay.hidden = false;
       }
@@ -201,6 +160,7 @@ export function createActorOwnershipUi() {
         const openedActorId = actorId;
         feedback = '';
         feedbackError = false;
+        busy = false;
         api.multiplayer?.requestAccess?.();
         render();
         setTimeout(() => { if (actorId === openedActorId) render(); }, 180);
@@ -265,8 +225,9 @@ export function createActorOwnershipUi() {
         }
       });
 
-      overlay.addEventListener('submit', event => {
+      overlay.addEventListener('submit', async event => {
         event.preventDefault();
+        if (busy) return;
         if (!actorId || !canManageActorOwnership(api)) { close(); return; }
         const access = statusAccess();
         if (!actorOwnershipCatalogReady(access, actorId)) {
@@ -288,12 +249,17 @@ export function createActorOwnershipUi() {
           return;
         }
         try {
-          const submitted = submitActorOwnershipChanges(documentNode, changes);
-          if (submitted !== changes.length) throw new Error('部分权限更新没有提交');
+          busy = true;
+          feedback = '正在等待服务器原子确认…';
+          feedbackError = false;
+          render();
+          await submitActorOwnershipChanges(api, actorId, changes);
           api.multiplayer?.requestAccess?.();
           api.emit?.('multiplayer:actor-ownership-update', { actorId, changes: structuredClone(changes) });
           close();
         } catch (error) {
+          busy = false;
+          if (error?.code === 'access_revision_conflict') api.multiplayer?.requestAccess?.();
           feedback = `保存失败：${error?.message || error}`;
           feedbackError = true;
           render();

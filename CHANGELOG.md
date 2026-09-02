@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.3.1
+
+- 收口 v2.3.0 发布后的角色/怪物卡权限修复（起点 `15cda37`）：Actor Sheet V3 正式接入运行时组合入口，移除 `<pre>` 占位 renderer 与 V2 DOM decorator；角色卡继续支持多窗口、Scene+Token 独立身份、拖动缩放、焦点顺序、本地几何记忆和窄屏单列布局。
+- 卡片上下文显式使用 NONE/LIMITED/OBSERVER/OWNER/GM 权限。OWNER/GM 的 Play 模式只处理 HP、资源、检定、战斗与状态等运行数据，Edit 模式才编辑名称、头像、类型、队伍、形态等结构；OBSERVER 完整只读，LIMITED 只进入专用最小卡，Token 控制权仍单独按实例规则判定。
+- Actor 增加向后兼容的 `publicProfile`：GM 可维护公共简介、外观、最多 20 条已知情报和允许公开的状态定义，并在模板卡预览 LIMITED 结果。`actor.publicProfile.update` 由服务器权威标准化、校验状态白名单并通过 Actor changeSet 增量同步；旧 Actor 默认为空，不会隐式公开 Ruleset 私有简介。
+- LIMITED AudienceProjection 只下发最小 Actor、规范化公共档案和当前 Token 的安全 `publicStatuses`。状态摘要仅包含名称、图标、颜色、分类和层数；不包含真实状态 ID、实例 ID、备注、持续时间、来源、能力、changes、生命、资源或权限。Linked 状态正常同步，Unlinked 怪物实例按各自 Synthetic Actor 隔离。
+- Actor 权限编辑改用 `api.multiplayer.updateActorOwnership()` 原子批量请求，服务端验证 GM、Actor、User、Access revision 与默认角色 OWNER 约束，并返回逐项结果；移除通过隐藏旧管理表单模拟提交的路径。
+- 应用版本升至 `2.3.1`。World schema 保持 `3`，operation schema 保持 `2`，Status schema 与 Access schema 保持 `4`，Infinite Horror Ruleset `1.0.0` 和 Lanzhou MapPackage `1.0.5` 不变。
+
 ## v2.3.0
 
 - Operation Protocol 升至 schema `2`：Token、Actor、Status、Chat、Health、Combat、Feature 与 Fog 统一使用 `world.operation`，提交消息包含连续 revision、Audience-safe patch、细粒度 `changeSet` 和裁剪后的 results。完整 snapshot 仅用于启动、显式恢复/导入、revision 缺口、Audience 身份变化和跨 MapPackage Scene。

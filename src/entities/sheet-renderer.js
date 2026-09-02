@@ -91,11 +91,31 @@ export function installEntityStyles(documentNode) {
     .entity-placement-hud button { flex:0 0 auto; }
     .entity-sheet-readonly input, .entity-sheet-readonly select,
     .entity-sheet-readonly [data-sheet-action]:not([data-sheet-action="close"]) { pointer-events:none; opacity:.55; }
+    .entity-sheet-v3 { min-width:560px; }
+    .entity-sheet-v3-badges { display:flex; gap:5px; flex-wrap:wrap; align-items:center; margin-top:5px; }
+    .entity-sheet-v3-badge { padding:2px 7px; border:1px solid #cbd6d2; border-radius:999px; background:#eef3ef; color:#536366; font-size:10px; font-weight:800; letter-spacing:.35px; }
+    .entity-sheet-v3-mode-toggle { border:1px solid #176d76; border-radius:7px; padding:4px 8px; background:#fff; color:#176d76; cursor:pointer; font-size:11px; font-weight:800; }
+    .entity-sheet-v3[data-sheet-interaction-mode="play"] [data-sheet-edit-only] { display:none !important; }
+    .entity-sheet-v3[data-sheet-interaction-mode="play"] [data-actor-name] { border-bottom-color:transparent; color:inherit; opacity:1; cursor:default; }
+    .entity-limited-sheet.entity-sheet-v3 { min-width:360px; width:min(520px,92vw); }
+    .entity-limited-sheet.entity-sheet-v3 .entity-sheet-header .entity-avatar,
+    .entity-limited-sheet.entity-sheet-v3 .entity-sheet-header .entity-avatar img { width:78px; height:78px; border-radius:10px; }
+    .entity-public-profile-editor { display:grid; gap:10px; }
+    .entity-public-profile-editor > label { display:grid; gap:5px; font-weight:700; color:#526366; }
+    .entity-public-profile-editor textarea { width:100%; box-sizing:border-box; resize:vertical; }
+    .entity-public-status-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px 10px; max-height:180px; overflow:auto; }
+    .entity-public-status-option { display:flex; gap:5px; align-items:center; }
+    .entity-public-profile-preview { display:grid; gap:10px; padding:10px; border:1px dashed #b8c6c1; border-radius:8px; background:#f5f7f4; }
+    .entity-known-facts { margin:0; padding-left:20px; display:grid; gap:6px; }
+    .entity-public-status-list { display:flex; gap:7px; flex-wrap:wrap; }
+    .entity-public-status { display:inline-flex; align-items:center; gap:5px; padding:5px 8px; border:1px solid var(--status-color); border-radius:999px; background:#fff; }
     .entity-template-runtime-readonly [data-actor-operation],
     .entity-template-runtime-readonly [data-form-select],
     .entity-template-runtime-readonly [data-sheet-action="cycle-form"] { pointer-events:none; opacity:.55; }
     @keyframes entity-indicator { 0%{opacity:0;transform:translate(-50%,-6px)} 15%,75%{opacity:1;transform:translate(-50%,0)} 100%{opacity:0;transform:translate(-50%,-8px)} }
     @media(max-width:760px){
+      .entity-sheet-v3{min-width:0;width:calc(100vw - 16px)!important;max-width:calc(100vw - 16px);left:8px!important;top:8px!important;height:calc(100vh - 16px)!important;max-height:calc(100vh - 16px)}
+      .entity-public-status-options{grid-template-columns:1fr}
       .entity-grid{grid-template-columns:1fr 1fr}
       .entity-sheet-backdrop:not(.entity-sheet-window){padding:8px}
       .entity-sheet-window > .entity-sheet{max-width:calc(100vw - 16px);max-height:calc(100vh - 16px)}

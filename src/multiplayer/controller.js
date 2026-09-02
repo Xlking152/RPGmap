@@ -99,7 +99,8 @@ export function createMultiplayerController() {
       let session = null;
       let permissions = { worldWrite: false, worldReset: false, manageAccess: false, combatManage: false, actorOwnerIds: [], actorObserverIds: [], actorLimitedIds: [], defaultActorId: null, placementGrants: { actorTypes: [], actorIds: [], markerKinds: [] } };
       let clients = [];
-      let access = { users: [], pending: [], actors: [], canManage: false, selfUserId: null };
+      let access = { revision: 0, users: [], pending: [], actors: [], canManage: false, selfUserId: null };
+      let pendingActorOwnership = null;
       let inFlight = false;
       let pendingPush = false;
       let intentionalClose = false;
@@ -502,6 +503,13 @@ export function createMultiplayerController() {
         api.emit?.('world:operation-pending-clear', { reason: message });
       }
 
+      function rejectActorOwnership(message = 'Actor 权限更新因联机中断而取消') {
+        if (!pendingActorOwnership) return;
+        const pending = pendingActorOwnership;
+        pendingActorOwnership = null;
+        pending.reject(new Error(message));
+      }
+
       function rejectQueuedOperations(error) {
         const queued = operationQueue;
         operationQueue = [];
@@ -782,6 +790,7 @@ export function createMultiplayerController() {
 
         if (message.type === 'access.snapshot') {
           access = {
+            revision: Math.max(0, Number(message.revision) || 0),
             users: Array.isArray(message.users) ? message.users : [],
             pending: Array.isArray(message.pending) ? message.pending : [],
             actors: Array.isArray(message.actors) ? message.actors : [],
@@ -789,6 +798,27 @@ export function createMultiplayerController() {
             selfUserId: message.selfUserId || null,
           };
           if (!overlay.hidden && connected) renderDashboard();
+          return;
+        }
+
+        if (message.type === 'access.actor-ownership.ack') {
+          if (pendingActorOwnership && message.operationId === pendingActorOwnership.operationId) {
+            const pending = pendingActorOwnership;
+            pendingActorOwnership = null;
+            pending.resolve({ actorId: message.actorId, revision: Number(message.revision) || access.revision, results: message.results || [] });
+          }
+          return;
+        }
+
+        if (message.type === 'access.actor-ownership.denied') {
+          if (pendingActorOwnership && message.operationId === pendingActorOwnership.operationId) {
+            const pending = pendingActorOwnership;
+            pendingActorOwnership = null;
+            const error = new Error(message.message || 'Actor 权限更新被拒绝');
+            error.code = message.code || 'actor_ownership_denied';
+            error.revision = Number(message.revision) || access.revision;
+            pending.reject(error);
+          }
           return;
         }
 
@@ -1047,6 +1077,7 @@ export function createMultiplayerController() {
         joining = true;
         setActiveVisionSource(null);
         rejectVisionSource('Reconnecting to the Local/LAN server');
+        rejectActorOwnership('正在重新连接局域网服务器，未确认的 Actor 权限更新已取消');
         session = null;
         inFlight = false;
         pendingPush = false;
@@ -1097,6 +1128,7 @@ export function createMultiplayerController() {
           inFlight = false;
           pendingPush = false;
           rejectVisionSource('Local/LAN connection closed');
+          rejectActorOwnership('局域网连接已断开，未确认的 Actor 权限更新已取消');
           deferredChat = [];
           activeWorldOperationId = null;
           rejectAtomicWorldOperations('局域网连接已断开，未确认的 World 操作已取消');
@@ -1119,6 +1151,7 @@ export function createMultiplayerController() {
         setActiveVisionSource(null);
         session = null;
         rejectVisionSource('Local/LAN connection closed');
+        rejectActorOwnership('已主动断开局域网连接，未确认的 Actor 权限更新已取消');
         inFlight = false;
         pendingPush = false;
         deferredChat = [];
@@ -1250,6 +1283,26 @@ export function createMultiplayerController() {
         disconnect,
         requestWorld: () => send({ type: 'world.snapshot.request' }),
         requestAccess: () => send({ type: 'access.request' }),
+        updateActorOwnership({ actorId, changes } = {}) {
+          if (!connected || session?.role !== 'gm' || access.canManage !== true) {
+            return Promise.reject(new Error('只有已连接的 GM 可以修改 Actor 权限'));
+          }
+          if (pendingActorOwnership) return Promise.reject(new Error('已有 Actor 权限更新正在等待服务器确认'));
+          const values = Array.isArray(changes) ? changes.map(change => ({
+            userId: String(change?.userId || ''), level: String(change?.level || 'none').toLowerCase(),
+          })) : [];
+          const operationId = createOperationId('access-ownership');
+          return new Promise((resolve, reject) => {
+            pendingActorOwnership = { operationId, resolve, reject };
+            if (!send({
+              type: 'access.actor-ownership.update', operationId,
+              baseRevision: access.revision, actorId: String(actorId || ''), changes: values,
+            })) {
+              pendingActorOwnership = null;
+              reject(new Error('Actor 权限更新发送失败'));
+            }
+          });
+        },
         appendChat,
         appendChatAfterWorld,
         performStatusOperation,

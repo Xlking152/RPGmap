@@ -88,7 +88,7 @@ test('Infinite Horror migrates legacy HP base/runtime into independent Health da
   const state = normalizedLegacyState();
   const actor = state.actors[0];
   assert.deepEqual(Object.keys(actor).sort(), [
-    'createdAt', 'effects', 'id', 'img', 'name', 'notes', 'partyId', 'prototypeToken', 'system', 'type', 'updatedAt',
+    'createdAt', 'effects', 'id', 'img', 'name', 'notes', 'partyId', 'prototypeToken', 'publicProfile', 'system', 'type', 'updatedAt',
   ]);
   assert.equal(actor.type, 'pc');
   assert.equal(actor.partyId, 'party-default');

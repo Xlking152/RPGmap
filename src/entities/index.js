@@ -64,7 +64,6 @@ export function createEntitySystem(options = {}) {
         if (destroyed) return null;
         if (!loading) loading = import('../ui/lazy-runtime-tools.js').then(({
           createEntityUiTool,
-          createActorSheetV2Decorator,
           installActorSheetOpenPolicy,
         }) => {
           if (destroyed) return null;
@@ -72,7 +71,6 @@ export function createEntitySystem(options = {}) {
           mapElement.removeEventListener('dblclick', handleTokenDoubleClick, true);
           createEntityUiTool(options).register(api);
           installActorSheetOpenPolicy(api);
-          createActorSheetV2Decorator().register(api);
           return api.entities;
         });
         return loading;

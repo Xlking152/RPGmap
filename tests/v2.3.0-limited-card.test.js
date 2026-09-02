@@ -12,5 +12,6 @@ test('LIMITED Actor rendering returns before Ruleset sheets, Health, Status, and
   assert.match(limitedBranch, /actor\.name/);
   assert.match(limitedBranch, /entityAvatarHtml\(actor/);
   assert.match(limitedBranch, /actor\.type/);
+  assert.match(limitedBranch, /actorSheet\.renderLimited/);
   assert.doesNotMatch(limitedBranch, /resolveStatusUiSnapshot|describeActorSheet|actorSheetBody|actorDelta|health|system/);
 });

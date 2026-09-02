@@ -15,6 +15,9 @@ test('release publishing declares the repository without requiring a checkout', 
     workflow,
     /gh release create[\s\S]*?--repo "\$GITHUB_REPOSITORY"[\s\S]*?--target/,
   );
+  assert.match(workflow, /Prepare release notes from changelog/);
+  assert.match(workflow, /Source Commit/);
+  assert.match(workflow, /--notes-file/);
 });
 
 test('release package closes every local server module inside the ZIP root', () => {
