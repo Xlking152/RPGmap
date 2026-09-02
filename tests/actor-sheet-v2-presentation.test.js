@@ -40,6 +40,6 @@ test('Actor Sheet policy and V2 presentation stay in the lazy Entity UI chunk', 
   assert.match(lazyRuntime, /createActorSheetV2Decorator/);
   assert.match(entityIndex, /installActorSheetOpenPolicy\(api\)/);
   assert.match(entityIndex, /createActorSheetV2Decorator\(\)\.register\(api\)/);
-  assert.ok(entityIndex.indexOf('installActorSheetOpenPolicy(api)') < entityIndex.indexOf('createActorSheetWindowCoordinator'));
+  assert.ok(entityIndex.indexOf('installActorSheetOpenPolicy(api)') < entityIndex.indexOf('createActorSheetWindowCoordinator({'));
   assert.ok(entityIndex.indexOf("import('../ui/lazy-runtime-tools.js')") < entityIndex.indexOf('createActorSheetV2Decorator().register(api)'));
 });
