@@ -18,7 +18,9 @@ export function createEntitySystem(options = {}) {
         if (!header) return;
         const sheet = header.parentElement;
         const rect = sheet.getBoundingClientRect();
-        drag = { sheet, x: event.clientX - rect.left, y: event.clientY - rect.top };
+        const key = String(sheet.dataset.sheetWindowKey || '');
+        if (key) api.entities?.focusSheet?.(key);
+        drag = { sheet, key, x: event.clientX - rect.left, y: event.clientY - rect.top };
         event.preventDefault();
       }
 
@@ -28,9 +30,16 @@ export function createEntitySystem(options = {}) {
         drag.sheet.style.top = `${Math.max(8, Math.min(windowNode.innerHeight - 56, event.clientY - drag.y))}px`;
       }
 
+      function pointerUp() {
+        if (!drag) return;
+        const { sheet, key } = drag;
+        drag = null;
+        if (key) api.entities?.captureSheetGeometry?.(key, sheet.getBoundingClientRect());
+      }
+
       documentNode.addEventListener('pointerdown', pointerDown, dragOptions);
       documentNode.addEventListener('pointermove', pointerMove, dragOptions);
-      documentNode.addEventListener('pointerup', () => { drag = null; }, dragOptions);
+      documentNode.addEventListener('pointerup', pointerUp, dragOptions);
 
       async function load() {
         if (destroyed) return null;
@@ -38,14 +47,12 @@ export function createEntitySystem(options = {}) {
           createEntityUiTool,
           createActorSheetV2Decorator,
           installActorSheetOpenPolicy,
-          createActorSheetWindowCoordinator,
         }) => {
           if (destroyed) return null;
           actorTabbar?.removeEventListener('click', handleActorTabClick, true);
           mapElement.removeEventListener('dblclick', handleTokenDoubleClick, true);
           createEntityUiTool(options).register(api);
           installActorSheetOpenPolicy(api);
-          createActorSheetWindowCoordinator({ api, documentNode, windowNode });
           createActorSheetV2Decorator().register(api);
           return api.entities;
         });
