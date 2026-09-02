@@ -1,14 +1,5 @@
 import { createSheetContext, ACTOR_PERMISSION_LEVELS } from './permission.js';
-
-function partFor(section) {
-  const type = String(section?.type || '').trim();
-  return {
-    type,
-    render(data = {}) {
-      return `<section class="entity-section" data-sheet-part="${type}"><h3>${type || 'section'}</h3><pre>${JSON.stringify(data, null, 2)}</pre></section>`;
-    },
-  };
-}
+import { renderPart } from './parts.js';
 
 export class ActorSheet {
   constructor({ actor, userId, description = {}, mode = 'play' } = {}) {
@@ -26,18 +17,17 @@ export class ActorSheet {
   }
 
   render() {
-    const title = this.context.level === ACTOR_PERMISSION_LEVELS.LIMITED
-      ? `${this.actor?.name || 'Unknown'}`
-      : `${this.actor?.name || 'Unknown'} (${this.context.level})`;
+    const title = this.actor?.name || 'Unknown';
+    const readonly = this.context.editable ? '' : ' entity-sheet-readonly';
 
     return `
-      <article class="entity-sheet" data-sheet-mode="${this.context.mode}">
+      <article class="entity-sheet${readonly}" data-sheet-mode="${this.context.mode}">
         <header class="entity-sheet-header">
           <strong>${title}</strong>
           <button data-sheet-mode-toggle>${this.context.mode === 'edit' ? 'Play' : 'Edit'}</button>
         </header>
         <div class="entity-sheet-body">
-          ${this.visibleSections.map(section => partFor(section).render(section)).join('')}
+          ${this.visibleSections.map(renderPart).join('')}
         </div>
       </article>`;
   }
