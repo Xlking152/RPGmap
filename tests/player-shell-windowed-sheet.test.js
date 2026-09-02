@@ -4,7 +4,6 @@ import test from 'node:test';
 
 const appShell = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
 const entityIndex = readFileSync(new URL('../src/entities/index.js', import.meta.url), 'utf8');
-const sheetWindow = readFileSync(new URL('../src/entities/sheet-window-behavior.js', import.meta.url), 'utf8');
 
 test('connected Player shell hides GM World controls and exposes one direct owned-Actor entry', () => {
   assert.match(appShell, /capabilities\?\.connected === true && capabilities\.role !== 'gm'/);
@@ -34,12 +33,12 @@ test('plain C opens only the primary selected Token sheet', () => {
 test('Actor sheets become map-friendly draggable and resizable desktop windows', () => {
   assert.match(appShell, /\.entity-sheet-backdrop\{[^}]*pointer-events:none/);
   assert.match(appShell, /\.entity-sheet\{[^}]*resize:both;pointer-events:auto/);
-  assert.match(sheetWindow, /documentNode\.addEventListener\('pointerdown', pointerDown,/);
-  assert.match(sheetWindow, /drag = \{ sheet, x:/);
+  assert.match(entityIndex, /documentNode\.addEventListener\('pointerdown', pointerDown,/);
+  assert.match(entityIndex, /drag = \{ sheet, x:/);
 });
 
-test('window behavior registers before the heavy Entity UI is lazily loaded', () => {
-  const windowRegister = entityIndex.indexOf('createSheetWindowBehavior().register(api)');
+test('window behavior is installed before the heavy Entity UI is lazily loaded', () => {
+  const windowRegister = entityIndex.indexOf("documentNode.addEventListener('pointerdown', pointerDown");
   const lazyImport = entityIndex.indexOf("import('../ui/lazy-runtime-tools.js')");
   assert.ok(windowRegister >= 0);
   assert.ok(lazyImport > windowRegister);
