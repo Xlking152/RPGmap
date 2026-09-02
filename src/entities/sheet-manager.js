@@ -43,9 +43,17 @@ export function actorSheetWindowKey(actorId) {
   return id ? `actor:${id}` : '';
 }
 
-export function tokenSheetWindowKey(tokenId) {
+export function tokenSheetWindowKey(sceneId, tokenId = undefined) {
+  // One-argument compatibility keeps persisted v1 callers safe while all new
+  // window records use the Scene-aware identity below.
+  if (tokenId === undefined) {
+    const id = String(sceneId || '').trim();
+    return id ? `token:${id}` : '';
+  }
+  const scene = String(sceneId || '').trim();
   const id = String(tokenId || '').trim();
-  return id ? `token:${id}` : '';
+  if (!id) return '';
+  return scene ? `scene:${scene}:token:${id}` : `token:${id}`;
 }
 
 export function createActorSheetManager({ storage = null, storageKey = DEFAULT_STORAGE_KEY } = {}) {
@@ -79,11 +87,14 @@ export function createActorSheetManager({ storage = null, storageKey = DEFAULT_S
     persist();
   }
 
-  function open({ actorId, tokenId = null, tab = null } = {}) {
+  function open({ actorId, tokenId = null, sceneId = null, tab = null } = {}) {
     const normalizedActorId = String(actorId || '').trim();
     const normalizedTokenId = String(tokenId || '').trim() || null;
+    const normalizedSceneId = normalizedTokenId ? String(sceneId || '').trim() || null : null;
     if (!normalizedActorId) return { record: null, created: false };
-    const key = normalizedTokenId ? tokenSheetWindowKey(normalizedTokenId) : actorSheetWindowKey(normalizedActorId);
+    const key = normalizedTokenId
+      ? tokenSheetWindowKey(normalizedSceneId, normalizedTokenId)
+      : actorSheetWindowKey(normalizedActorId);
     const existing = get(key);
     if (existing) {
       if (tab != null && String(tab).trim()) existing.tab = String(tab);
@@ -96,6 +107,7 @@ export function createActorSheetManager({ storage = null, storageKey = DEFAULT_S
       key,
       actorId: normalizedActorId,
       tokenId: normalizedTokenId,
+      sceneId: normalizedSceneId,
       tab: String(tab || saved.tab || 'overview'),
       left: saved.left ?? 24 + cascade * 26,
       top: saved.top ?? 72 + cascade * 22,
