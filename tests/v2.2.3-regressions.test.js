@@ -9,7 +9,7 @@ import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-hor
 import { applySyntheticActorStatusBatch } from '../src/token/synthetic-status.js';
 
 const movementIndex = await readFile(new URL('../src/movement/index.js', import.meta.url), 'utf8');
-const movementController = await readFile(new URL('../src/movement/controller-v5.js', import.meta.url), 'utf8');
+const movementController = await readFile(new URL('../src/movement/controller.js', import.meta.url), 'utf8');
 
 function monsterActor() {
   return createActorFromRulesetImport({
@@ -74,7 +74,7 @@ function world() {
 }
 
 test('Movement V5 keeps document drag lifecycle and coalesces repeated WASD input', () => {
-  assert.match(movementIndex, /createMovementControllerV5\(\{ settings \}\)\.register\(api\)/);
+  assert.match(movementIndex, /createMovementController\(\{ settings \}\)\.register\(api\)/);
   assert.match(movementController, /documentNode\.addEventListener\('pointermove', pointerMove, true\)/);
   assert.match(movementController, /documentNode\.addEventListener\('pointerup', pointerUp, true\)/);
   assert.match(movementController, /const keyboardQueue = \[\]/);

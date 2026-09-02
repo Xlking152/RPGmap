@@ -61,7 +61,7 @@ function ghostIcon(descriptor) {
   });
 }
 
-export function createMovementGhostRendererV2() {
+export function createMovementGhostRenderer() {
   return Object.freeze({
     register(api) {
       if (!api.tokens?.get || !api.tokens?.resolveActor || !api.selection) {

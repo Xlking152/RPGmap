@@ -27,7 +27,7 @@ function sameDirection(left, right) {
   return left && right && left.x === right.x && left.y === right.y;
 }
 
-export function createMovementControllerV5({ settings } = {}) {
+export function createMovementController({ settings } = {}) {
   return Object.freeze({
     register(api) {
       if (!settings) throw new Error('Movement V5 requires MovementSettings');

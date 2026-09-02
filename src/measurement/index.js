@@ -1,13 +1,13 @@
-import { createRulerControllerV2 } from './controller-v2.js';
+import { createRulerController } from './controller.js';
 
 export { RulerSession } from './session.js';
 export { summarizeRulerPath, segmentMidpoint, formatRulerDistance } from './distance.js';
-export { createRulerControllerV2 } from './controller-v2.js';
+export { createRulerController } from './controller.js';
 
 export function createMeasurementSystem() {
   return {
     register(api) {
-      createRulerControllerV2().register(api);
+      createRulerController().register(api);
     },
   };
 }
