@@ -40,10 +40,11 @@ const allJs = allFiles.filter(file => file.endsWith('.js'));
 const allCss = allFiles.filter(file => file.endsWith('.css'));
 const sum = async files => (await Promise.all(files.map(gzipSize))).reduce((total, value) => total + value, 0);
 
-// v2.3.0 is the formal baseline for post-release UX work. Initial JavaScript
-// may not grow. The complete payload gets a narrow 1.5% allowance for the
-// Actor-centric ownership surface while remaining below the old v2.2.6 total
-// payload (256689 B gzip).
+// v2.3.0 is the formal baseline for post-release UX work. The entry payload
+// gets only a 0.1% gzip-noise allowance for content-hash/chunk-reference churn.
+// The complete payload gets a narrow 1.5% allowance for the Actor-centric
+// ownership surface while remaining below the old v2.2.6 total payload
+// (256689 B gzip).
 const baseline = Object.freeze({
   commit: '15cda3787eaedb31b083d66841890251f588496b',
   version: '2.3.0',
@@ -52,7 +53,7 @@ const baseline = Object.freeze({
   totalCssGzip: 7076,
 });
 const limits = Object.freeze({
-  initialJsGzip: baseline.initialJsGzip,
+  initialJsGzip: Math.floor(baseline.initialJsGzip * 1.001),
   totalJsGzip: Math.floor(baseline.totalJsGzip * 1.015),
   totalCssGzip: Math.floor(baseline.totalCssGzip * 1.05),
 });
