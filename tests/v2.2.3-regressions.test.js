@@ -80,8 +80,20 @@ test('Movement V5 keeps document drag lifecycle and coalesces repeated WASD inpu
   assert.match(movementController, /const keyboardQueue = \[\]/);
   assert.match(movementController, /while \(keyboardQueue\.length/);
   assert.match(movementController, /sameDirection\(last, direction\)/);
+  assert.match(movementController, /KEYBOARD_BATCH_DELAY_MS = 50/);
+  assert.match(movementController, /MAX_KEYBOARD_BATCH_STEPS = 8/);
   assert.match(movementController, /api\.movementFast\?\.moveTokenTo \|\| api\.movement\.moveTokenTo/);
   assert.doesNotMatch(movementController, /setPointerCapture|releasePointerCapture/);
+});
+
+test('stable Movement Controller restores Ctrl/Cmd segmented waypoints without versioned runtimes', () => {
+  assert.match(movementController, /event\.ctrlKey \|\| event\.metaKey/);
+  assert.match(movementController, /nextClickCreatesWaypoint/);
+  assert.match(movementController, /async function addWaypoint/);
+  assert.match(movementController, /function removeWaypoint/);
+  assert.match(movementController, /\[current\.start, \.\.\.current\.waypoints, target\]/);
+  assert.match(movementController, /addWaypoint\(point = interaction\?\.current\)/);
+  assert.doesNotMatch(movementController, /addWaypoint\(\) \{ return false; \}/);
 });
 
 test('configured and overridden vision keeps ruleset ranges above 120 m', () => {
