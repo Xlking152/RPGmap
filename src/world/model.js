@@ -6,6 +6,7 @@ import { normalizeFogState } from '../vision/fog.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { normalizeFeatureStateRecords } from './feature-states.js';
 import { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
+import { STATUS_SCHEMA_VERSION } from '../status/model.js';
 
 export { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 
@@ -284,7 +285,7 @@ export function projectWorldV2ToRuntimeState(state, rawWorld, { mapPackage, rule
   delete next.preferences.featureInteractions;
   next.preferences.entitySystem = {
     ...clone(object(next.preferences.entitySystem)),
-    schemaVersion: Math.max(3, Number(next.preferences.entitySystem?.schemaVersion) || 0),
+    schemaVersion: STATUS_SCHEMA_VERSION,
     statusDefinitions: clone(world.statusDefinitions),
     actors: clone(world.actors),
     tokens: tokens.map(runtimeTokenFromWorld),

@@ -326,6 +326,8 @@ export function createVisionFogSystem() {
         const dispose = api.on?.(eventName, scheduleRender);
         if (typeof dispose === 'function') off.push(dispose);
       }
+      const disposeFog = api.on?.('fog:change', scheduleRender);
+      if (typeof disposeFog === 'function') off.push(disposeFog);
       const disposeCapabilities = api.on?.('multiplayer:capabilities', () => {
         clearUnavailableConnectedSource();
         scheduleRender();

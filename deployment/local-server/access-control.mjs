@@ -3,7 +3,8 @@ import { assertWorldState, isSameChat } from './world-schema.mjs';
 import { statusStateChanged } from './status-operations.mjs';
 import { resolveStatusCapabilitiesForToken } from './status-capabilities-v2.mjs';
 
-export const OWNERSHIP = Object.freeze({ NONE: 'none', OBSERVER: 'observer', OWNER: 'owner' });
+export const ACCESS_SCHEMA_VERSION = 4;
+export const OWNERSHIP = Object.freeze({ NONE: 'none', LIMITED: 'limited', OBSERVER: 'observer', OWNER: 'owner' });
 const OWNERSHIP_VALUES = new Set(Object.values(OWNERSHIP));
 
 function cleanName(value, fallback = 'Player') {
@@ -174,7 +175,7 @@ function normalizePlacementGrants(raw) {
     markerKinds: clean(source.markerKinds, MARKER_KINDS),
   };
 }
-export function createAccessState() { return { schemaVersion: 3, users: [] }; }
+export function createAccessState() { return { schemaVersion: ACCESS_SCHEMA_VERSION, users: [] }; }
 export function normalizeOwnership(raw) {
   const result = {};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return result;
@@ -208,7 +209,7 @@ export function normalizeAccessState(raw) {
       updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString(),
     });
   }
-  return { schemaVersion: 3, users };
+  return { schemaVersion: ACCESS_SCHEMA_VERSION, users };
 }
 function baseUser({ name, defaultActorId = null, ownership = {}, placementGrants = {} } = {}) {
   const normalizedOwnership = normalizeOwnership(ownership);

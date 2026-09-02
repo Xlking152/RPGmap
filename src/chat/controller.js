@@ -287,6 +287,10 @@ export function createChatController({ selection } = {}) {
         store.load();
         if (panel.classList.contains('active')) render();
       });
+      api.on('chat:change', () => {
+        store.load();
+        if (panel.classList.contains('active')) render();
+      });
 
       render();
     },

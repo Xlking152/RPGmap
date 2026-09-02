@@ -418,6 +418,21 @@ test('placement grants expose only a restricted Actor template catalog entry', (
   assert.deepEqual(entry.effects, []);
 });
 
+test('LIMITED ownership exposes only the legal Actor summary', () => {
+  const template = actor({ id: 'limited-npc', name: 'Limited NPC', type: 'npc', partyId: null });
+  template.notes = 'private notes';
+  const projected = projectStateForAudience(state({ actors: [template], tokens: [] }), {
+    role: 'player', userId: 'player-limited',
+    user: { id: 'player-limited', ownership: { 'limited-npc': 'limited' } },
+    ruleset: infiniteHorrorRuleset,
+  });
+  const entry = projected.preferences.worldV2.actors.find(item => item.id === 'limited-npc');
+  assert.equal(entry.audienceRestricted, true);
+  assert.equal(entry.name, 'Limited NPC');
+  assert.deepEqual(entry.system, {});
+  assert.equal(entry.notes, undefined);
+});
+
 test('public and party Markers do not disclose controller or explicit-user access lists', () => {
   const pc = actor({ id: 'actor-a', partyId: 'party-default' });
   const source = state({ actors: [pc], tokens: [token({ id: 'token-a', actorId: pc.id })], markers: [{

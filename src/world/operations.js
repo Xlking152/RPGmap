@@ -25,6 +25,7 @@ import {
 } from '../vision/fog.js';
 import { migrateWorldSchema3State } from './migration.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
+import { advanceStatusDurations, STATUS_SCHEMA_VERSION } from '../status/model.js';
 
 export {
   assertFeatureStatePatch,
@@ -34,7 +35,7 @@ export {
   migrateWorldSchema3State,
 };
 
-export const WORLD_OPERATION_SCHEMA_VERSION = 1;
+export const WORLD_OPERATION_SCHEMA_VERSION = 2;
 export const WORLD_OPERATION_BATCH_LIMIT = 64;
 export const WORLD_OPERATION_CACHE_LIMIT = 512;
 
@@ -62,6 +63,9 @@ const OPERATION_TYPES = new Set([
   'scene.fog.reset',
   'scene.fog.hide',
   'combat.replace',
+  'combat.advance',
+  'chat.append',
+  'chat.clear',
   'status.apply',
   'status.remove',
   'status.setStacks',
@@ -234,7 +238,15 @@ function applyStatusProjectionToWorld(state) {
   const world = worldFromState(state);
   const entity = state.preferences?.entitySystem;
   if (!plainObject(entity)) return state;
-  if (Array.isArray(entity.actors)) world.actors = clone(entity.actors);
+  const actors = mapById(entity.actors || []);
+  world.actors = (world.actors || []).map(actor => {
+    const projected = actors.get(String(actor.id));
+    if (!projected) return actor;
+    return {
+      ...actor,
+      effects: clone(Array.isArray(projected.effects) ? projected.effects : []),
+    };
+  });
   if (Array.isArray(entity.statusDefinitions)) world.statusDefinitions = clone(entity.statusDefinitions);
   const scene = activeScene(world);
   const tokens = mapById(entity.tokens || []);
@@ -248,7 +260,7 @@ export function projectWorldOperationState(rawState) {
   const scene = activeScene(world);
   state.preferences ||= {};
   const entity = plainObject(state.preferences.entitySystem) ? state.preferences.entitySystem : {};
-  entity.schemaVersion = Math.max(3, Number(entity.schemaVersion) || 0);
+  entity.schemaVersion = STATUS_SCHEMA_VERSION;
   entity.actors = clone(world.actors || []);
   entity.tokens = clone(scene.tokens || []);
   entity.statusDefinitions = clone(world.statusDefinitions || []);
@@ -561,6 +573,80 @@ function applyCanonicalOperation(state, operation, context = {}) {
     return { action: type };
   }
 
+  if (type === 'combat.advance') {
+    const combatSystem = plainObject(state.preferences.combatSystem)
+      ? state.preferences.combatSystem
+      : null;
+    const combat = combatSystem?.combat;
+    if (!plainObject(combat) || combat.state !== 'active' || !Array.isArray(combat.combatants) || !combat.combatants.length) {
+      fail('combat.advance requires active Combat', 'combat_not_active');
+    }
+    const previousRound = Math.max(1, Math.floor(Number(combat.round) || 1));
+    combat.turnIndex = Math.max(0, Math.floor(Number(combat.turnIndex) || 0)) + 1;
+    if (combat.turnIndex >= combat.combatants.length) {
+      combat.turnIndex = 0;
+      combat.round = previousRound + 1;
+    } else combat.round = previousRound;
+    combat.turnOrigin = null;
+    const scene = activeScene(world);
+    const advanced = advanceStatusDurations({
+      schemaVersion: 4,
+      actors: world.actors || [],
+      tokens: scene.tokens || [],
+      statusDefinitions: world.statusDefinitions || [],
+    }, {
+      roundAdvanced: combat.round > previousRound,
+      now: String(context.now || new Date().toISOString()),
+      round: combat.round,
+      turn: combat.turnIndex,
+    });
+    world.actors = advanced.state.actors;
+    scene.tokens = advanced.state.tokens;
+    world.statusDefinitions = advanced.state.statusDefinitions;
+    return {
+      action: type,
+      round: combat.round,
+      turnIndex: combat.turnIndex,
+      expiredCount: advanced.expiredEffectIds.length,
+    };
+  }
+
+  if (type === 'chat.append') {
+    const text = String(payload.text || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 4_000);
+    if (!text) fail('chat.append requires non-empty text', 'invalid_chat');
+    const createMessage = typeof context.createChatMessage === 'function'
+      ? context.createChatMessage
+      : input => ({
+        id: String(context.randomId?.() || `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`),
+        type: String(input.event || 'chat'),
+        text: input.text,
+        createdAt: String(context.now || new Date().toISOString()),
+        sender: clone(context.sender || { id: 'offline', name: '本地 GM', role: 'gm' }),
+        data: plainObject(input.data) ? clone(input.data) : null,
+      });
+    const message = object(createMessage({
+      text,
+      event: String(payload.event || 'chat'),
+      data: plainObject(payload.data) ? clone(payload.data) : null,
+    }), 'chat message');
+    identifier(message.id, 'chat.id');
+    state.preferences.chatSystem = plainObject(state.preferences.chatSystem)
+      ? state.preferences.chatSystem
+      : { schemaVersion: 1, messages: [] };
+    const messages = Array.isArray(state.preferences.chatSystem.messages)
+      ? state.preferences.chatSystem.messages
+      : [];
+    messages.push(clone(message));
+    if (messages.length > 500) messages.splice(0, messages.length - 500);
+    state.preferences.chatSystem.messages = messages;
+    return { action: type, chatId: String(message.id) };
+  }
+
+  if (type === 'chat.clear') {
+    state.preferences.chatSystem = { schemaVersion: 1, messages: [] };
+    return { action: type };
+  }
+
   fail(`Unsupported World operation: ${type}`, 'unknown_world_operation');
 }
 
@@ -585,13 +671,17 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
       results.push(...(Array.isArray(applied.results) ? clone(applied.results) : []));
     } else {
       results.push(applyCanonicalOperation(state, operation, context));
-      projectWorldOperationState(state);
     }
   }
   const world = worldFromState(state);
   world.updatedAt = String(context.now || new Date().toISOString());
   projectWorldOperationState(state);
-  return { state, operations: clone(operations), results };
+  return {
+    state,
+    operations: clone(operations),
+    results,
+    changeSet: createWorldOperationChangeSet(rawState, state),
+  };
 }
 
 function diffById(beforeItems = [], afterItems = []) {
@@ -623,6 +713,70 @@ function sceneContent(scene) {
     attackAreas: clone(scene?.attackAreas || []),
     sceneEvents: clone(scene?.sceneEvents || []),
     settings: clone(scene?.settings || {}),
+  };
+}
+
+function changedIds(beforeItems = [], afterItems = []) {
+  const diff = diffById(beforeItems, afterItems);
+  return {
+    upsertIds: diff.upsert.map(item => String(item.id)),
+    removeIds: diff.remove.map(String),
+  };
+}
+
+function chatMessages(state) {
+  const messages = state?.preferences?.chatSystem?.messages;
+  return Array.isArray(messages) ? messages : [];
+}
+
+export function createWorldOperationChangeSet(beforeState, afterState) {
+  const beforeWorld = worldFromState(beforeState);
+  const afterWorld = worldFromState(afterState);
+  const beforeScenes = mapById(beforeWorld.scenes);
+  const afterScenes = mapById(afterWorld.scenes);
+  const tokens = [];
+  const featureStates = [];
+  const fog = [];
+  for (const [sceneId, scene] of afterScenes) {
+    const previous = beforeScenes.get(sceneId);
+    const tokenChanges = changedIds(previous?.tokens || [], scene.tokens || []);
+    if (tokenChanges.upsertIds.length || tokenChanges.removeIds.length) tokens.push({ sceneId, ...tokenChanges });
+    const featureChanges = changedIds(
+      Object.entries(previous?.featureStates || {}).map(([id, state]) => ({ id, state })),
+      Object.entries(scene.featureStates || {}).map(([id, state]) => ({ id, state })),
+    );
+    const featureIds = [...new Set([...featureChanges.upsertIds, ...featureChanges.removeIds])];
+    if (featureIds.length) featureStates.push({ sceneId, featureIds });
+    if (!same(previous?.fog, scene.fog)) fog.push({ sceneId, dirtyBounds: null });
+  }
+  for (const [sceneId, scene] of beforeScenes) {
+    if (afterScenes.has(sceneId)) continue;
+    const removeIds = (scene.tokens || []).map(token => String(token.id));
+    if (removeIds.length) tokens.push({ sceneId, upsertIds: [], removeIds });
+  }
+  const beforeChat = chatMessages(beforeState);
+  const afterChat = chatMessages(afterState);
+  const beforeChatIds = new Set(beforeChat.map(message => String(message?.id || '')));
+  const appendedIds = afterChat
+    .filter(message => !beforeChatIds.has(String(message?.id || '')))
+    .map(message => String(message.id));
+  const cleared = beforeChat.length > 0 && afterChat.length === 0;
+  const sceneChanges = changedIds(
+    (beforeWorld.scenes || []).map(sceneMetadata),
+    (afterWorld.scenes || []).map(sceneMetadata),
+  );
+  return {
+    actors: changedIds(beforeWorld.actors || [], afterWorld.actors || []),
+    tokens,
+    scenes: {
+      ...sceneChanges,
+      activeSceneChanged: String(beforeWorld.activeSceneId || '') !== String(afterWorld.activeSceneId || ''),
+    },
+    featureStates,
+    fog,
+    combatChanged: !same(beforeState?.preferences?.combatSystem, afterState?.preferences?.combatSystem),
+    chat: { appendedIds, cleared },
+    statusDefinitionsChanged: !same(beforeWorld.statusDefinitions, afterWorld.statusDefinitions),
   };
 }
 
@@ -665,6 +819,9 @@ export function createWorldOperationPatch(beforeState, afterState) {
   }
   if (!same(beforeState?.preferences?.combatSystem, afterState?.preferences?.combatSystem)) {
     patch.combatSystem = clone(afterState?.preferences?.combatSystem || { schemaVersion: 1, combat: null });
+  }
+  if (!same(beforeState?.preferences?.chatSystem, afterState?.preferences?.chatSystem)) {
+    patch.chatSystem = clone(afterState?.preferences?.chatSystem || { schemaVersion: 1, messages: [] });
   }
   if (!same(beforeState?.preferences?.audienceVision, afterState?.preferences?.audienceVision)) {
     patch.audienceVision = afterState?.preferences?.audienceVision === undefined
@@ -730,6 +887,7 @@ export function applyWorldOperationPatch(rawState, rawPatch) {
     }
   }
   if (patch.combatSystem !== undefined) state.preferences.combatSystem = clone(patch.combatSystem);
+  if (patch.chatSystem !== undefined) state.preferences.chatSystem = clone(patch.chatSystem);
   if (patch.audienceVision === null) delete state.preferences.audienceVision;
   else if (patch.audienceVision !== undefined) state.preferences.audienceVision = clone(object(patch.audienceVision, 'audienceVision'));
   return projectWorldOperationState(state);

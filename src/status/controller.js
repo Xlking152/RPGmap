@@ -314,6 +314,7 @@ export function createStatusController() {
 
       api.on?.('state:import', () => observeStateChange('state:import'));
       api.on?.('state:commit', () => observeStateChange('state:commit'));
+      api.on?.('state:patch', () => observeStateChange('state:patch'));
     },
   };
 }

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  STATUS_SCHEMA_VERSION,
+  advanceStatusDurations,
   getStatusDefinitions,
   normalizeEntityStatusState,
   reduceStatusOperation,
@@ -49,6 +51,8 @@ function emptyState() {
 test('built-in definitions use the server IDs and spirit bypasses only structures', () => {
   assert.deepEqual(BUILTIN_STATUS_DEFINITIONS.map(definition => definition.id), [
     'status-invisible', 'status-spirit', 'status-rooted', 'status-incapacitated',
+    'status-strengthened', 'status-weakened', 'status-poisoned', 'status-burning',
+    'status-bleeding', 'status-blinded',
   ]);
   const spirit = BUILTIN_STATUS_DEFINITIONS.find(definition => definition.id === 'status-spirit');
   assert.deepEqual(spirit.capabilities.collisionBypassGroups, ['structure']);
@@ -67,7 +71,7 @@ test('legacy Actor effects migrate deterministically to custom definitions and r
 
   const first = normalizeEntityStatusState(legacy);
   const second = normalizeEntityStatusState(legacy);
-  assert.equal(first.schemaVersion, 3);
+  assert.equal(first.schemaVersion, STATUS_SCHEMA_VERSION);
   assert.equal(first.statusDefinitions.length, BUILTIN_STATUS_DEFINITIONS.length + 1);
   assert.deepEqual(first.statusDefinitions, second.statusDefinitions);
   assert.equal(first.actors[0].effects[0].id, 'old-bonus');
@@ -266,4 +270,41 @@ test('status normalization preserves custom definition and Effect extension meta
   const normalized = normalizeEntityStatusState(state);
   assert.deepEqual(normalized.statusDefinitions[0].extension, { provider: 'test-module' });
   assert.deepEqual(normalized.actors[0].effects[0].extension, { expiresAtRound: 4 });
+});
+
+test('Status V4 durations pause while disabled, expire authoritatively, and reset on re-enable', () => {
+  const source = emptyState();
+  source.statusDefinitions = structuredClone(BUILTIN_STATUS_DEFINITIONS);
+  const applied = reduceStatusOperation(source, {
+    type: 'status.apply', scope: 'actor', targetId: 'actor-1', statusId: 'status-poisoned',
+  }, { now: '2026-09-02T00:00:00.000Z', idFactory: () => 'effect-poisoned' });
+  assert.deepEqual(applied.state.actors[0].effects[0].duration, {
+    unit: 'turns', initial: 3, remaining: 3,
+  });
+
+  applied.state.actors[0].effects[0].enabled = false;
+  const paused = advanceStatusDurations(applied.state, { round: 1, turn: 1 });
+  assert.equal(paused.state.actors[0].effects[0].duration.remaining, 3);
+
+  paused.state.actors[0].effects[0].enabled = true;
+  const first = advanceStatusDurations(paused.state, { round: 1, turn: 2 });
+  const second = advanceStatusDurations(first.state, { round: 1, turn: 3 });
+  const expired = advanceStatusDurations(second.state, {
+    now: '2026-09-02T00:01:00.000Z', round: 2, turn: 0,
+  });
+  const effect = expired.state.actors[0].effects[0];
+  assert.equal(effect.duration.remaining, 0);
+  assert.equal(effect.enabled, false);
+  assert.deepEqual(effect.expiredAt, {
+    timestamp: '2026-09-02T00:01:00.000Z', round: 2, turn: 0,
+  });
+
+  const reenabled = reduceStatusOperation(expired.state, {
+    type: 'status.setStacks', scope: 'actor', targetId: 'actor-1',
+    statusId: 'status-poisoned', stacks: 1, enabled: true,
+  });
+  assert.deepEqual(reenabled.state.actors[0].effects[0].duration, {
+    unit: 'turns', initial: 3, remaining: 3,
+  });
+  assert.equal(reenabled.state.actors[0].effects[0].expiredAt, undefined);
 });

@@ -81,9 +81,22 @@ function assertSchema3Token(token, actor, label) {
   stringIds(visibility.userIds, `${label}.visibility.userIds`);
   const vision = object(token.vision, `${label}.vision`);
   if (typeof vision.enabled !== 'boolean') fail(`${label}.vision.enabled must be boolean`);
-  if (vision.rangeOverrideMeters !== null && (!Number.isFinite(Number(vision.rangeOverrideMeters))
-    || Number(vision.rangeOverrideMeters) < 0)) {
-    fail(`${label}.vision.rangeOverrideMeters is invalid`);
+  const legacyRange = Object.hasOwn(vision, 'rangeOverrideMeters');
+  const splitRange = Object.hasOwn(vision, 'preciseRangeOverrideMeters')
+    || Object.hasOwn(vision, 'vagueRangeOverrideMeters');
+  if (legacyRange && splitRange) fail(`${label}.vision cannot mix legacy and split range overrides`);
+  if (legacyRange) {
+    if (vision.rangeOverrideMeters !== null && (!Number.isFinite(Number(vision.rangeOverrideMeters))
+      || Number(vision.rangeOverrideMeters) < 0)) fail(`${label}.vision.rangeOverrideMeters is invalid`);
+  } else {
+    for (const field of ['preciseRangeOverrideMeters', 'vagueRangeOverrideMeters']) {
+      if (vision[field] !== null && (!Number.isFinite(Number(vision[field]))
+        || Number(vision[field]) < 0)) fail(`${label}.vision.${field} is invalid`);
+    }
+    if (vision.preciseRangeOverrideMeters !== null && vision.vagueRangeOverrideMeters !== null
+      && Number(vision.vagueRangeOverrideMeters) < Number(vision.preciseRangeOverrideMeters)) {
+      fail(`${label}.vision vague range cannot be smaller than precise range`);
+    }
   }
   stringIds(vision.overrideUserIds, `${label}.vision.overrideUserIds`);
   if (Object.hasOwn(token, 'hidden')) fail(`${label}.hidden is legacy-only`, 'legacy_token_hidden_forbidden');

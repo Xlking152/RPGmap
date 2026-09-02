@@ -194,3 +194,36 @@ test('Status and Effect operations use the injected reducer in offline and serve
   ]);
   assert.equal(applied.results[0].action, 'apply');
 });
+
+test('combat.advance updates turn, round, and Status V4 durations atomically', () => {
+  const initial = state();
+  const definition = {
+    id: 'status-timed', name: 'Timed', category: 'debuff', scopes: ['actor'], maxStacks: 1,
+    changes: [], capabilities: {}, defaultDuration: { unit: 'rounds', value: 1 },
+  };
+  initial.preferences.worldV2.statusDefinitions = [definition];
+  initial.preferences.worldV2.actors[0].effects = [{
+    id: 'effect-timed', definitionId: 'status-timed', stacks: 1, enabled: true,
+    duration: { unit: 'rounds', initial: 1, remaining: 1 },
+  }];
+  initial.preferences.combatSystem.combat = {
+    id: 'combat-a', state: 'active', round: 1, turnIndex: 1,
+    combatants: [
+      { id: 'combatant-a', tokenId: 'token-a', actorId: 'actor-a' },
+      { id: 'combatant-b', tokenId: 'token-b', actorId: 'actor-b' },
+    ],
+  };
+  const applied = applyWorldOperations(initial, [{ type: 'combat.advance', payload: {} }], {
+    now: '2026-09-02T00:02:00.000Z',
+  });
+  const combat = applied.state.preferences.combatSystem.combat;
+  const effect = applied.state.preferences.worldV2.actors[0].effects[0];
+  assert.equal(combat.round, 2);
+  assert.equal(combat.turnIndex, 0);
+  assert.equal(effect.duration.remaining, 0);
+  assert.equal(effect.enabled, false);
+  assert.deepEqual(effect.expiredAt, {
+    timestamp: '2026-09-02T00:02:00.000Z', round: 2, turn: 0,
+  });
+  assert.equal(applied.results[0].expiredCount, 1);
+});

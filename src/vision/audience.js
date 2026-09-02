@@ -93,13 +93,15 @@ function currentVision(world, context, actors) {
   const description = context.ruleset?.vision?.describe?.(resolved, {
     token, user: context.user, scene, lighting: scene?.settings?.lighting || 'normal',
   }) || {};
-  const override = token.vision?.rangeOverrideMeters;
-  const preciseRangeMeters = override === null || override === undefined
+  const legacyOverride = token.vision?.rangeOverrideMeters;
+  const preciseOverride = token.vision?.preciseRangeOverrideMeters ?? legacyOverride;
+  const vagueOverride = token.vision?.vagueRangeOverrideMeters ?? legacyOverride;
+  const preciseRangeMeters = preciseOverride === null || preciseOverride === undefined
     ? Number(description.preciseRangeMeters ?? description.rangeMeters) || 0
-    : Number(override) || 0;
-  const vagueRangeMeters = override === null || override === undefined
+    : Number(preciseOverride) || 0;
+  const vagueRangeMeters = vagueOverride === null || vagueOverride === undefined
     ? Math.max(preciseRangeMeters, Number(description.vagueRangeMeters ?? preciseRangeMeters) || 0)
-    : preciseRangeMeters;
+    : Math.max(preciseRangeMeters, Number(vagueOverride) || 0);
   if (token.vision?.enabled === false || vagueRangeMeters <= 0) return null;
   return {
     tokenId: String(token.id), x: Number(token.x), y: Number(token.y),
@@ -139,16 +141,22 @@ function actorPlacementGranted(actor, context) {
     || (Array.isArray(grants.actorTypes) && grants.actorTypes.map(String).includes(String(actor.type)));
 }
 
-function restrictedToken(token, { level = 'precise', vision = null, metersPerUnit = 1 } = {}) {
+function restrictedToken(token, {
+  level = 'precise', vision = null, metersPerUnit = 1, opaqueIdFor = null,
+} = {}) {
   const vague = level === 'vague';
-  const vagueId = `audience-vague-token-${String(token.id)}`;
-  const vagueActorId = `audience-vague-actor-${String(token.id)}`;
+  const opaque = typeof opaqueIdFor === 'function'
+    ? opaqueIdFor
+    : (kind, value) => `audience-${kind}-${String(value)}`;
+  const vagueId = opaque('token', token.id);
+  const vagueActorId = opaque('actor', token.id);
+  const actorLink = vague ? true : token.actorLink !== false;
   const quantize = value => Math.round(Number(value) * metersPerUnit / 5) * 5 / metersPerUnit;
   return {
     id: vague ? vagueId : String(token.id),
     actorId: vague ? vagueActorId : String(token.actorId),
-    actorLink: true,
-    actorDelta: null,
+    actorLink,
+    actorDelta: actorLink ? null : { system: {}, effects: [] },
     placement: token.placement === 'feature' ? 'feature' : 'map',
     x: token.placement === 'map' ? (vague ? quantize(token.x) : Number(token.x)) : null,
     y: token.placement === 'map' ? (vague ? quantize(token.y) : Number(token.y)) : null,
@@ -161,15 +169,23 @@ function restrictedToken(token, { level = 'precise', vision = null, metersPerUni
     locked: token.locked === true,
     showName: vague ? false : token.showName !== false,
     effects: [],
+    controllerUserIds: [],
+    visibility: { mode: 'public', userIds: [] },
+    vision: {
+      enabled: false,
+      preciseRangeOverrideMeters: null,
+      vagueRangeOverrideMeters: null,
+      overrideUserIds: [],
+    },
     audienceRestricted: true,
     audienceVisibility: vague ? 'vague' : 'precise',
     ...(vague ? { approximateDirection: Math.atan2(Number(token.y) - vision.y, Number(token.x) - vision.x) } : {}),
   };
 }
 
-function vagueActor(token) {
+function vagueActor(token, opaqueIdFor) {
   return {
-    id: `audience-vague-actor-${String(token.id)}`,
+    id: opaqueIdFor('actor', token.id),
     name: '模糊轮廓', img: null, type: 'other', partyId: null,
     prototypeToken: { texture: { src: null }, showName: false },
     system: {}, effects: [], audienceRestricted: true, audienceVisibility: 'vague',
@@ -205,9 +221,22 @@ function projectMarker(marker, context, parties) {
 export function projectStateForAudience(rawState, rawContext = {}) {
   const state = clone(rawState);
   if (!state) return state;
+  const localOpaqueIds = new Map();
+  const localOpaqueIdFor = (kind, rawId) => {
+    const key = `${String(kind)}:${String(rawId)}`;
+    if (!localOpaqueIds.has(key)) {
+      const suffix = globalThis.crypto?.randomUUID?.()
+        || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      localOpaqueIds.set(key, `audience-${String(kind)}-${suffix}`);
+    }
+    return localOpaqueIds.get(key);
+  };
   const context = {
     ...rawContext,
     userId: rawContext.userId == null ? '' : String(rawContext.userId),
+    opaqueIdFor: typeof rawContext.opaqueIdFor === 'function'
+      ? rawContext.opaqueIdFor
+      : localOpaqueIdFor,
   };
   const world = state?.preferences?.worldV2;
   if (!plainObject(world)) return state;
@@ -255,8 +284,10 @@ export function projectStateForAudience(rawState, rawContext = {}) {
         privateActorIds.add(String(actor.id));
         if (tokenInvisible(rawToken, actor, definitions)) token.audienceVisibility = 'allied-invisible';
       } else if (level === 'vague') {
-        token = restrictedToken(rawToken, { level, vision, metersPerUnit });
-        vagueActors.push(vagueActor(rawToken));
+        token = restrictedToken(rawToken, {
+          level, vision, metersPerUnit, opaqueIdFor: context.opaqueIdFor,
+        });
+        vagueActors.push(vagueActor(rawToken, context.opaqueIdFor));
       } else {
         visibleTokenIds.add(String(token.id));
         sceneVisibleTokenIds.add(String(token.id));
@@ -279,15 +310,18 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const hiddenActorIds = new Set();
   world.actors = (world.actors || []).flatMap(actor => {
     const actorId = String(actor.id);
-    const owned = ownershipLevel(context.user, actorId) !== 'none';
+    const access = ownershipLevel(context.user, actorId);
+    const owned = access === 'owner';
+    const observed = access === 'observer';
+    const limited = access === 'limited';
     const allied = Boolean((actor.type === 'pc' || actor.type === 'summon')
       && actor.partyId && parties.has(String(actor.partyId)));
     const placementGranted = actorPlacementGranted(actor, context);
-    if (!referencedActorIds.has(actorId) && !owned && !allied && !placementGranted) {
+    if (!referencedActorIds.has(actorId) && !owned && !observed && !limited && !allied && !placementGranted) {
       hiddenActorIds.add(actorId);
       return [];
     }
-    if (privateActorIds.has(actorId) || owned || allied) return [clone(actor)];
+    if (privateActorIds.has(actorId) || owned || observed || allied) return [clone(actor)];
     restrictedActorIds.add(actorId);
     return [restrictedActor(actor)];
   });

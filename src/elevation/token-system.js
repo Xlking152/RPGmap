@@ -50,6 +50,7 @@ function tokenName(api, tokenId) {
 }
 
 function canControlToken(api, tokenId) {
+  if (api.permissions?.can) return api.permissions.can('token.control', { tokenId });
   const status = api.multiplayer?.getStatus?.();
   if (!status?.connected) return true;
   if (status.session?.role === 'gm') return true;

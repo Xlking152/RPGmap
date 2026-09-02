@@ -399,6 +399,11 @@ export function createCombatController({ selection } = {}) {
         pruneMissingTokens();
         render();
       });
+      api.on('combat:change', () => {
+        store.load();
+        pruneMissingTokens();
+        render();
+      });
       api.on('state:commit', event => {
         const source = String(event.detail?.source || '');
         if (!source.startsWith('token-v2:') && !source.startsWith('world-v2:') && source !== 'health') return;

@@ -5,7 +5,9 @@ import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { canPermission } from '../../src/permissions/model.js';
 import {
+  ACCESS_SCHEMA_VERSION,
   OWNERSHIP,
   actorCatalogFromWorld,
   claimUser,
@@ -25,19 +27,20 @@ import { createPortableStorage, ensurePortableStorage, migrateLegacyStorage } fr
 import { assertSafeJson, assertWorldState, isSameChat } from './world-schema.mjs';
 import {
   STATUS_OPERATION_CACHE_LIMIT,
+  STATUS_SCHEMA_VERSION,
   applyStatusMessage,
   assertStatusOperationId,
-  isStatusMessage,
-  isStructuralStatusMessage,
 } from './status-operations.mjs';
 import {
   applyWorldOperations,
   assertWorldOperationMessage,
+  createWorldOperationChangeSet,
   createWorldOperationPatch,
   migrateLegacySceneFeatureStates,
   migrateWorldSchema3State,
   projectWorldOperationState,
   stripLegacyFeatureStateProjection,
+  WORLD_OPERATION_SCHEMA_VERSION,
 } from './world-operations.mjs';
 import {
   canUserControlToken,
@@ -326,7 +329,9 @@ if (loadedWorld !== undefined) {
   if (loadedWorld.state !== null && loadedWorld.state !== undefined) {
     try {
       const featureMigration = migrateLegacySceneFeatureStates(loadedWorld.state);
-      const schemaMigration = migrateWorldSchema3State(featureMigration.state);
+      const schemaMigration = migrateWorldSchema3State(featureMigration.state, {
+        statusDefinitions: serverRuleset.statuses?.definitions,
+      });
       assertWorldState(schemaMigration.state);
       loadedWorld.state = schemaMigration.state;
       if (featureMigration.migrated || schemaMigration.migrated) {
@@ -485,42 +490,27 @@ function broadcastWorld(message, exceptSocket = null) {
 }
 function audienceStateFor(session, state = world.state) {
   if (!state) return null;
-  return projectStateForAudience(state, {
+  if (!session.audienceOpaqueIds) session.audienceOpaqueIds = new Map();
+  const opaqueIdFor = (kind, rawId) => {
+    const key = `${String(kind)}:${String(rawId)}`;
+    if (!session.audienceOpaqueIds.has(key)) {
+      session.audienceOpaqueIds.set(key, `audience-${String(kind)}-${randomBytes(18).toString('base64url')}`);
+    }
+    return session.audienceOpaqueIds.get(key);
+  };
+  const projected = projectStateForAudience(state, {
     role: session.role,
     userId: session.userId,
     user: session.userId ? findUser(session.userId) : null,
     visionSourceTokenId: session.visionSourceTokenId,
     ruleset: serverRuleset,
     mapMetrics: { metersPerUnit: 1 },
+    opaqueIdFor,
   });
-}
-function statusSnapshot({ operationId, originSessionId, reason }, session = null) {
-  return {
-    type: 'world.snapshot',
-    operationId,
-    revision: world.revision,
-    updatedAt: world.updatedAt,
-    state: session ? audienceStateFor(session) : world.state,
-    audienceRevision: session?.audienceRevision,
-    originSessionId,
-    reason,
-  };
-}
-function sendStatusDenied(socket, message, code, description) {
-  const session = sessions.get(socket);
-  return sendSocket(socket, {
-    type: 'status.denied',
-    operationId: statusOperationIdForReply(message?.operationId),
-    code: String(code || 'status_denied'),
-    message: String(description || '服务器拒绝了状态操作'),
-    revision: world.revision,
-    updatedAt: world.updatedAt,
-    state: session ? audienceStateFor(session) : null,
-    audienceRevision: session?.audienceRevision,
-  });
+  assertWorldState(projected);
+  return projected;
 }
 function sendWorldOperationDenied(socket, message, code, description, extra = {}) {
-  const session = sessions.get(socket);
   return sendSocket(socket, {
     type: 'world.operation.denied',
     operationId: statusOperationIdForReply(message?.operationId),
@@ -528,8 +518,6 @@ function sendWorldOperationDenied(socket, message, code, description, extra = {}
     message: String(description || '服务器拒绝了 World 操作'),
     revision: world.revision,
     updatedAt: world.updatedAt,
-    state: session ? audienceStateFor(session) : null,
-    audienceRevision: session?.audienceRevision,
     ...extra,
   });
 }
@@ -554,11 +542,13 @@ function projectResultsForSession(results, projectedState, session) {
 function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId }) {
   for (const [socket, session] of sessions) {
     if (session.role !== 'gm' && session.identityStatus !== 'active') continue;
-    const beforeProjection = audienceStateFor(session, beforeState);
+    const beforeProjection = session.audienceProjection || audienceStateFor(session, beforeState);
     const afterProjection = audienceStateFor(session, afterState);
+    session.audienceProjection = structuredClone(afterProjection);
     sendSocket(socket, {
       type: 'world.operation.committed', operationId, baseRevision, revision, updatedAt,
       patch: createWorldOperationPatch(beforeProjection, afterProjection),
+      changeSet: createWorldOperationChangeSet(beforeProjection, afterProjection),
       results: projectResultsForSession(results, afterProjection, session),
       originSessionId,
       audienceRevision: session.audienceRevision,
@@ -567,22 +557,25 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
 }
 function sendAudienceSnapshot(socket, session, reason = 'audience.changed') {
   session.audienceRevision += 1;
+  const state = audienceStateFor(session);
+  session.audienceProjection = structuredClone(state);
   return sendSocket(socket, {
     type: 'audience.snapshot',
     audienceRevision: session.audienceRevision,
     revision: world.revision,
     updatedAt: world.updatedAt,
-    state: audienceStateFor(session),
+    state,
     reason,
   });
 }
 function sessionPermissions(session) {
   if (session.role === 'gm') {
-    return { worldWrite: true, worldReset: true, manageAccess: true, combatManage: true, actorOwnerIds: ['*'], actorObserverIds: ['*'], defaultActorId: null, placementGrants: { actorTypes: ['*'], actorIds: ['*'], markerKinds: ['*'] } };
+    return { worldWrite: true, worldReset: true, manageAccess: true, combatManage: true, actorOwnerIds: ['*'], actorObserverIds: ['*'], actorLimitedIds: ['*'], defaultActorId: null, placementGrants: { actorTypes: ['*'], actorIds: ['*'], markerKinds: ['*'] } };
   }
   const user = session.userId ? findUser(session.userId) : null;
   const ownerIds = user ? Object.entries(user.ownership).filter(([, level]) => level === OWNERSHIP.OWNER).map(([id]) => id) : [];
   const observerIds = user ? Object.entries(user.ownership).filter(([, level]) => level === OWNERSHIP.OBSERVER || level === OWNERSHIP.OWNER).map(([id]) => id) : [];
+  const limitedIds = user ? Object.entries(user.ownership).filter(([, level]) => [OWNERSHIP.LIMITED, OWNERSHIP.OBSERVER, OWNERSHIP.OWNER].includes(level)).map(([id]) => id) : [];
   return {
     worldWrite: Boolean(user && !user.disabled && session.identityStatus === 'active'),
     worldReset: false,
@@ -590,6 +583,7 @@ function sessionPermissions(session) {
     combatManage: false,
     actorOwnerIds: ownerIds,
     actorObserverIds: observerIds,
+    actorLimitedIds: limitedIds,
     defaultActorId: user?.defaultActorId || null,
     placementGrants: user?.placementGrants || { actorTypes: [], actorIds: [], markerKinds: [] },
   };
@@ -606,9 +600,15 @@ function canonicalScene(sceneId) {
   return worldValue?.scenes?.find(item => String(item?.id ?? '') === String(sceneId ?? '')) || null;
 }
 function sessionControlsToken(session, tokenId) {
-  if (session.role === 'gm') return true;
   const user = session.userId ? findUser(session.userId) : null;
-  return canUserControlToken(world.state, tokenId, { user, userId: session.userId });
+  const { token, actor } = canonicalRecord(tokenId);
+  return canPermission('token.control', {
+    role: session.role,
+    userId: session.userId,
+    token,
+    actor,
+    actorAccess: user?.ownership?.[String(actor?.id || '')] || 'none',
+  });
 }
 function operationDenied(code, message) {
   const error = new Error(message);
@@ -703,7 +703,8 @@ function authorizeOperations(session, operations) {
       };
       payload.token.vision = {
         enabled: true,
-        rangeOverrideMeters: null,
+        preciseRangeOverrideMeters: null,
+        vagueRangeOverrideMeters: null,
         overrideUserIds: [],
       };
       return value;
@@ -742,7 +743,7 @@ function authorizeOperations(session, operations) {
         operationDenied('token_access_gm_only', 'Only the GM can modify Token control or visibility');
       }
       const visionKeys = Object.keys(payload.patch.vision || {});
-      if (visionKeys.some(key => key !== 'rangeOverrideMeters')) {
+      if (visionKeys.some(key => !['preciseRangeOverrideMeters', 'vagueRangeOverrideMeters'].includes(key))) {
         operationDenied('vision_override_forbidden', 'Player may only modify the granted vision range override');
       }
       return value;
@@ -756,6 +757,18 @@ function authorizeOperations(session, operations) {
       if (payload.actor.type !== current.type || payload.actor.partyId !== current.partyId) {
         operationDenied('actor_classification_gm_only', 'Only the GM can change Actor classification or party');
       }
+      return value;
+    }
+    if (value.type === 'chat.append') {
+      const text = String(payload.text || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 4_000);
+      if (!text) operationDenied('invalid_chat', 'Chat text cannot be empty');
+      if (payload.event !== undefined && String(payload.event) !== 'chat') {
+        operationDenied('chat_type_forbidden', 'Players may submit ordinary chat text only');
+      }
+      if (payload.sender !== undefined || payload.id !== undefined || payload.createdAt !== undefined || payload.data !== undefined) {
+        operationDenied('chat_payload_forbidden', 'Chat identity, timestamp, and protected data are server-owned');
+      }
+      value.payload = { text };
       return value;
     }
     if (value.type.startsWith('status.') && !value.type.startsWith('status.definition.')) {
@@ -833,6 +846,9 @@ function multiplayerInfo() {
     publicUrl: null,
     joinCodeRequired: Boolean(PLAYER_JOIN_CODE),
     playerWriteEnabled: true,
+    operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
+    statusSchema: STATUS_SCHEMA_VERSION,
+    accessSchema: ACCESS_SCHEMA_VERSION,
   };
 }
 
@@ -862,11 +878,16 @@ function worldBootstrapInfo() {
   };
 }
 function sendWelcome(socket, session, { includeWorld = true, pendingApproval = false } = {}) {
+  const projectedState = includeWorld ? audienceStateFor(session) : null;
+  session.audienceProjection = projectedState ? structuredClone(projectedState) : null;
   sendSocket(socket, {
     type: 'welcome',
+    operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
+    statusSchema: STATUS_SCHEMA_VERSION,
+    accessSchema: ACCESS_SCHEMA_VERSION,
     session: publicSession(session),
     identity: { status: session.identityStatus, user: session.userId ? publicUser(findUser(session.userId)) : null, pendingApproval },
-    world: { revision: world.revision, updatedAt: world.updatedAt, state: includeWorld ? audienceStateFor(session) : null },
+    world: { revision: world.revision, updatedAt: world.updatedAt, state: projectedState },
     audienceRevision: session.audienceRevision,
     permissions: sessionPermissions(session),
     server: multiplayerInfo(),
@@ -891,7 +912,12 @@ function refreshOnlineUser(userId) {
 const server = http.createServer(async (req, res) => {
   try {
     if (!['GET', 'HEAD'].includes(req.method || 'GET')) return sendJson(res, 405, { error: 'method_not_allowed' });
-    if (req.url === '/api/health') return sendJson(res, 200, { status: 'ok', app: version.app || 'RPGmap', version: packageVersion, mode: version.serverMode || 'multiplayer', multiplayer: multiplayerInfo(), world: worldBootstrapInfo() });
+    if (req.url === '/api/health') return sendJson(res, 200, {
+      status: 'ok', app: version.app || 'RPGmap', version: packageVersion,
+      operationSchema: WORLD_OPERATION_SCHEMA_VERSION, statusSchema: STATUS_SCHEMA_VERSION,
+      accessSchema: ACCESS_SCHEMA_VERSION,
+      mode: version.serverMode || 'multiplayer', multiplayer: multiplayerInfo(), world: worldBootstrapInfo(),
+    });
     if (req.url === '/api/version') return sendJson(res, 200, version);
     if (req.url === '/api/multiplayer') return sendJson(res, 200, multiplayerInfo());
 
@@ -948,15 +974,34 @@ server.on('upgrade', (req, socket) => {
     try { message = JSON.parse(text); }
     catch { return sendSocket(socket, { type: 'error', code: 'invalid_json', message: 'Invalid JSON' }); }
     try { assertSafeJson(message, 'message'); }
-    catch (error) {
-      if (joined && isStatusMessage(message)) {
-        return sendStatusDenied(socket, message, error.code || 'invalid_message', error.message);
-      }
-      return sendSocket(socket, { type: 'error', code: error.code || 'invalid_message', message: error.message });
-    }
+    catch (error) { return sendSocket(socket, { type: 'error', code: error.code || 'invalid_message', message: error.message }); }
 
     if (!joined) {
       if (message?.type !== 'hello') return closeSocket(socket, 1008, 'hello required');
+      if (Number(message.operationSchema) !== WORLD_OPERATION_SCHEMA_VERSION) {
+        sendSocket(socket, {
+          type: 'error', code: 'operation_schema_incompatible',
+          message: `Operation schema ${WORLD_OPERATION_SCHEMA_VERSION} is required`,
+          operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
+        });
+        return closeSocket(socket, 1008, 'operation schema incompatible');
+      }
+      if (Number(message.statusSchema) !== STATUS_SCHEMA_VERSION) {
+        sendSocket(socket, {
+          type: 'error', code: 'status_schema_incompatible',
+          message: `Status schema ${STATUS_SCHEMA_VERSION} is required`,
+          statusSchema: STATUS_SCHEMA_VERSION,
+        });
+        return closeSocket(socket, 1008, 'status schema incompatible');
+      }
+      if (Number(message.accessSchema) !== ACCESS_SCHEMA_VERSION) {
+        sendSocket(socket, {
+          type: 'error', code: 'access_schema_incompatible',
+          message: `Access schema ${ACCESS_SCHEMA_VERSION} is required`,
+          accessSchema: ACCESS_SCHEMA_VERSION,
+        });
+        return closeSocket(socket, 1008, 'access schema incompatible');
+      }
       const requestedRole = message.requestedRole === 'gm' ? 'gm' : 'player';
       const secretMatches = Boolean(message.gmSecret) && String(message.gmSecret) === GM_SECRET;
       const gmAuthorized = requestedRole === 'gm' && secretMatches;
@@ -1197,13 +1242,6 @@ server.on('upgrade', (req, socket) => {
 
       const completed = completedStatusOperations.get(envelope.operationId);
       if (completed) {
-        // A duplicate may arrive after later revisions. A full snapshot is a
-        // recovery boundary here, not the ordinary operation broadcast path.
-        sendSocket(socket, statusSnapshot({
-          operationId: envelope.operationId,
-          originSessionId: session.id,
-          reason: 'world.operation.duplicate',
-        }, session));
         return sendSocket(socket, {
           type: 'world.operation.ack',
           operationId: envelope.operationId,
@@ -1240,13 +1278,31 @@ server.on('upgrade', (req, socket) => {
               sessionId: session.id,
             });
           },
+          createChatMessage(input) {
+            const typeByEvent = {
+              chat: 'chat', system: 'system', combat: 'combat', damage: 'damage', healing: 'healing', roll: 'roll',
+            };
+            const event = String(input.event || 'chat');
+            if (!typeByEvent[event] || (event !== 'chat' && session.role !== 'gm')) {
+              operationDenied('chat_type_forbidden', 'Only the GM can submit protected chat events');
+            }
+            return {
+              id: randomUUID(),
+              type: typeByEvent[event],
+              text: input.text,
+              createdAt: now,
+              sender: {
+                id: session.userId || session.id,
+                name: publicSession(session).name,
+                role: session.role,
+              },
+              data: session.role === 'gm' && input.data && typeof input.data === 'object'
+                ? structuredClone(input.data)
+                : null,
+            };
+          },
         });
         assertWorldState(applied.state);
-        if (!isSameChat(world.state, applied.state)) {
-          const error = new Error('聊天记录只能通过服务器提交');
-          error.code = 'chat_server_only';
-          throw error;
-        }
         if (Buffer.byteLength(JSON.stringify(applied.state)) > MAX_WS_PAYLOAD) {
           const error = new Error('World state is too large');
           error.code = 'state_too_large';
@@ -1301,93 +1357,6 @@ server.on('upgrade', (req, socket) => {
       return;
     }
 
-    if (isStatusMessage(message)) {
-      let operationId;
-      try { operationId = assertStatusOperationId(message.operationId); }
-      catch (error) { return sendStatusDenied(socket, message, error?.code || 'invalid_operation_id', error?.message); }
-
-      if (session.role !== 'gm') {
-        return sendStatusDenied(socket, message, 'status_gm_only', '只有 GM 可以修改状态定义与 Actor / Token 效果');
-      }
-
-      const completed = completedStatusOperations.get(operationId);
-      if (completed) {
-        // Send the current canonical World as well as the idempotent ACK. The
-        // original commit may predate later World revisions after a reconnect.
-        sendSocket(socket, statusSnapshot({
-          operationId,
-          originSessionId: session.id,
-          reason: 'status.duplicate',
-        }, session));
-        return sendSocket(socket, {
-          type: 'status.ack',
-          operationId,
-          revision: world.revision,
-          committedRevision: completed.revision,
-          results: completed.results,
-          duplicate: true,
-        });
-      }
-
-      if (isStructuralStatusMessage(message)) {
-        if (!Number.isSafeInteger(message.clientRevision) || message.clientRevision < 0) {
-          return sendStatusDenied(socket, message, 'invalid_revision', '修改状态定义时必须提供有效的 clientRevision');
-        }
-        if (message.clientRevision !== world.revision) {
-          return sendStatusDenied(socket, message, 'revision_conflict', '状态定义已被其他操作更新，请先重新载入最新 World');
-        }
-      }
-
-      let applied;
-      try {
-        applied = applyStatusMessage(world.state, message, {
-          userId: session.userId,
-          sessionId: session.id,
-        });
-        // The status operation validator is deliberately narrow. Run the full
-        // World schema as a second gate before a byte can reach disk.
-        assertWorldState(applied.state);
-        if (Buffer.byteLength(JSON.stringify(applied.state)) > MAX_WS_PAYLOAD) {
-          const error = new Error('World state is too large');
-          error.code = 'state_too_large';
-          throw error;
-        }
-      } catch (error) {
-        return sendStatusDenied(socket, message, error?.code || 'invalid_status', error?.message);
-      }
-
-      const nextWorld = {
-        schemaVersion: 1,
-        worldId: WORLD_ID,
-        revision: world.revision + 1,
-        updatedAt: new Date().toISOString(),
-        state: applied.state,
-        recentStatusOperations: recentStatusOperationsWith(
-          operationId,
-          world.revision + 1,
-          applied.results,
-        ),
-      };
-      try { await persistWorld(nextWorld); }
-      catch (error) { return sendStatusDenied(socket, message, 'persist_failed', `状态操作未保存：${error.message}`); }
-
-      world = nextWorld;
-      rememberStatusOperation(operationId, world.revision, applied.results);
-      broadcastWorld(statusSnapshot({
-        operationId,
-        originSessionId: session.id,
-        reason: String(message.type),
-      }));
-      sendSocket(socket, {
-        type: 'status.ack',
-        operationId,
-        revision: world.revision,
-        results: applied.results,
-        duplicate: false,
-      });
-      return;
-    }
-
     if (message?.type === 'world.push') {
       const worldOperationId = statusOperationIdForReply(message.operationId);
       if (session.role !== 'gm') {
@@ -1410,7 +1379,9 @@ server.on('upgrade', (req, socket) => {
       }
       let incomingState;
       try {
-        incomingState = migrateWorldSchema3State(migrateLegacySceneFeatureStates(message.state).state).state;
+        incomingState = migrateWorldSchema3State(migrateLegacySceneFeatureStates(message.state).state, {
+          statusDefinitions: serverRuleset.statuses?.definitions,
+        }).state;
         assertWorldState(incomingState);
       } catch (error) {
         return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: error?.code || 'invalid_state', message: error?.message || 'World state 无效' });
@@ -1472,62 +1443,7 @@ server.on('upgrade', (req, socket) => {
       return;
     }
 
-    if (message?.type === 'chat.append') {
-      if (session.role !== 'gm' && session.identityStatus !== 'active') {
-        return sendSocket(socket, { type: 'error', code: 'identity_pending', message: '等待 GM 批准身份后才能聊天' });
-      }
-      if (!world.state) return sendSocket(socket, { type: 'error', code: 'world_uninitialized', message: 'World 尚未初始化' });
-      const text = String(message.text || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 4000);
-      if (!text) return sendSocket(socket, { type: 'error', code: 'invalid_chat', message: '聊天内容不能为空' });
-      const event = String(message.event || 'chat');
-      const typeByEvent = { chat: 'chat', system: 'system', combat: 'combat', damage: 'damage', healing: 'healing', roll: 'roll' };
-      if (!typeByEvent[event] || (event !== 'chat' && session.role !== 'gm')) {
-        return sendSocket(socket, { type: 'error', code: 'chat_type_forbidden', message: '只有 GM 可以发送系统事件日志' });
-      }
-      const nextState = structuredClone(world.state);
-      nextState.preferences ||= {};
-      nextState.preferences.chatSystem ||= { schemaVersion: 1, messages: [] };
-      const messages = nextState.preferences.chatSystem.messages;
-      if (!Array.isArray(messages)) return sendSocket(socket, { type: 'error', code: 'invalid_chat', message: '聊天数据损坏' });
-      messages.push({
-        id: randomUUID(), type: typeByEvent[event], text, createdAt: new Date().toISOString(),
-        sender: { id: session.userId || session.id, name: publicSession(session).name, role: session.role },
-        data: message.data && typeof message.data === 'object' && !Array.isArray(message.data) ? message.data : null,
-      });
-      if (messages.length > 500) messages.splice(0, messages.length - 500);
-      try { assertWorldState(nextState); }
-      catch (error) { return sendSocket(socket, { type: 'error', code: error.code || 'invalid_chat', message: error.message }); }
-      const nextWorld = {
-        schemaVersion: 1, worldId: WORLD_ID, revision: world.revision + 1,
-        updatedAt: new Date().toISOString(), state: nextState,
-        recentStatusOperations: world.recentStatusOperations || [],
-      };
-      try { await persistWorld(nextWorld); }
-      catch (error) { return sendSocket(socket, { type: 'error', code: 'persist_failed', message: `聊天未保存：${error.message}` }); }
-      world = nextWorld;
-      broadcastWorld({ type: 'world.snapshot', revision: world.revision, updatedAt: world.updatedAt, state: world.state, originSessionId: session.id, reason: 'chat.append' });
-      return;
-    }
-
-    if (message?.type === 'chat.clear') {
-      if (session.role !== 'gm') return sendSocket(socket, { type: 'error', code: 'gm_only', message: '只有 GM 可以清空共享聊天记录' });
-      if (!world.state) return sendSocket(socket, { type: 'error', code: 'world_uninitialized', message: 'World 尚未初始化' });
-      const nextState = structuredClone(world.state);
-      nextState.preferences ||= {};
-      nextState.preferences.chatSystem = { schemaVersion: 1, messages: [] };
-      const nextWorld = {
-        schemaVersion: 1, worldId: WORLD_ID, revision: world.revision + 1,
-        updatedAt: new Date().toISOString(), state: nextState,
-        recentStatusOperations: world.recentStatusOperations || [],
-      };
-      try { await persistWorld(nextWorld); }
-      catch (error) { return sendSocket(socket, { type: 'error', code: 'persist_failed', message: `聊天未保存：${error.message}` }); }
-      world = nextWorld;
-      broadcastWorld({ type: 'world.snapshot', revision: world.revision, updatedAt: world.updatedAt, state: world.state, originSessionId: session.id, reason: 'chat.clear' });
-      return;
-    }
-
-    if (message?.type === 'world.request') {
+    if (message?.type === 'world.snapshot.request') {
       if (session.role !== 'gm' && session.identityStatus !== 'active') return sendSocket(socket, { type: 'error', code: 'identity_pending', message: '等待 GM 批准身份' });
       return sendSocket(socket, { type: 'world.snapshot', revision: world.revision, updatedAt: world.updatedAt, state: audienceStateFor(session), audienceRevision: session.audienceRevision, originSessionId: null, reason: 'request' });
     }

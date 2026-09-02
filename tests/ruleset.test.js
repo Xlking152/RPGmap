@@ -51,6 +51,8 @@ test('infinite horror is registered as the default built-in ruleset', () => {
   assert.equal(typeof ruleset.health.presentation.describe, 'function');
   assert.deepEqual(ruleset.statuses.definitions.map(item => item.id), [
     'status-invisible', 'status-spirit', 'status-rooted', 'status-incapacitated',
+    'status-strengthened', 'status-weakened', 'status-poisoned', 'status-burning',
+    'status-bleeding', 'status-blinded',
   ]);
   assert.equal(typeof ruleset.statuses.derive, 'function');
   assert.equal(typeof ruleset.importers.xlsx.importFile, 'function');

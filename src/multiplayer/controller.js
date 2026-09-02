@@ -3,7 +3,10 @@ import { canControlActor, validateLocalPlayerChange } from './permissions.js';
 import {
   applyWorldOperationPatch,
   deriveWorldOperations,
+  WORLD_OPERATION_SCHEMA_VERSION,
 } from '../world/operations.js';
+import { STATUS_SCHEMA_VERSION } from '../status/model.js';
+import { ACCESS_SCHEMA_VERSION } from '../permissions/model.js';
 import { escapeMultiplayerHtml as escapeHtml } from './access-ui.js';
 import { createMultiplayerSessionStorage } from './session.js';
 import { createOperationId, parseTransportMessage, sendTransportMessage } from './transport.js';
@@ -94,7 +97,7 @@ export function createMultiplayerController() {
       let pendingVisionSource = null;
       let activeVisionSourceTokenId = null;
       let session = null;
-      let permissions = { worldWrite: false, worldReset: false, manageAccess: false, combatManage: false, actorOwnerIds: [], actorObserverIds: [], defaultActorId: null, placementGrants: { actorTypes: [], actorIds: [], markerKinds: [] } };
+      let permissions = { worldWrite: false, worldReset: false, manageAccess: false, combatManage: false, actorOwnerIds: [], actorObserverIds: [], actorLimitedIds: [], defaultActorId: null, placementGrants: { actorTypes: [], actorIds: [], markerKinds: [] } };
       let clients = [];
       let access = { users: [], pending: [], actors: [], canManage: false, selfUserId: null };
       let inFlight = false;
@@ -110,8 +113,6 @@ export function createMultiplayerController() {
       let activeWorldOperationId = null;
       let activeAtomicWorldOperation = null;
       let atomicWorldOperationQueue = [];
-      let activeStatusOperation = null;
-      let statusOperationQueue = [];
       let activeOperation = null;
       let operationQueue = [];
       let lastObservedLocalState = null;
@@ -216,7 +217,7 @@ export function createMultiplayerController() {
         if (!access.actors.length) return '<div class="multiplayer-muted">World 中还没有 Actor。</div>';
         return `<div class="multiplayer-ownership">${access.actors.map(actor => {
           const level = user.ownership?.[actor.id] || 'none';
-          return `<span>${escapeHtml(actor.name)}</span><select data-mp-actor-permission="${escapeHtml(actor.id)}"><option value="none" ${level === 'none' ? 'selected' : ''}>NONE</option><option value="observer" ${level === 'observer' ? 'selected' : ''}>OBSERVER</option><option value="owner" ${level === 'owner' ? 'selected' : ''}>OWNER</option></select>`;
+          return `<span>${escapeHtml(actor.name)}</span><select data-mp-actor-permission="${escapeHtml(actor.id)}"><option value="none" ${level === 'none' ? 'selected' : ''}>NONE</option><option value="limited" ${level === 'limited' ? 'selected' : ''}>LIMITED</option><option value="observer" ${level === 'observer' ? 'selected' : ''}>OBSERVER</option><option value="owner" ${level === 'owner' ? 'selected' : ''}>OWNER</option></select>`;
         }).join('')}</div>`;
       }
 
@@ -331,23 +332,43 @@ export function createMultiplayerController() {
         return task;
       }
 
+      function applyAuthoritativeOperationState(state, nextRevision, changeSet, serverState) {
+        if (!state || typeof state !== 'object') return Promise.resolve(false);
+        try {
+          api.applyAuthoritativePatchState(state, {
+            source: 'world.operation',
+            revision: nextRevision,
+            changeSet: changeSet || {},
+          });
+          revision = Number(nextRevision) || revision;
+          lastServerState = structuredClone(serverState);
+          lastObservedLocalState = structuredClone(state);
+          return Promise.resolve(true);
+        } catch (error) {
+          console.error('[RPGmap Multiplayer] authoritative patch apply failed', error);
+          return Promise.resolve(false);
+        }
+      }
+
       function send(message) {
         return sendTransportMessage(socket, message);
       }
 
       function flushDeferredChat() {
         if (!connected || applyingRemote || inFlight || activeAtomicWorldOperation || atomicWorldOperationQueue.length
-          || activeStatusOperation || pendingPush || statusOperationQueue.length
+          || pendingPush
           || activeOperation || operationQueue.length || !deferredChat.length) return;
-        while (deferredChat.length) {
-          const message = deferredChat[0];
-          if (!send({ type: 'chat.append', ...message })) return;
-          deferredChat.shift();
-        }
+        const message = deferredChat.shift();
+        performOperations([{ type: 'chat.append', payload: message }], { kind: 'chat' })
+          .catch(error => setMapStatus(`聊天发送失败：${error.message}`));
       }
 
       function appendChat({ text, event = 'chat', data = null } = {}) {
-        return send({ type: 'chat.append', text, event, data });
+        if (!connected) return false;
+        performOperations([{
+          type: 'chat.append', payload: { text, event, data },
+        }], { kind: 'chat' }).catch(error => setMapStatus(`聊天发送失败：${error.message}`));
+        return true;
       }
 
       function appendChatAfterWorld({ text, event = 'chat', data = null } = {}) {
@@ -395,15 +416,6 @@ export function createMultiplayerController() {
       }
       function publishCapabilities() { api.emit?.('multiplayer:capabilities', getCapabilities()); }
 
-      function rejectStatusOperations(message = '联机连接已中断') {
-        const error = new Error(message);
-        if (activeStatusOperation) activeStatusOperation.reject(error);
-        for (const operation of statusOperationQueue) operation.reject(error);
-        activeStatusOperation = null;
-        statusOperationQueue = [];
-        api.emit?.('status:pending-clear', { reason: message });
-      }
-
       function rejectAtomicWorldOperations(message = '联机连接已中断') {
         const error = new Error(message);
         if (activeAtomicWorldOperation) activeAtomicWorldOperation.reject(error);
@@ -420,7 +432,6 @@ export function createMultiplayerController() {
         else operation.resolve(detail || { operationId: operation.operationId, revision });
         queueMicrotask(() => {
           flushOperations();
-          flushStatusOperations();
           flushAtomicWorldOperations();
           flushPush();
           flushDeferredChat();
@@ -429,7 +440,6 @@ export function createMultiplayerController() {
 
       function flushAtomicWorldOperations() {
         if (!connected || applyingRemote || inFlight || pendingPush || activeAtomicWorldOperation
-          || activeStatusOperation || statusOperationQueue.length
           || activeOperation || operationQueue.length || !atomicWorldOperationQueue.length) return;
         const operation = atomicWorldOperationQueue.shift();
         activeAtomicWorldOperation = operation;
@@ -460,8 +470,6 @@ export function createMultiplayerController() {
           pendingPush,
           activeAtomicWorldOperation,
           atomicWorldOperationQueueLength: atomicWorldOperationQueue.length,
-          activeStatusOperation,
-          statusOperationQueueLength: statusOperationQueue.length,
           activeOperation,
           operationQueueLength: operationQueue.length,
         })) {
@@ -538,7 +546,7 @@ export function createMultiplayerController() {
 
       function flushOperations() {
         if (!connected || applyingRemote || inFlight || pendingPush || activeAtomicWorldOperation
-          || activeStatusOperation || statusOperationQueue.length || activeOperation || !operationQueue.length) return;
+          || activeOperation || !operationQueue.length) return;
         const operation = operationQueue.shift();
         activeOperation = operation;
         if (!send({
@@ -653,44 +661,6 @@ export function createMultiplayerController() {
         return true;
       }
 
-      function finishStatusOperation(error = null, detail = null) {
-        const operation = activeStatusOperation;
-        if (!operation) return;
-        activeStatusOperation = null;
-        if (error) operation.reject(error);
-        else operation.resolve(detail || { operationId: operation.operationId, revision });
-        api.emit?.('status:operation-result', {
-          operationId: operation.operationId,
-          ok: !error,
-          error: error?.message || '',
-          revision,
-        });
-        queueMicrotask(() => {
-          flushOperations();
-          flushStatusOperations();
-          flushAtomicWorldOperations();
-          flushPush();
-          flushDeferredChat();
-        });
-      }
-
-      function maybeFinishStatusOperation() {
-        const operation = activeStatusOperation;
-        if (!operation || !operation.acknowledged || !operation.snapshotApplied) return;
-        finishStatusOperation(null, { operationId: operation.operationId, revision: operation.revision || revision });
-      }
-
-      function flushStatusOperations() {
-        if (!connected || applyingRemote || inFlight || pendingPush || activeAtomicWorldOperation
-          || activeStatusOperation || activeOperation || operationQueue.length || !statusOperationQueue.length) return;
-        const operation = statusOperationQueue.shift();
-        activeStatusOperation = operation;
-        if (!send({ type: operation.type, operationId: operation.operationId, clientRevision: revision, ...operation.payload })) {
-          activeStatusOperation = null;
-          statusOperationQueue.unshift(operation);
-        }
-      }
-
       function performStatusOperation(type, payload = {}) {
         if (!connected) return Promise.reject(new Error('当前未连接局域网服务器'));
         if (!getCapabilities().canManageStatuses) return Promise.reject(new Error('只有 GM 可以管理机械状态'));
@@ -705,7 +675,7 @@ export function createMultiplayerController() {
 
       function flushPush() {
         if (!connected || applyingRemote || inFlight || activeAtomicWorldOperation
-          || activeStatusOperation || activeOperation || !permissions.worldWrite || !pendingPush) return;
+          || activeOperation || !permissions.worldWrite || !pendingPush) return;
         const nextState = api.exportState();
         if (session?.role !== 'gm' && lastServerState) {
           const authorization = validateLocalPlayerChange({ before: lastServerState, next: nextState, permissions });
@@ -731,7 +701,6 @@ export function createMultiplayerController() {
       function flushPendingNetworkWork() {
         queueMicrotask(() => {
           flushOperations();
-          flushStatusOperations();
           flushAtomicWorldOperations();
           flushPush();
           flushDeferredChat();
@@ -755,6 +724,21 @@ export function createMultiplayerController() {
         }
 
         if (message.type === 'welcome') {
+          if (Number(message.operationSchema) !== WORLD_OPERATION_SCHEMA_VERSION) {
+            setMapStatus(`联机失败：Operation schema 需要 ${WORLD_OPERATION_SCHEMA_VERSION}`);
+            try { socket?.close(); } catch {}
+            return;
+          }
+          if (Number(message.statusSchema) !== STATUS_SCHEMA_VERSION) {
+            setMapStatus(`联机失败：Status schema 需要 ${STATUS_SCHEMA_VERSION}`);
+            try { socket?.close(); } catch {}
+            return;
+          }
+          if (Number(message.accessSchema) !== ACCESS_SCHEMA_VERSION) {
+            setMapStatus(`联机失败：Access schema 需要 ${ACCESS_SCHEMA_VERSION}`);
+            try { socket?.close(); } catch {}
+            return;
+          }
           connected = true;
           joining = false;
           session = message.session || null;
@@ -838,9 +822,6 @@ export function createMultiplayerController() {
         if (message.type === 'permissions.update') {
           permissions = message.permissions || permissions;
           publishCapabilities();
-          if (!getCapabilities().canManageStatuses && (activeStatusOperation || statusOperationQueue.length)) {
-            rejectStatusOperations('状态管理权限已被移除');
-          }
           if (!getCapabilities().canManageStatuses) {
             const error = new Error('状态管理权限已被移除');
             error.code = 'status_permission_removed';
@@ -880,7 +861,7 @@ export function createMultiplayerController() {
             const error = new Error('联机操作 revision 出现缺口，正在重新载入服务器状态');
             error.code = 'revision_gap';
             rejectOperations(error.message);
-            send({ type: 'world.request' });
+            send({ type: 'world.snapshot.request' });
             return;
           }
           let canonicalState;
@@ -892,18 +873,18 @@ export function createMultiplayerController() {
             const error = new Error(`无法应用服务器操作补丁：${cause.message}`);
             error.code = cause.code || 'world_operation_patch_invalid';
             rejectOperations(error.message);
-            send({ type: 'world.request' });
+            send({ type: 'world.snapshot.request' });
             return;
           }
           const matchesActive = activeOperation
             && String(message.operationId || '') === String(activeOperation.operationId);
           const expectedOperationId = matchesActive ? activeOperation.operationId : null;
-          applyRemoteState(localState, incomingRevision, 'world.operation', { serverState: canonicalState }).then(applied => {
+          applyAuthoritativeOperationState(localState, incomingRevision, message.changeSet, canonicalState).then(applied => {
             if (!applied) {
               const error = new Error('服务器已经保存操作，但客户端无法载入操作补丁');
               error.code = 'world_operation_patch_import_failed';
               rejectOperations(error.message);
-              send({ type: 'world.request' });
+              send({ type: 'world.snapshot.request' });
               return;
             }
             if (expectedOperationId && activeOperation
@@ -926,7 +907,7 @@ export function createMultiplayerController() {
           activeOperation.results = Array.isArray(message.results) ? structuredClone(message.results) : activeOperation.results;
           if (message.duplicate === true && !activeOperation.patchApplied) {
             activeOperation.awaitingCanonicalSnapshot = true;
-            send({ type: 'world.request' });
+            send({ type: 'world.snapshot.request' });
           }
           maybeFinishOperation();
           return;
@@ -943,7 +924,7 @@ export function createMultiplayerController() {
           if (message.state && typeof message.state === 'object') {
             applyRemoteState(message.state, message.revision, '操作回滚').then(finish);
           } else {
-            send({ type: 'world.request' });
+            send({ type: 'world.snapshot.request' });
             finish();
           }
           return;
@@ -955,12 +936,6 @@ export function createMultiplayerController() {
           const atomicWorldOperation = activeAtomicWorldOperation
             && message.operationId
             && String(message.operationId) === String(activeAtomicWorldOperation.operationId);
-          const statusOperation = activeStatusOperation
-            && message.operationId
-            && String(message.operationId) === String(activeStatusOperation.operationId);
-          const canonicalStatusReload = activeStatusOperation
-            && activeStatusOperation.awaitingCanonicalSnapshot === true
-            && !message.operationId;
           const genericOperation = activeOperation
             && message.operationId
             && String(message.operationId) === String(activeOperation.operationId);
@@ -991,19 +966,6 @@ export function createMultiplayerController() {
               }
               finishAtomicWorldOperation(null, { operationId: expectedOperationId, revision: incomingRevision });
             });
-          } else if (statusOperation || canonicalStatusReload) {
-            const expectedOperationId = activeStatusOperation.operationId;
-            activeStatusOperation.revision = incomingRevision;
-            applyRemoteState(message.state, incomingRevision, message.reason || 'status').then(applied => {
-              if (!activeStatusOperation || String(activeStatusOperation.operationId) !== String(expectedOperationId)) return;
-              if (!applied) {
-                finishStatusOperation(new Error('服务器状态已经保存，但客户端无法载入最新快照'));
-                return;
-              }
-              activeStatusOperation.awaitingCanonicalSnapshot = false;
-              activeStatusOperation.snapshotApplied = true;
-              maybeFinishStatusOperation();
-            });
           } else if (own && shouldApplyOwnServerSnapshot(message)) {
             // Chat is server-only: unlike ordinary optimistic World mutations,
             // the sender has not applied this change locally before the server
@@ -1022,32 +984,6 @@ export function createMultiplayerController() {
             inFlight = false;
             pendingPush = false;
             applyRemoteState(message.state, incomingRevision, message.reason || 'remote').then(flushPendingNetworkWork);
-          }
-          return;
-        }
-
-        if (message.type === 'status.ack') {
-          if (!activeStatusOperation || String(message.operationId || '') !== String(activeStatusOperation.operationId)) return;
-          activeStatusOperation.acknowledged = true;
-          activeStatusOperation.revision = Number(message.revision) || revision;
-          if (message.duplicate === true && !activeStatusOperation.snapshotApplied) {
-            activeStatusOperation.awaitingCanonicalSnapshot = true;
-            send({ type: 'world.request' });
-          }
-          maybeFinishStatusOperation();
-          return;
-        }
-
-        if (message.type === 'status.denied') {
-          if (!activeStatusOperation || String(message.operationId || '') !== String(activeStatusOperation.operationId)) return;
-          const error = new Error(message.message || '服务器拒绝了状态操作');
-          error.code = message.code || 'status_denied';
-          const finish = () => finishStatusOperation(error);
-          if (message.state && typeof message.state === 'object') {
-            applyRemoteState(message.state, message.revision, '状态操作回滚').then(finish);
-          } else {
-            send({ type: 'world.request' });
-            finish();
           }
           return;
         }
@@ -1087,13 +1023,6 @@ export function createMultiplayerController() {
             finishAtomicWorldOperation(error);
             return;
           }
-          if (message.operationId && activeStatusOperation
-            && String(message.operationId) === String(activeStatusOperation.operationId)) {
-            const error = new Error(message.message || message.code || '状态操作失败');
-            error.code = message.code || 'status_error';
-            finishStatusOperation(error);
-            return;
-          }
           inFlight = false;
           joining = false;
           renderButton();
@@ -1121,7 +1050,6 @@ export function createMultiplayerController() {
         deferredChat = [];
         activeWorldOperationId = null;
         rejectAtomicWorldOperations('正在重新连接局域网服务器');
-        rejectStatusOperations('正在重新连接局域网服务器');
         rejectOperations('正在重新连接局域网服务器');
         lastServerState = null;
         lastObservedLocalState = null;
@@ -1137,6 +1065,9 @@ export function createMultiplayerController() {
           const isPlayer = normalizeRequestedRole(requestedRole) === 'player';
           send({
             type: 'hello',
+            operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
+            statusSchema: STATUS_SCHEMA_VERSION,
+            accessSchema: ACCESS_SCHEMA_VERSION,
             name: sanitizeMultiplayerName(name),
             requestedRole: normalizeRequestedRole(requestedRole),
             joinCode,
@@ -1166,7 +1097,6 @@ export function createMultiplayerController() {
           deferredChat = [];
           activeWorldOperationId = null;
           rejectAtomicWorldOperations('局域网连接已断开，未确认的 World 操作已取消');
-          rejectStatusOperations('局域网连接已断开，未确认的状态操作已取消');
           rejectOperations('局域网连接已断开，未确认的操作已取消');
           lastServerState = null;
           lastObservedLocalState = null;
@@ -1191,7 +1121,6 @@ export function createMultiplayerController() {
         deferredChat = [];
         activeWorldOperationId = null;
         rejectAtomicWorldOperations('已主动断开局域网连接，未确认的 World 操作已取消');
-        rejectStatusOperations('已主动断开局域网连接，未确认的状态操作已取消');
         rejectOperations('已主动断开局域网连接，未确认的操作已取消');
         lastServerState = null;
         lastObservedLocalState = null;
@@ -1316,7 +1245,7 @@ export function createMultiplayerController() {
       api.multiplayer = {
         connect,
         disconnect,
-        requestWorld: () => send({ type: 'world.request' }),
+        requestWorld: () => send({ type: 'world.snapshot.request' }),
         requestAccess: () => send({ type: 'access.request' }),
         appendChat,
         appendChatAfterWorld,
@@ -1326,7 +1255,12 @@ export function createMultiplayerController() {
         performWorldOperation,
         setVisionSource,
         getVisionSource: () => activeVisionSourceTokenId,
-        clearChat: () => send({ type: 'chat.clear' }),
+        clearChat: () => {
+          if (!connected) return false;
+          performOperations([{ type: 'chat.clear', payload: {} }], { kind: 'chat' })
+            .catch(error => setMapStatus(`清空聊天失败：${error.message}`));
+          return true;
+        },
         getCapabilities,
         canControlActor: actorId => canControlActor({ actorId, state: api.getState(), permissions }),
         canControlToken: tokenId => {
@@ -1338,6 +1272,15 @@ export function createMultiplayerController() {
           return actor?.type === 'pc' && canControlActor({ actorId: actor.id, state: api.getState(), permissions });
         },
         canObserveActor: actorId => session?.role === 'gm' || (permissions.actorObserverIds || []).map(String).includes(String(actorId)),
+        canViewLimitedActor: actorId => session?.role === 'gm' || (permissions.actorLimitedIds || []).map(String).includes(String(actorId)),
+        getActorAccessLevel: actorId => {
+          if (session?.role === 'gm') return 'owner';
+          const id = String(actorId ?? '');
+          if ((permissions.actorOwnerIds || []).map(String).includes(id)) return 'owner';
+          if ((permissions.actorObserverIds || []).map(String).includes(id)) return 'observer';
+          if ((permissions.actorLimitedIds || []).map(String).includes(id)) return 'limited';
+          return 'none';
+        },
         getStatus: () => ({
           connected,
           joining,

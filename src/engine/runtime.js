@@ -274,6 +274,47 @@ export function createRpgMapRuntime({
     return true;
   }
 
+  function applyAuthoritativePatchState(nextState, {
+    source = 'world.operation', changeSet = {}, revision = null,
+  } = {}) {
+    state = normalizeState(nextState);
+    const actorIds = Array.isArray(changeSet.actors) ? changeSet.actors.map(String) : [];
+    const tokenChanges = Array.isArray(changeSet.tokens) ? changeSet.tokens : [];
+    const changedTokenIds = [];
+    for (const entry of tokenChanges) {
+      for (const tokenId of entry?.removeIds || []) {
+        emit('token:delete', { id: String(tokenId), tokenId: String(tokenId), canonical: true });
+      }
+      for (const tokenId of entry?.upsertIds || []) {
+        const id = String(tokenId);
+        changedTokenIds.push(id);
+        emit('token:property-change', { id, tokenId: id, canonical: true });
+      }
+    }
+    if (actorIds.length) emit('actor:change', { actorIds, canonical: true });
+    if (actorIds.length || changedTokenIds.length) {
+      emit('health:change', { actorIds, tokenIds: changedTokenIds, canonical: true });
+      emit('status:change', { actorIds, tokenIds: changedTokenIds, canonical: true });
+    }
+    if (changeSet.statusDefinitionsChanged) emit('status:definitions-change', { canonical: true });
+    if (changeSet.combatChanged) emit('combat:change', { canonical: true });
+    if (changeSet.chat?.appendedIds?.length || changeSet.chat?.cleared) {
+      emit('chat:change', { ...clone(changeSet.chat), canonical: true });
+    }
+    for (const entry of changeSet.featureStates || []) {
+      emit('feature:state-change', { sceneId: entry.sceneId, featureIds: clone(entry.featureIds || []), canonical: true });
+    }
+    for (const entry of changeSet.fog || []) {
+      emit('fog:change', { sceneId: entry.sceneId, dirtyBounds: clone(entry.dirtyBounds || null), canonical: true });
+    }
+    if (changeSet.scenes?.activeSceneChanged || changeSet.scenes?.upsertIds?.length || changeSet.scenes?.removeIds?.length) {
+      renderScene();
+      emit('scene:activate', { sceneId: state.preferences?.worldV2?.activeSceneId || null, canonical: true });
+    }
+    emit('state:patch', { source, revision, changeSet: clone(changeSet), state: clone(state) });
+    return true;
+  }
+
   async function commitAuthoritativeState(nextState, { source = 'authoritative-world', reason = source, render = true } = {}) {
     const normalized = normalizeState(nextState);
     const multiplayer = api.multiplayer?.getStatus?.();
@@ -410,6 +451,7 @@ export function createRpgMapRuntime({
     getActivePanel: () => activePanel,
     getSelectedFeatureId: () => selectedFeatureId,
     commitState,
+    applyAuthoritativePatchState,
     commitAuthoritativeState,
     persistNow,
     exportState,

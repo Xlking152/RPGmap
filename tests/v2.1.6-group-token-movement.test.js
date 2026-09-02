@@ -17,7 +17,12 @@ function token(id, x, y, elevationFt = 0) {
     diameterMeters: 1, rotation: 0, elevationFt,
     controllerUserIds: [],
     visibility: { mode: 'party', userIds: [] },
-    vision: { enabled: true, rangeOverrideMeters: null, overrideUserIds: [] },
+    vision: {
+      enabled: true,
+      preciseRangeOverrideMeters: null,
+      vagueRangeOverrideMeters: null,
+      overrideUserIds: [],
+    },
     locked: false, showName: true, effects: [],
   };
 }
@@ -122,7 +127,7 @@ function permissionState({ combat = false } = {}) {
   const value = {
     version: 2, mapId: 'test',
     preferences: {
-      entitySystem: { schemaVersion: 3, actors: [actor()], tokens: canonicalTokens, statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS) },
+      entitySystem: { schemaVersion: 4, actors: [actor()], tokens: canonicalTokens, statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS) },
       chatSystem: { messages: [] },
       combatSystem: { combat: combat ? {
         id: 'combat', state: 'active', round: 1, turnIndex: 0,

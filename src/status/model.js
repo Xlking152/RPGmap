@@ -1,11 +1,11 @@
 import { getCompatibilityRuleset } from '../ruleset/active-compat.js';
 
-export const STATUS_SCHEMA_VERSION = 3;
+export const STATUS_SCHEMA_VERSION = 4;
 export const MAX_STACKS = 99;
 
 const STATUS_SCOPES = new Set(['actor', 'token']);
 const STATUS_TARGET_SCOPES = new Set(['actor', 'token', 'syntheticActor']);
-const STATUS_CATEGORIES = new Set(['buff', 'debuff', 'trait', 'status']);
+const STATUS_CATEGORIES = new Set(['buff', 'debuff', 'neutral']);
 const STATUS_CHANGE_MODES = new Set(['add', 'set', 'multiply', 'min', 'max']);
 const BOOLEAN_CAPABILITIES = Object.freeze(['canMove', 'canInteract', 'canActInCombat']);
 export const STATUS_ICON_NAMES = new Set([
@@ -55,8 +55,29 @@ function normalizeCapabilities(value) {
   const capabilities = {};
   for (const key of BOOLEAN_CAPABILITIES) if (typeof source[key] === 'boolean') capabilities[key] = source[key];
   if (source.visibility === 'invisible') capabilities.visibility = 'invisible';
+  if (source.visionPrecision === 'vague') capabilities.visionPrecision = 'vague';
   if (Array.isArray(source.collisionBypassGroups) && source.collisionBypassGroups.includes('structure')) capabilities.collisionBypassGroups = ['structure'];
   return capabilities;
+}
+
+function normalizeDurationDefinition(value) {
+  if (value == null) return null;
+  if (!plainObject(value) || !['turns', 'rounds'].includes(String(value.unit))) return null;
+  const amount = Math.floor(Number(value.value));
+  return Number.isInteger(amount) && amount > 0 && amount <= 10_000
+    ? { unit: String(value.unit), value: amount }
+    : null;
+}
+
+function normalizeInstanceDuration(value, fallback = null) {
+  const source = plainObject(value) ? value : null;
+  const unit = String(source?.unit || fallback?.unit || '');
+  if (!['turns', 'rounds'].includes(unit)) return null;
+  const initial = Math.floor(Number(source?.initial ?? fallback?.value));
+  const remaining = Math.floor(Number(source?.remaining ?? initial));
+  if (!Number.isInteger(initial) || initial <= 0 || initial > 10_000) return null;
+  if (!Number.isInteger(remaining) || remaining < 0 || remaining > initial) return null;
+  return { unit, initial, remaining };
 }
 
 export function normalizeStatusDefinition(value, { fallbackScopes = ['actor'], tokenOnly = false } = {}) {
@@ -68,7 +89,8 @@ export function normalizeStatusDefinition(value, { fallbackScopes = ['actor'], t
   const changes = normalizeChanges(value.changes, { token: tokenOnly || scopes.every(scope => scope === 'token') });
   const requestedMax = integer(value.maxStacks, 1);
   const maxStacks = requestedMax > 1 && changes.some(change => change.mode !== 'add') ? 1 : requestedMax;
-  const categoryValue = String(value.category || 'status');
+  const requestedCategory = String(value.category || 'neutral');
+  const categoryValue = ['trait', 'status'].includes(requestedCategory) ? 'neutral' : requestedCategory;
   return {
     ...clone(value),
     id,
@@ -76,11 +98,12 @@ export function normalizeStatusDefinition(value, { fallbackScopes = ['actor'], t
     description: cleanText(value.description),
     icon: safeIcon(value.icon),
     color: safeColor(value.color),
-    category: STATUS_CATEGORIES.has(categoryValue) ? categoryValue : 'status',
+    category: STATUS_CATEGORIES.has(categoryValue) ? categoryValue : 'neutral',
     scopes,
     maxStacks,
     changes,
     capabilities: normalizeCapabilities(value.capabilities),
+    defaultDuration: normalizeDurationDefinition(value.defaultDuration),
     builtIn: value.builtIn === true,
   };
 }
@@ -126,12 +149,12 @@ function legacyDefinition(effect, scope, forcedId = '') {
   const maxStacks = changes.every(change => change.mode === 'add') ? integer(effect?.maxStacks, 1) : 1;
   const semantic = {
     name, description: cleanText(effect?.description), icon: safeIcon(effect?.icon), color: safeColor(effect?.color),
-    category: STATUS_CATEGORIES.has(String(effect?.category)) ? String(effect.category) : 'status',
+    category: ['buff', 'debuff'].includes(String(effect?.category)) ? String(effect.category) : 'neutral',
     scopes: [scope], maxStacks, changes, capabilities,
   };
   const supplied = cleanText(forcedId);
   const id = supplied || `status-legacy-${idSlug(name)}-${stableHash(semantic)}`;
-  return { id, ...semantic, builtIn: false };
+  return { id, ...semantic, defaultDuration: null, builtIn: false };
 }
 
 function ensureUniqueInstanceId(candidate, targetId, definitionId, index, usedIds) {
@@ -156,6 +179,16 @@ function normalizeInstance(effect, { definition, targetId, index, usedIds }) {
   ]) delete instance[key];
   if (plainObject(effect?.source)) instance.source = clone(effect.source);
   if (cleanText(effect?.createdAt)) instance.createdAt = cleanText(effect.createdAt);
+  const duration = normalizeInstanceDuration(effect?.duration, definition.defaultDuration);
+  if (duration) instance.duration = duration;
+  else delete instance.duration;
+  if (plainObject(effect?.expiredAt) && duration?.remaining === 0) {
+    instance.expiredAt = {
+      timestamp: cleanText(effect.expiredAt.timestamp, '', 80),
+      round: Math.max(0, Math.floor(finite(effect.expiredAt.round, 0))),
+      turn: Math.max(0, Math.floor(finite(effect.expiredAt.turn, 0))),
+    };
+  } else delete instance.expiredAt;
   return instance;
 }
 
@@ -272,12 +305,13 @@ export function deriveActorStatuses(actor, actorStatuses = [], { ruleset = getCo
 
 export function resolveStatusCapabilities(statuses = []) {
   const enabled = statuses.filter(status => status && status.enabled !== false);
-  const capabilities = { canMove: true, canInteract: true, canActInCombat: true, collisionBypassGroups: [], reasons: [] };
+  const capabilities = { canMove: true, canInteract: true, canActInCombat: true, collisionBypassGroups: [], visionPrecision: 'precise', reasons: [] };
   for (const key of BOOLEAN_CAPABILITIES) {
     if (enabled.some(status => status.capabilities?.[key] === false)) capabilities[key] = false;
     else if (enabled.some(status => status.capabilities?.[key] === true)) capabilities[key] = true;
   }
   const bypass = new Set();
+  if (enabled.some(status => status.capabilities?.visionPrecision === 'vague')) capabilities.visionPrecision = 'vague';
   for (const status of enabled) {
     if (BOOLEAN_CAPABILITIES.some(key => status.capabilities?.[key] === false)) {
       const reason = cleanText(status.label || status.name || status.definitionId, '状态限制');
@@ -321,13 +355,17 @@ function strictDefinition(value) {
   if (rawScopes.includes('token') && rawChanges.length) throw statusError('Definitions usable by Token cannot modify Actor numeric values', 'status_scope_forbidden');
   const requestedMax = integer(value.maxStacks, 1);
   if (requestedMax > 1 && rawChanges.some(change => String(change.mode || 'add') !== 'add')) throw statusError('Stacking definitions may only use additive changes', 'status_stacking_invalid');
-  const allowedCapabilityKeys = new Set([...BOOLEAN_CAPABILITIES, 'collisionBypassGroups', 'visibility']);
+  const allowedCapabilityKeys = new Set([...BOOLEAN_CAPABILITIES, 'collisionBypassGroups', 'visibility', 'visionPrecision']);
   if (plainObject(value.capabilities)) {
     for (const key of Object.keys(value.capabilities)) if (!allowedCapabilityKeys.has(key)) throw statusError(`definition.capabilities.${key} is not allowed`);
     for (const key of BOOLEAN_CAPABILITIES) if (value.capabilities[key] !== undefined && typeof value.capabilities[key] !== 'boolean') throw statusError(`definition.capabilities.${key} must be boolean`);
     if (value.capabilities.visibility !== undefined && value.capabilities.visibility !== 'invisible') throw statusError('definition.capabilities.visibility must be invisible');
+    if (value.capabilities.visionPrecision !== undefined && value.capabilities.visionPrecision !== 'vague') throw statusError('definition.capabilities.visionPrecision must be vague');
     const bypass = value.capabilities.collisionBypassGroups;
     if (bypass !== undefined && (!Array.isArray(bypass) || bypass.some(group => group !== 'structure'))) throw statusError('collisionBypassGroups may only contain structure');
+  }
+  if (value.defaultDuration !== undefined && value.defaultDuration !== null && !normalizeDurationDefinition(value.defaultDuration)) {
+    throw statusError('definition.defaultDuration must use positive turns or rounds');
   }
   return normalizeStatusDefinition({ ...value, id, scopes: rawScopes, builtIn: false });
 }
@@ -404,6 +442,11 @@ function applySingleOperation(entityState, message, context) {
     if (index >= 0) {
       target.effects[index].stacks = Math.min(definition.maxStacks, (Number(target.effects[index].stacks) || 1) + amount);
       target.effects[index].enabled = true;
+      if (target.effects[index].expiredAt) {
+        const reset = normalizeInstanceDuration(message.duration, definition.defaultDuration);
+        if (reset) target.effects[index].duration = reset;
+        delete target.effects[index].expiredAt;
+      }
       if (message.note !== undefined) target.effects[index].note = cleanText(message.note);
     } else {
       if (target.effects.length >= MAX_EFFECTS_PER_TARGET) throw statusError('Target has too many statuses', 'status_limit');
@@ -413,6 +456,8 @@ function applySingleOperation(entityState, message, context) {
         source: plainObject(message.source) ? clone(message.source) : clone(context.source || { role: 'offline' }),
         createdAt: cleanText(context.now) || new Date().toISOString(),
       };
+      const duration = normalizeInstanceDuration(message.duration, definition.defaultDuration);
+      if (duration) instance.duration = duration;
       target.effects.push(instance);
     }
     return { action: 'apply', scope, targetId, definitionId };
@@ -421,11 +466,60 @@ function applySingleOperation(entityState, message, context) {
   if (type === 'status.setStacks') {
     if (index < 0) throw statusError('Status is not applied to this target', 'status_not_applied');
     target.effects[index].stacks = integer(message.stacks, 1, 1, definition.maxStacks);
-    if (message.enabled !== undefined) { if (typeof message.enabled !== 'boolean') throw statusError('enabled must be boolean'); target.effects[index].enabled = message.enabled; }
+    if (message.enabled !== undefined) {
+      if (typeof message.enabled !== 'boolean') throw statusError('enabled must be boolean');
+      target.effects[index].enabled = message.enabled;
+      if (message.enabled && target.effects[index].expiredAt) {
+        const reset = normalizeInstanceDuration(message.duration, definition.defaultDuration);
+        if (reset) target.effects[index].duration = reset;
+        delete target.effects[index].expiredAt;
+      }
+    }
+    if (message.duration !== undefined) {
+      const duration = normalizeInstanceDuration(message.duration, definition.defaultDuration);
+      if (!duration) throw statusError('duration must use valid turns or rounds');
+      target.effects[index].duration = duration;
+      delete target.effects[index].expiredAt;
+    }
     if (message.note !== undefined) target.effects[index].note = cleanText(message.note);
     return { action: 'setStacks', scope, targetId, definitionId };
   }
   throw statusError(`Unsupported status operation: ${type}`, 'unknown_message');
+}
+
+function statusEffectCollections(entityState) {
+  return [
+    ...(entityState.actors || []).map(actor => actor.effects),
+    ...(entityState.tokens || []).flatMap(token => [token.effects, token.actorDelta?.effects]),
+  ].filter(Array.isArray);
+}
+
+export function advanceStatusDurations(rawEntityState, {
+  roundAdvanced = false,
+  now = new Date().toISOString(),
+  round = 0,
+  turn = 0,
+} = {}) {
+  const state = normalizeEntityStatusState(rawEntityState);
+  const expiredEffectIds = [];
+  for (const effects of statusEffectCollections(state)) {
+    for (const effect of effects) {
+      if (effect?.enabled === false || !effect?.duration || effect.duration.remaining <= 0) continue;
+      const shouldTick = effect.duration.unit === 'turns'
+        || (effect.duration.unit === 'rounds' && roundAdvanced);
+      if (!shouldTick) continue;
+      effect.duration.remaining = Math.max(0, Number(effect.duration.remaining) - 1);
+      if (effect.duration.remaining > 0) continue;
+      effect.enabled = false;
+      effect.expiredAt = {
+        timestamp: String(now),
+        round: Math.max(0, Math.floor(Number(round) || 0)),
+        turn: Math.max(0, Math.floor(Number(turn) || 0)),
+      };
+      expiredEffectIds.push(String(effect.id));
+    }
+  }
+  return { state, expiredEffectIds };
 }
 
 export function reduceStatusOperation(rawEntityState, message, context = {}) {
