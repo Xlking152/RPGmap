@@ -1,4 +1,5 @@
 import { actorSheetDescriptionFor } from './sheet-policy.js';
+import { actorSheetWindowKey, tokenSheetWindowKey } from './sheet-manager.js';
 
 const STYLE_ID = 'rpgmap-actor-sheet-v2-style';
 
@@ -53,10 +54,12 @@ function installStyles(documentNode) {
 }
 
 function sheetKey(sheet) {
-  const tokenId = String(sheet?.dataset?.tokenId || '').trim();
-  if (tokenId) return `token:${tokenId}`;
-  const actorId = String(sheet?.dataset?.actorId || '').trim();
-  return actorId ? `actor:${actorId}` : '';
+  if (!sheet) return '';
+  const managedKey = String(sheet.dataset.sheetWindowKey || '').trim();
+  if (managedKey) return managedKey;
+  const tokenId = String(sheet.dataset.tokenId || '').trim();
+  if (tokenId) return tokenSheetWindowKey(sheet.dataset.sceneId, tokenId);
+  return actorSheetWindowKey(sheet.dataset.actorId);
 }
 
 function kindLabel(kind) {
