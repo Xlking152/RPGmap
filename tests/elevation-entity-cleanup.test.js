@@ -8,13 +8,13 @@ function withoutComments(source) {
     .replace(/(^|\s)\/\/.*$/gm, '$1');
 }
 
-const entityUi = withoutComments(await readFile(new URL('../src/entities/ui.js', import.meta.url), 'utf8'));
+const entityUi = withoutComments(await readFile(new URL('../src/entities/ui-live.js', import.meta.url), 'utf8'));
 const tokenController = withoutComments(await readFile(new URL('../src/entities/token-controller.js', import.meta.url), 'utf8'));
 const runtimeSource = withoutComments(await readFile(new URL('../src/engine/runtime.js', import.meta.url), 'utf8'));
 const appShellSource = withoutComments(await readFile(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8'));
 const interactionIndex = withoutComments(await readFile(new URL('../src/interaction/index.js', import.meta.url), 'utf8'));
 
-test('modern Entity UI owns an Actor panel and recognizes only canonical Token DOM', () => {
+test('modern live Entity UI owns an Actor panel and recognizes only canonical Token DOM', () => {
   assert.match(entityUi, /const panel = api\.uiPanels\?\.actors/);
   assert.match(entityUi, /closest\?\.\('\.rpg-token-v2'\)/);
   assert.match(entityUi, /api\.on\('token:select'/);
