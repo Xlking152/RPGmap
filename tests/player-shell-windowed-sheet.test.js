@@ -38,7 +38,11 @@ test('Actor sheets become managed map-friendly draggable and resizable desktop w
   assert.match(entityIndex, /dataset\?\.sheetWindowKey/);
   assert.match(entityIndex, /api\.entities\?\.focusSheet\?\.\(key\)/);
   assert.match(entityIndex, /drag = \{ sheet, key, x:/);
-  assert.match(entityIndex, /api\.entities\?\.captureSheetGeometry\?\.\(key, sheet\.getBoundingClientRect\(\)\)/);
+  assert.match(entityIndex, /let geometryPointer = null/);
+  assert.match(entityIndex, /geometryPointer = sheet && key \? \{ sheet, key \} : null/);
+  assert.match(entityIndex, /const target = drag \|\| geometryPointer/);
+  assert.match(entityIndex, /api\.entities\?\.captureSheetGeometry\?\.\(target\.key, target\.sheet\.getBoundingClientRect\(\)\)/);
+  assert.match(entityIndex, /addEventListener\('pointercancel', pointerCancel/);
 });
 
 test('keyboard focus and form submission resolve the live window before sheet handlers run', () => {
