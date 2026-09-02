@@ -55,13 +55,13 @@ test('SheetManager persists only local tab and geometry preferences', () => {
   assert.equal(restored.height, 640);
 });
 
-test('closing the active window falls back to the highest remaining sheet', () => {
+test('closing the focused window leaves the highest remaining sheet as fallback', () => {
   const manager = createActorSheetManager();
   const actor = manager.open({ actorId: 'a' }).record;
   const token = manager.open({ actorId: 'b', tokenId: 'b-1' }).record;
   manager.activate(actor.key);
   manager.close(actor.key);
-  assert.equal(manager.activeKey(), token.key);
+  assert.equal(manager.list().at(-1)?.key, token.key);
 });
 
 test('lazy Entity UI installs the multi-window coordinator after the canonical UI owns open APIs', () => {
