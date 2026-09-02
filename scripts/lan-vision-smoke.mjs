@@ -4,6 +4,9 @@ import net from 'node:net';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 import { normalizeSceneToken } from '../src/token/model.js';
+import { WORLD_OPERATION_SCHEMA_VERSION } from '../src/world/operations.js';
+import { STATUS_SCHEMA_VERSION } from '../src/status/model.js';
+import { ACCESS_SCHEMA_VERSION } from '../deployment/local-server/access-control.mjs';
 
 const httpUrl = String(process.argv[2] || '').replace(/\/$/, '');
 const gmSecret = String(process.argv[3] || '');
@@ -186,7 +189,13 @@ async function openSocket() {
 async function hello(message) {
   const socket = await openSocket();
   const welcome = waitForMessage(socket, value => value.type === 'welcome', 'welcome');
-  socket.send(JSON.stringify({ type: 'hello', ...message }));
+  socket.send(JSON.stringify({
+    type: 'hello',
+    operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
+    statusSchema: STATUS_SCHEMA_VERSION,
+    accessSchema: ACCESS_SCHEMA_VERSION,
+    ...message,
+  }));
   return { socket, welcome: await welcome };
 }
 
@@ -298,6 +307,9 @@ try {
   const playerWelcomePromise = waitForMessage(playerSocket, message => message.type === 'welcome', 'Player welcome');
   playerSocket.send(JSON.stringify({
     type: 'hello', name: 'Packaged Smoke Player', requestedRole: 'player',
+    operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
+    statusSchema: STATUS_SCHEMA_VERSION,
+    accessSchema: ACCESS_SCHEMA_VERSION,
     claimCode: claim.claimCode, joinCode,
   }));
   await boundPromise;
@@ -344,11 +356,11 @@ try {
   }));
   const denied = await deniedPromise;
   assert(denied.code === 'token_not_controlled', 'Hidden target did not receive stable permission rejection');
-  assert(!JSON.stringify(denied.state).includes('smoke-secret-token'), 'Hidden target leaked in rejection rollback');
+  assert(!Object.hasOwn(denied, 'state'), 'Protocol V2 rejection must not include a World rollback');
 
   const canonicalPromise = waitForMessage(gm.socket, message =>
     message.type === 'world.snapshot' && message.reason === 'request', 'Canonical snapshot');
-  gm.socket.send(JSON.stringify({ type: 'world.request' }));
+  gm.socket.send(JSON.stringify({ type: 'world.snapshot.request' }));
   const canonical = await canonicalPromise;
   const canonicalScene = canonical.state.preferences.worldV2.scenes.find(item => item.id === scene.id);
   assert(Object.keys(canonicalScene.fog.exploredByParty['smoke-party']?.rows || {}).length > 0,

@@ -38,46 +38,39 @@ await copy('dist', 'app');
 for (const file of [
   'server.mjs',
   'access-control.mjs',
+  'http-runtime.mjs',
   'status-capabilities-v2.mjs',
   'portable-storage.mjs',
   'world-schema.mjs',
   'world-v2.mjs',
-  'status-operations.mjs',
+  'websocket-runtime.mjs',
   'launcher.mjs',
   'start-rpgmap.bat',
 ]) {
   await copy(path.join('deployment', 'local-server', file), file);
 }
-await viteBuild({
-  configFile: false,
-  logLevel: 'error',
-  build: {
-    target: 'es2020',
-    emptyOutDir: false,
-    minify: false,
-    outDir: root,
-    lib: {
-      entry: path.join(projectRoot, 'src', 'server', 'world-operations-entry.js'),
-      formats: ['es'],
-      fileName: () => 'world-operations.mjs',
+async function bundleServerModule(entry, fileName) {
+  await viteBuild({
+    configFile: false,
+    logLevel: 'error',
+    build: {
+      target: 'es2020',
+      emptyOutDir: false,
+      minify: false,
+      outDir: root,
+      lib: {
+        entry: path.join(projectRoot, entry),
+        formats: ['es'],
+        fileName: () => fileName,
+      },
     },
-  },
-});
-await viteBuild({
-  configFile: false,
-  logLevel: 'error',
-  build: {
-    target: 'es2020',
-    emptyOutDir: false,
-    minify: false,
-    outDir: root,
-    lib: {
-      entry: path.join(projectRoot, 'src', 'server', 'authority.js'),
-      formats: ['es'],
-      fileName: () => 'ruleset-authority.mjs',
-    },
-  },
-});
+  });
+}
+
+await bundleServerModule('src/server/world-operations-entry.js', 'world-operations.mjs');
+await bundleServerModule('src/server/authority.js', 'ruleset-authority.mjs');
+await bundleServerModule('src/permissions/model.js', 'permissions-model.mjs');
+await bundleServerModule('deployment/local-server/status-operations.mjs', 'status-operations.mjs');
 await copy('文档/操作指南.md', 'docs/OPERATION-GUIDE.md');
 
 await writeFile(path.join(root, 'VERSION.json'), `${JSON.stringify({

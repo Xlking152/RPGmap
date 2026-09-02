@@ -5,7 +5,7 @@ import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { canPermission } from '../../src/permissions/model.js';
+import { canPermission } from './permissions-model.mjs';
 import {
   ACCESS_SCHEMA_VERSION,
   OWNERSHIP,

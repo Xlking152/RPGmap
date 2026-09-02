@@ -24,8 +24,10 @@ const EXPECTED_ROOT_ENTRIES = [
   'access-control.mjs',
   'app',
   'docs',
+  'http-runtime.mjs',
   'launcher.mjs',
   'map',
+  'permissions-model.mjs',
   'portable-storage.mjs',
   'ruleset-authority.mjs',
   'server.mjs',
@@ -35,6 +37,7 @@ const EXPECTED_ROOT_ENTRIES = [
   'world-operations.mjs',
   'world-schema.mjs',
   'world-v2.mjs',
+  'websocket-runtime.mjs',
 ];
 
 function fail(message) {
@@ -78,6 +81,22 @@ for (const file of EXPECTED_ROOT_ENTRIES.filter(name => name.endsWith('.mjs') ||
   await requireFile(file);
 }
 if (rootEntries.filter(name => name.toLowerCase().endsWith('.bat')).length !== 1) fail('package must contain exactly one BAT');
+
+for (const file of rootEntries.filter(name => name.endsWith('.mjs'))) {
+  const source = await readFile(path.join(root, file), 'utf8');
+  const specifiers = [
+    ...source.matchAll(/(?:import|export)\s+(?:[^'";]*?\s+from\s+)?['"](\.[^'"]+)['"]/g),
+    ...source.matchAll(/import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g),
+  ].map(match => match[1]);
+  for (const specifier of specifiers) {
+    const target = path.resolve(root, path.dirname(file), specifier);
+    if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+      fail(`${file} imports outside the package root: ${specifier}`);
+    }
+    const info = await stat(target).catch(() => null);
+    if (!info?.isFile()) fail(`${file} imports missing package module: ${specifier}`);
+  }
+}
 
 const version = JSON.parse(await readFile(path.join(root, 'VERSION.json'), 'utf8'));
 if (version.version !== packageJson.version || version.releaseTag !== `v${packageJson.version}`) {
