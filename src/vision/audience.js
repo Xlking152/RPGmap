@@ -53,11 +53,16 @@ function viewerParties(world, context) {
   return parties;
 }
 
+function explicitVisibilityGranted(entity, context) {
+  if (String(entity?.visibility?.mode || 'public') === 'gm') return false;
+  return ids(entity?.visibility?.userIds).has(context.userId);
+}
+
 function visibleByPolicy(entity, actor, context, parties) {
   const visibility = plainObject(entity?.visibility) ? entity.visibility : { mode: 'public', userIds: [] };
   if (visibility.mode === 'gm') return false;
   if (tokenControlled(entity, actor, context)) return true;
-  if (ids(visibility.userIds).has(context.userId)) return true;
+  if (explicitVisibilityGranted(entity, context)) return true;
   if (visibility.mode === 'users') return false;
   if (visibility.mode === 'party') return Boolean(actor?.partyId && parties.has(String(actor.partyId)));
   return visibility.mode === 'public';
@@ -86,7 +91,6 @@ function tokenVisionPrecision(token, actor, definitions) {
 
 function authorizedForPrivateData(token, actor, context, parties) {
   return tokenControlled(token, actor, context)
-    || ids(token?.visibility?.userIds).has(context.userId)
     || Boolean((actor?.type === 'pc' || actor?.type === 'summon')
       && actor?.partyId && parties.has(String(actor.partyId)));
 }
@@ -284,11 +288,13 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     scene.tokens = (scene.tokens || []).flatMap(rawToken => {
       const actor = actors.get(String(rawToken.actorId));
       if (!actor || !visibleByPolicy(rawToken, actor, context, parties)) return [];
+      const visibilityOverride = explicitVisibilityGranted(rawToken, context);
       const authorized = authorizedForPrivateData(rawToken, actor, context, parties);
-      if (tokenInvisible(rawToken, actor, definitions) && !authorized) return [];
+      if (tokenInvisible(rawToken, actor, definitions) && !authorized && !visibilityOverride) return [];
       const hostile = !authorized;
-      const level = hostile && isActive ? detectionLevel(rawToken, vision, metersPerUnit) : 'precise';
-      if (hostile && (!isActive || level === 'none')) return [];
+      const requiresDetection = hostile && !visibilityOverride;
+      const level = requiresDetection && isActive ? detectionLevel(rawToken, vision, metersPerUnit) : 'precise';
+      if (requiresDetection && (!isActive || level === 'none')) return [];
       let token = clone(rawToken);
       if (authorized) {
         visibleTokenIds.add(String(token.id));

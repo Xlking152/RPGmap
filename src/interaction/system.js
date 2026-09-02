@@ -159,9 +159,12 @@ export function createFeatureInteractionSystem() {
           if (!tokenId) return { ok: false, reason: '请先选择 Token' };
           const token = api.tokens.get?.(tokenId);
           if (!token) return { ok: false, reason: 'Token 不存在' };
-          return api.multiplayer?.canControlActor?.(token.actorId) !== false
+          const allowed = api.permissions?.can
+            ? api.permissions.can('token.move', { token, tokenId: token.id })
+            : api.multiplayer?.canControlToken?.(token.id) !== false;
+          return allowed
             ? { ok: true, reason: '' }
-            : { ok: false, reason: '你没有该 Actor 的 OWNER 权限，或当前不在其战斗回合' };
+            : { ok: false, reason: '当前 Token 没有移动权限，或受到锁定、状态、战斗回合限制' };
         }
         return { ok: true, reason: '' };
       }
