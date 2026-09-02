@@ -39,17 +39,15 @@ export function createEntitySystem(options = {}) {
       }
 
       function handleCharacterSheetKey(event) {
-        if (event.defaultPrevented || event.code !== 'KeyC'
+        if (event.code !== 'KeyC'
           || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
           || event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
         const tokenId = api.selection?.getPrimaryTokenId?.();
         if (!tokenId) return;
-        event.preventDefault();
         void invoke('openToken', tokenId);
       }
 
       api.entities = {
-        lazy: true,
         canImportXlsx: typeof api.ruleset?.importers?.xlsx?.importFile === 'function',
         openActor: (...args) => invoke('openActor', ...args),
         openToken: (...args) => invoke('openToken', ...args),
