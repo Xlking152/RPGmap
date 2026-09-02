@@ -1,24 +1,13 @@
-import {
-  actorSheetWindowKey,
-  createActorSheetManager,
-  tokenSheetWindowKey,
-} from './sheet-manager.js';
+import { actorSheetWindowKey, createActorSheetManager, tokenSheetWindowKey } from './sheet-manager.js';
 
 function sheetKey(sheet) {
   if (!sheet) return '';
   const tokenId = String(sheet.dataset.tokenId || '').trim();
-  if (tokenId) return tokenSheetWindowKey(tokenId);
-  return actorSheetWindowKey(sheet.dataset.actorId);
+  return tokenId ? tokenSheetWindowKey(tokenId) : actorSheetWindowKey(sheet.dataset.actorId);
 }
 
 function sheetTab(sheet) {
   return String(sheet?.querySelector?.('.entity-sheet-tab.active')?.dataset.sheetTab || '').trim() || null;
-}
-
-function sheetRect(sheet) {
-  if (!sheet?.getBoundingClientRect) return null;
-  const rect = sheet.getBoundingClientRect();
-  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
 }
 
 export function createActorSheetWindowCoordinator({ api, documentNode, windowNode = documentNode?.defaultView } = {}) {
@@ -38,42 +27,30 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
   let promoting = false;
   let scheduled = false;
   const staticSelector = '.entity-sheet-backdrop[data-sheet-manager-static="true"]';
+  const backdrops = () => [...documentNode.querySelectorAll('.entity-sheet-backdrop')];
+  const liveBackdrop = () => backdrops().find(node => node.dataset.sheetManagerStatic !== 'true') || null;
+  const backdropForKey = key => backdrops().find(node => node.dataset.sheetWindowKey === key) || null;
+  const sheetForBackdrop = backdrop => backdrop?.querySelector?.('.entity-sheet') || null;
 
-  function backdrops() {
-    return [...documentNode.querySelectorAll('.entity-sheet-backdrop')];
-  }
-
-  function liveBackdrop() {
-    return backdrops().find(node => node.dataset.sheetManagerStatic !== 'true') || null;
-  }
-
-  function backdropForKey(key) {
-    return backdrops().find(node => node.dataset.sheetWindowKey === key) || null;
-  }
-
-  function sheetForBackdrop(backdrop) {
-    return backdrop?.querySelector?.('.entity-sheet') || null;
-  }
-
-  function markBackdrop(backdrop, record, { staticWindow = false } = {}) {
+  function markBackdrop(backdrop, record, staticWindow = false) {
     if (!backdrop || !record) return;
     backdrop.dataset.sheetWindowKey = record.key;
     if (staticWindow) backdrop.dataset.sheetManagerStatic = 'true';
     else delete backdrop.dataset.sheetManagerStatic;
     backdrop.style.zIndex = String(record.zIndex);
     const sheet = sheetForBackdrop(backdrop);
-    if (!sheet) return;
-    sheet.dataset.sheetWindowKey = record.key;
-    sheet.setAttribute('aria-modal', 'false');
+    if (sheet) {
+      sheet.dataset.sheetWindowKey = record.key;
+      sheet.setAttribute('aria-modal', 'false');
+    }
   }
 
   function applyGeometry(backdrop, record) {
     const sheet = sheetForBackdrop(backdrop);
     if (!sheet || !record) return;
-    if (record.left != null) sheet.style.left = `${Math.round(record.left)}px`;
-    if (record.top != null) sheet.style.top = `${Math.round(record.top)}px`;
-    if (record.width != null) sheet.style.width = `${Math.round(record.width)}px`;
-    if (record.height != null) sheet.style.height = `${Math.round(record.height)}px`;
+    for (const field of ['left', 'top', 'width', 'height']) {
+      if (record[field] != null) sheet.style[field] = `${Math.round(record[field])}px`;
+    }
     backdrop.style.zIndex = String(record.zIndex);
   }
 
@@ -82,8 +59,8 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     const key = backdrop?.dataset.sheetWindowKey || sheetKey(sheet);
     const record = manager.get(key);
     if (!record || !sheet) return record;
-    const rect = sheetRect(sheet);
-    if (rect) manager.capture(key, rect);
+    const rect = sheet.getBoundingClientRect();
+    manager.capture(key, rect);
     const tab = sheetTab(sheet);
     if (tab) manager.update(key, { tab });
     return manager.get(key);
@@ -99,8 +76,6 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
   function focusKey(key) {
     const record = manager.activate(key);
     if (!record) return null;
-    const backdrop = backdropForKey(record.key);
-    if (backdrop) backdrop.style.zIndex = String(record.zIndex);
     refreshZOrder();
     return record;
   }
@@ -114,45 +89,24 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
   function archiveLive() {
     const live = liveBackdrop();
     const sheet = sheetForBackdrop(live);
-    if (!live || !sheet) return null;
-    const key = live.dataset.sheetWindowKey || sheetKey(sheet);
-    const record = manager.get(key);
-    if (!record) return null;
+    const record = manager.get(live?.dataset.sheetWindowKey || sheetKey(sheet));
+    if (!live || !sheet || !record) return null;
     captureBackdrop(live);
-    removeStatic(key);
+    removeStatic(record.key);
     const clone = live.cloneNode(true);
-    markBackdrop(clone, manager.get(key), { staticWindow: true });
+    markBackdrop(clone, manager.get(record.key), true);
     documentNode.body.append(clone);
     return clone;
   }
 
   function ensureLiveTarget() {
-    const live = liveBackdrop();
-    if (live) return live;
+    if (liveBackdrop()) return;
     const placeholder = documentNode.createElement('div');
     placeholder.className = 'entity-sheet-backdrop';
     placeholder.dataset.sheetManagerPlaceholder = 'true';
     const firstStatic = documentNode.querySelector(staticSelector);
     if (firstStatic) documentNode.body.insertBefore(placeholder, firstStatic);
     else documentNode.body.append(placeholder);
-    return placeholder;
-  }
-
-  function currentRecordFromDom() {
-    const live = liveBackdrop();
-    const sheet = sheetForBackdrop(live);
-    if (!sheet) return null;
-    const key = sheetKey(sheet);
-    if (!key) return null;
-    let record = manager.get(key);
-    if (!record) {
-      const tokenId = String(sheet.dataset.tokenId || '').trim() || null;
-      record = manager.open({ actorId: sheet.dataset.actorId, tokenId, tab: sheetTab(sheet) }).record;
-    }
-    if (!record) return null;
-    markBackdrop(live, record);
-    applyGeometry(live, record);
-    return record;
   }
 
   function finishOpen(record) {
@@ -163,69 +117,46 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     refreshZOrder();
   }
 
-  function openActor(actorId, tab = null) {
-    const key = actorSheetWindowKey(actorId);
-    if (!key) return false;
-    const existingBackdrop = backdropForKey(key);
-    if (existingBackdrop) {
-      captureBackdrop(existingBackdrop);
-      const record = manager.open({ actorId, tab }).record;
-      if (existingBackdrop.dataset.sheetManagerStatic === 'true') return promote(key, tab);
-      if (tab && tab !== sheetTab(sheetForBackdrop(existingBackdrop))) {
-        promoting = true;
-        try {
-          const result = originalOpenActor(actorId, tab);
-          finishOpen(record);
-          return result;
-        } finally { promoting = false; }
-      }
-      finishOpen(record);
-      return true;
-    }
-
-    if (liveBackdrop()) archiveLive();
-    ensureLiveTarget();
-    const record = manager.open({ actorId, tab }).record;
+  function renderRecord(record, tab = record?.tab) {
+    if (!record) return false;
     promoting = true;
     try {
-      const result = originalOpenActor(actorId, tab || record?.tab);
-      if (!result) { manager.close(record?.key); return false; }
+      const result = record.tokenId
+        ? originalOpenToken(record.tokenId, tab)
+        : originalOpenActor(record.actorId, tab);
+      if (!result) return false;
       finishOpen(record);
       return true;
     } finally { promoting = false; }
   }
 
-  function openToken(tokenId, tab = null) {
-    const token = api.tokens?.get?.(tokenId);
-    if (!token) return false;
-    const key = tokenSheetWindowKey(token.id);
-    const existingBackdrop = backdropForKey(key);
-    if (existingBackdrop) {
-      captureBackdrop(existingBackdrop);
-      const record = manager.open({ actorId: token.actorId, tokenId: token.id, tab }).record;
-      if (existingBackdrop.dataset.sheetManagerStatic === 'true') return promote(key, tab);
-      if (tab && tab !== sheetTab(sheetForBackdrop(existingBackdrop))) {
-        promoting = true;
-        try {
-          const result = originalOpenToken(token.id, tab);
-          finishOpen(record);
-          return result;
-        } finally { promoting = false; }
-      }
+  function managedOpen(actorId, tokenId = null, tab = null) {
+    const key = tokenId ? tokenSheetWindowKey(tokenId) : actorSheetWindowKey(actorId);
+    if (!key) return false;
+    const existing = backdropForKey(key);
+    if (existing) {
+      captureBackdrop(existing);
+      const record = manager.open({ actorId, tokenId, tab }).record;
+      if (existing.dataset.sheetManagerStatic === 'true') return promote(key, tab);
+      if (tab && tab !== sheetTab(sheetForBackdrop(existing))) return renderRecord(record, tab);
       finishOpen(record);
       return true;
     }
-
     if (liveBackdrop()) archiveLive();
     ensureLiveTarget();
-    const record = manager.open({ actorId: token.actorId, tokenId: token.id, tab }).record;
-    promoting = true;
-    try {
-      const result = originalOpenToken(token.id, tab || record?.tab);
-      if (!result) { manager.close(record?.key); return false; }
-      finishOpen(record);
-      return true;
-    } finally { promoting = false; }
+    const record = manager.open({ actorId, tokenId, tab }).record;
+    if (renderRecord(record, tab || record?.tab)) return true;
+    manager.close(record?.key);
+    return false;
+  }
+
+  function openActor(actorId, tab = null) {
+    return managedOpen(String(actorId || '').trim(), null, tab);
+  }
+
+  function openToken(tokenId, tab = null) {
+    const token = api.tokens?.get?.(tokenId);
+    return token ? managedOpen(token.actorId, token.id, tab) : false;
   }
 
   function promote(key, preferredTab = null) {
@@ -238,20 +169,8 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     if (current && current !== target) archiveLive();
     removeStatic(key);
     ensureLiveTarget();
-    const next = manager.open({
-      actorId: record.actorId,
-      tokenId: record.tokenId,
-      tab: preferredTab || manager.get(key)?.tab,
-    }).record;
-    promoting = true;
-    try {
-      const result = next.tokenId
-        ? originalOpenToken(next.tokenId, next.tab)
-        : originalOpenActor(next.actorId, next.tab);
-      if (!result) return false;
-      finishOpen(next);
-      return true;
-    } finally { promoting = false; }
+    const next = manager.open({ actorId: record.actorId, tokenId: record.tokenId, tab: preferredTab || record.tab }).record;
+    return renderRecord(next);
   }
 
   function promoteFallback() {
@@ -264,11 +183,19 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     scheduled = false;
     if (destroyed || promoting) return;
     const live = liveBackdrop();
-    if (live?.dataset.sheetManagerPlaceholder === 'true' && !sheetForBackdrop(live)) return;
-    if (live) {
-      const record = currentRecordFromDom();
-      if (record) focusKey(record.key);
-    } else promoteFallback();
+    const sheet = sheetForBackdrop(live);
+    if (live?.dataset.sheetManagerPlaceholder === 'true' && !sheet) return;
+    if (!sheet) return promoteFallback();
+    const key = sheetKey(sheet);
+    if (!key) return;
+    let record = manager.get(key);
+    if (!record) {
+      const tokenId = String(sheet.dataset.tokenId || '').trim() || null;
+      record = manager.open({ actorId: sheet.dataset.actorId, tokenId, tab: sheetTab(sheet) }).record;
+    }
+    markBackdrop(live, record);
+    applyGeometry(live, record);
+    focusKey(record.key);
   }
 
   function scheduleReconcile() {
@@ -279,57 +206,44 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
 
   function activateEventSheet(event) {
     const sheet = event.target?.closest?.('.entity-sheet');
-    if (!sheet) return null;
-    const key = sheet.dataset.sheetWindowKey || sheetKey(sheet);
-    if (!key) return null;
+    const key = sheet?.dataset.sheetWindowKey || sheetKey(sheet);
     const record = manager.get(key);
     if (!record) return null;
-    const backdrop = sheet.closest('.entity-sheet-backdrop');
-    if (backdrop?.dataset.sheetManagerStatic === 'true') {
+    if (sheet.closest('.entity-sheet-backdrop')?.dataset.sheetManagerStatic === 'true') {
       promote(key, sheetTab(sheet));
       return manager.get(key);
     }
-    focusKey(key);
-    return manager.get(key);
+    return focusKey(key);
   }
 
   function handlePointerDown(event) {
     const sheet = event.target?.closest?.('.entity-sheet');
     if (!sheet) return;
-    const backdrop = sheet.closest('.entity-sheet-backdrop');
-    if (backdrop?.dataset.sheetManagerStatic === 'true') {
-      activateEventSheet(event);
-      if (event.target.closest?.('.entity-sheet-header') && !event.target.closest?.('input,button,select,textarea,a')) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-      return;
-    }
+    const staticWindow = sheet.closest('.entity-sheet-backdrop')?.dataset.sheetManagerStatic === 'true';
     activateEventSheet(event);
+    if (staticWindow && event.target.closest?.('.entity-sheet-header') && !event.target.closest?.('input,button,select,textarea,a')) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
   }
 
   function handleClickCapture(event) {
     const panelOpen = event.target?.closest?.('[data-entity-action="open"]');
-    if (panelOpen) {
-      const actorId = panelOpen.dataset.id;
-      if (actorId) {
-        event.preventDefault();
-        event.stopPropagation();
-        openActor(actorId);
-        return;
-      }
+    if (panelOpen?.dataset.id) {
+      event.preventDefault();
+      event.stopPropagation();
+      openActor(panelOpen.dataset.id);
+      return;
     }
     activateEventSheet(event);
     const tab = event.target?.closest?.('[data-sheet-tab]');
-    if (tab) {
-      const key = tab.closest('.entity-sheet')?.dataset.sheetWindowKey;
-      if (key) manager.update(key, { tab: tab.dataset.sheetTab });
-    }
+    const tabKey = tab?.closest('.entity-sheet')?.dataset.sheetWindowKey;
+    if (tabKey) manager.update(tabKey, { tab: tab.dataset.sheetTab });
     if (event.target?.closest?.('[data-sheet-action="close"]')) {
       const sheet = event.target.closest('.entity-sheet');
       const key = sheet?.dataset.sheetWindowKey || sheetKey(sheet);
       queueMicrotask(() => {
-        if (!documentNode.querySelector(`.entity-sheet[data-sheet-window-key="${key.replace(/["\\]/g, '\\$&')}"]`)) manager.close(key);
+        if (![...documentNode.querySelectorAll('.entity-sheet')].some(node => node.dataset.sheetWindowKey === key)) manager.close(key);
         promoteFallback();
       });
     }
@@ -337,38 +251,26 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
 
   function handleGeometryEnd(event) {
     const sheet = event.target?.closest?.('.entity-sheet') || sheetForBackdrop(liveBackdrop());
-    const key = sheet?.dataset.sheetWindowKey || sheetKey(sheet);
-    const record = manager.get(key);
-    const rect = sheetRect(sheet);
-    if (record && rect) manager.capture(key, rect);
-  }
-
-  function handlePotentialDirectOpen(event) {
-    if (event.target?.matches?.('input[type="file"][accept*="spreadsheetml"]')) archiveLive();
+    const record = manager.get(sheet?.dataset.sheetWindowKey || sheetKey(sheet));
+    if (record && sheet) manager.capture(record.key, sheet.getBoundingClientRect());
   }
 
   documentNode.addEventListener('pointerdown', handlePointerDown, true);
   documentNode.addEventListener('click', handleClickCapture, true);
   documentNode.addEventListener('focusin', activateEventSheet, true);
-  documentNode.addEventListener('change', activateEventSheet, true);
-  documentNode.addEventListener('submit', activateEventSheet, true);
   documentNode.addEventListener('pointerup', handleGeometryEnd, true);
-  documentNode.addEventListener('change', handlePotentialDirectOpen, true);
+  documentNode.addEventListener('change', event => {
+    if (event.target?.matches?.('input[type="file"][accept*="spreadsheetml"]')) archiveLive();
+  }, true);
   const Observer = windowNode?.MutationObserver || globalThis.MutationObserver;
   const observer = Observer ? new Observer(scheduleReconcile) : null;
   observer?.observe(documentNode.body, { childList: true, subtree: true });
 
-  api.entities = Object.freeze({
-    ...entityApi,
-    openActor,
-    openToken,
-    sheetManager: manager,
-  });
+  api.entities = Object.freeze({ ...entityApi, openActor, openToken, sheetManager: manager });
 
   api.on?.('token:delete', event => {
-    const tokenId = String(event.detail?.tokenId || event.detail?.id || '').trim();
-    const key = tokenSheetWindowKey(tokenId);
-    if (!key || !manager.get(key)) return;
+    const key = tokenSheetWindowKey(event.detail?.tokenId || event.detail?.id);
+    if (!manager.get(key)) return;
     backdropForKey(key)?.remove();
     manager.close(key);
     scheduleReconcile();
@@ -379,10 +281,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     documentNode.removeEventListener('pointerdown', handlePointerDown, true);
     documentNode.removeEventListener('click', handleClickCapture, true);
     documentNode.removeEventListener('focusin', activateEventSheet, true);
-    documentNode.removeEventListener('change', activateEventSheet, true);
-    documentNode.removeEventListener('submit', activateEventSheet, true);
     documentNode.removeEventListener('pointerup', handleGeometryEnd, true);
-    documentNode.removeEventListener('change', handlePotentialDirectOpen, true);
   });
 
   return manager;
