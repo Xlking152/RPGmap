@@ -16,7 +16,6 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
   const manager = createActorSheetManager({
     storage: windowNode?.localStorage || null,
     storageKey: `rpgmap.ui.actor-sheets.v1.${worldId}`,
-    baseZIndex: 4210,
   });
   const entityApi = api.entities;
   const originalOpenActor = entityApi?.openActor?.bind(entityApi);
@@ -39,10 +38,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     else delete backdrop.dataset.sheetManagerStatic;
     backdrop.style.zIndex = String(record.zIndex);
     const sheet = sheetForBackdrop(backdrop);
-    if (sheet) {
-      sheet.dataset.sheetWindowKey = record.key;
-      sheet.setAttribute('aria-modal', 'false');
-    }
+    if (sheet) sheet.dataset.sheetWindowKey = record.key;
   }
 
   function applyGeometry(backdrop, record) {
@@ -59,8 +55,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     const key = backdrop?.dataset.sheetWindowKey || sheetKey(sheet);
     const record = manager.get(key);
     if (!record || !sheet) return record;
-    const rect = sheet.getBoundingClientRect();
-    manager.capture(key, rect);
+    manager.capture(key, sheet.getBoundingClientRect());
     const tab = sheetTab(sheet);
     if (tab) manager.update(key, { tab });
     return manager.get(key);
@@ -175,7 +170,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
 
   function promoteFallback() {
     if (liveBackdrop() || !manager.size()) return;
-    const record = manager.active() || manager.list().at(-1);
+    const record = manager.list().at(-1);
     if (record) promote(record.key);
   }
 
