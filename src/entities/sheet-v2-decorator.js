@@ -2,6 +2,12 @@ import { actorSheetDescriptionFor } from './sheet-policy.js';
 
 const STYLE_ID = 'rpgmap-actor-sheet-v2-style';
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[ch]);
+}
+
 function installStyles(documentNode) {
   if (documentNode.getElementById(STYLE_ID)) return;
   const style = documentNode.createElement('style');
@@ -133,8 +139,8 @@ function decorateSheet(sheet, api, storage, storageKey) {
 
   const sheetMode = String(sheet.dataset.sheetMode || '');
   const badgeHtml = [
-    `<span class="entity-sheet-v2-badge${kindClass(kind)}">${kindLabel(kind)}</span>`,
-    summary.typeLabel ? `<span class="entity-sheet-v2-badge">${String(summary.typeLabel)}</span>` : '',
+    `<span class="entity-sheet-v2-badge${kindClass(kind)}">${escapeHtml(kindLabel(kind))}</span>`,
+    summary.typeLabel ? `<span class="entity-sheet-v2-badge">${escapeHtml(summary.typeLabel)}</span>` : '',
   ];
   if (sheetMode === 'limited') badgeHtml.push('<span class="entity-sheet-v2-badge is-limited">LIMITED</span>');
   else if (sheetMode === 'instance') badgeHtml.push('<span class="entity-sheet-v2-badge">TOKEN INSTANCE</span>');
