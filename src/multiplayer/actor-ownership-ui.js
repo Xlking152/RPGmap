@@ -27,6 +27,12 @@ export function actorOwnershipRows(access = {}, actorId) {
   }).filter(row => row.userId);
 }
 
+export function actorOwnershipCatalogReady(access = {}, actorId) {
+  const id = String(actorId || '');
+  return Boolean(id && (Array.isArray(access.actors) ? access.actors : [])
+    .some(actor => String(actor?.id || '') === id));
+}
+
 export function buildActorOwnershipChanges(access = {}, actorId, requestedLevels = {}) {
   const changes = [];
   for (const row of actorOwnershipRows(access, actorId)) {
@@ -173,15 +179,17 @@ export function createActorOwnershipUi() {
         const actor = actorRecord();
         if (!actor) { close(); return; }
         const rows = actorOwnershipRows(access, actorId);
+        const catalogReady = actorOwnershipCatalogReady(access, actorId);
+        const notice = feedback || (!catalogReady ? '正在同步 Actor 权限目录，完成前不会提交旧快照。' : '');
         overlay.innerHTML = `<form class="actor-ownership-dialog" data-actor-ownership-form data-actor-id="${escapeHtml(actorId)}">
           <h2>${escapeHtml(actor.name || actorId)} · 权限</h2>
           <p>这里以 Actor 为中心配置 Player 的角色卡访问级别。Token 的地图可见性与 <code>controllerUserIds</code> 仍由 Token 设置独立管理，不会因为这里设为 OWNER 就自动取得怪物/NPC/召唤物实例控制权。</p>
-          ${feedback ? `<div class="actor-ownership-feedback ${feedbackError ? 'error' : ''}">${escapeHtml(feedback)}</div>` : ''}
+          ${notice ? `<div class="actor-ownership-feedback ${feedbackError ? 'error' : ''}">${escapeHtml(notice)}</div>` : ''}
           <div class="actor-ownership-list">${rows.length ? rows.map(row => `<label class="actor-ownership-row">
             <span class="actor-ownership-user"><span class="actor-ownership-online ${row.online ? 'on' : ''}"></span><span class="actor-ownership-user-copy"><strong>${escapeHtml(row.name)}</strong><small>${row.online ? '在线' : '离线'}${row.disabled ? ' · 已禁用' : ''}</small>${row.defaultActor ? '<span class="actor-ownership-badge">默认角色 · 必须 OWNER</span>' : ''}</span></span>
             <select data-actor-ownership-user="${escapeHtml(row.userId)}" ${row.defaultActor ? 'disabled' : ''}>${levelOptions(row.level)}</select>
           </label>`).join('') : '<div class="actor-ownership-feedback">还没有正式 Player User。请先在“联机 / Users”中创建或批准玩家。</div>'}</div>
-          <div class="actor-ownership-actions"><button type="button" data-actor-ownership-refresh>刷新</button><button type="button" data-actor-ownership-close>取消</button><button type="submit" class="primary" ${rows.length ? '' : 'disabled'}>保存权限</button></div>
+          <div class="actor-ownership-actions"><button type="button" data-actor-ownership-refresh>刷新</button><button type="button" data-actor-ownership-close>取消</button><button type="submit" class="primary" ${rows.length && catalogReady ? '' : 'disabled'}>保存权限</button></div>
         </form>`;
         overlay.hidden = false;
       }
@@ -190,10 +198,12 @@ export function createActorOwnershipUi() {
         if (!canManageActorOwnership(api)) return false;
         actorId = String(nextActorId || '');
         if (!actorId) return false;
+        const openedActorId = actorId;
         feedback = '';
         feedbackError = false;
         api.multiplayer?.requestAccess?.();
         render();
+        setTimeout(() => { if (actorId === openedActorId) render(); }, 180);
         return true;
       }
 
@@ -251,18 +261,26 @@ export function createActorOwnershipUi() {
           api.multiplayer?.requestAccess?.();
           feedback = '已请求服务器刷新 User / Ownership 快照。';
           feedbackError = false;
-          setTimeout(() => { if (actorId) render(); }, 120);
+          setTimeout(() => { if (actorId) render(); }, 180);
         }
       });
 
       overlay.addEventListener('submit', event => {
         event.preventDefault();
         if (!actorId || !canManageActorOwnership(api)) { close(); return; }
+        const access = statusAccess();
+        if (!actorOwnershipCatalogReady(access, actorId)) {
+          api.multiplayer?.requestAccess?.();
+          feedback = 'Actor 权限目录仍在同步，请稍后再保存。';
+          feedbackError = false;
+          render();
+          return;
+        }
         const requested = {};
         for (const select of overlay.querySelectorAll('[data-actor-ownership-user]')) {
           requested[String(select.dataset.actorOwnershipUser || '')] = select.value;
         }
-        const changes = buildActorOwnershipChanges(statusAccess(), actorId, requested);
+        const changes = buildActorOwnershipChanges(access, actorId, requested);
         if (!changes.length) {
           feedback = '权限没有变化。';
           feedbackError = false;
