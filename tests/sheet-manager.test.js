@@ -15,22 +15,26 @@ function memoryStorage() {
   };
 }
 
-test('SheetManager gives Actor templates and Token instances independent window identities', () => {
+test('SheetManager gives Actor templates and Scene Token instances independent window identities', () => {
   assert.equal(actorSheetWindowKey('ragna'), 'actor:ragna');
-  assert.equal(tokenSheetWindowKey('ragna-1'), 'token:ragna-1');
+  assert.equal(tokenSheetWindowKey('scene-a', 'ragna-1'), 'scene:scene-a:token:ragna-1');
   const manager = createActorSheetManager();
   manager.open({ actorId: 'ragna' });
-  manager.open({ actorId: 'ragna', tokenId: 'ragna-1' });
-  manager.open({ actorId: 'ragna', tokenId: 'ragna-2' });
+  manager.open({ actorId: 'ragna', tokenId: 'ragna-1', sceneId: 'scene-a' });
+  manager.open({ actorId: 'ragna', tokenId: 'ragna-2', sceneId: 'scene-a' });
   assert.equal(manager.size(), 3);
-  assert.deepEqual(manager.list().map(item => item.key), ['actor:ragna', 'token:ragna-1', 'token:ragna-2']);
+  assert.deepEqual(manager.list().map(item => item.key), [
+    'actor:ragna',
+    'scene:scene-a:token:ragna-1',
+    'scene:scene-a:token:ragna-2',
+  ]);
 });
 
 test('opening an existing sheet focuses it instead of creating a duplicate', () => {
   const manager = createActorSheetManager();
-  const first = manager.open({ actorId: 'boss', tokenId: 'boss-1', tab: 'overview' });
+  const first = manager.open({ actorId: 'boss', tokenId: 'boss-1', sceneId: 'scene-a', tab: 'overview' });
   const previousZ = first.record.zIndex;
-  const second = manager.open({ actorId: 'boss', tokenId: 'boss-1' });
+  const second = manager.open({ actorId: 'boss', tokenId: 'boss-1', sceneId: 'scene-a' });
   assert.equal(first.created, true);
   assert.equal(second.created, false);
   assert.equal(manager.size(), 1);
@@ -58,7 +62,7 @@ test('SheetManager persists only local tab and geometry preferences', () => {
 test('closing the focused window leaves the highest remaining sheet as fallback', () => {
   const manager = createActorSheetManager();
   const actor = manager.open({ actorId: 'a' }).record;
-  const token = manager.open({ actorId: 'b', tokenId: 'b-1' }).record;
+  const token = manager.open({ actorId: 'b', tokenId: 'b-1', sceneId: 'scene-a' }).record;
   manager.activate(actor.key);
   manager.close(actor.key);
   assert.equal(manager.list().at(-1)?.key, token.key);
@@ -74,5 +78,6 @@ test('lazy Entity UI installs the multi-window coordinator after the canonical U
   assert.match(lazyTools, /createActorSheetWindowCoordinator/);
   assert.match(coordinator, /api\.entities = Object\.freeze\(\{[\s\S]*openActor,[\s\S]*openToken\s*\}\);/);
   assert.match(coordinator, /data-sheet-manager-static/);
+  assert.match(coordinator, /sheetSceneId/);
   assert.match(coordinator, /storageKey: `rpgmap\.ui\.actor-sheets\.v1\.\$\{worldId\}`/);
 });
