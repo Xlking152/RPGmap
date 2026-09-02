@@ -1,9 +1,13 @@
 import { actorSheetWindowKey, createActorSheetManager, tokenSheetWindowKey } from './sheet-manager.js';
 
-function sheetKey(sheet) {
+function sheetKey(sheet, fallbackSceneId = '') {
   if (!sheet) return '';
   const tokenId = String(sheet.dataset.tokenId || '').trim();
-  return tokenId ? tokenSheetWindowKey(tokenId) : actorSheetWindowKey(sheet.dataset.actorId);
+  if (tokenId) {
+    const sceneId = String(sheet.dataset.sheetSceneId || fallbackSceneId || '').trim();
+    return tokenSheetWindowKey(sceneId, tokenId);
+  }
+  return actorSheetWindowKey(sheet.dataset.actorId);
 }
 
 function sheetTab(sheet) {
@@ -13,6 +17,7 @@ function sheetTab(sheet) {
 export function createActorSheetWindowCoordinator({ api, documentNode, windowNode = documentNode?.defaultView } = {}) {
   if (!api || !documentNode) throw new Error('Actor sheet coordinator unavailable');
   const worldId = String(api.world?.get?.()?.id || 'default').replace(/[^a-zA-Z0-9._-]/g, '_');
+  const currentSceneId = () => String(api.world?.get?.()?.activeSceneId || '').trim();
   const manager = createActorSheetManager({
     storage: windowNode?.localStorage || null,
     storageKey: `rpgmap.ui.actor-sheets.v1.${worldId}`,
@@ -38,7 +43,11 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     else delete backdrop.dataset.sheetManagerStatic;
     backdrop.style.zIndex = String(record.zIndex);
     const sheet = sheetForBackdrop(backdrop);
-    if (sheet) sheet.dataset.sheetWindowKey = record.key;
+    if (sheet) {
+      sheet.dataset.sheetWindowKey = record.key;
+      if (record.sceneId) sheet.dataset.sheetSceneId = record.sceneId;
+      else delete sheet.dataset.sheetSceneId;
+    }
   }
 
   function applyGeometry(backdrop, record) {
@@ -52,7 +61,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
 
   function captureBackdrop(backdrop) {
     const sheet = sheetForBackdrop(backdrop);
-    const key = backdrop?.dataset.sheetWindowKey || sheetKey(sheet);
+    const key = backdrop?.dataset.sheetWindowKey || sheetKey(sheet, currentSceneId());
     const record = manager.get(key);
     if (!record || !sheet) return record;
     manager.capture(key, sheet.getBoundingClientRect());
@@ -84,7 +93,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
   function archiveLive() {
     const live = liveBackdrop();
     const sheet = sheetForBackdrop(live);
-    const record = manager.get(live?.dataset.sheetWindowKey || sheetKey(sheet));
+    const record = manager.get(live?.dataset.sheetWindowKey || sheetKey(sheet, currentSceneId()));
     if (!live || !sheet || !record) return null;
     captureBackdrop(live);
     removeStatic(record.key);
@@ -114,6 +123,11 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
 
   function renderRecord(record, tab = record?.tab) {
     if (!record) return false;
+    // A Token record remembers its Scene even while another Scene is active. The
+    // legacy Entity renderer can only resolve the active Scene, so an inactive-
+    // Scene snapshot stays archived until that Scene is active again. The true
+    // multi-window renderer can later remove this transitional restriction.
+    if (record.tokenId && record.sceneId && record.sceneId !== currentSceneId()) return false;
     promoting = true;
     try {
       const result = record.tokenId
@@ -125,13 +139,16 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     } finally { promoting = false; }
   }
 
-  function managedOpen(actorId, tokenId = null, tab = null) {
-    const key = tokenId ? tokenSheetWindowKey(tokenId) : actorSheetWindowKey(actorId);
+  function managedOpen(actorId, tokenId = null, tab = null, sceneId = null) {
+    const normalizedSceneId = tokenId ? String(sceneId || currentSceneId()).trim() : null;
+    const key = tokenId
+      ? tokenSheetWindowKey(normalizedSceneId, tokenId)
+      : actorSheetWindowKey(actorId);
     if (!key) return false;
     const existing = backdropForKey(key);
     if (existing) {
       captureBackdrop(existing);
-      const record = manager.open({ actorId, tokenId, tab }).record;
+      const record = manager.open({ actorId, tokenId, sceneId: normalizedSceneId, tab }).record;
       if (existing.dataset.sheetManagerStatic === 'true') return promote(key, tab);
       if (tab && tab !== sheetTab(sheetForBackdrop(existing))) return renderRecord(record, tab);
       finishOpen(record);
@@ -139,7 +156,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     }
     if (liveBackdrop()) archiveLive();
     ensureLiveTarget();
-    const record = manager.open({ actorId, tokenId, tab }).record;
+    const record = manager.open({ actorId, tokenId, sceneId: normalizedSceneId, tab }).record;
     if (renderRecord(record, tab || record?.tab)) return true;
     manager.close(record?.key);
     return false;
@@ -151,7 +168,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
 
   function openToken(tokenId, tab = null) {
     const token = api.tokens?.get?.(tokenId);
-    return token ? managedOpen(token.actorId, token.id, tab) : false;
+    return token ? managedOpen(token.actorId, token.id, tab, currentSceneId()) : false;
   }
 
   function promote(key, preferredTab = null) {
@@ -160,17 +177,24 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     if (!record) return false;
     const target = backdropForKey(key);
     if (target) captureBackdrop(target);
+    if (record.tokenId && record.sceneId && record.sceneId !== currentSceneId()) return false;
     const current = liveBackdrop();
     if (current && current !== target) archiveLive();
     removeStatic(key);
     ensureLiveTarget();
-    const next = manager.open({ actorId: record.actorId, tokenId: record.tokenId, tab: preferredTab || record.tab }).record;
+    const next = manager.open({
+      actorId: record.actorId,
+      tokenId: record.tokenId,
+      sceneId: record.sceneId,
+      tab: preferredTab || record.tab,
+    }).record;
     return renderRecord(next);
   }
 
   function promoteFallback() {
     if (liveBackdrop() || !manager.size()) return;
-    const record = manager.list().at(-1);
+    const activeScene = currentSceneId();
+    const record = manager.list().filter(item => !item.tokenId || !item.sceneId || item.sceneId === activeScene).at(-1);
     if (record) promote(record.key);
   }
 
@@ -181,12 +205,13 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     const sheet = sheetForBackdrop(live);
     if (live?.dataset.sheetManagerPlaceholder === 'true' && !sheet) return;
     if (!sheet) return promoteFallback();
-    const key = sheetKey(sheet);
+    const key = sheetKey(sheet, currentSceneId());
     if (!key) return;
     let record = manager.get(key);
     if (!record) {
       const tokenId = String(sheet.dataset.tokenId || '').trim() || null;
-      record = manager.open({ actorId: sheet.dataset.actorId, tokenId, tab: sheetTab(sheet) }).record;
+      const sceneId = tokenId ? String(sheet.dataset.sheetSceneId || currentSceneId()).trim() || null : null;
+      record = manager.open({ actorId: sheet.dataset.actorId, tokenId, sceneId, tab: sheetTab(sheet) }).record;
     }
     markBackdrop(live, record);
     applyGeometry(live, record);
@@ -201,7 +226,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
 
   function activateEventSheet(event) {
     const sheet = event.target?.closest?.('.entity-sheet');
-    const key = sheet?.dataset.sheetWindowKey || sheetKey(sheet);
+    const key = sheet?.dataset.sheetWindowKey || sheetKey(sheet, currentSceneId());
     const record = manager.get(key);
     if (!record) return null;
     if (sheet.closest('.entity-sheet-backdrop')?.dataset.sheetManagerStatic === 'true') {
@@ -236,7 +261,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
     if (tabKey) manager.update(tabKey, { tab: tab.dataset.sheetTab });
     if (event.target?.closest?.('[data-sheet-action="close"]')) {
       const sheet = event.target.closest('.entity-sheet');
-      const key = sheet?.dataset.sheetWindowKey || sheetKey(sheet);
+      const key = sheet?.dataset.sheetWindowKey || sheetKey(sheet, currentSceneId());
       queueMicrotask(() => {
         if (![...documentNode.querySelectorAll('.entity-sheet')].some(node => node.dataset.sheetWindowKey === key)) manager.close(key);
         promoteFallback();
@@ -246,7 +271,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
 
   function handleGeometryEnd(event) {
     const sheet = event.target?.closest?.('.entity-sheet') || sheetForBackdrop(liveBackdrop());
-    const record = manager.get(sheet?.dataset.sheetWindowKey || sheetKey(sheet));
+    const record = manager.get(sheet?.dataset.sheetWindowKey || sheetKey(sheet, currentSceneId()));
     if (record && sheet) manager.capture(record.key, sheet.getBoundingClientRect());
   }
 
@@ -264,7 +289,9 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
   api.entities = Object.freeze({ ...entityApi, openActor, openToken });
 
   api.on?.('token:delete', event => {
-    const key = tokenSheetWindowKey(event.detail?.tokenId || event.detail?.id);
+    const tokenId = event.detail?.tokenId || event.detail?.id;
+    const sceneId = String(event.detail?.sceneId || currentSceneId()).trim();
+    const key = tokenSheetWindowKey(sceneId, tokenId);
     if (!manager.get(key)) return;
     backdropForKey(key)?.remove();
     manager.close(key);
