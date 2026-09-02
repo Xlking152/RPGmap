@@ -71,7 +71,7 @@ function Invoke-RpgMapSheetFinalBrowserSmoke {
   )
 
   for ($attempt = 1; $attempt -le 2; $attempt++) {
-    & node (Join-Path $PSScriptRoot 'sheet-browser-final-smoke.mjs') $Url ([Math]::Max(45000, $TimeoutSeconds * 1000))
+    & node (Join-Path $PSScriptRoot 'sheet-browser-final-v2-smoke.mjs') $Url ([Math]::Max(45000, $TimeoutSeconds * 1000))
     if ($LASTEXITCODE -eq 0) { return }
     if ($attempt -lt 2) {
       Write-Warning "Packaged Edge Character/NPC final smoke failed on attempt $attempt; retrying once with a fresh profile."
