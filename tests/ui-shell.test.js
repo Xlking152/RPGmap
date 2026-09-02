@@ -9,7 +9,7 @@ const builtinsSource = readFileSync(new URL('../src/map-package/builtins.js', im
 const rulesetBuiltinsSource = readFileSync(new URL('../src/ruleset/builtins.js', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const appShellSource = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
-const entityUiSource = readFileSync(new URL('../src/entities/ui.js', import.meta.url), 'utf8');
+const entityUiSource = readFileSync(new URL('../src/entities/ui-live.js', import.meta.url), 'utf8');
 const tokenControllerSource = readFileSync(new URL('../src/entities/token-controller.js', import.meta.url), 'utf8');
 const markerSource = readFileSync(new URL('../src/marker/system.js', import.meta.url), 'utf8');
 const sceneRenderer = readFileSync(new URL('../src/render/scene-renderer.js', import.meta.url), 'utf8');
@@ -65,9 +65,9 @@ test('modern shell owns Actor/current panels and Token-first tools without legac
   assert.doesNotMatch(appShellSource, /legacyAction|legacyProxy|data-panel="characters"|selectCharacter|character:move|character:delete|characterPane/);
 });
 
-test('Token placement owns the map click directly through the canonical Entity controller', () => {
+test('Token placement owns the map click directly through the canonical live Entity controller', () => {
   assert.match(entityUiSource, /mapElement\.addEventListener\('click', tokenController\.handleMapClick, true\)/);
-  assert.match(entityUiSource, /tokenController\.beginPlacement\(id, \{ actorLink: shared \}\)/);
+  assert.match(entityUiSource, /tokenController\.beginPlacement\(actorId, \{ actorLink: shared \}\)/);
   assert.match(tokenControllerSource, /createActorTokenAtPoint\(api, actorId, point, pendingPlacementOptions\)/);
   assert.match(entityUiSource, /data-entity-share checked/);
   assert.match(tokenControllerSource, /relocateActorTokenAtPoint\(api, target, point\)/);
@@ -81,7 +81,7 @@ test('restricted audience records open a dedicated LIMITED summary instead of th
   assert.match(entityUiSource, /仅公开名称、头像与类型/);
   assert.doesNotMatch(entityUiSource, /无权读取该 Actor 模板卡/);
   assert.doesNotMatch(entityUiSource, /无权读取该 Token 的角色卡/);
-  assert.match(entityUiSource, /api\.entities\.openToken\(token\.id, openTab\)/);
+  assert.match(entityUiSource, /api\.entities\.openToken\(token\.id\)/);
   assert.match(markerSource, /actor\.audienceRestricted === true \? '公开摘要' : '模板卡'/);
   assert.match(appShellSource, /view\.actor\.audienceRestricted \? '公开摘要' : '角色卡'/);
 });
