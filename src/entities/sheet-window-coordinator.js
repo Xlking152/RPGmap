@@ -11,7 +11,7 @@ function sheetTab(sheet) {
 }
 
 export function createActorSheetWindowCoordinator({ api, documentNode, windowNode = documentNode?.defaultView } = {}) {
-  if (!api || !documentNode) throw new Error('Actor Sheet window coordinator requires api and document');
+  if (!api || !documentNode) throw new Error('Actor sheet coordinator unavailable');
   const worldId = String(api.world?.get?.()?.id || 'default').replace(/[^a-zA-Z0-9._-]/g, '_');
   const manager = createActorSheetManager({
     storage: windowNode?.localStorage || null,
@@ -20,7 +20,7 @@ export function createActorSheetWindowCoordinator({ api, documentNode, windowNod
   const entityApi = api.entities;
   const originalOpenActor = entityApi?.openActor?.bind(entityApi);
   const originalOpenToken = entityApi?.openToken?.bind(entityApi);
-  if (!originalOpenActor || !originalOpenToken) throw new Error('Actor Sheet coordinator requires Entity open APIs');
+  if (!originalOpenActor || !originalOpenToken) throw new Error('Actor sheet open API unavailable');
 
   let destroyed = false;
   let promoting = false;
