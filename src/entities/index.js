@@ -12,6 +12,7 @@ export function createEntitySystem(options = {}) {
       let loading = null;
       let destroyed = false;
       let drag = null;
+      let geometryPointer = null;
 
       function focusWindowFromEvent(event) {
         const sheet = event.target?.closest?.('.entity-sheet');
@@ -22,6 +23,7 @@ export function createEntitySystem(options = {}) {
 
       function pointerDown(event) {
         const { sheet, key } = focusWindowFromEvent(event);
+        geometryPointer = sheet && key ? { sheet, key } : null;
         if (windowNode.innerWidth <= 760 || event.button || event.target.closest('input,button,select,textarea,a')) return;
         const header = event.target.closest('.entity-sheet-header');
         if (!header || !sheet) return;
@@ -37,15 +39,22 @@ export function createEntitySystem(options = {}) {
       }
 
       function pointerUp() {
-        if (!drag) return;
-        const { sheet, key } = drag;
+        const target = drag || geometryPointer;
         drag = null;
-        if (key) api.entities?.captureSheetGeometry?.(key, sheet.getBoundingClientRect());
+        geometryPointer = null;
+        if (!target?.sheet?.isConnected || !target.key) return;
+        api.entities?.captureSheetGeometry?.(target.key, target.sheet.getBoundingClientRect());
+      }
+
+      function pointerCancel() {
+        drag = null;
+        geometryPointer = null;
       }
 
       documentNode.addEventListener('pointerdown', pointerDown, dragOptions);
       documentNode.addEventListener('pointermove', pointerMove, dragOptions);
       documentNode.addEventListener('pointerup', pointerUp, dragOptions);
+      documentNode.addEventListener('pointercancel', pointerCancel, dragOptions);
       documentNode.addEventListener('focusin', focusWindowFromEvent, dragOptions);
       // Capture submit before the lazy sheet runtime consumes it so keyboard-only
       // form submission always resolves against the form's own live window.
