@@ -40,18 +40,20 @@ const allJs = allFiles.filter(file => file.endsWith('.js'));
 const allCss = allFiles.filter(file => file.endsWith('.css'));
 const sum = async files => (await Promise.all(files.map(gzipSize))).reduce((total, value) => total + value, 0);
 
-// v2.2.6 is the formal baseline for v2.3.0. The World Manager entry may not
-// grow, while the complete JavaScript payload must shrink by at least 2%.
+// v2.3.0 is the formal baseline for post-release UX work. Initial JavaScript
+// may not grow. The complete payload gets a narrow 1.5% allowance for the
+// Actor-centric ownership surface while remaining below the old v2.2.6 total
+// payload (256689 B gzip).
 const baseline = Object.freeze({
-  commit: 'f8d144053d30d096b658d0163703d21e6c1b76f8',
-  version: '2.2.6',
-  initialJsGzip: 11775,
-  totalJsGzip: 256689,
+  commit: '15cda3787eaedb31b083d66841890251f588496b',
+  version: '2.3.0',
+  initialJsGzip: 11714,
+  totalJsGzip: 251478,
   totalCssGzip: 7076,
 });
 const limits = Object.freeze({
   initialJsGzip: baseline.initialJsGzip,
-  totalJsGzip: 251555,
+  totalJsGzip: Math.floor(baseline.totalJsGzip * 1.015),
   totalCssGzip: Math.floor(baseline.totalCssGzip * 1.05),
 });
 const measured = {
