@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createDefaultActor, describeActorSheet } from '../src/actor/model.js';
+import { prepareRuleset } from '../src/ruleset/contract.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 
 function sheetFor(type) {
@@ -51,12 +52,13 @@ test('Infinite Horror keeps attack and defense card interfaces without inventing
 });
 
 test('sheet contract falls back to an available tab instead of returning an invalid defaultTab', () => {
-  const customRuleset = {
-    ...infiniteHorrorRuleset,
+  const ruleset = prepareRuleset({
+    apiVersion: 1,
+    id: 'sheet-contract-test',
+    title: 'Sheet Contract Test',
+    version: '1.0.0',
     actor: {
-      ...infiniteHorrorRuleset.actor,
       presentation: {
-        ...infiniteHorrorRuleset.actor.presentation,
         describeSheet(actor) {
           return {
             actorId: actor.id,
@@ -67,10 +69,9 @@ test('sheet contract falls back to an available tab instead of returning an inva
         },
       },
     },
-  };
-
-  // prepareRuleset normally wraps the raw presentation. This assertion guards the
-  // already-prepared built-in contract behavior through a direct raw ruleset below.
-  assert.equal(sheetFor('monster').tabs.some(tab => tab.id === sheetFor('monster').defaultTab), true);
-  assert.equal(customRuleset.actor.presentation.describeSheet({ id: 'raw' }).defaultTab, 'missing-tab');
+  });
+  const described = ruleset.actor.presentation.describeSheet({ id: 'raw', type: 'monster' });
+  assert.equal(described.kind, 'monster');
+  assert.equal(described.defaultTab, 'notes');
+  assert.equal(described.summary.typeLabel, '怪物');
 });
