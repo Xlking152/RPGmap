@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.3.0
+
+- Operation Protocol 升至 schema `2`：Token、Actor、Status、Chat、Health、Combat、Feature 与 Fog 统一使用 `world.operation`，提交消息包含连续 revision、Audience-safe patch、细粒度 `changeSet` 和裁剪后的 results。完整 snapshot 仅用于启动、显式恢复/导入、revision 缺口、Audience 身份变化和跨 MapPackage Scene。
+- Access schema 升至 `4`，Actor 权限明确区分 NONE、LIMITED、OBSERVER 与 OWNER；Token 可见性、Actor 查看/编辑、实例控制权和视野授权分别判断。公开怪物使用合法 LIMITED 投影，模糊敌影使用每 Session opaque ID，不泄漏真实 ID、精确坐标或私有 Actor/Token 数据。
+- Status schema 升至 `4`：定义增加 buff/debuff/neutral 分类与默认持续时间，实例保存 turns/rounds 剩余时间；服务器权威 `combat.advance` 原子推进战斗和状态计时，到期状态自动停用。右键 Token 或点击徽章可打开快捷 HUD，自定义状态导入采用全量校验和冲突拒绝。
+- Token 实例页改为基础、视野、权限、高级四区，支持精确/模糊范围分别继承 Ruleset、按显示名选择控制者/授权用户、字段级 pending/confirmed/error 和危险操作确认；390px 布局无横向溢出。
+- 恢复完整分段移动：普通拖放保持直线，`Ctrl`/`Cmd` 进入 waypoint 规划，支持点击、`F`、`Alt+F`、右键、`Enter` 与 `Esc`；服务器逐段复验碰撞、控制权、Token lock、Combat 回合和群组原子性。
+- 聊天 composer 默认折叠为消息、伤害、恢复三种模式，切换不重建日志；失败保留输入，未激活标签显示未读角标。普通 Player 只能提交文本，消息 ID、时间与发送者由服务器生成。
+- Fog 使用独立去饱和与暗度 Canvas：normal/dim/dark 按感官能力区分精确、模糊、历史探索和未探索区域。dirty bounds 与 RAF 合并避免 Chat、普通 Status 和非视觉属性更新触发全量 Fog 重绘。
+- Reducer 改为 batch 单次克隆和细粒度 copy-on-write，Token/状态/聊天/生命 UI 使用 keyed 更新；每个 LAN Session 缓存 AudienceProjection，普通提交从裁剪后的 patch 生成安全 changeSet。Node 22.12 固定 fixture 的三类 operation 中位数均降低超过 25%，三会话 LAN 聚合 p95 降低 31.5%。
+- World Manager 首屏继续保持不增长；兰州地图 SVG 与数据改为选择地图后才请求的编译资源，重型角色卡与状态工具首次打开才加载。相对 v2.2.6，总 JS gzip 从 `256,689 B` 降至不超过 `251,555 B`。
+- 应用版本升至 `2.3.0`。World schema 保持 `3`，Infinite Horror Ruleset 保持 `1.0.0`，Lanzhou MapPackage 数据版本保持 `1.0.5`；正式包记录 operation `2`、status `4` 和 access `4`。
+
 ## v2.2.2
 
 - 实时视野改为保存服务器确认的视野源 Token ID，并在每次渲染与 World commit 后从当前 Scene 解析最新权威坐标；Token 移动、重连、Scene 切换、删除、进入 Feature 或失去控制权时不再残留旧位置视野。
