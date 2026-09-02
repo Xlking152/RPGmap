@@ -1,3 +1,5 @@
+import { createSheetWindowBehavior } from './sheet-window-behavior.js';
+
 export function createEntitySystem(options = {}) {
   return {
     register(api) {
@@ -7,6 +9,8 @@ export function createEntitySystem(options = {}) {
       const actorTabbar = shell.querySelector?.('.sidebar .tabbar');
       let loading = null;
       let destroyed = false;
+
+      createSheetWindowBehavior().register(api);
 
       async function load() {
         if (destroyed) return null;
