@@ -47,7 +47,8 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.meta.outputs.version }}"
-          NOTES="RELEASE-NOTES-v${VERSION}.md"
+          NOTES="artifact/RELEASE-NOTES-v${VERSION}.md"
+          mkdir -p artifact
           awk -v heading="## v${VERSION}" '
             $0 == heading { found=1; next }
             found && /^## / { exit }
@@ -66,7 +67,7 @@ jobs:
           path: |
             artifact/RPGmap-v${{ steps.meta.outputs.version }}.zip
             artifact/RPGmap-v${{ steps.meta.outputs.version }}.zip.sha256
-            RELEASE-NOTES-v${{ steps.meta.outputs.version }}.md
+            artifact/RELEASE-NOTES-v${{ steps.meta.outputs.version }}.md
           if-no-files-found: error
 
   windows-smoke:
