@@ -81,9 +81,10 @@ export function createVisionFogSystem() {
         pane.append(canvas);
         return canvas;
       };
-      const saturationCanvas = createCanvas('saturation', 'saturation');
-      const darknessCanvas = createCanvas('darkness');
-      const canvases = [saturationCanvas, darknessCanvas];
+      const explorationCanvas = createCanvas('exploration-cache');
+      explorationCanvas.style.display = 'none';
+      const perceptionCanvas = createCanvas('perception');
+      const canvases = [explorationCanvas, perceptionCanvas];
       let localSourceTokenId = null;
       let lastLocalVision = null;
       let localExploreChain = Promise.resolve();
@@ -91,6 +92,7 @@ export function createVisionFogSystem() {
       let renderFrame = 0;
       let pendingDirtyBounds;
       let lastVisionSignature = '';
+      let explorationDirty = true;
       const off = [];
 
       function removeOverlay() {
@@ -124,7 +126,8 @@ export function createVisionFogSystem() {
         }
         return {
           sceneId: String(scene.id), tokenId: String(token.id),
-          x: Number(token.x), y: Number(token.y), rangeMeters: preciseRangeMeters,
+          x: Number(api.renderer?.getVisualTokenPoint?.(token.id)?.x ?? token.x),
+          y: Number(api.renderer?.getVisualTokenPoint?.(token.id)?.y ?? token.y), rangeMeters: preciseRangeMeters,
           preciseRangeMeters, vagueRangeMeters,
           senses: structuredClone(description.senses || {}), lighting: description.lighting || 'normal',
           partyId: actor.partyId ? String(actor.partyId) : null,
@@ -244,9 +247,9 @@ export function createVisionFogSystem() {
         }
         const origin = api.map.containerPointToLayerPoint([0, 0]);
         canvases.forEach(canvas => { canvas.style.transform = `translate3d(${origin.x}px,${origin.y}px,0)`; });
-        const saturation = saturationCanvas.getContext('2d');
-        const darkness = darknessCanvas.getContext('2d');
-        for (const context of [saturation, darkness]) {
+        const exploration = explorationCanvas.getContext('2d');
+        const perception = perceptionCanvas.getContext('2d');
+        for (const context of [exploration, perception]) {
           context.setTransform(dpr, 0, 0, dpr, 0, 0);
         }
         const fog = normalizeFogState(scene.fog);
@@ -268,7 +271,7 @@ export function createVisionFogSystem() {
               Number(dirtyBounds.maxY) - Number(dirtyBounds.minY),
             )
           : null;
-        for (const context of [saturation, darkness]) {
+        for (const context of [perception]) {
           context.save();
           if (clip) {
             const x = Math.max(0, Math.floor(clip.x) - 2);
@@ -303,33 +306,34 @@ export function createVisionFogSystem() {
           context.fill();
         };
 
-        saturation.globalCompositeOperation = 'source-over';
-        saturation.fillStyle = '#7f7f7f';
-        saturation.fillRect(0, 0, size.x, size.y);
-        saturation.globalCompositeOperation = 'destination-out';
-        saturation.fillStyle = '#000';
-        drawCurrentCircle(saturation, source?.preciseRangeMeters ?? source?.rangeMeters);
-        saturation.globalCompositeOperation = 'source-over';
+        if (explorationDirty || resized) {
+          exploration.clearRect(0, 0, size.x, size.y);
+          exploration.globalCompositeOperation = 'source-over';
+          exploration.fillStyle = 'rgba(8,12,14,0.96)';
+          exploration.fillRect(0, 0, size.x, size.y);
+          exploration.globalCompositeOperation = 'destination-out';
+          exploration.fillStyle = '#000';
+          drawExplored(exploration);
+          exploration.globalCompositeOperation = 'source-over';
+          exploration.fillStyle = 'rgba(11,16,18,0.82)';
+          drawExplored(exploration);
+          explorationDirty = false;
+        }
 
-        darkness.globalCompositeOperation = 'source-over';
-        darkness.fillStyle = 'rgba(5,8,10,0.975)';
-        darkness.fillRect(0, 0, size.x, size.y);
-        darkness.globalCompositeOperation = 'destination-out';
-        darkness.fillStyle = '#000';
-        drawExplored(darkness);
-        drawCurrentCircle(darkness, source?.vagueRangeMeters ?? source?.rangeMeters);
-        darkness.globalCompositeOperation = 'source-over';
-        darkness.fillStyle = 'rgba(11,16,18,0.82)';
-        drawExplored(darkness);
-        darkness.fillStyle = 'rgba(15,22,24,0.56)';
-        drawCurrentCircle(darkness, source?.vagueRangeMeters ?? source?.rangeMeters);
-        darkness.globalCompositeOperation = 'destination-out';
-        darkness.fillStyle = '#000';
-        drawCurrentCircle(darkness, source?.preciseRangeMeters ?? source?.rangeMeters);
-        darkness.globalCompositeOperation = 'source-over';
+        perception.globalCompositeOperation = 'source-over';
+        perception.drawImage(explorationCanvas, 0, 0, size.x, size.y);
+        perception.globalCompositeOperation = 'destination-out';
+        perception.fillStyle = '#000';
+        drawCurrentCircle(perception, source?.vagueRangeMeters ?? source?.rangeMeters);
+        perception.globalCompositeOperation = 'source-over';
+        perception.fillStyle = 'rgba(218,226,228,0.20)';
+        drawCurrentCircle(perception, source?.vagueRangeMeters ?? source?.rangeMeters);
+        perception.globalCompositeOperation = 'destination-out';
+        perception.fillStyle = '#000';
+        drawCurrentCircle(perception, source?.preciseRangeMeters ?? source?.rangeMeters);
+        perception.globalCompositeOperation = 'source-over';
         lastVisionSignature = visionSignature();
-        saturation.restore();
-        darkness.restore();
+        perception.restore();
       }
 
       function scheduleRender(dirtyBounds = null) {
@@ -406,25 +410,36 @@ export function createVisionFogSystem() {
         const dispose = api.on?.(eventName, () => {
           synchronizeLocalVision();
           clearUnavailableConnectedSource();
+          explorationDirty = true;
           scheduleRender();
         });
         if (typeof dispose === 'function') off.push(dispose);
       }
       const disposeSource = api.on?.('vision:source-change', () => scheduleRender(null));
       if (typeof disposeSource === 'function') off.push(disposeSource);
+      const disposeVisualPosition = api.on?.('token:visual-position', event => {
+        if (String(event?.detail?.tokenId || '') === String(confirmedSourceTokenId() || '')) scheduleRender(null);
+      });
+      if (typeof disposeVisualPosition === 'function') off.push(disposeVisualPosition);
       const disposeStatus = api.on?.('status:change', () => {
         synchronizeLocalVision();
         if (visionSignature() !== lastVisionSignature) scheduleRender();
       });
       if (typeof disposeStatus === 'function') off.push(disposeStatus);
-      const disposeFog = api.on?.('fog:change', detail => scheduleRender(detail?.dirtyBounds ?? null));
+      const disposeFog = api.on?.('fog:change', event => {
+        explorationDirty = true;
+        scheduleRender(event?.detail?.dirtyBounds ?? null);
+      });
       if (typeof disposeFog === 'function') off.push(disposeFog);
       const disposeCapabilities = api.on?.('multiplayer:capabilities', () => {
         clearUnavailableConnectedSource();
         scheduleRender();
       });
       if (typeof disposeCapabilities === 'function') off.push(disposeCapabilities);
-      const scheduleViewportRender = () => scheduleRender(null);
+      const scheduleViewportRender = () => {
+        explorationDirty = true;
+        scheduleRender(null);
+      };
       api.map.on?.('move zoom resize viewreset', scheduleViewportRender);
       render();
       api.on?.('app:destroy', () => {

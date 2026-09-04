@@ -6,6 +6,48 @@ function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
 }
 
+// Audience projection is executed once per connected session for every
+// authoritative commit. Cloning the complete World here made a one-Token
+// move proportional to the entire 500-Token fixture before projection even
+// began. Build a copy-on-write shell instead; every branch mutated below is
+// replaced before it is changed, while selected output documents are cloned
+// at the point they enter the projection.
+function projectionShell(rawState) {
+  if (!rawState) return rawState;
+  const rawPreferences = plainObject(rawState.preferences) ? rawState.preferences : {};
+  const rawWorld = plainObject(rawPreferences.worldV2) ? rawPreferences.worldV2 : null;
+  const preferences = { ...rawPreferences };
+  if (rawWorld) {
+    preferences.worldV2 = {
+      ...rawWorld,
+      actors: Array.isArray(rawWorld.actors) ? rawWorld.actors : [],
+      statusDefinitions: Array.isArray(rawWorld.statusDefinitions) ? rawWorld.statusDefinitions : [],
+      scenes: (Array.isArray(rawWorld.scenes) ? rawWorld.scenes : []).map(scene => ({
+        ...scene,
+        tokens: Array.isArray(scene?.tokens) ? scene.tokens : [],
+        markers: Array.isArray(scene?.markers) ? scene.markers : [],
+        attackAreas: Array.isArray(scene?.attackAreas) ? scene.attackAreas : [],
+        sceneEvents: Array.isArray(scene?.sceneEvents) ? scene.sceneEvents : [],
+      })),
+    };
+  }
+  if (plainObject(rawPreferences.combatSystem)) {
+    preferences.combatSystem = {
+      ...rawPreferences.combatSystem,
+      combat: plainObject(rawPreferences.combatSystem.combat)
+        ? { ...rawPreferences.combatSystem.combat, combatants: clone(rawPreferences.combatSystem.combat.combatants || []) }
+        : rawPreferences.combatSystem.combat,
+    };
+  }
+  if (plainObject(rawPreferences.chatSystem)) {
+    preferences.chatSystem = {
+      ...rawPreferences.chatSystem,
+      messages: Array.isArray(rawPreferences.chatSystem.messages) ? rawPreferences.chatSystem.messages : [],
+    };
+  }
+  return { ...rawState, preferences };
+}
+
 function plainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -258,7 +300,7 @@ function projectMarker(marker, context, parties) {
 }
 
 export function projectStateForAudience(rawState, rawContext = {}) {
-  const state = clone(rawState);
+  const state = projectionShell(rawState);
   if (!state) return state;
   const localOpaqueIds = new Map();
   const localOpaqueIdFor = (kind, rawId) => {

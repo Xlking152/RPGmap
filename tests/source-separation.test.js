@@ -26,12 +26,14 @@ test('only explicit build/compatibility adapters may import Lanzhou reference so
   // - builtins.js lazily registers the selected built-in map;
   // - default-map.js adapts the Lanzhou reference package to the generic contract;
   // - the two src/maps files are legacy import shims kept for old callers/tests.
+  // - movement-authority-entry.js is the Local Server build adapter for trusted built-in collision data.
   // Runtime packages are separately verified after deleting reference/ entirely.
   const allowed = new Set([
     'map-package/builtins.js',
     'map-package/default-map.js',
     'maps/lanzhou.js',
     'maps/presentation-cleanup.js',
+    'server/movement-authority-entry.js',
   ]);
   const importers = [];
 

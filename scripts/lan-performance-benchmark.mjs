@@ -191,9 +191,13 @@ try {
     const { claimCode } = await claim;
     return connect({ name, requestedRole: 'player', claimCode });
   }
-  const [playerA, playerB] = [await createPlayer('Benchmark Player A'), await createPlayer('Benchmark Player B')];
+  const players = [];
+  for (let index = 0; index < 6; index += 1) {
+    players.push(await createPlayer(`Benchmark Player ${index + 1}`));
+  }
   if (process.argv.includes('--debug')) {
-    for (const [name, socket] of [['gm', gm.socket], ['playerA', playerA.socket], ['playerB', playerB.socket]]) {
+    const debugSockets = [['gm', gm.socket], ...players.map((player, index) => [`player${index + 1}`, player.socket])];
+    for (const [name, socket] of debugSockets) {
       socket.addEventListener('message', event => {
         const message = JSON.parse(event.data);
         console.error(name, message.type, message.reason || message.operationId || '', message.revision ?? '');
@@ -202,36 +206,46 @@ try {
     }
   }
   let revision = 1;
+  const tokenPositions = new Map(Array.from({ length: TOKEN_COUNT }, (_, index) => [
+    `token-${index}`, { x: index % 100, y: Math.floor(index / 100) },
+  ]));
   const statusId = INFINITE_HORROR_STATUS_DEFINITIONS.find(definition => definition.id === 'status-strengthened')?.id
     || INFINITE_HORROR_STATUS_DEFINITIONS[0].id;
 
   async function perform(type, index) {
     const operationId = `lan-bench-${type}-${index}-${revision}`;
-    const predicate = operationSchema >= 2 || type !== 'chat'
-      ? message => message.type === 'world.operation.committed' && message.operationId === operationId
-      : message => message.type === 'world.snapshot' && message.reason === 'chat.append';
-    const received = [waitForMessage(playerA.socket, predicate, `${type} player A`), waitForMessage(playerB.socket, predicate, `${type} player B`)];
-    const legacyChatResult = type === 'chat' && operationSchema < 2
-      ? waitForMessage(gm.socket, message => predicate(message) || message.type === 'error', 'legacy chat result')
-      : null;
+    const predicate = message => message.type === 'document.batch.committed' && message.operationId === operationId;
+    const received = players.map((player, playerIndex) =>
+      waitForMessage(player.socket, predicate, `${type} player ${playerIndex + 1}`));
     const startedAt = performance.now();
-    if (type === 'chat' && operationSchema < 2) {
-      gm.socket.send({ type: 'chat.append', text: `Benchmark ${index}` });
+    let write;
+    if (type === 'move') {
+      const tokenId = `token-${index % TOKEN_COUNT}`;
+      const origin = tokenPositions.get(tokenId);
+      const destination = { x: 100 + index, y: index % 70 };
+      write = {
+        action: 'move',
+        document: { type: 'Token', id: tokenId, parent: { type: 'Scene', id: 'scene-benchmark' } },
+        intent: 'token.movePath',
+        data: { tokenIds: [tokenId], waypoints: [destination], method: 'keyboard' },
+        precondition: { expectedOrigins: { [tokenId]: origin } },
+      };
+      tokenPositions.set(tokenId, destination);
+    } else if (type === 'status') {
+      const actorId = `actor-${index % ACTOR_COUNT}`;
+      write = {
+        action: 'update', document: { type: 'Status', id: actorId, parent: null },
+        intent: 'status.apply', data: { scope: 'actor', targetId: actorId, statusId }, precondition: {},
+      };
     } else {
-      const payload = type === 'move'
-        ? { sceneId: 'scene-benchmark', tokenId: `token-${index % TOKEN_COUNT}`, placement: 'map', x: 100 + index, y: index % 70 }
-        : type === 'status'
-          ? { scope: 'actor', targetId: `actor-${index % ACTOR_COUNT}`, statusId }
-          : { text: `Benchmark ${index}` };
-      gm.socket.send({
-        type: 'world.operation', operationId, baseRevision: revision,
-        operations: [{ type: type === 'move' ? 'token.move' : type === 'status' ? 'status.apply' : 'chat.append', payload }],
-      });
+      write = {
+        action: 'append', document: { type: 'ChatMessage', id: `${operationId}-message`, parent: null },
+        intent: 'chat.append', data: { text: `Benchmark ${index}` }, precondition: {},
+      };
     }
-    if (legacyChatResult) {
-      const result = await legacyChatResult;
-      if (result.type === 'error') throw new Error(`Legacy chat failed: ${JSON.stringify(result)}`);
-    }
+    gm.socket.send({
+      type: 'document.batch', operationSchema, operationId, baseRevision: revision, writes: [write],
+    });
     const messages = await Promise.all(received);
     revision = Number(messages[0].revision);
     return performance.now() - startedAt;
@@ -252,11 +266,20 @@ try {
     medianMs: Number(percentile(values, 0.5).toFixed(3)),
     p95Ms: Number(percentile(values, 0.95).toFixed(3)),
   });
+  const measurement = {
+    ...Object.fromEntries(Object.entries(records).map(([key, values]) => [key, summarize(values)])),
+    aggregate: summarize(aggregate),
+  };
   console.log(JSON.stringify({
     repo: root, version: health.version, schemas, fixture: { actors: ACTOR_COUNT, tokens: TOKEN_COUNT },
-    warmup: WARMUP_COUNT, measurement: { ...Object.fromEntries(Object.entries(records).map(([key, values]) => [key, summarize(values)])), aggregate: summarize(aggregate) },
-    scope: 'send until both remote sessions receive the authoritative update; browser DOM timing is covered by Edge smoke',
+    warmup: WARMUP_COUNT, measurement,
+    scope: 'GM + 6 Player fanout: send until all six remote sessions receive the authoritative Document update; browser DOM timing is covered by Edge/Chrome smoke',
   }, null, 2));
+  if (process.argv.includes('--assert')) {
+    if (measurement.aggregate.p95Ms > 60) {
+      throw new Error(`LAN performance gate failed: aggregate p95 ${measurement.aggregate.p95Ms}ms exceeds 60ms`);
+    }
+  }
 } finally {
   await stopServer(runtime);
 }

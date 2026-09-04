@@ -388,13 +388,17 @@ function applyOne(state, message, context) {
 
 export function applyStatusMessage(state, message, context = {}) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) fail('World is not initialized', 'world_uninitialized');
-  const next = structuredClone(state);
+  const next = context.mutate === true ? state : structuredClone(state);
   const now = context.now || new Date().toISOString();
   const entities = entityState(next);
-  const reduced = reduceStatusOperation(normalizeEntityStatusState(entities), message, {
+  const reduced = reduceStatusOperation(
+    context.assumeNormalized === true ? entities : normalizeEntityStatusState(entities),
+    message,
+    {
     now,
     idFactory: () => randomUUID(),
     source: sourceFor(message || {}, { ...context, now }),
+    assumeNormalized: context.assumeNormalized === true,
   });
   next.preferences.entitySystem = reduced.state;
   assertStatusState(entityState(next));

@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.3.2
+
+- 新增轻量 Document Operation Protocol 3：Actor、Token、Scene、ChatMessage、Combat、Status 与 Fog 通过带 Document 地址、白名单 intent、precondition 和原子 batch 的统一入口提交。普通交互只返回 Audience-safe create/update/delete/move/append 差量，不再导入完整 World；旧 `performOperations()` 仅作为迁移中的兼容包装器。
+- Local/LAN 会话携带协议版本、resume revision 与 Audience 指纹。服务端保留最近 256 次或 5 分钟安全提交，断线后优先补发缺失 Document commit，历史不足或权限身份改变时才回退 snapshot；未确认请求沿用 `operationId`，重复移动、聊天、伤害和状态不会再次执行。
+- 服务端 AudienceProjection 使用写时复制投影与受影响 Document 快速路径。移动、普通聊天和非视野源的安全状态变更只更新相关 Token/Actor/Chat；权限、视野源、隐身、跨 Scene 等安全边界变化仍执行完整投影。500 Token、GM+6 Player 的本机回环基准综合 p95 从首轮约 `291 ms` 降至 `60 ms` 以下，普通请求/响应保持差量。
+- Local Server 增加 `world.operations.ndjson` WAL：每条记录包含连续 revision、operationId、权威 patch、时间与 SHA-256 checksum，刷盘成功后才 ACK；尾部不完整记录可安全截断，中间损坏会停止加载并进入恢复流程。每 100 revision、60 秒或 8 MB 压缩为原子 `world.json`。
+- Token 移动改为一次性 `token.movePath` Document 事务。单个和群组 Token 的所有 waypoint 由服务端逐段复验控制权、锁定、战斗回合、状态能力、边界与内置 MapPackage 碰撞；全局 revision 变化但目标起点未变时可安全 rebase，目标已移动则返回 `entity_conflict`。WASD 以 50 ms/最多 8 步合并且保留逐步路径。
+- 恢复 FVTT 风格路径操作：普通拖放直线移动；Ctrl/Cmd 拖放进入规划但不把释放点误记为 waypoint；Ctrl/Cmd+点击或 `F` 添加点，右键或 `Alt+F` 撤销，普通点击或 `Enter` 提交，`Esc` 取消。拖动、WASD 与路径规划立即显示本地 visual state，确认后无跳变衔接，拒绝或断线时平滑回滚。
+- Token 图片、幽灵和摘要头像禁用浏览器原生拖图，Pointer 生命周期覆盖 pointerup、pointercancel、窗口失焦与销毁。Token Renderer、状态徽章、选择摘要和 Actor Sheet Part 在同一 RAF 内按 ID 合并更新，普通 Document 变更不替换整张角色卡或整场 Token DOM。
+- Fog 拆分为静态探索层和动态感知层。模糊范围取消灰度和重度压暗，仅叠加 `rgba(218,226,228,0.20)` 冷灰透明薄雾；未探索区域仍接近纯黑，历史探索保持极暗。预测位置可以驱动临时视野，但永久探索只接受服务器确认路径，匿名轮廓与零泄漏规则不变。
+- Windows 发布 smoke 同时覆盖 Microsoft Edge 与 Google Chrome，并使用隔离临时浏览器配置。README 增加 Radmin VPN 的 `26.x.x.x:30000`、Direct/Relay、可信网卡、防火墙放行、Ping 和同版本要求。
+- 应用版本升至 `2.3.2`。World schema 保持 `3`，operation schema 升至 `3`，Status schema 与 Access schema 保持 `4`，Infinite Horror Ruleset `1.0.0` 和 Lanzhou MapPackage `1.0.5` 不变。
+
 ## v2.3.1
 
 - 收口 v2.3.0 发布后的角色/怪物卡权限修复（起点 `15cda37`）：Actor Sheet V3 正式接入运行时组合入口，移除 `<pre>` 占位 renderer 与 V2 DOM decorator；角色卡继续支持多窗口、Scene+Token 独立身份、拖动缩放、焦点顺序、本地几何记忆和窄屏单列布局。

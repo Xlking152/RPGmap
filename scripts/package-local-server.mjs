@@ -44,6 +44,7 @@ for (const file of [
   'world-schema.mjs',
   'world-v2.mjs',
   'websocket-runtime.mjs',
+  'world-wal.mjs',
   'launcher.mjs',
   'start-rpgmap.bat',
 ]) {
@@ -69,6 +70,7 @@ async function bundleServerModule(entry, fileName) {
 
 await bundleServerModule('src/server/world-operations-entry.js', 'world-operations.mjs');
 await bundleServerModule('src/server/authority.js', 'ruleset-authority.mjs');
+await bundleServerModule('src/server/movement-authority-entry.js', 'movement-authority.mjs');
 await bundleServerModule('src/permissions/model.js', 'permissions-model.mjs');
 await bundleServerModule('deployment/local-server/status-operations.mjs', 'status-operations.mjs');
 await copy('文档/操作指南.md', 'docs/OPERATION-GUIDE.md');
@@ -77,7 +79,7 @@ await writeFile(path.join(root, 'VERSION.json'), `${JSON.stringify({
   app: 'RPGmap', version, releaseTag: `v${version}`,
   commit: await sourceCommit(),
   worldSchema: 3,
-  operationSchema: 2,
+  operationSchema: 3,
   statusSchema: 4,
   accessSchema: 4,
   serverMode: 'multiplayer', platform: 'windows', storageMode: 'portable-map-root-server-authoritative',

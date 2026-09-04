@@ -1,6 +1,8 @@
 param(
   [Parameter(Mandatory = $true)]
   [string]$Root,
+  [ValidateSet('edge', 'chrome')]
+  [string]$Browser = 'edge',
   [int]$TimeoutSeconds = 30
 )
 
@@ -12,7 +14,7 @@ if (-not (Test-Path -LiteralPath $batch -PathType Leaf)) {
 }
 
 function Clear-RpgMapSmokeState {
-  Remove-Item -LiteralPath (Join-Path $rootPath 'map\world.json'), (Join-Path $rootPath 'map\users.json') -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Join-Path $rootPath 'map\world.json'), (Join-Path $rootPath 'map\world.operations.ndjson'), (Join-Path $rootPath 'map\users.json') -Force -ErrorAction SilentlyContinue
   foreach ($relative in @('map\backups', 'map\uploads')) {
     $directory = Join-Path $rootPath $relative
     if (-not (Test-Path -LiteralPath $directory -PathType Container)) { continue }
@@ -38,12 +40,12 @@ function Invoke-RpgMapBrowserSmoke {
     }
     if ($LASTEXITCODE -eq 0) { return }
     if ($attempt -lt 2) {
-      Write-Warning "Packaged Edge $Mode smoke failed on attempt $attempt; retrying once with a fresh profile."
+      Write-Warning "Packaged $Browser $Mode smoke failed on attempt $attempt; retrying once with a fresh profile."
       Start-Sleep -Seconds 2
     }
   }
 
-  throw "Packaged Edge $Mode smoke failed after 2 attempts."
+  throw "Packaged $Browser $Mode smoke failed after 2 attempts."
 }
 
 function Invoke-RpgMapSheetBrowserSmoke {
@@ -56,12 +58,12 @@ function Invoke-RpgMapSheetBrowserSmoke {
     & node (Join-Path $PSScriptRoot 'sheet-browser-smoke.mjs') $Url ([Math]::Max(45000, $TimeoutSeconds * 1000))
     if ($LASTEXITCODE -eq 0) { return }
     if ($attempt -lt 2) {
-      Write-Warning "Packaged Edge Actor-sheet interaction smoke failed on attempt $attempt; retrying once with a fresh profile."
+      Write-Warning "Packaged $Browser Actor-sheet interaction smoke failed on attempt $attempt; retrying once with a fresh profile."
       Start-Sleep -Seconds 2
     }
   }
 
-  throw 'Packaged Edge Actor-sheet interaction smoke failed after 2 attempts.'
+  throw "Packaged $Browser Actor-sheet interaction smoke failed after 2 attempts."
 }
 
 function Invoke-RpgMapSheetFinalBrowserSmoke {
@@ -74,12 +76,12 @@ function Invoke-RpgMapSheetFinalBrowserSmoke {
     & node (Join-Path $PSScriptRoot 'sheet-browser-final-pass.mjs') $Url ([Math]::Max(45000, $TimeoutSeconds * 1000))
     if ($LASTEXITCODE -eq 0) { return }
     if ($attempt -lt 2) {
-      Write-Warning "Packaged Edge Character/NPC final smoke failed on attempt $attempt; retrying once with a fresh profile."
+      Write-Warning "Packaged $Browser Character/NPC final smoke failed on attempt $attempt; retrying once with a fresh profile."
       Start-Sleep -Seconds 2
     }
   }
 
-  throw 'Packaged Edge Character/NPC final smoke failed after 2 attempts.'
+  throw "Packaged $Browser Character/NPC final smoke failed after 2 attempts."
 }
 
 Clear-RpgMapSmokeState
@@ -95,6 +97,8 @@ $env:RPGMAP_NO_BROWSER = '1'
 $env:RPGMAP_NO_PAUSE = '1'
 $env:PORT = [string]$port
 $env:RPGMAP_WORLD_ID = "ci-$([Guid]::NewGuid().ToString('N'))"
+$previousSmokeBrowser = $env:RPGMAP_SMOKE_BROWSER
+$env:RPGMAP_SMOKE_BROWSER = $Browser
 
 $logRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
 $stdout = Join-Path $logRoot "rpgmap-smoke-$PID.stdout.log"
@@ -150,7 +154,7 @@ try {
         if (-not $joinMatch.Success) { throw 'Packaged launcher did not publish a Join Code for smoke.' }
         $smokeJoinCode = $joinMatch.Groups[1].Value
         $hostUrl = "http://127.0.0.1:$port/#rpgmap-host=1&gmSecret=$smokeGmSecret"
-        Write-Host '[smoke] opening World Manager and Lanzhou Runtime in Edge'
+        Write-Host "[smoke] opening World Manager and Lanzhou Runtime in $Browser"
         $browserAttempted = $true
         Invoke-RpgMapBrowserSmoke -Url $hostUrl
         Write-Host '[smoke] World Manager and Lanzhou Runtime passed'
@@ -193,5 +197,6 @@ try {
     if (-not $launcher.HasExited) { Stop-Process -Id $launcher.Id -Force -ErrorAction SilentlyContinue }
   }
   Remove-Item -LiteralPath $stdout, $stderr, $serverPidFile -Force -ErrorAction SilentlyContinue
+  $env:RPGMAP_SMOKE_BROWSER = $previousSmokeBrowser
   Clear-RpgMapSmokeState
 }

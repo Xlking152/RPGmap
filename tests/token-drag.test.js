@@ -23,22 +23,20 @@ test('TokenDragPlan follows drag, planning, ready and moving phases', () => {
   assert.equal(drag.phase, TokenDragPhase.MOVING);
 });
 
-test('Ctrl drag release does not become a waypoint and arms the next left click', () => {
+test('Ctrl drag release does not become a waypoint or turn an ordinary click into one', () => {
   const drag = new TokenDragPlan();
   drag.begin({ tokenId: 'hero', start: { x: 0, y: 0 }, pointerId: 9 });
   drag.update({ x: 40, y: 0 });
   drag.setRoute({ valid: true, destination: { x: 40, y: 0 }, distance: 40 });
 
-  drag.continuePlanning({ nextClickCreatesWaypoint: true });
+  drag.continuePlanning();
   assert.equal(drag.phase, TokenDragPhase.PLANNING);
-  assert.equal(drag.nextClickCreatesWaypoint, true);
   assert.deepEqual(drag.session.waypoints, []);
 
   drag.update({ x: 60, y: 20 });
   drag.setRoute({ valid: true, destination: { x: 60, y: 20 }, distance: 70 });
   assert.equal(drag.addWaypoint(drag.route.destination), true);
   assert.deepEqual(drag.session.waypoints, [{ x: 60, y: 20 }]);
-  assert.equal(drag.nextClickCreatesWaypoint, false);
 });
 
 test('Adding a waypoint while still dragging is guarded and never stores the drag endpoint', () => {
@@ -49,7 +47,6 @@ test('Adding a waypoint while still dragging is guarded and never stores the dra
 
   assert.equal(drag.addWaypoint(), false);
   assert.equal(drag.phase, TokenDragPhase.PLANNING);
-  assert.equal(drag.nextClickCreatesWaypoint, true);
   assert.deepEqual(drag.session.waypoints, []);
 });
 
@@ -68,5 +65,4 @@ test('TokenDragPlan can undo the last waypoint and reset cleanly', () => {
   drag.reset();
   assert.equal(drag.phase, TokenDragPhase.IDLE);
   assert.equal(drag.session, null);
-  assert.equal(drag.nextClickCreatesWaypoint, false);
 });

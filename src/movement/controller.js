@@ -59,6 +59,7 @@ export function createMovementController({ settings } = {}) {
       let previewEnd = null;
       let keyboardFrame = null;
       let keyboardRunning = false;
+      let activePointerId = null;
       const keyboardQueue = [];
 
       const mapToken = tokenId => {
@@ -107,7 +108,6 @@ export function createMovementController({ settings } = {}) {
           dragged: false,
           members,
           waypoints: [],
-          nextClickCreatesWaypoint: false,
           pending: false,
         };
         api.selection.replace?.(members.map(member => member.tokenId), leader.id);
@@ -138,7 +138,7 @@ export function createMovementController({ settings } = {}) {
           previewLine.setLatLngs(points);
           previewLine.setStyle({ color });
         }
-        const end = points[1];
+        const end = points.at(-1);
         if (!previewEnd) {
           previewEnd = L.circleMarker(end, {
             pane: 'measurePane', radius: 9, color, weight: 2,
@@ -159,6 +159,10 @@ export function createMovementController({ settings } = {}) {
         if (pointerFrame !== null) cancelFrame(pointerFrame);
         pointerFrame = null;
         mapElement.classList.remove('fvtt-token-dragging');
+        if (activePointerId !== null) {
+          try { mapElement.releasePointerCapture?.(activePointerId); } catch {}
+          activePointerId = null;
+        }
         if (api.map.dragging && !api.map.dragging.enabled() && mapElement.dataset.rpgMovementDisabledDragging === 'true') {
           api.map.dragging.enable();
         }
@@ -167,14 +171,14 @@ export function createMovementController({ settings } = {}) {
         if (message) status(message);
       }
 
-      async function fastValidate(tokenId, target, from = null) {
-        const fn = api.movementFast?.validateTokenMove || api.movement.validateTokenMove;
-        return fn?.(tokenId, target, from ? { from } : {}) || { valid: false, reason: '无法校验移动' };
+      function releaseActivePointer() {
+        if (activePointerId === null) return;
+        try { mapElement.releasePointerCapture?.(activePointerId); } catch {}
+        activePointerId = null;
       }
 
-      async function fastMove(tokenId, target) {
-        const fn = api.movementFast?.moveTokenTo || api.movement.moveTokenTo;
-        return fn?.(tokenId, target) || { valid: false, reason: '移动接口不可用' };
+      async function fastValidate(tokenId, target, from = null) {
+        return api.movementFast.validateTokenMove(tokenId, target, from ? { from } : {});
       }
 
       async function commitDirect(target) {
@@ -184,54 +188,18 @@ export function createMovementController({ settings } = {}) {
         const members = current.members || [];
         const routePoints = [current.start, ...current.waypoints, target];
         try {
-          if (members.length > 1) {
-            const planned = await api.movement.planTokenGroupMove?.(
-              members.map(member => member.tokenId), current.tokenId, routePoints,
-            );
-            if (!planned?.valid) {
-              drawPreview(target, { valid: false });
-              status('群组移动失败：至少一个 Token 的路径不可通行');
-              current.pending = false;
-              return false;
-            }
-            drawPreview(target, { valid: true });
-            if (!api.movement.commitTokenGroupMove?.()) {
-              status('群组移动提交失败');
-              current.pending = false;
-              return false;
-            }
-            suppressClickUntil = Date.now() + 250;
-            status(`群组 ${members.length} Token 移动已提交`);
-            reset();
-            return true;
-          }
-
-          if (current.waypoints.length) {
-            for (let index = 1; index < routePoints.length; index += 1) {
-              const validation = await fastValidate(current.tokenId, routePoints[index], routePoints[index - 1]);
-              if (!validation?.valid) {
-                drawPreview(target, { valid: false });
-                status(`移动失败：第 ${index} 段路径不可通行`);
-                current.pending = false;
-                return false;
-              }
-            }
-          }
-          let result = null;
-          let totalDistance = 0;
-          for (const destination of routePoints.slice(1)) {
-            result = await fastMove(current.tokenId, destination);
-            if (!result?.valid) {
-              drawPreview(destination, { valid: false });
-              status(`移动失败：${result?.reason || '当前位置不可通行'}`);
-              current.pending = false;
-              return false;
-            }
-            totalDistance += Number(result.distance) || 0;
+          const result = await api.movementFast.moveTokenPath(
+            members.map(member => member.tokenId), current.tokenId, routePoints.slice(1), { method: 'drag' },
+          );
+          if (!result?.valid) {
+            drawPreview(target, { valid: false });
+            status(`移动失败：${result?.reason || '当前位置不可通行'}`);
+            current.pending = false;
+            return false;
           }
           drawPreview(target, { valid: true });
           suppressClickUntil = Date.now() + 250;
-          status(`Token 已移动 ${formatDistance(totalDistance)} · ${current.waypoints.length} 个拐点`);
+          status(`${members.length > 1 ? `群组 ${members.length} Token` : 'Token'} 已移动 ${formatDistance(Number(result.distance) || 0)} · ${current.waypoints.length} 个拐点`);
           reset();
           return true;
         } catch (error) {
@@ -273,6 +241,10 @@ export function createMovementController({ settings } = {}) {
         }
         settings.beginSession(api.map, api.mapPackage);
         if (!beginInteraction(token, { mode: 'drag', client: clientPoint(event) })) return;
+        event.preventDefault();
+        event.stopPropagation();
+        activePointerId = event.pointerId;
+        try { mapElement.setPointerCapture?.(event.pointerId); } catch {}
         if (api.map.dragging?.enabled?.()) {
           api.map.dragging.disable();
           mapElement.dataset.rpgMovementDisabledDragging = 'true';
@@ -301,20 +273,20 @@ export function createMovementController({ settings } = {}) {
         }
         event.preventDefault();
         event.stopPropagation();
+        releaseActivePointer();
         suppressClickUntil = Date.now() + 250;
         const raw = worldPointFromClient(clientPoint(event));
         const target = inside(raw, api.mapPackage) ? snapPoint(raw) : current.current;
         current.current = target;
         if (event.ctrlKey || event.metaKey) {
           current.mode = 'click';
-          current.nextClickCreatesWaypoint = true;
           mapElement.classList.remove('fvtt-token-dragging');
           if (api.map.dragging && !api.map.dragging.enabled() && mapElement.dataset.rpgMovementDisabledDragging === 'true') {
             api.map.dragging.enable();
           }
           delete mapElement.dataset.rpgMovementDisabledDragging;
           drawPreview(target, { valid: true });
-          status('已进入拐点规划 · 松开位置仅作预览，下一次点击设置第一个拐点');
+          status('已进入路径规划 · Ctrl/Cmd+点击或 F 添加拐点，普通点击设置终点');
           return;
         }
         void commitDirect(target);
@@ -353,11 +325,14 @@ export function createMovementController({ settings } = {}) {
             }
             const count = Math.max(1, Math.min(MAX_KEYBOARD_BATCH_STEPS, Number(segment.count) || 1));
             if (Number(segment.count) > count) keyboardQueue.unshift({ ...segment, count: Number(segment.count) - count });
-            const target = snapPoint({
-              x: Number(token.x) + segment.x * settings.step * count,
-              y: Number(token.y) + segment.y * settings.step * count,
-            });
-            const result = await fastMove(token.id, target);
+            const waypoints = [];
+            for (let step = 1; step <= count; step += 1) waypoints.push(snapPoint({
+              x: Number(token.x) + segment.x * settings.step * step,
+              y: Number(token.y) + segment.y * settings.step * step,
+            }));
+            const result = await api.movementFast.moveTokenPath(
+              [token.id], token.id, waypoints, { method: 'keyboard' },
+            );
             if (!result?.valid) {
               keyboardQueue.length = 0;
               status(`移动失败：${result?.reason || '当前位置不可通行'}`);
@@ -374,7 +349,7 @@ export function createMovementController({ settings } = {}) {
       function keydown(event) {
         const editable = 'input,textarea,select,[contenteditable="true"],.entity-sheet,.actor-sheet,[data-actor-sheet]';
         const focusTarget = event.target?.closest?.(editable) || documentNode.activeElement?.closest?.(editable);
-        if (event.defaultPrevented || focusTarget || event.ctrlKey || event.altKey || event.metaKey) return;
+        if (event.defaultPrevented || focusTarget) return;
         if (event.key === 'Escape' && interaction) {
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -387,6 +362,15 @@ export function createMovementController({ settings } = {}) {
           void commitDirect(interaction.current);
           return;
         }
+        if (event.code === 'KeyF' && interaction?.mode === 'click' && !interaction.pending) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          if (event.altKey) {
+            if (!removeWaypoint()) reset('没有可移除的拐点，已取消 Token 移动');
+          } else void addWaypoint(interaction.current);
+          return;
+        }
+        if (event.ctrlKey || event.altKey || event.metaKey) return;
         if (interaction?.mode === 'drag') return;
         const direction = {
           w: { x: 0, y: -1 }, a: { x: -1, y: 0 },
@@ -421,7 +405,6 @@ export function createMovementController({ settings } = {}) {
         }
         interaction.waypoints.push(target);
         interaction.current = target;
-        interaction.nextClickCreatesWaypoint = false;
         drawPreview(target, { valid: true });
         status(`已添加拐点 ${interaction.waypoints.length} · Ctrl/Cmd+点击继续添加，普通点击设置终点`);
         return true;
@@ -445,7 +428,7 @@ export function createMovementController({ settings } = {}) {
         event.stopImmediatePropagation();
         interaction.current = snapPoint(raw);
         drawPreview(interaction.current, { valid: true });
-        if (interaction.nextClickCreatesWaypoint || event.ctrlKey || event.metaKey) {
+        if (event.ctrlKey || event.metaKey) {
           void addWaypoint(interaction.current);
           return;
         }
@@ -456,7 +439,17 @@ export function createMovementController({ settings } = {}) {
         if (!interaction || interaction.mode !== 'click' || interaction.pending) return;
         event.preventDefault();
         event.stopImmediatePropagation();
-        if (!removeWaypoint()) status('没有可移除的拐点');
+        if (!removeWaypoint()) reset('没有可移除的拐点，已取消 Token 移动');
+      }
+
+      function nativeDragStart(event) {
+        if (!event.target?.closest?.('.rpg-token-v2,[data-token-id]')) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+
+      function windowBlur() {
+        if (interaction?.mode === 'drag') reset('窗口失去焦点，已取消 Token 拖动');
       }
 
       function wheel(event) {
@@ -531,6 +524,8 @@ export function createMovementController({ settings } = {}) {
       mapElement.addEventListener('contextmenu', contextMenu, true);
       mapElement.addEventListener('wheel', wheel, { passive: false, capture: true });
       documentNode.addEventListener('keydown', keydown, true);
+      documentNode.addEventListener('dragstart', nativeDragStart, true);
+      windowNode.addEventListener?.('blur', windowBlur);
 
       off.push(api.on?.('app:destroy', () => {
         destroyed = true;
@@ -547,6 +542,8 @@ export function createMovementController({ settings } = {}) {
         mapElement.removeEventListener('contextmenu', contextMenu, true);
         mapElement.removeEventListener('wheel', wheel, true);
         documentNode.removeEventListener('keydown', keydown, true);
+        documentNode.removeEventListener('dragstart', nativeDragStart, true);
+        windowNode.removeEventListener?.('blur', windowBlur);
         routeLayer.clearLayers();
         api.map.removeLayer?.(routeLayer);
         off.splice(0).forEach(dispose => dispose?.());

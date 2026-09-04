@@ -32,6 +32,7 @@ import { createSceneManagerSystem } from '../scene/manager.js';
 import { createVisionFogSystem } from '../vision/index.js';
 import { createLightweightMarkerSystem } from '../marker/index.js';
 import { createPermissionSystem } from '../permissions/index.js';
+import { createDocumentBackendSystem } from '../documents/index.js';
 
 export async function startMapRuntime({
   appContainer,
@@ -74,6 +75,7 @@ export async function startMapRuntime({
     tools: [
       createAppLifecycleSystem(),
       createWorldSystem({ worldId, worldName }),
+      createDocumentBackendSystem(),
       createSceneManagerSystem({
         mapPackages: mapPackageRegistry,
         worldCatalogManager: worldManager,

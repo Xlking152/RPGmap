@@ -515,6 +515,45 @@ function applySingleOperation(entityState, message, context) {
   throw statusError(`Unsupported status operation: ${type}`, 'unknown_message');
 }
 
+function cloneStatusOperationInput(rawEntityState, message) {
+  const state = {
+    ...rawEntityState,
+    statusDefinitions: [...(rawEntityState?.statusDefinitions || [])],
+    actors: [...(rawEntityState?.actors || [])],
+    tokens: [...(rawEntityState?.tokens || [])],
+  };
+  const operations = message?.type === 'status.batch' ? message.operations || [] : [message];
+  const actorIds = new Set();
+  const tokenIds = new Set();
+  const syntheticIds = new Set();
+  for (const operation of operations) {
+    const target = plainObject(operation?.target) ? operation.target : operation;
+    const scope = String(target?.scope || '');
+    const targetId = String(target?.targetId || '');
+    if (scope === 'actor') actorIds.add(targetId);
+    else if (scope === 'token') tokenIds.add(targetId);
+    else if (scope === 'syntheticActor') syntheticIds.add(targetId);
+  }
+  state.actors = state.actors.map(actor => actorIds.has(String(actor?.id || ''))
+    ? { ...actor, effects: clone(actor.effects || []) }
+    : actor);
+  state.tokens = state.tokens.map(token => {
+    const id = String(token?.id || '');
+    if (tokenIds.has(id)) return { ...token, effects: clone(token.effects || []) };
+    if (syntheticIds.has(id)) {
+      return {
+        ...token,
+        actorDelta: {
+          ...(plainObject(token.actorDelta) ? token.actorDelta : {}),
+          effects: clone(token.actorDelta?.effects || []),
+        },
+      };
+    }
+    return token;
+  });
+  return state;
+}
+
 function statusEffectCollections(entityState) {
   return [
     ...(entityState.actors || []).map(actor => actor.effects),
@@ -551,7 +590,9 @@ export function advanceStatusDurations(rawEntityState, {
 }
 
 export function reduceStatusOperation(rawEntityState, message, context = {}) {
-  const state = normalizeEntityStatusState(rawEntityState);
+  const state = context.assumeNormalized === true
+    ? cloneStatusOperationInput(rawEntityState, message)
+    : normalizeEntityStatusState(rawEntityState);
   let results;
   if (message?.type === 'status.batch') {
     if (!Array.isArray(message.operations) || !message.operations.length) throw statusError('status.batch.operations cannot be empty');

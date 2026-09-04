@@ -14,6 +14,7 @@ import {
 } from './runtime-state.js';
 import { createMapPresentation } from '../render/map-presentation.js';
 import { createSceneRenderer } from '../render/scene-renderer.js';
+import { applyWorldOperationPatch } from '../world/operations.js';
 
 const MAX_SAVE_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -274,10 +275,7 @@ export function createRpgMapRuntime({
     return true;
   }
 
-  function applyAuthoritativePatchState(nextState, {
-    source = 'world.operation', changeSet = {}, revision = null,
-  } = {}) {
-    state = normalizeState(nextState);
+  function emitAuthoritativeChanges({ source, changeSet = {}, revision = null } = {}) {
     const actorIds = Array.isArray(changeSet.actors)
       ? changeSet.actors.map(String)
       : [...(changeSet.actors?.upsertIds || []), ...(changeSet.actors?.removeIds || [])].map(String);
@@ -313,8 +311,24 @@ export function createRpgMapRuntime({
       renderScene();
       emit('scene:activate', { sceneId: state.preferences?.worldV2?.activeSceneId || null, canonical: true });
     }
-    emit('state:patch', { source, revision, changeSet: clone(changeSet), state: clone(state) });
+    const detail = { source, revision, changeSet: clone(changeSet) };
+    if (!String(source || '').startsWith('document.')) detail.state = clone(state);
+    emit('state:patch', detail);
     return true;
+  }
+
+  function applyAuthoritativePatchState(nextState, {
+    source = 'world.operation', changeSet = {}, revision = null,
+  } = {}) {
+    state = normalizeState(nextState);
+    return emitAuthoritativeChanges({ source, changeSet, revision });
+  }
+
+  function applyAuthoritativeDocumentPatch(patch, {
+    source = 'document.batch', changeSet = {}, revision = null,
+  } = {}) {
+    state = applyWorldOperationPatch(state, patch, { mutate: true });
+    return emitAuthoritativeChanges({ source, changeSet, revision });
   }
 
   async function commitAuthoritativeState(nextState, { source = 'authoritative-world', reason = source, render = true } = {}) {
@@ -454,6 +468,7 @@ export function createRpgMapRuntime({
     getSelectedFeatureId: () => selectedFeatureId,
     commitState,
     applyAuthoritativePatchState,
+    applyAuthoritativeDocumentPatch,
     commitAuthoritativeState,
     persistNow,
     exportState,

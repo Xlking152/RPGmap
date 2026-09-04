@@ -82,6 +82,7 @@ export function createEntityUiTool(options = {}) {
       const publicProfilePreview = new Set();
       const publicProfileDrafts = new Map();
       const publicProfileFeedback = new Map();
+      const sheetInstances = new Map();
       const rulesetCapabilities = actorUiCapabilities(api.ruleset);
 
       const panel = api.uiPanels?.actors;
@@ -186,10 +187,59 @@ export function createEntityUiTool(options = {}) {
         const target = String(key || '');
         if (!target) return false;
         backdropForKey(target)?.remove();
+        sheetInstances.get(target)?.dispose?.();
+        sheetInstances.delete(target);
         const closed = sheetManager.close(target);
         if (!closed) return false;
         if (activeSheetKey === target) activeSheetKey = sheetManager.list().at(-1)?.key || null;
         refreshZOrder();
+        return true;
+      }
+
+      function applySheetParts(record, html, actorSheet) {
+        const template = documentNode.createElement('template');
+        template.innerHTML = String(html || '').trim();
+        const incomingBackdrop = template.content.firstElementChild;
+        const incomingSheet = incomingBackdrop?.querySelector?.('.entity-sheet');
+        if (!incomingBackdrop || !incomingSheet) return false;
+        let backdrop = backdropForKey(record.key);
+        if (!backdrop) {
+          documentNode.body.append(incomingBackdrop);
+          backdrop = incomingBackdrop;
+        } else {
+          const currentSheet = backdrop.querySelector('.entity-sheet');
+          backdrop.className = incomingBackdrop.className;
+          for (const attribute of [...incomingBackdrop.attributes]) {
+            if (attribute.name !== 'style') backdrop.setAttribute(attribute.name, attribute.value);
+          }
+          if (!currentSheet) backdrop.append(incomingSheet);
+          else {
+            currentSheet.className = incomingSheet.className;
+            for (const attribute of [...currentSheet.attributes]) {
+              if (attribute.name !== 'style' && !incomingSheet.hasAttribute(attribute.name)) currentSheet.removeAttribute(attribute.name);
+            }
+            for (const attribute of [...incomingSheet.attributes]) {
+              if (attribute.name !== 'style') currentSheet.setAttribute(attribute.name, attribute.value);
+            }
+            const selectors = [
+              ':scope > .entity-sheet-header',
+              ':scope > [data-sheet-edit-only]',
+              ':scope > .entity-sheet-tabs',
+              ':scope > .entity-sheet-body',
+            ];
+            for (const selector of selectors) {
+              const currentPart = currentSheet.querySelector(selector);
+              const incomingPart = incomingSheet.querySelector(selector);
+              if (!incomingPart) currentPart?.remove();
+              else if (!currentPart) currentSheet.append(incomingPart);
+              else if (currentPart.innerHTML !== incomingPart.innerHTML) currentPart.replaceChildren(...[...incomingPart.childNodes]);
+            }
+          }
+        }
+        const previous = sheetInstances.get(record.key);
+        if (previous !== actorSheet) previous?.dispose?.();
+        sheetInstances.set(record.key, actorSheet);
+        applyGeometry(sheetManager.get(record.key) || record);
         return true;
       }
       function closeAllSheets() {
@@ -207,7 +257,7 @@ export function createEntityUiTool(options = {}) {
         } finally {
           store.load({ migrateLegacy: false, dropMarkers: false });
           renderPanel();
-          renderAllSheets();
+          renderRelatedSheets({ actorIds: [actor?.id].filter(Boolean) });
         }
       }
 
@@ -239,7 +289,10 @@ export function createEntityUiTool(options = {}) {
         } finally {
           store.load({ migrateLegacy: false, dropMarkers: false });
           renderPanel();
-          renderAllSheets();
+          renderRelatedSheets({
+            actorIds: [targetActorId, actor?.id].filter(Boolean),
+            tokenIds: [targetTokenId].filter(Boolean),
+          });
         }
       }
 
@@ -317,7 +370,7 @@ export function createEntityUiTool(options = {}) {
                 : [],
           };
         },
-        render: () => { renderPanel(); renderAllSheets(); },
+        render: renderPanel,
         setStatus,
       });
 
@@ -475,17 +528,13 @@ export function createEntityUiTool(options = {}) {
           : api.permissions?.can?.('actor.edit', { actorId: actor.id, actor }) === true;
         const actorSheet = createLiveActorSheet(actor, token, record, { canRuntimeEdit: runtimeAllowed });
         const windowAttrs = `data-sheet-window-key="${escapeEntityHtml(record.key)}" data-scene-id="${escapeEntityHtml(record.sceneId || '')}"`;
-        const existing = backdropForKey(record.key);
         if (actor.audienceRestricted === true) {
           const typeLabel = ({ pc: 'PC', monster: '怪物', npc: 'NPC', summon: '召唤物', other: '其他' })[actor.type] || '其他';
           const html = `<div class="entity-sheet-backdrop entity-sheet-window" ${windowAttrs}><div class="entity-sheet entity-sheet-v3 entity-limited-sheet" ${windowAttrs} data-actor-id="${escapeEntityHtml(actor.id)}" data-token-id="${escapeEntityHtml(token?.id || '')}" data-sheet-mode="limited" data-sheet-interaction-mode="limited" role="dialog" aria-modal="false">
             <header class="entity-sheet-header">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><strong>${escapeEntityHtml(actor.name)}</strong><div class="entity-formbar"><span>${escapeEntityHtml(typeLabel)}</span><strong>公开摘要</strong></div>${actorSheet.renderBadges()}</div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>
             <main class="entity-sheet-body">${actorSheet.renderLimited()}</main>
           </div></div>`;
-          if (existing) existing.outerHTML = html;
-          else documentNode.body.insertAdjacentHTML('beforeend', html);
-          applyGeometry(record);
-          return true;
+          return applySheetParts(record, html, actorSheet);
         }
 
         const sheetDescription = describeActorSheet(actor) || { variants: [], tabs: [] };
@@ -517,14 +566,22 @@ export function createEntityUiTool(options = {}) {
           ${classificationControls}<nav class="entity-sheet-tabs">${tabs.map(([tabId, label]) => `<button type="button" class="entity-sheet-tab ${id(tab) === id(tabId) ? 'active' : ''}" data-sheet-tab="${escapeEntityHtml(tabId)}">${escapeEntityHtml(label)}</button>`).join('')}</nav>
           <main class="entity-sheet-body">${actorSheetBody(context, tab, actorSheet)}</main>
         </div></div>`;
-        if (existing) existing.outerHTML = html;
-        else documentNode.body.insertAdjacentHTML('beforeend', html);
-        applyGeometry(sheetManager.get(record.key) || record);
-        return true;
+        return applySheetParts(record, html, actorSheet);
       }
 
       function renderAllSheets() {
         for (const record of [...sheetManager.list()]) renderSheetRecord(record);
+        refreshZOrder();
+      }
+
+      function renderRelatedSheets({ actorIds = [], tokenIds = [] } = {}) {
+        const actors = new Set(actorIds.map(String));
+        const tokens = new Set(tokenIds.map(String));
+        for (const record of [...sheetManager.list()]) {
+          if (actors.has(String(record.actorId)) || (record.tokenId && tokens.has(String(record.tokenId)))) {
+            renderSheetRecord(record);
+          }
+        }
         refreshZOrder();
       }
 
@@ -873,19 +930,23 @@ export function createEntityUiTool(options = {}) {
         selectedTokenId = event.detail?.tokenId || event.detail?.id || null;
         renderAllSheets();
       });
-      api.on('token:create', () => { renderPanel(); renderAllSheets(); });
+      api.on('token:create', event => {
+        renderPanel();
+        renderRelatedSheets({ actorIds: [event.detail?.actorId].filter(Boolean), tokenIds: [event.detail?.tokenId || event.detail?.id].filter(Boolean) });
+      });
       api.on('token:delete', event => {
         if (selectedTokenId && id(event.detail?.tokenId || event.detail?.id) === id(selectedTokenId)) selectedTokenId = null;
         renderPanel();
-        renderAllSheets();
+        renderRelatedSheets({ actorIds: [event.detail?.actorId].filter(Boolean), tokenIds: [event.detail?.tokenId || event.detail?.id].filter(Boolean) });
       });
-      api.on('token:move', () => { renderPanel(); renderAllSheets(); });
-      api.on('token:property-change', () => { renderPanel(); renderAllSheets(); });
-      api.on('elevation:token-change', () => { renderPanel(); renderAllSheets(); });
-      api.on('state:commit', () => {
+      api.on('token:move', event => { renderPanel(); renderRelatedSheets({ actorIds: [event.detail?.actorId].filter(Boolean), tokenIds: [event.detail?.tokenId || event.detail?.id].filter(Boolean) }); });
+      api.on('token:property-change', event => { renderPanel(); renderRelatedSheets({ actorIds: [event.detail?.actorId].filter(Boolean), tokenIds: [event.detail?.tokenId || event.detail?.id].filter(Boolean) }); });
+      api.on('elevation:token-change', event => { renderPanel(); renderRelatedSheets({ tokenIds: [event.detail?.tokenId || event.detail?.id].filter(Boolean) }); });
+      api.on('state:commit', event => {
         if (store.saving) return;
         store.load({ migrateLegacy: false, dropMarkers: false });
         renderPanel();
+        if (String(event.detail?.source || '').startsWith('document.')) return;
         renderAllSheets();
       });
       api.on('state:import', () => {
@@ -895,7 +956,20 @@ export function createEntityUiTool(options = {}) {
         renderPanel();
         renderAllSheets();
       });
-      api.on('status:change', () => { renderPanel(); renderAllSheets(); });
+      api.on('status:change', event => {
+        renderPanel();
+        renderRelatedSheets({
+          actorIds: [...(event.detail?.actorIds || []), event.detail?.actorId].filter(Boolean),
+          tokenIds: [...(event.detail?.tokenIds || []), event.detail?.tokenId].filter(Boolean),
+        });
+      });
+      for (const eventName of ['document:create', 'document:update', 'document:delete', 'document:move']) {
+        api.on(eventName, event => {
+          const address = event.detail?.document || {};
+          if (address.type === 'Actor') renderRelatedSheets({ actorIds: [address.id] });
+          if (address.type === 'Token') renderRelatedSheets({ tokenIds: [address.id] });
+        });
+      }
       api.on('multiplayer:capabilities', () => { renderPanel(); renderAllSheets(); });
       api.on('app:destroy', () => {
         destroyed = true;

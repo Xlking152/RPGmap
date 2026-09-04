@@ -33,13 +33,18 @@ import {
 } from './status-operations.mjs';
 import {
   applyWorldOperations,
+  applyWorldOperationPatch,
+  assertDocumentBatchMessage,
   assertWorldOperationMessage,
+  createDocumentChanges,
   createWorldOperationPatch,
+  documentWritesToWorldOperations,
   migrateLegacySceneFeatureStates,
   migrateWorldSchema3State,
   projectWorldOperationState,
   WORLD_OPERATION_SCHEMA_VERSION,
 } from './world-operations.mjs';
+import { resolveStatusCapabilitiesForToken } from './status-capabilities-v2.mjs';
 import {
   canUserControlToken,
   describeVisionForToken,
@@ -59,6 +64,8 @@ import {
   sendSocket as sendWebSocket,
   websocketAccept,
 } from './websocket-runtime.mjs';
+import { createWorldWal } from './world-wal.mjs';
+import { validateAuthoritativeTokenMovePath } from './movement-authority.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '0.0.0.0';
@@ -68,6 +75,7 @@ const STORAGE = createPortableStorage({ root: ROOT, worldId: WORLD_ID, env: proc
 const PUBLIC_DIR = STORAGE.appDir;
 const MAP_DIR = STORAGE.mapDir;
 const WORLD_FILE = STORAGE.worldFile;
+const WORLD_OPERATIONS_FILE = STORAGE.operationsFile;
 const ACCESS_FILE = STORAGE.usersFile;
 const PLAYER_JOIN_CODE = String(process.env.RPGMAP_JOIN_CODE || '').trim();
 const GM_SECRET = String(process.env.RPGMAP_GM_SECRET || randomBytes(4).toString('hex').toUpperCase());
@@ -376,6 +384,13 @@ if (loadedWorld !== undefined) {
   };
 }
 
+const worldWal = createWorldWal({
+  filePath: WORLD_OPERATIONS_FILE,
+  applyPatch: applyWorldOperationPatch,
+});
+world = await worldWal.replay(world);
+if (world.state) assertWorldState(world.state);
+
 // Idempotency is intentionally bounded. A reconnect can safely retry a recent
 // GM status mutation without applying it twice, while unbounded client keys can
 // never grow server memory for the lifetime of the process.
@@ -476,6 +491,107 @@ function persistAccess(snapshot = access) {
 }
 
 const sessions = new Map();
+const resumeHistory = [];
+const RESUME_HISTORY_LIMIT = 256;
+const RESUME_HISTORY_MAX_AGE_MS = 5 * 60_000;
+let resumeBaseRevision = Number(world.revision) || 0;
+let resumeBaseState = world.state ? structuredClone(world.state) : null;
+function audienceFingerprint(session) {
+  return createHash('sha256').update(JSON.stringify({
+    role: session.role,
+    userId: session.userId || null,
+    identityStatus: session.identityStatus,
+    visionSourceTokenId: session.visionSourceTokenId || null,
+    accessRevision: Math.max(0, Number(access.revision) || 0),
+  })).digest('hex').slice(0, 24);
+}
+function advanceResumeBase(entry) {
+  if (!resumeBaseState || Number(entry.baseRevision) !== resumeBaseRevision) {
+    resumeBaseState = null;
+    resumeBaseRevision = Number(entry.revision);
+    return;
+  }
+  resumeBaseState = applyWorldOperationPatch(resumeBaseState, entry.patch);
+  resumeBaseRevision = Number(entry.revision);
+}
+function resetResumeHistory() {
+  resumeHistory.length = 0;
+  resumeBaseRevision = Number(world.revision) || 0;
+  resumeBaseState = world.state ? structuredClone(world.state) : null;
+}
+function rememberResumeCommit({
+  beforeState, afterState, operationId, baseRevision, revision, updatedAt,
+  results, originSessionId, changeSet, documentBatch,
+}) {
+  const now = Date.now();
+  if (!resumeHistory.length) {
+    resumeBaseRevision = Number(baseRevision);
+    resumeBaseState = structuredClone(beforeState);
+  }
+  resumeHistory.push({
+    baseRevision: Number(baseRevision),
+    revision: Number(revision),
+    at: now,
+    patch: createWorldOperationPatch(beforeState, afterState),
+    operationId: String(operationId),
+    updatedAt: String(updatedAt),
+    results: structuredClone(results || []),
+    originSessionId: originSessionId || null,
+    changeSet: structuredClone(changeSet || {}),
+    documentBatch: documentBatch === true,
+  });
+  while (resumeHistory.length > RESUME_HISTORY_LIMIT
+    || (resumeHistory[0] && now - resumeHistory[0].at > RESUME_HISTORY_MAX_AGE_MS)) {
+    advanceResumeBase(resumeHistory.shift());
+  }
+}
+function resumableCommits(session, revision, fingerprint) {
+  const requested = Number(revision);
+  const currentFingerprint = audienceFingerprint(session);
+  if (!Number.isSafeInteger(requested) || requested < 0 || requested > world.revision
+    || String(fingerprint || '') !== currentFingerprint) return null;
+  if (requested === world.revision) return [];
+  if (!resumeBaseState || requested < resumeBaseRevision) return null;
+  let canonical = structuredClone(resumeBaseState);
+  let expected = resumeBaseRevision;
+  let beforeProjection = null;
+  const result = [];
+  for (const entry of resumeHistory) {
+    if (entry.baseRevision !== expected || entry.revision !== expected + 1) return null;
+    const nextCanonical = applyWorldOperationPatch(canonical, entry.patch);
+    if (entry.revision <= requested) {
+      canonical = nextCanonical;
+      expected = entry.revision;
+      continue;
+    }
+    if (expected !== requested && !beforeProjection) return null;
+    beforeProjection ||= audienceStateFor(session, canonical);
+    const afterProjection = audienceStateFor(session, nextCanonical);
+    const patch = createWorldOperationPatch(beforeProjection, afterProjection);
+    const motion = projectMotionForSession(entry.results, beforeProjection, afterProjection);
+    result.push({
+      type: entry.documentBatch ? 'document.batch.committed' : 'world.operation.committed',
+      operationId: entry.operationId,
+      baseRevision: entry.baseRevision,
+      revision: entry.revision,
+      updatedAt: entry.updatedAt,
+      patch,
+      changeSet: audienceChangeSetFromPatch(patch, afterProjection, entry.changeSet),
+      ...(entry.documentBatch ? {
+        changes: createDocumentChanges(beforeProjection, afterProjection, patch, { motion }),
+        motion,
+      } : {}),
+      results: projectResultsForSession(entry.results, afterProjection, session),
+      originSessionId: entry.originSessionId,
+      audienceRevision: session.audienceRevision,
+    });
+    beforeProjection = afterProjection;
+    canonical = nextCanonical;
+    expected = entry.revision;
+    if (expected === world.revision) return result;
+  }
+  return null;
+}
 function findUser(userId) { return access.users.find(user => user.id === String(userId || '')) || null; }
 function socketForSessionId(sessionId) {
   for (const [socket, session] of sessions) if (session.id === sessionId) return socket;
@@ -545,7 +661,10 @@ function audienceStateFor(session, state = world.state) {
   const opaqueIdFor = (kind, rawId) => {
     const key = `${String(kind)}:${String(rawId)}`;
     if (!session.audienceOpaqueIds.has(key)) {
-      session.audienceOpaqueIds.set(key, `audience-${String(kind)}-${randomBytes(18).toString('base64url')}`);
+      const opaque = createHash('sha256').update([
+        GM_SECRET, WORLD_ID, session.role, session.userId || '', session.visionSourceTokenId || '', key,
+      ].join('|')).digest('base64url').slice(0, 24);
+      session.audienceOpaqueIds.set(key, `audience-${String(kind)}-${opaque}`);
     }
     return session.audienceOpaqueIds.get(key);
   };
@@ -562,8 +681,9 @@ function audienceStateFor(session, state = world.state) {
   return projected;
 }
 function sendWorldOperationDenied(socket, message, code, description, extra = {}) {
+  const documentBatch = message?.type === 'document.batch' || message?._documentBatch === true;
   return sendSocket(socket, {
-    type: 'world.operation.denied',
+    type: documentBatch ? 'document.batch.denied' : 'world.operation.denied',
     operationId: statusOperationIdForReply(message?.operationId),
     code: String(code || 'world_operation_denied'),
     message: String(description || '服务器拒绝了 World 操作'),
@@ -627,22 +747,257 @@ function audienceChangeSetFromPatch(patch, afterProjection, canonical = {}) {
     statusDefinitionsChanged: worldPatch.statusDefinitions !== undefined,
   };
 }
-function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, changeSet }) {
+function visiblePreciseToken(state, tokenId) {
+  const worldValue = state?.preferences?.worldV2;
+  for (const scene of worldValue?.scenes || []) {
+    const token = (scene.tokens || []).find(item => String(item?.id ?? '') === String(tokenId));
+    if (token) return token.audienceVisibility !== 'vague';
+  }
+  return false;
+}
+
+async function persistWorldCommit(snapshot, beforeState, operationId) {
+  const patch = createWorldOperationPatch(beforeState, snapshot.state);
+  await worldWal.append({
+    baseRevision: Number(snapshot.revision) - 1,
+    revision: Number(snapshot.revision),
+    operationId,
+    patch,
+    results: snapshot.recentStatusOperations || [],
+    timestamp: snapshot.updatedAt,
+  });
+  if (worldWal.shouldCompact(snapshot.revision)) {
+    await persistWorld(snapshot);
+    await worldWal.reset();
+  }
+}
+function projectMotionForSession(results, beforeProjection, afterProjection) {
+  return (results || []).flatMap(result => result?.motion || []).filter(motion =>
+    visiblePreciseToken(beforeProjection, motion.tokenId) && visiblePreciseToken(afterProjection, motion.tokenId))
+    .map(motion => structuredClone(motion));
+}
+
+function lightweightProjectionShell(state) {
+  const preferences = { ...(state?.preferences || {}) };
+  const worldState = preferences.worldV2 || {};
+  preferences.worldV2 = {
+    ...worldState,
+    actors: [...(worldState.actors || [])],
+    scenes: [...(worldState.scenes || [])],
+  };
+  preferences.entitySystem = { ...(preferences.entitySystem || {}) };
+  return { ...state, preferences };
+}
+
+function canonicalWorldScene(state, sceneId) {
+  return (state?.preferences?.worldV2?.scenes || [])
+    .find(scene => String(scene?.id || '') === String(sceneId || '')) || null;
+}
+
+function tryIncrementalAudienceProjection(session, beforeProjection, afterState, operations, results) {
+  if (!beforeProjection || session.role === 'gm' || !Array.isArray(operations) || !operations.length) return null;
+  const types = new Set(operations.map(operation => String(operation?.type || '')));
+  const next = lightweightProjectionShell(beforeProjection);
+  const projectedWorld = next.preferences.worldV2;
+  projectedWorld.updatedAt = String(afterState?.preferences?.worldV2?.updatedAt || projectedWorld.updatedAt || '');
+
+  if ([...types].every(type => type === 'chat.append')) {
+    const chatIds = new Set((results || []).map(result => String(result?.chatId || '')).filter(Boolean));
+    const appended = (afterState?.preferences?.chatSystem?.messages || [])
+      .filter(message => chatIds.has(String(message?.id || '')));
+    // Player chat has no entity-bearing data. Protected GM event data still
+    // uses the full projection so hidden Actor/Token references are filtered.
+    if (appended.length !== chatIds.size || appended.some(message => message?.data != null)) return null;
+    next.preferences.chatSystem = {
+      ...(beforeProjection.preferences?.chatSystem || {}),
+      messages: [
+        ...(beforeProjection.preferences?.chatSystem?.messages || []),
+        ...appended.map(message => structuredClone(message)),
+      ],
+    };
+    return next;
+  }
+
+  if ([...types].every(type => type === 'token.movePath') && !session.visionSourceTokenId) {
+    const motion = (results || []).flatMap(result => result?.motion || []);
+    const motionById = new Map(motion.map(item => [String(item?.tokenId || ''), item]));
+    for (const [sceneIndex, scene] of projectedWorld.scenes.entries()) {
+      const canonical = canonicalWorldScene(afterState, scene.id);
+      if (!canonical) return null;
+      let changed = false;
+      const tokens = (scene.tokens || []).map(token => {
+        if (!motionById.has(String(token?.id || ''))) return token;
+        const authoritative = (canonical.tokens || []).find(item => String(item?.id || '') === String(token.id));
+        if (!authoritative) return token;
+        changed = true;
+        return {
+          ...token,
+          placement: authoritative.placement,
+          x: authoritative.x,
+          y: authoritative.y,
+          featureId: authoritative.featureId,
+        };
+      });
+      if (!changed) continue;
+      const attackAreas = (scene.attackAreas || []).map(area => {
+        const item = motionById.get(String(area?.anchor?.tokenId || ''));
+        return item ? { ...area, origin: structuredClone(item.to) } : area;
+      });
+      projectedWorld.scenes[sceneIndex] = { ...scene, tokens, attackAreas };
+      if (String(projectedWorld.activeSceneId || '') === String(scene.id)) {
+        next.preferences.entitySystem = { ...next.preferences.entitySystem, tokens: [...tokens] };
+        next.attackAreas = [...attackAreas];
+      }
+    }
+    return next;
+  }
+
+  if ([...types].every(type => type.startsWith('status.')) && !types.has('status.definition.upsert')
+    && !types.has('status.definition.delete') && !types.has('status.definition.import')) {
+    const actorIds = new Set();
+    const tokenIds = new Set();
+    for (const operation of operations) {
+      const payload = operation.payload || {};
+      const scope = String(payload.scope || payload.target?.scope || '');
+      const targetId = String(payload.targetId || payload.target?.targetId || '');
+      if (scope === 'actor' && targetId) actorIds.add(targetId);
+      else if (['token', 'syntheticActor'].includes(scope) && targetId) tokenIds.add(targetId);
+      else return null;
+    }
+    const canonicalWorld = afterState?.preferences?.worldV2;
+    for (const actorId of actorIds) {
+      if (session.visionSourceTokenId) {
+        const source = canonicalWorldScene(afterState, canonicalWorld?.activeSceneId)?.tokens
+          ?.find(token => String(token?.id || '') === String(session.visionSourceTokenId));
+        if (String(source?.actorId || '') === actorId) return null;
+      }
+      const index = projectedWorld.actors.findIndex(actor => String(actor?.id || '') === actorId);
+      const current = projectedWorld.actors[index];
+      const authoritative = (canonicalWorld?.actors || []).find(actor => String(actor?.id || '') === actorId);
+      if (index < 0 || current?.audienceRestricted === true || !authoritative) return null;
+      projectedWorld.actors[index] = structuredClone(authoritative);
+    }
+    for (const tokenId of tokenIds) {
+      if (String(session.visionSourceTokenId || '') === tokenId) return null;
+      let found = false;
+      for (const [sceneIndex, scene] of projectedWorld.scenes.entries()) {
+        const index = (scene.tokens || []).findIndex(token => String(token?.id || '') === tokenId);
+        if (index < 0) continue;
+        const current = scene.tokens[index];
+        const authoritative = canonicalWorldScene(afterState, scene.id)?.tokens
+          ?.find(token => String(token?.id || '') === tokenId);
+        if (current?.audienceRestricted === true || !authoritative) return null;
+        const tokens = [...scene.tokens];
+        tokens[index] = structuredClone(authoritative);
+        projectedWorld.scenes[sceneIndex] = { ...scene, tokens };
+        if (String(projectedWorld.activeSceneId || '') === String(scene.id)) {
+          next.preferences.entitySystem = { ...next.preferences.entitySystem, tokens: [...tokens] };
+        }
+        found = true;
+        break;
+      }
+      if (!found) return null;
+    }
+    if (actorIds.size) {
+      next.preferences.entitySystem = {
+        ...next.preferences.entitySystem,
+        actors: [...projectedWorld.actors],
+      };
+    }
+    return next;
+  }
+  return null;
+}
+
+function targetedAudiencePatch(beforeProjection, afterProjection, operations, results) {
+  const types = new Set((operations || []).map(operation => String(operation?.type || '')));
+  const worldPatch = {
+    updatedAt: String(afterProjection?.preferences?.worldV2?.updatedAt || new Date().toISOString()),
+  };
+  const patch = { schemaVersion: WORLD_OPERATION_SCHEMA_VERSION, world: worldPatch };
+  if ([...types].every(type => type === 'chat.append')) {
+    const ids = new Set((results || []).map(result => String(result?.chatId || '')).filter(Boolean));
+    patch.chatAppend = (afterProjection?.preferences?.chatSystem?.messages || [])
+      .filter(message => ids.has(String(message?.id || '')))
+      .map(message => structuredClone(message));
+    return patch;
+  }
+  if ([...types].every(type => type === 'token.movePath')) {
+    const tokenIds = new Set((results || []).flatMap(result => result?.motion || [])
+      .map(motion => String(motion?.tokenId || '')).filter(Boolean));
+    const beforeScenes = new Map((beforeProjection?.preferences?.worldV2?.scenes || [])
+      .map(scene => [String(scene?.id || ''), scene]));
+    const tokens = [];
+    for (const scene of afterProjection?.preferences?.worldV2?.scenes || []) {
+      const previousIds = new Set((beforeScenes.get(String(scene.id))?.tokens || [])
+        .map(token => String(token?.id || '')));
+      const upsert = (scene.tokens || []).filter(token => tokenIds.has(String(token?.id || '')))
+        .map(token => structuredClone(token));
+      const afterIds = new Set((scene.tokens || []).map(token => String(token?.id || '')));
+      const remove = [...tokenIds].filter(id => previousIds.has(id) && !afterIds.has(id));
+      if (upsert.length || remove.length) tokens.push({ sceneId: String(scene.id), upsert, remove });
+    }
+    if (tokens.length) worldPatch.scenes = { upsert: [], remove: [], tokens, content: [], featureStates: [], fog: [] };
+    return patch;
+  }
+  if ([...types].every(type => type.startsWith('status.'))) {
+    const actorIds = new Set();
+    const tokenIds = new Set();
+    for (const operation of operations || []) {
+      const payload = operation.payload || {};
+      const scope = String(payload.scope || payload.target?.scope || '');
+      const targetId = String(payload.targetId || payload.target?.targetId || '');
+      if (scope === 'actor' && targetId) actorIds.add(targetId);
+      else if (targetId) tokenIds.add(targetId);
+    }
+    const actors = (afterProjection?.preferences?.worldV2?.actors || [])
+      .filter(actor => actorIds.has(String(actor?.id || ''))).map(actor => structuredClone(actor));
+    if (actors.length) worldPatch.actors = { upsert: actors, remove: [] };
+    const tokens = [];
+    for (const scene of afterProjection?.preferences?.worldV2?.scenes || []) {
+      const upsert = (scene.tokens || []).filter(token => tokenIds.has(String(token?.id || '')))
+        .map(token => structuredClone(token));
+      if (upsert.length) tokens.push({ sceneId: String(scene.id), upsert, remove: [] });
+    }
+    if (tokens.length) worldPatch.scenes = { upsert: [], remove: [], tokens, content: [], featureStates: [], fog: [] };
+    return patch;
+  }
+  return null;
+}
+
+function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, changeSet, operations = [], documentBatch = false }) {
   for (const [socket, session] of sessions) {
     if (session.role !== 'gm' && session.identityStatus !== 'active') continue;
     const beforeProjection = session.audienceProjection || audienceStateFor(session, beforeState);
-    const afterProjection = audienceStateFor(session, afterState);
+    const incrementalProjection = tryIncrementalAudienceProjection(
+      session, beforeProjection, afterState, operations, results,
+    );
+    const afterProjection = incrementalProjection || audienceStateFor(session, afterState);
     session.audienceProjection = afterProjection;
-    const patch = createWorldOperationPatch(beforeProjection, afterProjection);
-    sendSocket(socket, {
-      type: 'world.operation.committed', operationId, baseRevision, revision, updatedAt,
+    const patch = (incrementalProjection
+      ? targetedAudiencePatch(beforeProjection, afterProjection, operations, results)
+      : null) || createWorldOperationPatch(beforeProjection, afterProjection);
+    const motion = documentBatch
+      ? projectMotionForSession(results, beforeProjection, afterProjection)
+      : [];
+    const response = {
+      type: documentBatch ? 'document.batch.committed' : 'world.operation.committed', operationId, baseRevision, revision, updatedAt,
       patch,
       changeSet: audienceChangeSetFromPatch(patch, afterProjection, changeSet),
+      ...(documentBatch ? {
+        changes: createDocumentChanges(beforeProjection, afterProjection, patch, { motion }),
+        motion,
+      } : {}),
       results: projectResultsForSession(results, afterProjection, session),
       originSessionId,
       audienceRevision: session.audienceRevision,
-    });
+    };
+    sendSocket(socket, response);
   }
+  rememberResumeCommit({
+    beforeState, afterState, operationId, baseRevision, revision, updatedAt,
+    results, originSessionId, changeSet, documentBatch,
+  });
 }
 function sendAudienceSnapshot(socket, session, reason = 'audience.changed') {
   session.audienceRevision += 1;
@@ -655,6 +1010,7 @@ function sendAudienceSnapshot(socket, session, reason = 'audience.changed') {
     updatedAt: world.updatedAt,
     state,
     reason,
+    audienceFingerprint: audienceFingerprint(session),
   });
 }
 function sessionPermissions(session) {
@@ -734,18 +1090,31 @@ function authorizeOperations(session, operations) {
     }
     operationDenied('status_target_not_controlled', 'Status target is not controlled by this Player');
   };
+  const authorizeMovedToken = tokenId => {
+    if (!tokenId) operationDenied('token_target_required', 'Player Token movement requires tokenId');
+    if (!sessionControlsToken(session, tokenId)) operationDenied('token_not_controlled', 'Token is not controlled by this Player');
+    const capability = resolveStatusCapabilitiesForToken(world.state, tokenId);
+    if (capability.canMove === false) operationDenied('status_movement_forbidden', capability.reasons?.[0] || 'Current status prevents movement');
+    const combat = world.state?.preferences?.combatSystem?.combat;
+    if (combat?.state === 'active' && Array.isArray(combat.combatants) && combat.combatants.length) {
+      const current = combat.combatants[Math.max(0, Math.min(combat.combatants.length - 1, Number(combat.turnIndex) || 0))];
+      if (String(current?.tokenId || '') !== String(tokenId)) operationDenied('combat_turn_locked', 'Only the active Combat Token may act');
+    }
+  };
   return operations.map(operation => {
     const value = structuredClone(operation);
     const payload = value.payload || {};
     if (value.type === 'token.move') {
       const tokenId = String(payload.tokenId || '');
-      if (!tokenId) operationDenied('token_target_required', 'Player Token movement requires tokenId');
-      if (!sessionControlsToken(session, tokenId)) operationDenied('token_not_controlled', 'Token is not controlled by this Player');
-      const combat = world.state?.preferences?.combatSystem?.combat;
-      if (combat?.state === 'active' && Array.isArray(combat.combatants) && combat.combatants.length) {
-        const current = combat.combatants[Math.max(0, Math.min(combat.combatants.length - 1, Number(combat.turnIndex) || 0))];
-        if (String(current?.tokenId || '') !== tokenId) operationDenied('combat_turn_locked', 'Only the active Combat Token may act');
+      authorizeMovedToken(tokenId);
+      return value;
+    }
+    if (value.type === 'token.movePath') {
+      const tokenIds = [...new Set((Array.isArray(payload.tokenIds) ? payload.tokenIds : []).map(String).filter(Boolean))];
+      if (!tokenIds.length || tokenIds.length > 64 || !tokenIds.includes(String(payload.tokenId || ''))) {
+        operationDenied('token_target_required', 'Token path movement requires 1-64 controlled Tokens including the leader');
       }
+      tokenIds.forEach(authorizeMovedToken);
       return value;
     }
     if (value.type === 'actor.runtime.perform') {
@@ -878,26 +1247,37 @@ function appendVisionExplorationOperations(operations) {
   const next = operations.map(operation => structuredClone(operation));
   const seen = new Set();
   for (const operation of operations) {
-    if (operation.type !== 'token.move' || operation.payload?.placement === 'feature') continue;
-    const tokenId = String(operation.payload?.tokenId || '');
-    for (const session of sessions.values()) {
-      if (String(session.visionSourceTokenId || '') !== tokenId) continue;
-      const vision = describeVisionForToken(world.state, tokenId);
-      if (!vision?.partyId) continue;
-      const key = `${vision.sceneId}:${vision.partyId}:${tokenId}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      next.push({
-        type: 'scene.fog.explore',
-        payload: {
-          sceneId: vision.sceneId,
-          partyId: vision.partyId,
-          from: { x: vision.x, y: vision.y },
-          to: { x: Number(operation.payload.x), y: Number(operation.payload.y) },
-          radiusMeters: vision.vagueRangeMeters,
-        },
-      });
-    }
+    if (!['token.move', 'token.movePath'].includes(operation.type) || operation.payload?.placement === 'feature') continue;
+    const movedIds = operation.type === 'token.movePath'
+      ? (operation.payload.tokenIds || []).map(String)
+      : [String(operation.payload?.tokenId || '')];
+    for (const tokenId of movedIds) for (const session of sessions.values()) {
+        if (String(session.visionSourceTokenId || '') !== tokenId) continue;
+        const vision = describeVisionForToken(world.state, tokenId);
+        if (!vision?.partyId) continue;
+        const key = `${vision.sceneId}:${vision.partyId}:${tokenId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const canonical = canonicalRecord(tokenId).token;
+        const leader = canonicalRecord(operation.payload?.tokenId).token;
+        const offset = operation.type === 'token.movePath' && canonical && leader
+          ? { x: Number(canonical.x) - Number(leader.x), y: Number(canonical.y) - Number(leader.y) }
+          : { x: 0, y: 0 };
+        const route = operation.type === 'token.movePath'
+          ? (operation.payload.waypoints || []).map(point => ({ x: Number(point.x) + offset.x, y: Number(point.y) + offset.y }))
+          : [{ x: Number(operation.payload.x), y: Number(operation.payload.y) }];
+        const to = route.at(-1);
+        if (to) next.push({
+          type: 'scene.fog.explore',
+          payload: {
+            sceneId: vision.sceneId,
+            partyId: vision.partyId,
+            from: { x: vision.x, y: vision.y },
+            to,
+            radiusMeters: vision.vagueRangeMeters,
+          },
+        });
+      }
   }
   return next;
 }
@@ -971,7 +1351,12 @@ function worldBootstrapInfo() {
   };
 }
 function sendWelcome(socket, session, { includeWorld = true, pendingApproval = false } = {}) {
-  const projectedState = includeWorld ? audienceStateFor(session) : null;
+  const fingerprint = audienceFingerprint(session);
+  const resumed = includeWorld
+    ? resumableCommits(session, session.resumeRevision, session.resumeAudienceFingerprint)
+    : null;
+  const resumeAccepted = Array.isArray(resumed);
+  const projectedState = includeWorld && !resumeAccepted ? audienceStateFor(session) : null;
   session.audienceProjection = projectedState ? structuredClone(projectedState) : null;
   sendSocket(socket, {
     type: 'welcome',
@@ -981,11 +1366,22 @@ function sendWelcome(socket, session, { includeWorld = true, pendingApproval = f
     session: publicSession(session),
     identity: { status: session.identityStatus, user: session.userId ? publicUser(findUser(session.userId)) : null, pendingApproval },
     world: { revision: world.revision, updatedAt: world.updatedAt, state: projectedState },
+    resumeAccepted,
+    audienceFingerprint: fingerprint,
     audienceRevision: session.audienceRevision,
     permissions: sessionPermissions(session),
     server: multiplayerInfo(),
   });
   sendAccessSnapshot(socket);
+  if (resumeAccepted) {
+    for (const response of resumed) sendSocket(socket, response);
+    sendSocket(socket, {
+      type: 'resume.complete',
+      revision: world.revision,
+      audienceRevision: session.audienceRevision,
+      audienceFingerprint: fingerprint,
+    });
+  }
 }
 function refreshOnlineUser(userId) {
   const user = findUser(userId);
@@ -1139,6 +1535,10 @@ server.on('upgrade', (req, socket) => {
 
       session.visionSourceTokenId = null;
       session.audienceRevision = 0;
+      session.resumeRevision = Number.isSafeInteger(Number(message.resumeRevision))
+        ? Math.max(0, Number(message.resumeRevision))
+        : null;
+      session.resumeAudienceFingerprint = String(message.audienceFingerprint || '').slice(0, 80);
       const requestedVisionSource = String(message.visionSourceTokenId || '').trim();
       if (requestedVisionSource && world.state) {
         const user = session.userId ? findUser(session.userId) : null;
@@ -1158,6 +1558,21 @@ server.on('upgrade', (req, socket) => {
 
     const session = sessions.get(socket);
     if (!session) return closeSocket(socket, 1008, 'session missing');
+
+    if (message?.type === 'document.batch') {
+      try {
+        const documentEnvelope = assertDocumentBatchMessage(message);
+        message = {
+          type: 'world.operation',
+          operationId: documentEnvelope.operationId,
+          baseRevision: documentEnvelope.baseRevision,
+          operations: documentWritesToWorldOperations(documentEnvelope.writes),
+          _documentBatch: true,
+        };
+      } catch (error) {
+        return sendWorldOperationDenied(socket, message, error?.code || 'invalid_document_operation', error?.message);
+      }
+    }
 
     if (message?.type === 'access.request') return sendAccessSnapshot(socket);
 
@@ -1337,7 +1752,8 @@ server.on('upgrade', (req, socket) => {
           updatedAt: new Date().toISOString(), state: applied.state,
           recentStatusOperations: world.recentStatusOperations || [],
         };
-        try { await persistWorld(nextWorld); }
+        const visionOperationId = `vision-${randomUUID()}`;
+        try { await persistWorldCommit(nextWorld, beforeState, visionOperationId); }
         catch (error) {
           session.visionSourceTokenId = null;
           return sendSocket(socket, { type: 'vision.source.denied', code: 'persist_failed', message: error.message });
@@ -1345,7 +1761,7 @@ server.on('upgrade', (req, socket) => {
         const baseRevision = world.revision;
         world = nextWorld;
         broadcastOperationCommit({
-          beforeState, afterState: world.state, operationId: `vision-${randomUUID()}`,
+          beforeState, afterState: world.state, operationId: visionOperationId,
           baseRevision, revision: world.revision, updatedAt: world.updatedAt,
           results: applied.results, originSessionId: session.id,
         });
@@ -1381,7 +1797,7 @@ server.on('upgrade', (req, socket) => {
       const completed = completedStatusOperations.get(envelope.operationId);
       if (completed) {
         return sendSocket(socket, {
-          type: 'world.operation.ack',
+          type: message._documentBatch === true ? 'document.batch.ack' : 'world.operation.ack',
           operationId: envelope.operationId,
           revision: world.revision,
           committedRevision: completed.revision,
@@ -1393,24 +1809,34 @@ server.on('upgrade', (req, socket) => {
       if (!world.state) {
         return sendWorldOperationDenied(socket, message, 'world_uninitialized', 'World 尚未初始化，必须先由 GM 创建完整 World');
       }
-      if (envelope.baseRevision !== world.revision) {
+      const safeMoveRebase = message._documentBatch === true
+        && envelope.operations.every(operation => operation.type === 'token.movePath');
+      if (envelope.baseRevision !== world.revision && !safeMoveRebase) {
         return sendWorldOperationDenied(socket, message, 'revision_conflict', 'World 已被其他操作更新，请先重新载入最新状态');
       }
 
       let applied;
+      let committedOperations = [];
       try {
         const now = new Date().toISOString();
         const authorizedOperations = authorizeOperations(session, envelope.operations);
         const operations = appendVisionExplorationOperations(authorizedOperations);
+        committedOperations = operations;
         applied = applyWorldOperations(world.state, operations, {
           now,
           ruleset: serverRuleset,
           mapMetrics: { metersPerUnit: 1 },
           userId: session.userId,
           sessionId: session.id,
+          validateTokenMovePath({ state, scene, token, origin, waypoints }) {
+            const capabilities = resolveStatusCapabilitiesForToken(state, token.id);
+            return validateAuthoritativeTokenMovePath({
+              state, scene, token, origin, waypoints, capabilities,
+            });
+          },
           applyStatus(state, statusMessage) {
             return applyStatusMessage(state, statusMessage, {
-              now,
+              now, mutate: true, assumeNormalized: true,
               userId: session.userId,
               sessionId: session.id,
             });
@@ -1459,7 +1885,7 @@ server.on('upgrade', (req, socket) => {
           applied.results,
         ),
       };
-      try { await persistWorld(nextWorld); }
+      try { await persistWorldCommit(nextWorld, world.state, envelope.operationId); }
       catch (error) {
         const code = error?.code === 'state_too_large' ? error.code : 'persist_failed';
         const description = code === 'state_too_large' ? error.message : `World 操作未保存：${error.message}`;
@@ -1480,10 +1906,12 @@ server.on('upgrade', (req, socket) => {
         results: applied.results,
         originSessionId: session.id,
         changeSet: applied.changeSet,
+        operations: committedOperations,
+        documentBatch: message._documentBatch === true,
       });
       const originProjection = session.audienceProjection || audienceStateFor(session);
       sendSocket(socket, {
-        type: 'world.operation.ack',
+        type: message._documentBatch === true ? 'document.batch.ack' : 'world.operation.ack',
         operationId: envelope.operationId,
         revision: world.revision,
         results: projectResultsForSession(applied.results, originProjection, session),
@@ -1566,7 +1994,9 @@ server.on('upgrade', (req, socket) => {
       };
       try { await persistWorld(nextWorld, { forceBackup: true }); }
       catch (error) { return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'persist_failed', message: `World 未保存：${error.message}` }); }
+      await worldWal.reset();
       world = nextWorld;
+      resetResumeHistory();
       const snapshot = {
         type: 'world.snapshot',
         operationId: worldOperationId,
@@ -1586,7 +2016,11 @@ server.on('upgrade', (req, socket) => {
       return sendSocket(socket, { type: 'world.snapshot', revision: world.revision, updatedAt: world.updatedAt, state: audienceStateFor(session), audienceRevision: session.audienceRevision, originSessionId: null, reason: 'request' });
     }
 
-    if (message?.type === 'ping') return sendSocket(socket, { type: 'pong', at: Date.now() });
+    if (message?.type === 'ping') return sendSocket(socket, {
+      type: 'pong',
+      sentAt: Number(message.sentAt) || null,
+      at: Date.now(),
+    });
     sendSocket(socket, { type: 'error', code: 'unknown_message', message: 'Unknown message type' });
     }).catch(error => {
       console.error('[RPGmap] websocket message rejected:', error);

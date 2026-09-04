@@ -6,7 +6,6 @@ import {
 } from '../engine/navigation.js';
 import { deriveSceneState } from '../engine/state.js';
 import { tokenDiameterMeters, tokenElevationFt } from '../elevation/model.js';
-import { moveSceneToken } from '../token/model.js';
 
 const MAX_GRID_CACHE = 8;
 
@@ -52,24 +51,6 @@ function navigationStateKey(api, token) {
     featureStates: state.preferences?.featureStates || {},
     context,
   });
-}
-
-function updateAnchoredAreas(world, tokenId, point) {
-  if (!point) return world;
-  const next = clone(world);
-  const activeId = String(next?.activeSceneId || '');
-  const scene = (next?.scenes || []).find(item => String(item?.id || '') === activeId);
-  if (!scene) return next;
-  scene.attackAreas = (scene.attackAreas || []).map(area => {
-    const anchor = area?.anchor || {};
-    if (anchor.type !== 'token' || String(anchor.tokenId) !== String(tokenId)) return area;
-    return {
-      ...area,
-      origin: { x: Number(point.x), y: Number(point.y) },
-      anchor: { type: 'token', tokenId: String(tokenId) },
-    };
-  });
-  return next;
 }
 
 function failure(code, reason, details = {}) {
@@ -121,44 +102,54 @@ export function createMovementFastPathSystem() {
       }
 
       async function moveTokenTo(tokenId, destination) {
-        const route = await validateTokenMove(tokenId, destination);
-        if (!route?.valid) return route;
-        const current = api.tokens?.get?.(tokenId);
-        const from = tokenPoint(current);
-        if (!current || !from) return failure('token_not_on_map', 'Token 当前不在地图上');
-        const target = finitePoint(route.destination || destination);
-        if (!target) return failure('invalid_destination', '移动终点无效');
+        return moveTokenPath([tokenId], tokenId, [destination], { method: 'drag' });
+      }
 
+      async function moveTokenPath(rawTokenIds, leaderId, rawWaypoints, { method = 'drag' } = {}) {
+        const tokenIds = [...new Set((Array.isArray(rawTokenIds) ? rawTokenIds : []).map(String).filter(Boolean))];
+        const leader = api.tokens?.get?.(leaderId);
+        const leaderOrigin = tokenPoint(leader);
+        const waypoints = (Array.isArray(rawWaypoints) ? rawWaypoints : []).map(finitePoint).filter(Boolean);
+        if (!leader || !leaderOrigin || !tokenIds.length || tokenIds.length > 64 || !tokenIds.includes(String(leaderId))) {
+          return failure('invalid_move_group', '移动目标无效');
+        }
+        if (!waypoints.length || waypoints.length > 64) return failure('invalid_move_path', '移动路径必须包含 1-64 个节点');
+        const expectedOrigins = {};
+        let distance = 0;
+        const predicted = [];
         try {
-          let world = moveSceneToken(api.world.get(), current.id, target).world;
-          world = updateAnchoredAreas(world, current.id, target);
-          await api.world.commit(world, {
-            source: 'movement:token-fast',
-            reason: 'token.move',
-            render: true,
+          for (const tokenId of tokenIds) {
+            const token = api.tokens.get(tokenId);
+            const origin = tokenPoint(token);
+            if (!token || !origin) return failure('token_not_on_map', `Token ${tokenId} 当前不在地图上`);
+            const offset = { x: origin.x - leaderOrigin.x, y: origin.y - leaderOrigin.y };
+            const route = waypoints.map(point => ({ x: point.x + offset.x, y: point.y + offset.y }));
+            let from = origin;
+            for (const destination of route) {
+              const validation = await validateTokenMove(tokenId, destination, { from });
+              if (!validation?.valid) return validation;
+              distance += Number(validation.distance) || Math.hypot(destination.x - from.x, destination.y - from.y);
+              from = destination;
+            }
+            expectedOrigins[tokenId] = origin;
+            predicted.push({ tokenId, route });
+          }
+          for (const item of predicted) api.renderer?.predictTokenVisualRoute?.(item.tokenId, item.route);
+          const sceneId = String(api.world.get()?.activeSceneId || '');
+          const result = await api.documents.dispatch({
+            action: 'move',
+            document: { type: 'Token', id: String(leaderId), parent: { type: 'Scene', id: sceneId } },
+            intent: 'token.movePath',
+            data: { tokenIds, waypoints, method: method === 'keyboard' ? 'keyboard' : 'drag' },
+            precondition: { expectedOrigins },
           });
-          // Moving a Token does not alter terrain, so the shared fast-grid cache
-          // remains valid. The legacy runtime cache is cheap to invalidate and
-          // may otherwise retain a stale state signature for older callers.
           api.movement.invalidateNavigation?.();
-          const committed = api.tokens.get(current.id);
-          api.emit?.('token:move', {
-            id: current.id,
-            tokenId: current.id,
-            actorId: current.actorId,
-            token: clone(committed),
-            from: clone(from),
-            to: clone(target),
-            arrival: null,
-            reason: 'token.move',
-          });
-          return clone({ ...route, destination: target, committed: true });
+          return { valid: true, code: 'ok', committed: true, distance, destination: waypoints.at(-1), result };
         } catch (error) {
+          for (const tokenId of tokenIds) api.renderer?.rollbackTokenVisual?.(tokenId);
           api.emit?.('token:move-cancelled', {
-            id: current.id,
-            tokenId: current.id,
-            code: error?.code || 'movement_failed',
-            reason: error?.message || String(error || 'movement cancelled'),
+            id: String(leaderId), tokenId: String(leaderId), tokenIds,
+            code: error?.code || 'movement_failed', reason: error?.message || String(error || 'movement cancelled'),
           });
           return failure(error?.code || 'movement_failed', error?.message || 'Token 移动失败');
         }
@@ -177,6 +168,7 @@ export function createMovementFastPathSystem() {
         validateTokenMove,
         inspectTokenMove,
         moveTokenTo,
+        moveTokenPath,
         clearNavigationCache() { grids.clear(); },
         getNavigationCacheSize() { return grids.size; },
       });

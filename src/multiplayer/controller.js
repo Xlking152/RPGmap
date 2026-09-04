@@ -82,6 +82,7 @@ export function createMultiplayerController() {
     register(api) {
       const mapElement = api.map.getContainer();
       const documentNode = mapElement.ownerDocument || document;
+      const windowNode = documentNode.defaultView || globalThis;
       const shell = mapElement.closest('.app-shell') || documentNode;
       const toolbar = shell.querySelector?.('.toolbar-right');
       if (!toolbar) return;
@@ -120,6 +121,15 @@ export function createMultiplayerController() {
       let remoteApplyChain = Promise.resolve();
       let remoteApplyPending = 0;
       let remoteEpoch = 0;
+      let audienceFingerprint = '';
+      let rttMs = null;
+      let lastPongAt = 0;
+      let heartbeatTimer = null;
+      let reconnectTimer = null;
+      let reconnectAttempt = 0;
+      let reconnectCountdown = 0;
+      let lastConnectionOptions = null;
+      let resuming = false;
 
       const operationId = createOperationId;
 
@@ -165,6 +175,51 @@ export function createMultiplayerController() {
         button.dataset.state = pending ? 'pending' : connected ? 'online' : joining ? 'connecting' : 'offline';
         const label = button.querySelector('[data-mp-label]');
         if (label) label.textContent = statusText();
+        button.title = connected
+          ? `Local/LAN · RTT ${Number.isFinite(rttMs) ? `${Math.round(rttMs)} ms` : '测量中'} · 待确认 ${operationQueue.length + (activeOperation ? 1 : 0)}`
+          : reconnectCountdown > 0 ? `正在重连 · ${reconnectCountdown}s` : '多人联机 / Users / Actor Ownership';
+      }
+
+      function stopHeartbeat() {
+        if (heartbeatTimer !== null) windowNode.clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+
+      function startHeartbeat() {
+        stopHeartbeat();
+        lastPongAt = Date.now();
+        const pulse = () => {
+          if (!connected || !socket) return;
+          if (Date.now() - lastPongAt >= 45_000) {
+            try { socket.close(1012, 'heartbeat timeout'); } catch {}
+            return;
+          }
+          send({ type: 'ping', sentAt: Date.now() });
+        };
+        pulse();
+        heartbeatTimer = windowNode.setInterval(pulse, 15_000);
+      }
+
+      function clearReconnectTimer() {
+        if (reconnectTimer !== null) windowNode.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+        reconnectCountdown = 0;
+      }
+
+      function scheduleReconnect() {
+        if (intentionalClose || !lastConnectionOptions || reconnectTimer !== null) return;
+        const delays = [1, 2, 4, 8, 10];
+        const base = delays[Math.min(reconnectAttempt, delays.length - 1)];
+        reconnectAttempt += 1;
+        const delayMs = Math.round(base * 1000 * (0.85 + Math.random() * 0.3));
+        reconnectCountdown = Math.max(1, Math.ceil(delayMs / 1000));
+        renderButton();
+        setMapStatus(`连接中断 · ${reconnectCountdown} 秒后自动重连`);
+        reconnectTimer = windowNode.setTimeout(() => {
+          reconnectTimer = null;
+          reconnectCountdown = 0;
+          connect(lastConnectionOptions, { resume: true });
+        }, delayMs);
       }
       function setMapStatus(message) {
         const node = shell.querySelector?.('[data-role="map-status"]');
@@ -268,7 +323,7 @@ export function createMultiplayerController() {
         }).join('');
 
         overlay.innerHTML = `<div class="multiplayer-dialog" data-mp-dashboard>
-          <div class="multiplayer-user-head"><h2>联机 / Users</h2><span class="multiplayer-muted">revision ${revision}</span></div>
+          <div class="multiplayer-user-head"><h2>联机 / Users</h2><span class="multiplayer-muted">revision ${revision} · RTT ${Number.isFinite(rttMs) ? `${Math.round(rttMs)} ms` : '测量中'} · 待确认 ${operationQueue.length + (activeOperation ? 1 : 0)}</span></div>
           ${message ? `<div class="multiplayer-status-card">${escapeHtml(message)}</div>` : ''}
           ${latestNotice ? `<div class="multiplayer-status-card">${escapeHtml(latestNotice)}</div>` : ''}
           ${latestPlayerKey ? `<div class="multiplayer-status-card key"><b>Player Key</b> — 请保存并发送给对应玩家。Quick Tunnel 地址变化后用它恢复原 User。<span class="multiplayer-key-value">${escapeHtml(latestPlayerKey)}</span><button type="button" class="multiplayer-mini-button" data-mp-dismiss-key>我已保存</button></div>` : ''}
@@ -559,12 +614,21 @@ export function createMultiplayerController() {
           || activeOperation || !operationQueue.length) return;
         const operation = operationQueue.shift();
         activeOperation = operation;
-        if (!send({
-          type: 'world.operation',
-          operationId: operation.operationId,
-          baseRevision: revision,
-          operations: operation.operations,
-        })) {
+        const message = operation.documentBatch
+          ? {
+              type: 'document.batch',
+              operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
+              operationId: operation.operationId,
+              baseRevision: revision,
+              writes: operation.writes,
+            }
+          : {
+              type: 'world.operation',
+              operationId: operation.operationId,
+              baseRevision: revision,
+              operations: operation.operations,
+            };
+        if (!send(message)) {
           activeOperation = null;
           operationQueue.unshift(operation);
         }
@@ -590,6 +654,31 @@ export function createMultiplayerController() {
           });
           api.emit?.('world:operation-pending', { operationId: id, kind, operations: values });
           if (kind === 'status') api.emit?.('status:pending', { operationId: id, type: values[0]?.type || 'status.batch' });
+          flushOperations();
+        });
+      }
+
+      function performDocumentBatch(writes, { requestedOperationId = null } = {}) {
+        if (!connected) return Promise.reject(new Error('当前未连接局域网服务器'));
+        const values = Array.isArray(writes) ? structuredClone(writes) : [];
+        if (!values.length) return Promise.resolve({ unchanged: true, revision, results: [] });
+        const id = String(requestedOperationId || operationId('document'));
+        return new Promise((resolve, reject) => {
+          operationQueue.push({
+            operationId: id,
+            writes: values,
+            operations: [],
+            documentBatch: true,
+            kind: 'document',
+            resolve,
+            reject,
+            acknowledged: false,
+            patchApplied: false,
+            awaitingCanonicalSnapshot: false,
+            revision: null,
+            results: [],
+          });
+          api.emit?.('world:operation-pending', { operationId: id, kind: 'document', writes: values });
           flushOperations();
         });
       }
@@ -721,6 +810,27 @@ export function createMultiplayerController() {
         const message = parseTransportMessage(event);
         if (!message) return;
 
+        if (message.type === 'pong') {
+          lastPongAt = Date.now();
+          if (Number.isFinite(Number(message.sentAt))) {
+            const sample = Math.max(0, Date.now() - Number(message.sentAt));
+            rttMs = rttMs === null ? sample : rttMs * 0.7 + sample * 0.3;
+          }
+          renderButton();
+          return;
+        }
+
+        if (message.type === 'resume.complete') {
+          revision = Math.max(revision, Number(message.revision) || 0);
+          audienceRevision = Math.max(audienceRevision, Number(message.audienceRevision) || 0);
+          audienceFingerprint = String(message.audienceFingerprint || audienceFingerprint);
+          resuming = false;
+          reconnectAttempt = 0;
+          setMapStatus(`联机续传完成 · revision ${revision} · RTT ${Number.isFinite(rttMs) ? `${Math.round(rttMs)} ms` : '测量中'}`);
+          flushPendingNetworkWork();
+          return;
+        }
+
         if (message.type === 'identity.bound') {
           const wasPending = session?.identityStatus === 'pending';
           save('userId', message.userId || '');
@@ -751,13 +861,18 @@ export function createMultiplayerController() {
           }
           connected = true;
           joining = false;
+          clearReconnectTimer();
+          if (message.resumeAccepted !== true) reconnectAttempt = 0;
           session = message.session || null;
           permissions = message.permissions || permissions;
           publishCapabilities();
-          revision = Number(message.world?.revision) || 0;
+          if (message.resumeAccepted !== true) revision = Number(message.world?.revision) || 0;
+          resuming = message.resumeAccepted === true;
+          audienceFingerprint = String(message.audienceFingerprint || '');
           audienceRevision = Math.max(0, Number(message.audienceRevision) || 0);
           setActiveVisionSource(message.world?.state?.preferences?.audienceVision?.source?.tokenId || null);
           renderButton();
+          startHeartbeat();
           save('role', session?.role || 'player');
           if (session?.identityStatus === 'pending') {
             lastServerState = null;
@@ -766,7 +881,9 @@ export function createMultiplayerController() {
             return;
           }
           hideDialog();
-          if (message.world?.state) {
+          if (message.resumeAccepted === true) {
+            setMapStatus(`连接已恢复 · 正在补发 revision ${revision + 1}-${Number(message.world?.revision) || revision}`);
+          } else if (message.world?.state) {
             applyRemoteState(message.world.state, revision, 'initial').then(() => {
               inFlight = false;
               flushPendingNetworkWork();
@@ -846,6 +963,7 @@ export function createMultiplayerController() {
           const incomingAudienceRevision = Number(message.audienceRevision);
           if (!Number.isSafeInteger(incomingAudienceRevision) || incomingAudienceRevision <= audienceRevision) return;
           audienceRevision = incomingAudienceRevision;
+          audienceFingerprint = String(message.audienceFingerprint || audienceFingerprint);
           applyRemoteState(message.state, Number(message.revision) || revision, message.reason || 'audience.snapshot')
             .then(flushPendingNetworkWork);
           return;
@@ -887,7 +1005,8 @@ export function createMultiplayerController() {
           return;
         }
 
-        if (message.type === 'world.operation.committed') {
+        if (message.type === 'world.operation.committed' || message.type === 'document.batch.committed') {
+          const documentBatch = message.type === 'document.batch.committed';
           const incomingRevision = Number(message.revision);
           if (hasWorldOperationRevisionGap(message, revision)) {
             const error = new Error('联机操作 revision 出现缺口，正在重新载入服务器状态');
@@ -899,8 +1018,11 @@ export function createMultiplayerController() {
           let canonicalState;
           let localState;
           try {
-            canonicalState = applyWorldOperationPatch(lastServerState || api.exportState(), message.patch);
-            localState = applyWorldOperationPatch(api.exportState(), message.patch);
+            for (const motion of documentBatch && Array.isArray(message.motion) ? message.motion : []) {
+              api.renderer?.prepareTokenVisualRoute?.(motion.tokenId, motion.waypoints || []);
+            }
+            canonicalState = applyWorldOperationPatch(lastServerState || api.exportState(), message.patch, { mutate: Boolean(lastServerState) });
+            localState = documentBatch ? null : applyWorldOperationPatch(api.exportState(), message.patch);
           } catch (cause) {
             const error = new Error(`无法应用服务器操作补丁：${cause.message}`);
             error.code = cause.code || 'world_operation_patch_invalid';
@@ -911,7 +1033,21 @@ export function createMultiplayerController() {
           const matchesActive = activeOperation
             && String(message.operationId || '') === String(activeOperation.operationId);
           const expectedOperationId = matchesActive ? activeOperation.operationId : null;
-          applyAuthoritativeOperationState(localState, incomingRevision, message.changeSet, canonicalState).then(applied => {
+          const applyPromise = documentBatch
+            ? Promise.resolve().then(() => {
+                api.applyAuthoritativeDocumentPatch(message.patch, {
+                  source: 'document.batch', revision: incomingRevision, changeSet: message.changeSet || {},
+                });
+                revision = incomingRevision;
+                lastServerState = canonicalState;
+                lastObservedLocalState = null;
+                return true;
+              }).catch(error => {
+                console.error('[RPGmap Multiplayer] authoritative Document patch apply failed', error);
+                return false;
+              })
+            : applyAuthoritativeOperationState(localState, incomingRevision, message.changeSet, canonicalState);
+          applyPromise.then(applied => {
             if (!applied) {
               const error = new Error('服务器已经保存操作，但客户端无法载入操作补丁');
               error.code = 'world_operation_patch_import_failed';
@@ -919,6 +1055,11 @@ export function createMultiplayerController() {
               send({ type: 'world.snapshot.request' });
               return;
             }
+            if (documentBatch) api.documents?.applyCommitted?.(message.changes || [], {
+              revision: incomingRevision,
+              operationId: message.operationId,
+              source: 'document.batch.committed',
+            });
             if (expectedOperationId && activeOperation
               && String(activeOperation.operationId) === String(expectedOperationId)) {
               activeOperation.patchApplied = true;
@@ -932,7 +1073,7 @@ export function createMultiplayerController() {
           return;
         }
 
-        if (message.type === 'world.operation.ack') {
+        if (message.type === 'world.operation.ack' || message.type === 'document.batch.ack') {
           if (!activeOperation || String(message.operationId || '') !== String(activeOperation.operationId)) return;
           activeOperation.acknowledged = true;
           activeOperation.revision = Number(message.revision) || revision;
@@ -945,7 +1086,7 @@ export function createMultiplayerController() {
           return;
         }
 
-        if (message.type === 'world.operation.denied') {
+        if (message.type === 'world.operation.denied' || message.type === 'document.batch.denied') {
           if (!activeOperation || String(message.operationId || '') !== String(activeOperation.operationId)) return;
           const error = new Error(message.message || '服务器拒绝了 World 操作');
           error.code = message.code || 'world_operation_denied';
@@ -1066,8 +1207,10 @@ export function createMultiplayerController() {
         }
       }
 
-      function connect({ name, requestedRole, joinCode = '', gmSecret = '', playerKey = '' }) {
+      function connect({ name, requestedRole, joinCode = '', gmSecret = '', playerKey = '' }, { resume = false } = {}) {
         intentionalClose = false;
+        clearReconnectTimer();
+        lastConnectionOptions = { name, requestedRole, joinCode, gmSecret, playerKey };
         remoteEpoch += 1;
         if (socket) {
           try { socket.close(); } catch {}
@@ -1075,18 +1218,21 @@ export function createMultiplayerController() {
         }
         connected = false;
         joining = true;
-        setActiveVisionSource(null);
-        rejectVisionSource('Reconnecting to the Local/LAN server');
-        rejectActorOwnership('正在重新连接局域网服务器，未确认的 Actor 权限更新已取消');
+        stopHeartbeat();
+        if (!resume) setActiveVisionSource(null);
+        if (!resume) rejectVisionSource('Reconnecting to the Local/LAN server');
+        if (!resume) rejectActorOwnership('正在重新连接局域网服务器，未确认的 Actor 权限更新已取消');
         session = null;
         inFlight = false;
         pendingPush = false;
-        deferredChat = [];
         activeWorldOperationId = null;
-        rejectAtomicWorldOperations('正在重新连接局域网服务器');
-        rejectOperations('正在重新连接局域网服务器');
-        lastServerState = null;
-        lastObservedLocalState = null;
+        if (!resume) {
+          deferredChat = [];
+          rejectAtomicWorldOperations('正在重新连接局域网服务器');
+          rejectOperations('正在重新连接局域网服务器');
+          lastServerState = null;
+          lastObservedLocalState = null;
+        }
         submittedPlayerKey = String(playerKey || '').trim().toUpperCase();
         renderButton();
         save('name', name);
@@ -1110,6 +1256,8 @@ export function createMultiplayerController() {
             authToken: isPlayer ? saved('authToken', '') : '',
             claimCode: isPlayer ? submittedPlayerKey : '',
             visionSourceTokenId: saved('visionSourceTokenId', ''),
+            resumeRevision: resume ? revision : null,
+            audienceFingerprint: resume ? audienceFingerprint : '',
           });
         });
         ws.addEventListener('message', event => { if (socket === ws) handleMessage(event); });
@@ -1123,26 +1271,30 @@ export function createMultiplayerController() {
           remoteEpoch += 1;
           connected = false;
           joining = false;
-          setActiveVisionSource(null);
+          stopHeartbeat();
           session = null;
           inFlight = false;
           pendingPush = false;
           rejectVisionSource('Local/LAN connection closed');
           rejectActorOwnership('局域网连接已断开，未确认的 Actor 权限更新已取消');
-          deferredChat = [];
           activeWorldOperationId = null;
           rejectAtomicWorldOperations('局域网连接已断开，未确认的 World 操作已取消');
-          rejectOperations('局域网连接已断开，未确认的操作已取消');
-          lastServerState = null;
-          lastObservedLocalState = null;
+          if (activeOperation) {
+            activeOperation.acknowledged = false;
+            activeOperation.patchApplied = false;
+            operationQueue.unshift(activeOperation);
+            activeOperation = null;
+          }
           renderButton();
           publishCapabilities();
-          if (!intentionalClose) setMapStatus('多人连接已断开 · 点击“联机”重新连接');
+          if (!intentionalClose) scheduleReconnect();
         });
       }
 
       function disconnect() {
         intentionalClose = true;
+        clearReconnectTimer();
+        stopHeartbeat();
         remoteEpoch += 1;
         if (socket) { try { socket.close(); } catch {} }
         socket = null;
@@ -1160,6 +1312,9 @@ export function createMultiplayerController() {
         rejectOperations('已主动断开局域网连接，未确认的操作已取消');
         lastServerState = null;
         lastObservedLocalState = null;
+        lastConnectionOptions = null;
+        audienceFingerprint = '';
+        rttMs = null;
         renderButton();
         hideDialog();
         publishCapabilities();
@@ -1307,6 +1462,7 @@ export function createMultiplayerController() {
         appendChatAfterWorld,
         performStatusOperation,
         performOperations,
+        performDocumentBatch,
         performStateOperation,
         performWorldOperation,
         setVisionSource,
@@ -1340,8 +1496,13 @@ export function createMultiplayerController() {
         getStatus: () => ({
           connected,
           joining,
+          resuming,
           revision,
           audienceRevision,
+          audienceFingerprint,
+          rttMs,
+          reconnectAttempt,
+          pendingOperationCount: operationQueue.length + (activeOperation ? 1 : 0),
           visionSourceTokenId: activeVisionSourceTokenId,
           session: session ? { ...session } : null,
           permissions: structuredClone(permissions),
@@ -1349,6 +1510,16 @@ export function createMultiplayerController() {
           access: structuredClone(access),
         }),
       };
+
+      api.on?.('app:destroy', () => {
+        intentionalClose = true;
+        clearReconnectTimer();
+        stopHeartbeat();
+        try { socket?.close(); } catch {}
+        socket = null;
+        button.remove();
+        overlay.remove();
+      });
 
       renderButton();
       renderLogin('Player 第一次加入后需要 GM 批准身份并分配角色；已有 User 可使用 Player Key 恢复身份。');

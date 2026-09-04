@@ -24,6 +24,7 @@ export function createPortableStorage({ root, worldId = 'default', env = process
     appDir,
     mapDir,
     worldFile: path.join(mapDir, 'world.json'),
+    operationsFile: path.join(mapDir, 'world.operations.ndjson'),
     usersFile: path.join(mapDir, 'users.json'),
     uploadsDir: path.join(mapDir, 'uploads'),
     backupsDir: path.join(mapDir, 'backups'),

@@ -51,6 +51,15 @@ function movementFixture() {
       getActiveScene: () => structuredClone(currentWorld.scenes[0]),
       async commit(next) { currentWorld = structuredClone(next); return structuredClone(currentWorld); },
     },
+    documents: {
+      async dispatch(write) {
+        const destination = write.data.waypoints.at(-1);
+        const ids = new Set(write.data.tokenIds.map(String));
+        currentWorld.scenes[0].tokens = currentWorld.scenes[0].tokens.map(item =>
+          ids.has(String(item.id)) ? { ...item, x: destination.x, y: destination.y } : item);
+        return { revision: 1, motion: write.data.tokenIds.map(tokenId => ({ tokenId, to: destination })) };
+      },
+    },
     status: {
       resolve: () => ({ statusVersion: 'same', capabilities: { canMove: true, collisionBypassGroups: [] } }),
     },
@@ -140,7 +149,9 @@ test('Movement V5 uses RAF preview updates, persistent Leaflet preview objects, 
   assert.match(movementController, /previewLine\.setLatLngs/);
   assert.match(movementController, /sameDirection\(last, direction\)/);
   assert.match(movementController, /last\.count \+= 1/);
-  assert.doesNotMatch(movementController, /setPointerCapture|releasePointerCapture/);
+  assert.match(movementController, /setPointerCapture/);
+  assert.match(movementController, /releasePointerCapture/);
+  assert.match(movementController, /dragstart/);
 });
 
 test('selection health HUD stays Ruleset-described and batch edits reuse canonical health operations', () => {

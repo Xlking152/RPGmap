@@ -30,12 +30,15 @@ test('Movement system activates the RAF document-drag and coalesced-keyboard con
   assert.match(movementController, /documentNode\.addEventListener\('pointermove', pointerMove, true\)/);
   assert.match(movementController, /documentNode\.addEventListener\('pointerup', pointerUp, true\)/);
   assert.match(movementController, /documentNode\.addEventListener\('pointercancel', pointerCancel, true\)/);
-  assert.match(movementController, /api\.movement\.planTokenGroupMove/);
-  assert.match(movementController, /api\.movementFast\?\.moveTokenTo \|\| api\.movement\.moveTokenTo/);
+  assert.match(movementController, /api\.movementFast\.moveTokenPath/);
+  assert.match(movementController, /method: 'keyboard'/);
   assert.match(movementController, /const keyboardQueue = \[\]/);
   assert.match(movementController, /sameDirection\(last, direction\)/);
   assert.match(movementController, /w: \{ x: 0, y: -1 \}/);
   assert.match(movementController, /\[data-actor-sheet\]/);
   assert.match(movementController, /requestAnimationFrame/);
-  assert.doesNotMatch(movementController, /setPointerCapture|releasePointerCapture/);
+  assert.match(movementController, /setPointerCapture/);
+  assert.match(movementController, /releasePointerCapture/);
+  assert.match(movementController, /addEventListener\('dragstart', nativeDragStart, true\)/);
+  assert.match(movementController, /event\.code === 'KeyF'/);
 });

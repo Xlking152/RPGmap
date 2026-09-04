@@ -4,7 +4,9 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-if (process.platform !== 'win32') throw new Error('Packaged browser smoke requires Windows Edge');
+if (process.platform !== 'win32') throw new Error('Packaged browser smoke requires Windows');
+const browserName = String(process.env.RPGMAP_SMOKE_BROWSER || 'edge').toLowerCase();
+if (!['edge', 'chrome'].includes(browserName)) throw new Error(`Unsupported smoke browser: ${browserName}`);
 const targetUrl = String(process.argv[2] || '').trim();
 if (!/^http:\/\/127\.0\.0\.1:\d+\/?/.test(targetUrl)) throw new Error('Browser smoke requires a loopback HTTP URL');
 const timeoutMs = Math.max(10_000, Number(process.argv[3]) || 30_000);
@@ -14,10 +16,9 @@ const viewportMatch = /^(\d{2,4})x(\d{2,4})$/.exec(String(process.env.RPGMAP_SMO
 
 function edgePath() {
   const roots = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean);
-  const suffixes = [
-    ['Microsoft', 'Edge', 'Application', 'msedge.exe'],
-    ['Microsoft', 'Edge SxS', 'Application', 'msedge.exe'],
-  ];
+  const suffixes = browserName === 'chrome'
+    ? [['Google', 'Chrome', 'Application', 'chrome.exe'], ['Google', 'Chrome Beta', 'Application', 'chrome.exe']]
+    : [['Microsoft', 'Edge', 'Application', 'msedge.exe'], ['Microsoft', 'Edge SxS', 'Application', 'msedge.exe']];
   for (const root of roots) {
     for (const suffix of suffixes) {
       const candidate = path.join(root, ...suffix);
@@ -26,7 +27,7 @@ function edgePath() {
       } catch {}
     }
   }
-  throw new Error('Microsoft Edge executable was not found');
+  throw new Error(`${browserName === 'chrome' ? 'Google Chrome' : 'Microsoft Edge'} executable was not found`);
 }
 
 async function reservePort() {
@@ -50,7 +51,7 @@ async function retry(task, label, deadline) {
 }
 
 const port = await reservePort();
-const profile = await mkdtemp(path.join(os.tmpdir(), 'rpgmap-edge-smoke-'));
+const profile = await mkdtemp(path.join(os.tmpdir(), `rpgmap-${browserName}-smoke-`));
 const edge = spawn(edgePath(), [
   '--headless=new',
   '--disable-gpu',
@@ -215,7 +216,7 @@ try {
     await evaluate(`document.querySelector('#app').rpgMapApp.vision.setSource('smoke-pc-token')`);
     await evaluate(`document.querySelector('#app').rpgMapApp.selection.replace(['smoke-pc-token'], 'smoke-pc-token')`);
     fogAudit = await retry(() => evaluate(`(() => {
-        const canvas = document.querySelector('.rpgmap-vision-fog-canvas');
+        const canvas = document.querySelector('.rpgmap-vision-fog-perception');
         if (!canvas || canvas.hidden || !canvas.width || !canvas.height) return null;
         const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
         let minAlpha = 255, maxAlpha = 0;

@@ -34,7 +34,8 @@ function installStyles(documentNode) {
     .rpg-token-v2 .rpg-token-v2-core { position:relative; border-radius:50%; overflow:visible; transform:scale(1); transition:transform 140ms ease,filter 140ms ease; transform-origin:center; }
     .rpg-token-v2 .rpg-token-v2-core.selected { transform:scale(1.16); filter:drop-shadow(0 4px 8px rgba(0,0,0,.34)); }
     .rpg-token-v2 .rpg-token-v2-portrait { width:100%; height:100%; display:grid; place-items:center; border-radius:inherit; overflow:hidden; }
-    .rpg-token-v2 .rpg-token-v2-portrait img { width:100%; height:100%; object-fit:cover; }
+    .rpg-token-v2,.rpg-token-v2 * { user-select:none; -webkit-user-select:none; -webkit-user-drag:none; touch-action:none; }
+    .rpg-token-v2 .rpg-token-v2-portrait img { width:100%; height:100%; object-fit:cover; -webkit-user-drag:none; pointer-events:none; }
     .rpg-token-v2-core[data-audience-visibility="allied-invisible"] { opacity:.48; filter:saturate(.55); }
     .rpg-token-v2-core[data-audience-visibility="vague"] .rpg-token-v2-portrait { opacity:.62; border:2px dashed #d9e0df; background:#7b8587; filter:grayscale(1); }
     .rpg-token-v2-core[data-gm-private="true"] .rpg-token-v2-portrait { opacity:.48; filter:saturate(.55); }
@@ -48,7 +49,7 @@ function installStyles(documentNode) {
     .selected-token-summary { position:absolute; right:12px; bottom:max(12px,env(safe-area-inset-bottom)); z-index:1600; width:210px; min-height:92px; box-sizing:border-box; display:flex; align-items:center; gap:11px; padding:10px; border:1px solid rgba(38,60,62,.28); border-radius:8px; background:rgba(248,250,247,.96); box-shadow:0 10px 28px rgba(18,27,29,.24); pointer-events:none; }
     .selected-token-summary[hidden] { display:none !important; }
     .selected-token-summary-portrait { flex:0 0 72px; width:72px; height:72px; display:grid; place-items:center; overflow:hidden; border:3px solid var(--token-color,#3d9b63); border-radius:50%; background:var(--token-color,#3d9b63); color:white; font:800 28px/1 sans-serif; }
-    .selected-token-summary-portrait img { width:100%; height:100%; object-fit:cover; }
+    .selected-token-summary-portrait img { width:100%; height:100%; object-fit:cover; -webkit-user-drag:none; }
     .selected-token-summary-body { min-width:0; display:grid; gap:4px; }
     .selected-token-summary-body strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; color:#263638; }
     .selected-token-summary-body span { font-size:11px; color:#647174; }
@@ -71,7 +72,7 @@ function renderSize(api, model) {
 export function tokenIcon(api, model) {
   const size = renderSize(api, model);
   const portrait = model.avatarDataUrl
-    ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="">`
+    ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="" draggable="false">`
     : `<span>${escapeHtml((Array.from(model.name)[0] || '?').toUpperCase())}</span>`;
   const flags = model.gmViewer ? [
     ...(model.gmOnly ? ['<span class="rpg-token-v2-flag gm-only">GM 专属</span>'] : []),
@@ -138,6 +139,9 @@ export function createTokenRendererSystem() {
       const visualPoints = new Map();
       const animations = new Map();
       const preparedRoutes = new Map();
+      let eventRenderFrame = null;
+      const pendingRenderIds = new Set();
+      let pendingFullRender = false;
       let selectedIds = new Set(api.selection?.getSelectedTokenIds?.() || []);
       let destroyed = false;
       const off = [];
@@ -231,7 +235,7 @@ export function createTokenRendererSystem() {
           return;
         }
         const portrait = model.avatarDataUrl
-          ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="">`
+          ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="" draggable="false">`
           : escapeHtml((Array.from(model.name)[0] || '?').toUpperCase());
         let healthText = '';
         if (!model.audienceRestricted) {
@@ -258,6 +262,7 @@ export function createTokenRendererSystem() {
           const point = interpolateTokenPoint(motion.from, motion.target, progress) || motion.target;
           visualPoints.set(motion.id, point);
           motion.view.setLatLng(worldToLatLng(point, api.mapPackage.height));
+          api.emit?.('token:visual-position', { id: motion.id, tokenId: motion.id, point, predicted: motion.prediction === true });
           if (progress < 1) {
             motion.frame = requestFrame(step);
             return;
@@ -272,7 +277,8 @@ export function createTokenRendererSystem() {
           animations.delete(motion.id);
           motion.frame = null;
           api.emit?.('token:visual-move-end', { id: motion.id, tokenId: motion.id, point: motion.target });
-          renderToken(motion.id);
+          const canonical = normalizeTokenPoint(api.tokens.get?.(motion.id));
+          if (!motion.prediction || sameTokenPoint(canonical, motion.target)) renderToken(motion.id);
         };
         motion.frame = requestFrame(step);
       }
@@ -309,7 +315,7 @@ export function createTokenRendererSystem() {
         });
         if (!path.length) path = [target];
         const [first, ...queue] = path;
-        const motion = { id, view, from: current, target: first, queue, frame: null, startedAt: null, duration: 0 };
+        const motion = { id, view, from: current, target: first, queue, frame: null, startedAt: null, duration: 0, prediction: false };
         animations.set(id, motion);
         api.emit?.('token:visual-move-start', { id, tokenId: id, from: current, to: target });
         beginSegment(motion, first);
@@ -380,16 +386,34 @@ export function createTokenRendererSystem() {
         renderSummary();
       }
 
+      function flushEventRender() {
+        eventRenderFrame = null;
+        if (pendingFullRender) render();
+        else {
+          for (const id of pendingRenderIds) renderToken(id, { summary: false });
+          renderSummary();
+        }
+        pendingRenderIds.clear();
+        pendingFullRender = false;
+      }
+
       function renderEventTokens(event) {
         const detail = event?.detail || {};
-        const ids = new Set([detail.tokenId, detail.id, ...(detail.tokenIds || [])].filter(Boolean).map(String));
-        const actorIds = new Set([detail.actorId, ...(detail.actorIds || [])].filter(Boolean).map(String));
+        const address = detail.document || {};
+        const ids = new Set([
+          detail.tokenId, detail.id, ...(detail.tokenIds || []),
+          address.type === 'Token' ? address.id : null,
+        ].filter(Boolean).map(String));
+        const actorIds = new Set([
+          detail.actorId, ...(detail.actorIds || []),
+          address.type === 'Actor' ? address.id : null,
+        ].filter(Boolean).map(String));
         if (actorIds.size) {
           for (const token of api.tokens.list()) if (actorIds.has(String(token.actorId))) ids.add(String(token.id));
         }
-        if (!ids.size) return render();
-        for (const id of ids) renderToken(id, { summary: false });
-        renderSummary();
+        if (!ids.size) pendingFullRender = true;
+        else for (const id of ids) pendingRenderIds.add(id);
+        if (eventRenderFrame === null) eventRenderFrame = requestFrame(flushEventRender);
       }
 
       const selectionOff = api.selection?.subscribe?.(snapshot => {
@@ -405,6 +429,9 @@ export function createTokenRendererSystem() {
         'token:create', 'token:delete', 'token:move', 'token:size-change',
         'token:property-change', 'actor:change', 'health:change', 'status:change',
       ]) off.push(api.on(eventName, renderEventTokens));
+      for (const eventName of ['document:create', 'document:update', 'document:delete', 'document:move']) {
+        off.push(api.on(eventName, renderEventTokens));
+      }
       for (const eventName of ['state:import', 'scene:activate']) off.push(api.on(eventName, render));
 
       api.map.on('zoomend', render);
@@ -414,6 +441,8 @@ export function createTokenRendererSystem() {
         api.map.off('zoomend', render);
         api.map.off('resize', render);
         for (const id of [...animations.keys()]) cancelMotion(id);
+        if (eventRenderFrame !== null) cancelFrame(eventRenderFrame);
+        eventRenderFrame = null;
         preparedRoutes.clear();
         tokenLayer.clearLayers();
         statusLayer.clearLayers();
@@ -436,6 +465,34 @@ export function createTokenRendererSystem() {
           const route = points.map(normalizeTokenPoint).filter(Boolean);
           if (route.length) preparedRoutes.set(id, route);
           else preparedRoutes.delete(id);
+          return true;
+        },
+        predictTokenVisualRoute(tokenId, points = []) {
+          const id = String(tokenId || '');
+          const view = views.get(id);
+          const route = points.map(normalizeTokenPoint).filter(Boolean);
+          const current = normalizeTokenPoint(visualPoints.get(id));
+          if (!id || !view || !current || !route.length) return false;
+          cancelMotion(id);
+          const filtered = route.filter((point, index, values) => {
+            const previous = index ? values[index - 1] : current;
+            return !sameTokenPoint(previous, point);
+          });
+          if (!filtered.length) return true;
+          const [first, ...queue] = filtered;
+          const motion = { id, view, from: current, target: first, queue, frame: null, startedAt: null, duration: 0, prediction: true };
+          animations.set(id, motion);
+          api.emit?.('token:visual-move-start', { id, tokenId: id, from: current, to: filtered.at(-1), predicted: true });
+          beginSegment(motion, first);
+          return true;
+        },
+        rollbackTokenVisual(tokenId) {
+          const id = String(tokenId || '');
+          cancelMotion(id);
+          const canonical = normalizeTokenPoint(api.tokens.get?.(id));
+          if (!canonical) return false;
+          preparedRoutes.set(id, [canonical]);
+          renderToken(id);
           return true;
         },
       });

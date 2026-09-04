@@ -57,6 +57,19 @@ async function waitForJsonFile(filePath, predicate, timeout = 5000) {
   throw new Error(`JSON file did not reach expected state: ${filePath}${lastError ? ` (${lastError.message})` : ''}`);
 }
 
+async function waitForWalRecord(filePath, predicate, timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    try {
+      const records = (await readFile(filePath, 'utf8')).trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+      const match = records.find(predicate);
+      if (match) return match;
+    } catch {}
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error(`World WAL did not reach expected state: ${filePath}`);
+}
+
 async function openSocket(url) {
   const ws = new WebSocket(url);
   await new Promise((resolve, reject) => {
@@ -514,8 +527,9 @@ test('generic World operations commit atomically, broadcast patches, and recover
     assert.equal(malformed.code, 'invalid_world_operation');
     assert.equal(malformed.revision, 3);
 
-    const worldData = await waitForJsonFile(path.join(runtime.mapDir, 'world.json'), value => value?.revision === 3);
-    assert.equal(worldData.state.preferences.worldV2.actors[0].effects[0].definitionId, 'status-rooted');
+    const walRecord = await waitForWalRecord(path.join(runtime.mapDir, 'world.operations.ndjson'), value => value?.revision === 3);
+    assert.equal(walRecord.operationId, 'generic-status-1');
+    assert.match(walRecord.checksum, /^[0-9a-f]{64}$/);
     gm.ws.close();
   } finally {
     await stopServer(runtime);
@@ -669,14 +683,14 @@ test('generic World operation idempotency survives a LAN server restart', async 
   }
 });
 
-test('LAN atomically persists every revision but rolls World backups every 25 revisions', async () => {
+test('LAN writes every revision to WAL and atomically compacts after 100 revisions', async () => {
   const runtime = await startServer();
   try {
     const gm = await openAndHello(runtime.url, { name: 'Backup GM', requestedRole: 'gm' });
     const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
     gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
     await initialized;
-    for (let index = 0; index < 24; index += 1) {
+    for (let index = 0; index < 98; index += 1) {
       await sendWorldOperationsAndWait(gm.ws, {
         type: 'world.operation', operationId: `backup-move-${index}`, baseRevision: index + 1,
         operations: [{ type: 'token.move', payload: {
@@ -686,7 +700,7 @@ test('LAN atomically persists every revision but rolls World backups every 25 re
     }
     assert.deepEqual((await readdir(path.join(runtime.mapDir, 'backups'))).filter(name => name.startsWith('world.backup.')), []);
     await sendWorldOperationsAndWait(gm.ws, {
-      type: 'world.operation', operationId: 'backup-move-24', baseRevision: 25,
+      type: 'world.operation', operationId: 'backup-move-98', baseRevision: 99,
       operations: [{ type: 'token.move', payload: {
         sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 40, y: 10,
       } }],
@@ -694,7 +708,8 @@ test('LAN atomically persists every revision but rolls World backups every 25 re
     const backups = (await readdir(path.join(runtime.mapDir, 'backups'))).filter(name => name.startsWith('world.backup.'));
     assert.equal(backups.length, 1);
     const durable = JSON.parse(await readFile(path.join(runtime.mapDir, 'world.json'), 'utf8'));
-    assert.equal(durable.revision, 26);
+    assert.equal(durable.revision, 100);
+    assert.equal((await readFile(path.join(runtime.mapDir, 'world.operations.ndjson'), 'utf8')).trim(), '');
     gm.ws.close();
   } finally {
     await stopServer(runtime);
@@ -868,8 +883,9 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
     assert.equal(featureCommit.committed.patch.world.scenes.tokens[0].upsert[0].x, 42);
     assert.equal(featureCommit.committed.patch.world.actors.upsert[0].effects[0].definitionId, 'status-rooted');
 
-    const worldData = await waitForJsonFile(path.join(runtime.mapDir, 'world.json'), value => value?.revision === 8);
-    assert.equal(worldData.state.preferences.entitySystem.actors[0].effects[0].definitionId, 'status-rooted');
+    const walRecord = await waitForWalRecord(path.join(runtime.mapDir, 'world.operations.ndjson'), value => value?.revision === 8);
+    assert.equal(walRecord.operationId, 'feature-world-1');
+    assert.match(walRecord.checksum, /^[0-9a-f]{64}$/);
 
     player.ws.close();
     gm.ws.close();
@@ -932,9 +948,9 @@ test('failed status persistence does not advance revision, broadcast, or consume
     gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' }));
     await initialized;
 
-    const worldFile = path.join(runtime.mapDir, 'world.json');
-    await rm(worldFile, { force: true });
-    await mkdir(worldFile);
+    const walFile = path.join(runtime.mapDir, 'world.operations.ndjson');
+    await rm(walFile, { force: true });
+    await mkdir(walFile);
 
     const message = {
       type: 'status.apply', operationId: 'status-persist-retry', clientRevision: 1,
@@ -961,7 +977,7 @@ test('failed status persistence does not advance revision, broadcast, or consume
     gm.ws.send(JSON.stringify({ type: 'world.snapshot.request' }));
     assert.equal((await canonicalPromise).revision, 1);
 
-    await rm(worldFile, { recursive: true, force: true });
+    await rm(walFile, { recursive: true, force: true });
     const retried = await sendStatusAndWait(gm.ws, message);
     assert.equal(retried.ack.duplicate, false);
     assert.equal(retried.snapshot.revision, 2);
@@ -1115,11 +1131,11 @@ test('GM approves Player identity; controlled Token operations succeed while uno
     assert.match(accessData.users[0].playerKeyHash, /^[0-9a-f]{64}$/);
     assert.equal(JSON.stringify(accessData).includes(bound.authToken), false);
 
-    const worldData = await waitForJsonFile(
-      path.join(runtime.mapDir, 'world.json'),
+    const walRecord = await waitForWalRecord(
+      path.join(runtime.mapDir, 'world.operations.ndjson'),
       value => value?.revision === 5,
     );
-    assert.equal(worldData.revision, 5);
+    assert.equal(walRecord.revision, 5);
 
     player.ws.close();
     await new Promise(resolve => setTimeout(resolve, 80));
@@ -1189,6 +1205,90 @@ test('LAN keeps same-template NPC Health isolated and requires a controlled Toke
     assert.equal(template.system.runtime.health.current, 20);
 
     player.ws.close();
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('disconnected Player resumes missed Document commits without a full World snapshot', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Resume GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({
+      type: 'world.push', baseRevision: 0, state: initialTokenVisionWorld(), reason: 'resume-init',
+    }));
+    await initialized;
+
+    const claimPromise = waitForMessage(gm.ws, message => message.type === 'access.claim');
+    gm.ws.send(JSON.stringify({
+      type: 'access.user.create', name: 'Resume Player', defaultActorId: 'actor-a',
+      ownership: { 'actor-a': 'owner' },
+    }));
+    const claim = await claimPromise;
+    const player = await openAndClaim(runtime.url, {
+      name: 'Resume Player', claimCode: claim.claimCode, visionSourceTokenId: 'token-a',
+    });
+    const resumeRevision = player.welcome.world.revision;
+    const resumeFingerprint = player.welcome.audienceFingerprint;
+    player.ws.close();
+    await new Promise(resolve => setTimeout(resolve, 80));
+
+    async function commitChat(operationId, baseRevision, text) {
+      const committed = waitForMessage(gm.ws, message =>
+        message.type === 'document.batch.committed' && message.operationId === operationId);
+      const ack = waitForMessage(gm.ws, message =>
+        message.type === 'document.batch.ack' && message.operationId === operationId);
+      gm.ws.send(JSON.stringify({
+        type: 'document.batch', operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
+        operationId, baseRevision,
+        writes: [{
+          action: 'append',
+          document: { type: 'ChatMessage', id: `${operationId}-message`, parent: null },
+          intent: 'chat.append', data: { text }, precondition: {},
+        }],
+      }));
+      const [commit] = await Promise.all([committed, ack]);
+      return commit.revision;
+    }
+    const revisionTwo = await commitChat('resume-chat-1', 1, 'First missed message');
+    const revisionThree = await commitChat('resume-chat-2', revisionTwo, 'Second missed message');
+    assert.equal(revisionThree, 3);
+
+    const socket = await openSocket(runtime.url);
+    let snapshotReceived = false;
+    socket.addEventListener('message', event => {
+      try {
+        if (JSON.parse(String(event.data)).type === 'world.snapshot') snapshotReceived = true;
+      } catch {}
+    });
+    const welcomePromise = waitForMessage(socket, message => message.type === 'welcome');
+    const firstCommitPromise = waitForMessage(socket, message =>
+      message.type === 'document.batch.committed' && message.operationId === 'resume-chat-1');
+    const secondCommitPromise = waitForMessage(socket, message =>
+      message.type === 'document.batch.committed' && message.operationId === 'resume-chat-2');
+    const completePromise = waitForMessage(socket, message => message.type === 'resume.complete');
+    socket.send(JSON.stringify({
+      type: 'hello', name: 'Resume Player', requestedRole: 'player',
+      userId: player.bound.userId, authToken: player.bound.authToken,
+      visionSourceTokenId: 'token-a', resumeRevision, audienceFingerprint: resumeFingerprint,
+      operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
+      statusSchema: STATUS_SCHEMA_VERSION,
+      accessSchema: ACCESS_SCHEMA_VERSION,
+    }));
+    const [welcome, firstCommit, secondCommit, complete] = await Promise.all([
+      welcomePromise, firstCommitPromise, secondCommitPromise, completePromise,
+    ]);
+    assert.equal(welcome.resumeAccepted, true);
+    assert.equal(welcome.world.state, null);
+    assert.equal(firstCommit.baseRevision, 1);
+    assert.equal(firstCommit.revision, 2);
+    assert.equal(secondCommit.baseRevision, 2);
+    assert.equal(secondCommit.revision, 3);
+    assert.equal(complete.revision, 3);
+    assert.equal(snapshotReceived, false);
+    socket.close();
     gm.ws.close();
   } finally {
     await stopServer(runtime);

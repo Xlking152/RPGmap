@@ -24,6 +24,8 @@ jobs:
       - run: npm audit --registry=https://registry.npmjs.org --audit-level=high
       - run: npm audit --registry=https://registry.npmjs.org --omit=dev --audit-level=high
       - run: npm test
+      - run: npm run benchmark
+      - run: npm run benchmark:lan -- --assert
       - name: Check tracked JavaScript syntax
         shell: bash
         run: git ls-files -z -- '*.js' '*.mjs' | xargs -0 -n1 node --check
@@ -91,7 +93,8 @@ jobs:
           $root = Join-Path $PWD "release/unpacked/RPGmap-v$version"
           & node scripts/verify-package.mjs "--root=$root" "--archive=$zip" "--commit=${{ needs.candidate.outputs.commit }}"
           if ($LASTEXITCODE -ne 0) { throw 'Candidate package verification failed.' }
-          & ./scripts/windows-smoke.ps1 -Root $root -TimeoutSeconds 30
+          & ./scripts/windows-smoke.ps1 -Root $root -Browser edge -TimeoutSeconds 30
+          & ./scripts/windows-smoke.ps1 -Root $root -Browser chrome -TimeoutSeconds 30
 
   publish:
     needs: [candidate, windows-smoke]

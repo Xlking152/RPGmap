@@ -8,7 +8,8 @@ const appShell = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.u
 
 test('ordinary Token events update only keyed Token, status, and summary views', () => {
   assert.match(tokenLayer, /function renderToken\(tokenId/);
-  assert.match(tokenLayer, /for \(const id of ids\) renderToken\(id/);
+  assert.match(tokenLayer, /for \(const id of pendingRenderIds\) renderToken\(id/);
+  assert.match(tokenLayer, /eventRenderFrame = requestFrame/);
   assert.match(tokenLayer, /const changed = new Set\(\[\.\.\.previous, \.\.\.selectedIds\]\)/);
   assert.doesNotMatch(tokenLayer, /'state:saved'/);
   assert.doesNotMatch(tokenLayer, /api\.on\('state:commit', render\)/);

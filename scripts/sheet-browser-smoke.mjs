@@ -5,23 +5,25 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-if (process.platform !== 'win32') throw new Error('Actor sheet browser smoke requires Windows Edge');
+if (process.platform !== 'win32') throw new Error('Actor sheet browser smoke requires Windows');
+const browserName = String(process.env.RPGMAP_SMOKE_BROWSER || 'edge').toLowerCase();
+if (!['edge', 'chrome'].includes(browserName)) throw new Error(`Unsupported smoke browser: ${browserName}`);
 const targetUrl = String(process.argv[2] || '').trim();
 if (!/^http:\/\/127\.0\.0\.1:\d+\/?/.test(targetUrl)) throw new Error('Actor sheet smoke requires a loopback HTTP URL');
 const timeoutMs = Math.max(20_000, Number(process.argv[3]) || 45_000);
 
 function edgePath() {
   const roots = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean);
+  const suffixes = browserName === 'chrome'
+    ? [['Google', 'Chrome', 'Application', 'chrome.exe'], ['Google', 'Chrome Beta', 'Application', 'chrome.exe']]
+    : [['Microsoft', 'Edge', 'Application', 'msedge.exe'], ['Microsoft', 'Edge SxS', 'Application', 'msedge.exe']];
   for (const root of roots) {
-    for (const suffix of [
-      ['Microsoft', 'Edge', 'Application', 'msedge.exe'],
-      ['Microsoft', 'Edge SxS', 'Application', 'msedge.exe'],
-    ]) {
+    for (const suffix of suffixes) {
       const candidate = path.join(root, ...suffix);
       if (existsSync(candidate)) return candidate;
     }
   }
-  throw new Error('Microsoft Edge executable was not found');
+  throw new Error(`${browserName === 'chrome' ? 'Google Chrome' : 'Microsoft Edge'} executable was not found`);
 }
 
 async function reservePort() {
@@ -45,7 +47,7 @@ async function retry(task, label, deadline) {
 }
 
 const port = await reservePort();
-const profile = await mkdtemp(path.join(os.tmpdir(), 'rpgmap-sheet-smoke-'));
+const profile = await mkdtemp(path.join(os.tmpdir(), `rpgmap-${browserName}-sheet-smoke-`));
 const edge = spawn(edgePath(), [
   '--headless=new', '--disable-gpu', '--disable-dev-shm-usage', '--no-sandbox',
   '--no-first-run', '--no-default-browser-check', '--window-size=1440,1000',
