@@ -28,6 +28,7 @@ export const LANZHOU_FEATURE_TAXONOMY = Object.freeze({
   }),
   subtypes: Object.freeze({
     yamen: '州衙',
+    'yamen-wall': '州衙院墙',
     barracks: '营房',
     granary: '仓廪',
     stable: '马厩',

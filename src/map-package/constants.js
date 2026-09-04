@@ -1,6 +1,6 @@
 export const BUILT_IN_LANZHOU_MAP = Object.freeze({
   id: 'northern-song-lanzhou-1104',
-  version: '1.0.5',
+  version: '1.0.6',
   title: '北宋兰州城 · RPG 战术地图',
 });
 

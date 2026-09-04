@@ -238,7 +238,7 @@ try {
   const state = initial?.state ? structuredClone(initial.state) : {
     version: 2,
     mapId: 'northern-song-lanzhou-1104',
-    mapVersion: '1.0.5',
+    mapVersion: '1.0.6',
     markers: [], attackAreas: [], sceneEvents: [],
     preferences: {
       entitySystem: { schemaVersion: 3, actors: [], tokens: [], statusDefinitions: [] },
@@ -255,7 +255,7 @@ try {
     actors: [], statusDefinitions: [],
     scenes: [{
       id: 'scene-packaged-smoke', name: 'Packaged Smoke Scene',
-      mapPackage: { id: 'northern-song-lanzhou-1104', version: '1.0.5' },
+      mapPackage: { id: 'northern-song-lanzhou-1104', version: '1.0.6' },
       tokens: [], markers: [], attackAreas: [], sceneEvents: [], featureStates: {},
       fog: { schemaVersion: 1, cellSizeMeters: 5, exploredByParty: {} },
       settings: { gridVisible: true },

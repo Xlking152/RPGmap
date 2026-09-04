@@ -13,9 +13,9 @@ test('production Lanzhou package loads generated data and SVG as local runtime a
   ]);
   const runtimeData = JSON.parse(runtimeDataText);
   assert.equal(runtimeData.id, 'northern-song-lanzhou-1104');
-  assert.equal(runtimeData.version, '1.0.5');
+  assert.equal(runtimeData.version, '1.0.6');
   assert.equal(runtimeData.features.length, runtimeData.featureCount);
-  assert.equal(runtimeData.features.length, 98);
+  assert.equal(runtimeData.features.length, 103);
   assert.equal(Object.hasOwn(runtimeData, 'svg'), false);
   assert.equal(Object.hasOwn(runtimeData, 'artAssets'), false);
   assert.match(defaultMap, /runtime\.json\?url/);

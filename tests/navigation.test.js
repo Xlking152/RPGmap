@@ -288,3 +288,47 @@ test('Lanzhou navigation closes gates by default, opens them by Interaction stat
   const breached = createNavigationGrid(lanzhouMapPackage, breachedScene, staticBase);
   assert.notEqual(breached.tileAt(wallCell), NAVIGATION_TILES.blocked);
 });
+
+test('Lanzhou yamen walls seal the compound while the existing gate controls its passage', () => {
+  const source = createLanzhouMapPackage();
+  const mapPackage = prepareMapPackage({
+    ...source,
+    features: applyLanzhouCapabilities(source.features, source.navigation),
+  }, { source: 'test:lanzhou-yamen-wall' });
+  const walls = mapPackage.features.filter((feature) => feature.subtype === 'yamen-wall');
+  assert.equal(walls.length, 5);
+  assert.ok(walls.every((wall) => wall.capabilities.navigation.blocks));
+  assert.ok(walls.every((wall) => wall.capabilities.navigation.passableWhenDestroyed));
+  assert.ok(walls.every((wall) => wall.capabilities.navigation.damageCreatesPassage));
+  assert.ok(walls.every((wall) => wall.capabilities.navigation.blockingHeightFt === 12));
+
+  const state = createInitialState(mapPackage);
+  const gate = mapPackage.features.find((feature) => feature.id === 'yamen-gate');
+  getFeatureInteractionState(state, gate);
+  const base = createNavigationBase(mapPackage);
+  const intact = createNavigationGrid(mapPackage, deriveSceneState([]), base);
+  assert.equal(intact.tileAt({ x: 2470, y: 2500 }), NAVIGATION_TILES.blocked);
+  assert.equal(intact.tileAt({ x: 2774, y: 2782 }), NAVIGATION_TILES.blocked);
+
+  const openedState = setFeatureOpenState(state, gate.id, true);
+  getFeatureInteractionState(openedState, gate);
+  const opened = createNavigationGrid(mapPackage, deriveSceneState([]), base);
+  assert.notEqual(opened.tileAt({ x: 2774, y: 2782 }), NAVIGATION_TILES.blocked);
+  assert.equal(opened.tileAt({ x: 2470, y: 2500 }), NAVIGATION_TILES.blocked);
+
+  const breachedScene = deriveSceneState([{
+    id: 'scene-yamen-wall',
+    type: 'damage',
+    areaSnapshot: {
+      id: 'yamen-wall-area', type: 'rectangle', center: { x: 2470, y: 2500 },
+      length: 40, width: 40, headingDeg: 0, destructionTargets: ['wall'],
+    },
+    objectIds: [],
+    clipHits: [{
+      featureId: 'yamen-wall-west',
+      polygon: [[2445, 2475], [2495, 2475], [2495, 2525], [2445, 2525]],
+    }],
+  }]);
+  const breached = createNavigationGrid(mapPackage, breachedScene, base);
+  assert.notEqual(breached.tileAt({ x: 2470, y: 2500 }), NAVIGATION_TILES.blocked);
+});

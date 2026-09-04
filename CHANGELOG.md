@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.3.3
+
+- 兰州州衙沿原虚线院界新增五段低矮夯土院墙，并连接既有州衙仪门；南侧墙线避开仪门通道与 `yamen-lane`，墙体始终在房屋素材下方渲染，不遮盖正堂、后堂和东西廊房。
+- 五段州衙院墙均为独立、可检查的实体 `wall` Feature，阻挡高度为 `12 ft`，支持局部破坏形成通路及整段摧毁后恢复通行；既有仪门继续权威控制院落入口的开关与碰撞。
+- Lanzhou MapPackage 升至 `1.0.6` 并兼容 `1.0.5` World；原有 Feature State 通过稳定 ID 保留，新增院墙按完整状态初始化，无需 World schema 迁移。
+- 应用版本升至 `2.3.3`。World schema 保持 `3`，operation schema 保持 `3`，Status schema 与 Access schema 保持 `4`，Infinite Horror Ruleset 保持 `1.0.0`。
+
 ## v2.3.2
 
 - 修复 Ctrl/Cmd 连续路径规划：移动预览改用高于 Fog 的独立图层，规划态终点随鼠标更新，并显示已保存拐点、分段距离、累计距离与验证状态；快速连续添加拐点会串行验证，不再乱序或重复。

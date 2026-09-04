@@ -69,8 +69,8 @@ test('Lanzhou map package keeps the 6000 x 5000 contract and the layered SVG str
   assert.deepEqual(ROAD_RULES.widthsMeters, { major: 12, secondary: 7, alley: 3, country: 8 });
   assert.deepEqual(ROAD_RULES.setbacksMeters, { building: 3, streetShop: 1.5 });
   assert.equal(lanzhouMapPackage.roadRules, ROAD_RULES);
-  assert.equal(lanzhouMapPackage.version, '1.0.5');
-  assert.deepEqual([...lanzhouMapPackage.compatibleMapVersions], ['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4']);
+  assert.equal(lanzhouMapPackage.version, '1.0.6');
+  assert.deepEqual([...lanzhouMapPackage.compatibleMapVersions], ['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4', '1.0.5']);
   assert.equal(lanzhouMapPackage.navigation.roads.length, 10);
   assert.equal(lanzhouMapPackage.navigation.gateways.length, 6);
   assert.deepEqual(lanzhouMapPackage.floodRules, {
@@ -104,6 +104,49 @@ test('all buildings expose historical details and stable entrances', () => {
     assert.ok(building.details.use.length > 8, building.id + ' is missing use details');
     assert.ok(building.details.structure.length > 8, building.id + ' is missing structure details');
     assert.ok(building.details.description.length > 8, building.id + ' is missing reconstruction notes');
+  }
+});
+
+test('the yamen compound uses five low destructible walls without covering its halls', () => {
+  const wallIds = [
+    'yamen-wall-north',
+    'yamen-wall-west',
+    'yamen-wall-east',
+    'yamen-wall-southwest',
+    'yamen-wall-southeast',
+  ];
+  const hallIds = [
+    'yamen-main-hall',
+    'yamen-rear-hall',
+    'yamen-office-west',
+    'yamen-office-east',
+  ];
+  const walls = wallIds.map((id) => lanzhouMapPackage.features.find((feature) => feature.id === id));
+  const halls = hallIds.map((id) => lanzhouMapPackage.features.find((feature) => feature.id === id));
+
+  assert.ok(walls.every(Boolean));
+  assert.ok(halls.every(Boolean));
+  for (const wall of walls) {
+    assert.equal(wall.category, 'wall');
+    assert.equal(wall.subtype, 'yamen-wall');
+    assert.equal(wall.mode, 'clip');
+    for (const hall of halls) {
+      assert.equal(
+        intersectionArea(featureToPolygon(wall), featureToPolygon(hall)),
+        0,
+        `${wall.id} must not overlap ${hall.id}`,
+      );
+    }
+  }
+
+  const svg = lanzhouMapPackage.svg;
+  assert.doesNotMatch(svg, /M2470 2370 L3010 2350 L3020 2850 L2455 2870 Z/);
+  const courtyardMarkup = svg.match(/<g class="courtyard-walls">[\s\S]*?<\/g>/)?.[0] || '';
+  assert.equal((courtyardMarkup.match(/<path /g) || []).length, 2);
+  for (const id of wallIds) {
+    const wallIndex = svg.indexOf(`id="feature-${id}"`);
+    assert.notEqual(wallIndex, -1);
+    assert.ok(wallIndex < svg.indexOf('id="feature-yamen-main-hall"'));
   }
 });
 

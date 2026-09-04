@@ -58,6 +58,9 @@
       .courtyard-walls path { fill: none; stroke: #9f8764; stroke-width: 11; stroke-dasharray: 34 14; opacity: .65; }
       .wall-shadow { fill: #7c6a51; opacity: .26; }.rammed-wall { fill: #c7b58f; stroke: #826d4e; stroke-width: 8; }
       .wall-crown { fill: none; stroke: #e4d5b5; stroke-width: 10; stroke-dasharray: 28 14; opacity: .72; }
+      .yamen-wall-shadow { fill: #75634a; opacity: .24; }
+      .yamen-compound-wall { fill: #c8b58e; stroke: #806b4f; stroke-width: 3; }
+      .yamen-compound-wall-crown { fill: none; stroke: #eadcbb; stroke-width: 3; opacity: .78; }
       .pass-wall-shadow { fill: #594b39; opacity: .32; }.pass-wall { fill: #a99773; stroke: #65543d; stroke-width: 9; }
       .pass-stone-seam { fill: none; stroke: #d5c39f; stroke-width: 7; stroke-dasharray: 24 16; opacity: .65; }
       .wall-tower-base { fill: #b39b70; stroke: #68533a; stroke-width: 7; }.wall-tower-roof { fill: #6f776d; stroke: #465049; stroke-width: 5; }
@@ -202,7 +205,6 @@
     <path d="M3300 2290 L3975 2250 L4010 2800 L3250 2885 Z" class="parcel residential-parcel"/>
     <path d="M2090 2720 L2670 2860 L2610 2980 L2150 3025 Z" class="parcel residential-parcel pale"/>
     <g class="courtyard-walls">
-      <path d="M2470 2370 L3010 2350 L3020 2850 L2455 2870 Z"/>
       <path d="M2160 1660 L2980 1620 L2995 2130 L2145 2195 Z"/>
       <path d="M3540 1590 L3830 1570 L3880 2025 L3530 2070 Z"/>
     </g>
@@ -1663,6 +1665,31 @@
     <polygon points="2047,2257 1985,1580 2050,1570 2111,2247" class="wall-shadow" transform="translate(7 9)"/>
     <polygon points="2047,2257 1985,1580 2050,1570 2111,2247" class="rammed-wall"/>
     <polyline points="2047,2257 1985,1580 2050,1570 2111,2247 2047,2257" class="wall-crown"/>
+  </g>
+<g id="feature-yamen-wall-north" data-feature-id="yamen-wall-north" data-category="wall" data-subtype="yamen-wall" data-mode="clip" data-map-importance="secondary" class="destructible wall-feature yamen-wall-feature">
+    <polygon points="2469.74,2363 3031.74,2342 3032.26,2356 2470.26,2377" class="yamen-wall-shadow" transform="translate(4 5)"/>
+    <polygon points="2469.74,2363 3031.74,2342 3032.26,2356 2470.26,2377" class="yamen-compound-wall"/>
+    <polyline points="2469.74,2363 3031.74,2342 3032.26,2356 2470.26,2377 2469.74,2363" class="yamen-compound-wall-crown"/>
+  </g>
+<g id="feature-yamen-wall-west" data-feature-id="yamen-wall-west" data-category="wall" data-subtype="yamen-wall" data-mode="clip" data-map-importance="secondary" class="destructible wall-feature yamen-wall-feature">
+    <polygon points="2448,2869.79 2463,2369.79 2477,2370.21 2462,2870.21" class="yamen-wall-shadow" transform="translate(4 5)"/>
+    <polygon points="2448,2869.79 2463,2369.79 2477,2370.21 2462,2870.21" class="yamen-compound-wall"/>
+    <polyline points="2448,2869.79 2463,2369.79 2477,2370.21 2462,2870.21 2448,2869.79" class="yamen-compound-wall-crown"/>
+  </g>
+<g id="feature-yamen-wall-east" data-feature-id="yamen-wall-east" data-category="wall" data-subtype="yamen-wall" data-mode="clip" data-map-importance="secondary" class="destructible wall-feature yamen-wall-feature">
+    <polygon points="3039,2348.82 3049,2734.82 3035,2735.18 3025,2349.18" class="yamen-wall-shadow" transform="translate(4 5)"/>
+    <polygon points="3039,2348.82 3049,2734.82 3035,2735.18 3025,2349.18" class="yamen-compound-wall"/>
+    <polyline points="3039,2348.82 3049,2734.82 3035,2735.18 3025,2349.18 3039,2348.82" class="yamen-compound-wall-crown"/>
+  </g>
+<g id="feature-yamen-wall-southwest" data-feature-id="yamen-wall-southwest" data-category="wall" data-subtype="yamen-wall" data-mode="clip" data-map-importance="secondary" class="destructible wall-feature yamen-wall-feature">
+    <polygon points="2713.54,2818.83 2456.54,2876.83 2453.46,2863.17 2710.46,2805.17" class="yamen-wall-shadow" transform="translate(4 5)"/>
+    <polygon points="2713.54,2818.83 2456.54,2876.83 2453.46,2863.17 2710.46,2805.17" class="yamen-compound-wall"/>
+    <polyline points="2713.54,2818.83 2456.54,2876.83 2453.46,2863.17 2710.46,2805.17 2713.54,2818.83" class="yamen-compound-wall-crown"/>
+  </g>
+<g id="feature-yamen-wall-southeast" data-feature-id="yamen-wall-southeast" data-category="wall" data-subtype="yamen-wall" data-mode="clip" data-map-importance="secondary" class="destructible wall-feature yamen-wall-feature">
+    <polygon points="3044.23,2741.63 2842.23,2809.63 2837.77,2796.37 3039.77,2728.37" class="yamen-wall-shadow" transform="translate(4 5)"/>
+    <polygon points="3044.23,2741.63 2842.23,2809.63 2837.77,2796.37 3039.77,2728.37" class="yamen-compound-wall"/>
+    <polyline points="3044.23,2741.63 2842.23,2809.63 2837.77,2796.37 3039.77,2728.37 3044.23,2741.63" class="yamen-compound-wall-crown"/>
   </g>
 <g id="feature-city-wall-tower-northwest" data-feature-id="city-wall-tower-northwest" data-category="wall" data-subtype="wall-tower" data-mode="object" data-map-importance="primary" data-label-obstacle="true" class="destructible wall-tower-feature">
     <g transform="rotate(0 2018 1582) translate(2018 1582)">

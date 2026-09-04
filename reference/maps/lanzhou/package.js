@@ -182,8 +182,42 @@ function polygonFeature(id, category, points, renderType, options = {}) {
     renderType,
     accent: options.accent,
     severeOnly: options.severeOnly === true,
+    capabilities: options.capabilities,
   };
 }
+
+function wallSegmentFeature(id, name, start, end, width = 14) {
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  return polygonFeature(
+    id,
+    'yamen-wall',
+    rotatedRectangle(
+      (start[0] + end[0]) / 2,
+      (start[1] + end[1]) / 2,
+      Math.hypot(dx, dy),
+      width,
+      Math.atan2(dy, dx) * 180 / Math.PI,
+    ),
+    'yamen-wall',
+    {
+      name,
+      ruinStyle: 'rammed-earth',
+      minCoverage: 0.22,
+      capabilities: Object.freeze({
+        navigation: Object.freeze({ blockingHeightFt: 12 }),
+      }),
+    },
+  );
+}
+
+const yamenWallFeatures = [
+  wallSegmentFeature('yamen-wall-north', '州衙北院墙', [2470, 2370], [3032, 2349]),
+  wallSegmentFeature('yamen-wall-west', '州衙西院墙', [2455, 2870], [2470, 2370]),
+  wallSegmentFeature('yamen-wall-east', '州衙东院墙', [3032, 2349], [3042, 2735]),
+  wallSegmentFeature('yamen-wall-southwest', '州衙西南院墙', [2712, 2812], [2455, 2870]),
+  wallSegmentFeature('yamen-wall-southeast', '州衙东南院墙', [3042, 2735], [2840, 2803]),
+];
 
 const cityWallFeatures = [
   polygonFeature('city-wall-northwest', 'wall', [[2020, 1570], [2775, 1540], [2780, 1602], [2035, 1632]], 'wall', { name: '北城墙西段' }),
@@ -358,6 +392,7 @@ const groundFeature = polygonFeature(
 const featureDefinitions = Object.freeze([
   ...terrainFeatures,
   ...cityWallFeatures,
+  ...yamenWallFeatures,
   ...cityWallTowerFeatures,
   ...gateFeatures,
   ...passFeatures,
@@ -378,7 +413,7 @@ function canonicalCategory(feature) {
   if (feature.category === 'bridge') return 'bridge';
   if (feature.category === 'vegetation') return 'vegetation';
   if (feature.category === 'terrain') return 'terrain';
-  if (['wall', 'wall-tower', 'gate', 'pass-wall', 'pass-gate'].includes(feature.category)) return 'wall';
+  if (['wall', 'yamen-wall', 'wall-tower', 'gate', 'pass-wall', 'pass-gate'].includes(feature.category)) return 'wall';
   return 'building';
 }
 
@@ -490,6 +525,7 @@ const publicFeatures = Object.freeze(featureDefinitions.map((feature) => Object.
   ruinStyle: feature.ruinStyle,
   roadOverlapAllowed: feature.roadOverlapAllowed,
   severeOnly: Boolean(feature.severeOnly),
+  ...(feature.capabilities ? { capabilities: feature.capabilities } : {}),
   ...buildingMetadata(feature),
 })));
 
@@ -522,6 +558,16 @@ function renderWall(feature) {
     <polygon points="${points}" class="wall-shadow" transform="translate(7 9)"/>
     <polygon points="${points}" class="rammed-wall"/>
     <polyline points="${points} ${feature.geometry.points[0][0]},${feature.geometry.points[0][1]}" class="wall-crown"/>
+  </g>`;
+}
+
+function renderYamenWall(feature) {
+  const points = pointsAttribute(feature.geometry.points);
+  const closedPoints = `${points} ${feature.geometry.points[0][0]},${feature.geometry.points[0][1]}`;
+  return `${featureGroupOpen(feature, 'wall-feature yamen-wall-feature')}
+    <polygon points="${points}" class="yamen-wall-shadow" transform="translate(4 5)"/>
+    <polygon points="${points}" class="yamen-compound-wall"/>
+    <polyline points="${closedPoints}" class="yamen-compound-wall-crown"/>
   </g>`;
 }
 
@@ -819,6 +865,7 @@ function renderBuilding(feature, artAssets = {}) {
 function renderFeature(feature, artAssets = {}) {
   if (feature.renderType === 'field') return renderField(feature);
   if (feature.renderType === 'wall') return renderWall(feature);
+  if (feature.renderType === 'yamen-wall') return renderYamenWall(feature);
   if (feature.renderType === 'pass-wall') return renderPassWall(feature);
   if (feature.renderType === 'wall-tower') return renderWallTower(feature, artAssets);
   if (feature.renderType === 'gate') return renderGate(feature, false, artAssets);
@@ -881,7 +928,6 @@ function createParcelsLayer() {
     <path d="M3300 2290 L3975 2250 L4010 2800 L3250 2885 Z" class="parcel residential-parcel"/>
     <path d="M2090 2720 L2670 2860 L2610 2980 L2150 3025 Z" class="parcel residential-parcel pale"/>
     <g class="courtyard-walls">
-      <path d="M2470 2370 L3010 2350 L3020 2850 L2455 2870 Z"/>
       <path d="M2160 1660 L2980 1620 L2995 2130 L2145 2195 Z"/>
       <path d="M3540 1590 L3830 1570 L3880 2025 L3530 2070 Z"/>
     </g>
@@ -1052,6 +1098,9 @@ export function createLanzhouSvg(artAssets = {}) {
       .courtyard-walls path { fill: none; stroke: #9f8764; stroke-width: 11; stroke-dasharray: 34 14; opacity: .65; }
       .wall-shadow { fill: #7c6a51; opacity: .26; }.rammed-wall { fill: #c7b58f; stroke: #826d4e; stroke-width: 8; }
       .wall-crown { fill: none; stroke: #e4d5b5; stroke-width: 10; stroke-dasharray: 28 14; opacity: .72; }
+      .yamen-wall-shadow { fill: #75634a; opacity: .24; }
+      .yamen-compound-wall { fill: #c8b58e; stroke: #806b4f; stroke-width: 3; }
+      .yamen-compound-wall-crown { fill: none; stroke: #eadcbb; stroke-width: 3; opacity: .78; }
       .pass-wall-shadow { fill: #594b39; opacity: .32; }.pass-wall { fill: #a99773; stroke: #65543d; stroke-width: 9; }
       .pass-stone-seam { fill: none; stroke: #d5c39f; stroke-width: 7; stroke-dasharray: 24 16; opacity: .65; }
       .wall-tower-base { fill: #b39b70; stroke: #68533a; stroke-width: 7; }.wall-tower-roof { fill: #6f776d; stroke: #465049; stroke-width: 5; }
@@ -1278,7 +1327,7 @@ export function createLanzhouMapData(artAssets = {}) {
     title: BUILT_IN_LANZHOU_MAP.title,
     name: '北宋兰州城（1104）',
     version: BUILT_IN_LANZHOU_MAP.version,
-    compatibleMapVersions: Object.freeze(['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4']),
+    compatibleMapVersions: Object.freeze(['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4', '1.0.5']),
     period: '北宋·崇宁三年（1104）',
     width: MAP_WIDTH,
     height: MAP_HEIGHT,
