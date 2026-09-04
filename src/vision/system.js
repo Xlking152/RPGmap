@@ -315,7 +315,7 @@ export function createVisionFogSystem() {
           exploration.fillStyle = '#000';
           drawExplored(exploration);
           exploration.globalCompositeOperation = 'source-over';
-          exploration.fillStyle = 'rgba(11,16,18,0.82)';
+          exploration.fillStyle = 'rgba(11,16,18,0.70)';
           drawExplored(exploration);
           explorationDirty = false;
         }

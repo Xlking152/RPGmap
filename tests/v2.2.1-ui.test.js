@@ -45,6 +45,8 @@ test('Actor and Marker libraries separate PC templates from independent non-PC i
   assert.match(markerSource, /data-marker-import-actor-type/);
   assert.doesNotMatch(markerSource, /Actor 型指示物|NPC \/ 怪物/);
   assert.match(markerSource, /data-marker-actor-manage/);
+  assert.match(markerSource, /-webkit-line-clamp:2/);
+  assert.match(markerSource, /\.marker-template-row \.marker-actions \{ flex-wrap:wrap; \}/);
   assert.match(markerSource, /api\.status\.applyBatch/);
   assert.match(markerSource, /type: 'actor\.runtime\.perform'/);
   assert.match(markerSource, /actorLink: false/);

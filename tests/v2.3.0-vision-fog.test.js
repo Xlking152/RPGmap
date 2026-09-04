@@ -9,7 +9,7 @@ test('Fog renderer separates static exploration memory from the lightweight perc
   assert.match(visionSource, /createCanvas\('perception'\)/);
   assert.match(visionSource, /explorationCanvas\.style\.display = 'none'/);
   assert.match(visionSource, /rgba\(8,12,14,0\.96\)/);
-  assert.match(visionSource, /rgba\(11,16,18,0\.82\)/);
+  assert.match(visionSource, /rgba\(11,16,18,0\.70\)/);
   assert.match(visionSource, /rgba\(218,226,228,0\.20\)/);
   assert.match(visionSource, /drawCurrentCircle\(perception, source\?\.vagueRangeMeters/);
   assert.match(visionSource, /drawCurrentCircle\(perception, source\?\.preciseRangeMeters/);

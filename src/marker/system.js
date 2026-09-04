@@ -26,10 +26,11 @@ function installStyles(documentNode) {
     .marker-form label { display:grid; gap:4px; font-size:11px; color:#59676a; }
     .marker-form input,.marker-form select { width:100%; box-sizing:border-box; padding:7px; border:1px solid #cbd5d2; border-radius:6px; background:#fff; }
     .marker-actions { display:flex; flex-wrap:wrap; gap:6px; }
-    .marker-template-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 8px; align-items:center; padding:7px 0; border-bottom:1px solid rgba(70,90,90,.14); }
-    .marker-template-row strong,.marker-instance-row input[type="text"] { min-width:0; overflow:hidden; text-overflow:ellipsis; }
-    .marker-template-row small { grid-column:1; color:#667477; }
-    .marker-template-row .marker-actions { grid-column:2; grid-row:1/3; flex-wrap:nowrap; }
+    .marker-template-row { display:grid; grid-template-columns:minmax(0,1fr); gap:4px; align-items:center; padding:7px 0; border-bottom:1px solid rgba(70,90,90,.14); }
+    .marker-template-row strong { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; overflow-wrap:anywhere; }
+    .marker-instance-row input[type="text"] { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    .marker-template-row small { color:#667477; }
+    .marker-template-row .marker-actions { flex-wrap:wrap; }
     .marker-instance-drawer { display:grid; gap:8px; border-left:3px solid #176d76; }
     .marker-instance-toolbar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
     .marker-instance-row { display:grid; grid-template-columns:auto minmax(90px,1fr) 64px 64px; gap:6px; align-items:center; }
