@@ -55,7 +55,9 @@ const baseline = Object.freeze({
 });
 const limits = Object.freeze({
   initialJsGzip: Math.floor(baseline.initialJsGzip * 1.001),
-  totalJsGzip: Math.floor(baseline.totalJsGzip * 1.05),
+  // v2.3.2 adds the lazily loaded Document/WAL workspace plus visible segmented
+  // movement labels. Keep startup at 0.1%; give optional feature chunks 5.5%.
+  totalJsGzip: Math.floor(baseline.totalJsGzip * 1.055),
   totalCssGzip: Math.floor(baseline.totalCssGzip * 1.05),
 });
 const measured = {

@@ -68,6 +68,21 @@ test('Document Operation Protocol 3 rejects mismatched schemas and unsafe intent
   }), error => error.code === 'unknown_document_intent');
 });
 
+test('Actor Document deletion requires explicit referenced Token deletion semantics', () => {
+  assert.throws(() => documentWritesToWorldOperations([{
+    action: 'delete',
+    document: { type: 'Actor', id: 'actor-a', parent: null },
+    intent: 'actor.delete',
+    data: {},
+  }]), error => error.code === 'actor_delete_confirmation_required');
+  assert.deepEqual(documentWritesToWorldOperations([{
+    action: 'delete',
+    document: { type: 'Actor', id: 'actor-a', parent: null },
+    intent: 'actor.delete',
+    data: { deleteReferencedTokens: true },
+  }]), [{ type: 'actor.delete', payload: { actorId: 'actor-a', deleteReferencedTokens: true } }]);
+});
+
 test('Token Document move becomes one atomic path operation with preconditions', () => {
   const [operation] = documentWritesToWorldOperations([moveWrite()]);
   assert.equal(operation.type, 'token.movePath');

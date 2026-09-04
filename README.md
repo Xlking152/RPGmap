@@ -31,14 +31,14 @@ RPGmap 仅面向本机和可信局域网，不应直接暴露到公网。World�
 - Scene/MapPackage：同一地图可建立多个 Scene，Feature State 与 Token 相互隔离。
 - Actor/Token：Actor 是可复用模板；PC 可使用 Linked Token，怪物、NPC 与召唤物强制使用 Unlinked Token，并在各自 `actorDelta` 中独立保存生命、伤势、状态、资源和当前形态。
 - 角色与怪物卡：Actor Sheet V3 支持多窗口、拖动缩放与 Play/Edit 边界；GM 可维护公共简介、外观、已知情报和可公开状态。LIMITED 玩家只获得服务器裁剪后的公共卡，Unlinked 怪物状态按具体 Token 实例隔离。
-- 地图工具：选择、框选、直接拖动、碰撞、测距和高度。普通拖放提交直线路线；`Ctrl`/`Cmd` 进入分段规划，支持点击或 `F` 添加路径点、右键或 `Alt+F` 撤销、`Enter` 确认和 `Esc` 取消。连续 WASD 合并为有界事务，群组拖动保持相对队形并原子提交。
+- 地图工具：选择、框选、直接拖动、碰撞、测距和高度。普通拖放提交直线路线；拖动期间按住 `Ctrl`/`Cmd` 并松开鼠标进入分段规划，`Ctrl`/`Cmd`+点击或 `F` 连续添加拐点，普通点击或 `Enter` 提交，右键或 `Alt+F` 撤销，`Esc` 取消。规划线始终位于 Fog 上方，显示拐点、分段和累计距离。连续 WASD 合并为有界事务，群组拖动保持相对队形并原子提交。
 - 规则系统：Infinite Horror Actor、Health、B/L/A 伤势、Status/Effect、Damage/Healing；侦测分为精确与模糊范围，并结合明暗环境、暗视等感官能力计算。
 - 生命与批量操作：生命展示与可编辑字段由当前 Ruleset 的 Health Presentation 决定。Infinite Horror 在实例抽屉显示完好/B/L/A 伤势与对应编辑字段；普通 HP 或 DND 类规则可只显示 `current/max`。批量伤害/恢复也从 Ruleset 提供的伤害类型、恢复类型和标签生成。地图右下角保持紧凑的 Primary Token 大头像、名称、实例类型和 Ruleset 生命摘要，不再用大尺寸多选编辑 HUD 遮挡地图。
 - 战斗与聊天：先攻、回合权限、共享聊天与系统日志；当前战斗者离开本回合起点后，会保留不可交互的回合起点幻影直到下一回合。普通 Player 在战斗中只能移动当前回合的 Token 实例，不能通过同 Actor 模板的其他 Token 绕过 Combat Turn Lock；GM 可按需要调整多个 Token。
 - Local/LAN：Document Operation Protocol 3 在现有 World 权威层上按 Actor、Token、Scene、Chat、Combat、Status 与 Fog 地址提交白名单 intent；普通操作只广播逐会话安全差量。最近 256 次/5 分钟提交可供断线续传，WAL 在 ACK 前刷盘，revision、幂等和 AudienceProjection 继续由服务器裁决。权限区分 NONE、LIMITED、OBSERVER、OWNER 与 Token 控制权；怪物/NPC/召唤物实例使用 `controllerUserIds` 的 Token-first 控制权。
 - 视野与迷雾：玩家选择自己控制的 Token 作为唯一实时视野来源；视野圆心可跟随本地移动预测，但探索只在服务器确认后写入。模糊范围使用保留地图原色的冷灰透明薄雾，未探索区仍接近纯黑，历史探索保持极暗。精确与模糊范围实际看过的 5 米网格区域按 Scene 与队伍持久化共享，GM 可重置或重新隐藏。显式导入或实例覆盖的侦测距离按 Ruleset 原值运行，不再被 Fog 的 120 m 实现上限截断。
 - 隐身与可见性：Token 支持公开、队伍、仅 GM 和指定用户；隐身 Token 仅向 GM、控制者、队友及明确授权用户以半透明形式投影。
-- 其他指示物：陷阱、目标点、区域和注释使用轻量 Marker；指示物库分别提供怪物、NPC 与其他模板区域，怪物/NPC 可从各自 XLSX 入口导入，并可在当前 Scene 实例抽屉中逐个检查 Ruleset 生命字段与状态，并执行批量状态、批量伤害和批量恢复。怪物、NPC 与召唤物的 Actor 状态写入其 Synthetic Actor Token 的 `actorDelta.effects`，不会修改模板或同模板的其他实例。
+- 其他指示物：陷阱、目标点、区域和注释使用轻量 Marker；指示物库分别提供怪物、NPC 与其他模板区域，怪物/NPC 的首次 XLSX 导入不需要预先打开角色库。GM 可在模板卡 Edit 模式修改新实例的默认生命规则，但不改动已有 Unlinked Token；也可在危险区删除模板及所有 Scene 中的关联实例。当前 Scene 实例抽屉可检查 Ruleset 生命字段与状态，并执行批量状态、伤害和恢复。怪物、NPC 与召唤物状态写入各自 Synthetic Actor Token 的 `actorDelta.effects`，不会修改模板或其他实例。
 - 发布验证：audit、全量测试、500 Token/七会话基准、tracked syntax、bundle budget、严格包清单、SHA-256，以及 Windows Edge/Chrome 双浏览器 smoke。
 
 ## 架构边界

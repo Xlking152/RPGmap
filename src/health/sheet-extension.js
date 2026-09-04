@@ -81,6 +81,15 @@ function canEditHealth(api, actor, tokenId = null) {
   return !capabilities || capabilities.canEditActor?.(actor.id) !== false;
 }
 
+function canEditTemplateHealthMode(api, actor, sheet) {
+  if (!['monster', 'npc', 'summon'].includes(String(actor?.type || ''))) return false;
+  if (sheet?.dataset?.sheetMode !== 'template' || sheet?.dataset?.sheetInteractionMode !== 'edit') return false;
+  const multiplayer = api.multiplayer?.getStatus?.();
+  if (multiplayer?.connected && multiplayer.session?.role !== 'gm') return false;
+  if (api.permissions?.can) return api.permissions.can('actor.edit', { actorId: actor.id, actor }) === true;
+  return true;
+}
+
 function disabledReason(actor, tokenId = null) {
   if (!tokenId && ['monster', 'npc', 'summon'].includes(String(actor?.type || ''))) {
     return '怪物、NPC 与召唤物模板的生命只能从 Token 实例修改';
@@ -112,12 +121,15 @@ function healthInput(field, actorId, tokenId, disabled) {
   return `<input type="number"${min}${max} step="1" value="${escapeHtml(field.value)}" data-health-field-id="${escapeHtml(field.id)}" data-health-actor-id="${escapeHtml(actorId)}" data-health-token-id="${escapeHtml(tokenId || '')}" aria-label="${escapeHtml(field.label || field.id)}"${disabled}>`;
 }
 
-export function renderActorHealthPanel(api, actor, { actorId = actor.id, tokenId = null } = {}) {
+export function renderActorHealthPanel(api, actor, { actorId = actor.id, tokenId = null, sheet = null } = {}) {
   const health = resolveActorHealth(actor, api);
   if (!health) return '';
   const view = describeHealth(health, { ruleset: api.ruleset });
   const editable = canEditHealth(api, actor, tokenId);
   const disabled = editable ? '' : ` disabled title="${escapeHtml(disabledReason(actor, tokenId))}"`;
+  const independentTemplate = !tokenId && ['monster', 'npc', 'summon'].includes(String(actor?.type || ''));
+  const modeEditable = editable || canEditTemplateHealthMode(api, actor, sheet);
+  const modeDisabled = modeEditable ? '' : ` disabled title="${escapeHtml(independentTemplate ? '请以 GM 身份切换到“编辑卡片”修改新实例的默认生命规则' : disabledReason(actor, tokenId))}"`;
   const width = value => health.max > 0 ? Math.max(0, Number(value) / health.max * 100) : 0;
   const fields = new Map((view.fields || []).map(field => [String(field.id), field]));
   const segmentIds = new Set((view.segments || []).map(segment => String(segment.id)));
@@ -133,11 +145,12 @@ export function renderActorHealthPanel(api, actor, { actorId = actor.id, tokenId
     ? `<div class="entity-health-bar" title="${escapeHtml(view.summary)}">${view.segments.map(segment => `<span style="width:${width(segment.value)}%;background:${escapeHtml(segment.color || '#4b9f69')}" title="${escapeHtml(segment.label || segment.id)}"></span>`).join('')}</div>`
     : '';
   return `<section class="entity-section entity-health-panel" data-health-panel>
-    <div class="entity-health-head"><h3>${escapeHtml(view.title || '生命系统')}${view.compactSummary ? `<span class="entity-health-compact">${escapeHtml(view.compactSummary)}</span>` : ''}</h3><label>模式 <select data-health-mode="${escapeHtml(actorId)}" data-health-token-id="${escapeHtml(tokenId || '')}"${disabled}>${modeOptionsHtml(health.mode, api.ruleset)}</select></label></div>
+    <div class="entity-health-head"><h3>${escapeHtml(view.title || '生命系统')}${view.compactSummary ? `<span class="entity-health-compact">${escapeHtml(view.compactSummary)}</span>` : ''}</h3><label>${independentTemplate ? '默认生命规则（新实例）' : '模式'} <select data-health-mode="${escapeHtml(actorId)}" data-health-token-id="${escapeHtml(tokenId || '')}"${modeDisabled}>${modeOptionsHtml(health.mode, api.ruleset)}</select></label></div>
     ${bar}
     ${values ? `<div class="entity-health-values">${values}</div>` : ''}
     ${view.status ? `<div class="entity-health-status ${view.danger ? 'is-danger' : ''}">${escapeHtml(view.status)}</div>` : ''}
     ${view.help ? `<div class="entity-help">${escapeHtml(view.help)}</div>` : ''}
+    ${independentTemplate ? '<div class="entity-help">此设置只影响之后创建的独立 Token；现有实例的生命规则和当前生命不会改变。实例当前生命请从 Token 卡修改。</div>' : ''}
   </section>`;
 }
 
@@ -179,7 +192,7 @@ export function createHealthSheetExtension() {
         enhancing = true;
         try {
           existing?.remove();
-          body.insertAdjacentHTML('afterbegin', renderActorHealthPanel(api, actor, subject));
+          body.insertAdjacentHTML('afterbegin', renderActorHealthPanel(api, actor, { ...subject, sheet }));
           const panel = body.querySelector('[data-health-panel]');
           if (panel) panel.dataset.healthSignature = signature;
         } finally {
@@ -227,7 +240,9 @@ export function createHealthSheetExtension() {
             });
           } catch (error) {
             console.error('[RPGmap Health UI] mode update failed', error);
+            api.showToast?.(`生命规则保存失败：${error?.message || error}`, 'error');
           } finally {
+            sheet?.querySelector('[data-health-panel]')?.remove();
             queueMicrotask(() => { enhanceSheet(sheet); enhanceInspector(); });
           }
           return;

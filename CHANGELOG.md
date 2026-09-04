@@ -2,6 +2,10 @@
 
 ## v2.3.2
 
+- 修复 Ctrl/Cmd 连续路径规划：移动预览改用高于 Fog 的独立图层，规划态终点随鼠标更新，并显示已保存拐点、分段距离、累计距离与验证状态；快速连续添加拐点会串行验证，不再乱序或重复。
+- 修复首次从指示物列表导入怪物/NPC XLSX 无响应：文件选择器在原始用户点击中同步打开，选定文件后才懒加载解析器；指示物列表与角色库共用同一导入入口。
+- 怪物、NPC 和召唤物模板卡的 GM Edit 模式可修改“默认生命规则（新实例）”。该值只供之后放置的 Unlinked Token 继承，现有实例的生命规则与当前生命保持隔离。
+- 指示物模板列表与模板卡危险区增加“删除模板”。GM 必须输入模板名称确认，服务器再通过 Document Protocol 3 原子删除 Actor、所有 Scene 关联 Token 及战斗引用，不再克隆和提交整份 World。
 - 新增轻量 Document Operation Protocol 3：Actor、Token、Scene、ChatMessage、Combat、Status 与 Fog 通过带 Document 地址、白名单 intent、precondition 和原子 batch 的统一入口提交。普通交互只返回 Audience-safe create/update/delete/move/append 差量，不再导入完整 World；旧 `performOperations()` 仅作为迁移中的兼容包装器。
 - Local/LAN 会话携带协议版本、resume revision 与 Audience 指纹。服务端保留最近 256 次或 5 分钟安全提交，断线后优先补发缺失 Document commit，历史不足或权限身份改变时才回退 snapshot；未确认请求沿用 `operationId`，重复移动、聊天、伤害和状态不会再次执行。
 - 服务端 AudienceProjection 使用写时复制投影与受影响 Document 快速路径。移动、普通聊天和非视野源的安全状态变更只更新相关 Token/Actor/Chat；权限、视野源、隐身、跨 Scene 等安全边界变化仍执行完整投影。500 Token、GM+6 Player 的本机回环基准综合 p95 从首轮约 `291 ms` 降至 `60 ms` 以下，普通请求/响应保持差量。

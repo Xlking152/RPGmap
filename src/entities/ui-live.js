@@ -73,8 +73,6 @@ export function createEntityUiTool(options = {}) {
       let selectedTokenId = null;
       let activeSheetKey = null;
       let pendingAvatarSheetKey = null;
-      let pendingImportActorId = null;
-      let pendingImportActorType = 'pc';
       let renderingPanel = false;
       let importBusy = false;
       let destroyed = false;
@@ -94,12 +92,6 @@ export function createEntityUiTool(options = {}) {
       importButton.textContent = '导入角色卡';
       importButton.title = '导入 XLSX：仅读取角色概览与具体数值表';
       toolbar?.prepend(importButton);
-
-      const xlsxInput = documentNode.createElement('input');
-      xlsxInput.type = 'file';
-      xlsxInput.accept = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-      xlsxInput.hidden = true;
-      toolbar?.append(xlsxInput);
 
       const avatarInput = documentNode.createElement('input');
       avatarInput.type = 'file';
@@ -561,10 +553,16 @@ export function createEntityUiTool(options = {}) {
         const classificationControls = !instanceMode && actorSheet.context.editable && capabilities().canManageStructure
           ? `<div class="entity-formbar" data-sheet-edit-only><label>类型<select data-actor-type><option value="pc" ${actor.type === 'pc' ? 'selected' : ''}>PC</option><option value="monster" ${actor.type === 'monster' ? 'selected' : ''}>怪物</option><option value="npc" ${actor.type === 'npc' ? 'selected' : ''}>NPC</option><option value="summon" ${actor.type === 'summon' ? 'selected' : ''}>召唤物</option><option value="other" ${actor.type === 'other' ? 'selected' : ''}>其他</option></select></label><label>队伍<input data-actor-party maxlength="80" value="${escapeEntityHtml(actor.partyId || '')}"></label></div>`
           : '';
+        const deleteTemplateDanger = !instanceMode
+          && actorSheet.context.editable
+          && capabilities().canManageStructure
+          && ['monster', 'npc', 'summon', 'other'].includes(String(actor.type))
+          ? `<section class="entity-section entity-danger-zone" data-sheet-edit-only><h3>危险操作</h3><div class="entity-help">删除模板会同时删除所有 Scene 中的关联 Token，并清理战斗引用。</div><button type="button" class="small-button danger" data-sheet-action="delete-template">删除模板</button></section>`
+          : '';
         const html = `<div class="entity-sheet-backdrop entity-sheet-window" ${windowAttrs}><div class="entity-sheet entity-sheet-v3 ${canEdit ? '' : 'entity-sheet-readonly'} ${independentTemplate ? 'entity-template-runtime-readonly' : ''}" ${windowAttrs} data-actor-id="${escapeEntityHtml(actor.id)}" data-token-id="${escapeEntityHtml(token?.id || '')}" data-sheet-kind="${escapeEntityHtml(sheetKind)}" data-sheet-mode="${instanceMode ? 'instance' : 'template'}" data-sheet-interaction-mode="${actorSheet.context.mode}" role="dialog" aria-modal="false">
           <header class="entity-sheet-header">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><input type="text" maxlength="80" value="${escapeEntityHtml(actor.name)}" data-actor-name ${actorSheet.context.editable ? '' : 'disabled'}><div class="entity-formbar"><strong>${instanceMode ? 'Token 实例卡' : 'Actor 模板卡'}</strong>${sheetCapabilities.hasVariants ? `<span>当前形态</span><select data-form-select>${(sheetDescription.variants || []).map(item => `<option value="${escapeEntityHtml(item.id)}" ${id(item.id) === id(sheetDescription.currentVariantId) ? 'selected' : ''}>${escapeEntityHtml(item.label)}</option>`).join('')}</select>${sheetCapabilities.canCycleVariants ? '<button type="button" class="small-button primary" data-sheet-action="cycle-form">V · 切换</button>' : ''}${!instanceMode && sheetCapabilities.canImportXlsx && actorSheet.context.editable ? '<button type="button" class="small-button" data-sheet-edit-only data-sheet-action="add-form">+ 形态</button>' : ''}` : ''}${!instanceMode && actorSheet.context.editable ? '<button type="button" class="small-button" data-sheet-edit-only data-sheet-action="avatar">更换头像</button>' : ''}</div>${actorSheet.renderBadges(sheetDescription)}<div class="status-title-band">${renderStatusStrip(titleSnapshot.statuses, { limit: 8, emptyText: '无机械状态' })}</div></div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>
           ${classificationControls}<nav class="entity-sheet-tabs">${tabs.map(([tabId, label]) => `<button type="button" class="entity-sheet-tab ${id(tab) === id(tabId) ? 'active' : ''}" data-sheet-tab="${escapeEntityHtml(tabId)}">${escapeEntityHtml(label)}</button>`).join('')}</nav>
-          <main class="entity-sheet-body">${actorSheetBody(context, tab, actorSheet)}</main>
+          <main class="entity-sheet-body">${actorSheetBody(context, tab, actorSheet)}${deleteTemplateDanger}</main>
         </div></div>`;
         return applySheetParts(record, html, actorSheet);
       }
@@ -596,6 +594,7 @@ export function createEntityUiTool(options = {}) {
       }
 
       api.entities = {
+        ...api.entities,
         openActor(actorId, tab = null) {
           const actor = store.actor(actorId);
           if (!actor) return false;
@@ -611,7 +610,10 @@ export function createEntityUiTool(options = {}) {
           return openSheet(token.actorId, tab, token.id);
         },
         placeActor(actorId, placementOptions = {}) { tokenController.beginPlacement(actorId, placementOptions); },
-        requestImport(actorType = 'pc') { chooseImport(null, actorType); },
+        importFile(file, context = {}) {
+          return parseImport(file, context.actorId || null, context.actorType || 'pc');
+        },
+        removeActor(actorId) { return tokenController.removeActor(actorId); },
         canImportXlsx: rulesetCapabilities.canImportXlsx,
         closeSheet,
         focusSheet,
@@ -657,17 +659,7 @@ export function createEntityUiTool(options = {}) {
           setStatus('角色卡导入失败');
         } finally {
           importBusy = false;
-          xlsxInput.value = '';
-          pendingImportActorId = null;
-          pendingImportActorType = 'pc';
         }
-      }
-
-      function chooseImport(actorId = null, actorType = 'pc') {
-        if (!requireStructure('只有 GM 可以导入角色卡或形态')) return;
-        pendingImportActorId = actorId;
-        pendingImportActorType = actorType;
-        xlsxInput.click();
       }
 
       function migrateLegacyMarkers() {
@@ -693,7 +685,7 @@ export function createEntityUiTool(options = {}) {
         if (!button) return;
         const action = button.dataset.entityAction;
         const actorId = button.dataset.id;
-        if (action === 'import') chooseImport();
+        if (action === 'import') api.entities.requestImport({ actorId: null, actorType: 'pc' });
         else if (action === 'new') {
           if (!requireStructure()) return;
           const actor = createActorFromImport({}, { ruleset: api.ruleset });
@@ -703,7 +695,7 @@ export function createEntityUiTool(options = {}) {
         else if (action === 'place') {
           const shared = button.closest('[data-actor-id]')?.querySelector('[data-entity-share]')?.checked !== false;
           tokenController.beginPlacement(actorId, { actorLink: shared });
-        } else if (action === 'add-form') chooseImport(actorId);
+        } else if (action === 'add-form') api.entities.requestImport({ actorId, actorType: 'pc' });
         else if (action === 'delete') tokenController.removeActor(actorId).catch(error => {
           console.error('[RPGmap Entity UI] Actor delete failed', error);
           setStatus(`删除失败：${error?.message || error}`);
@@ -712,12 +704,7 @@ export function createEntityUiTool(options = {}) {
       }
 
       panel.addEventListener('click', handlePanelClick);
-      importButton.addEventListener('click', () => chooseImport());
-      xlsxInput.addEventListener('change', () => parseImport(
-        xlsxInput.files?.[0],
-        pendingImportActorId,
-        pendingImportActorType,
-      ));
+      importButton.addEventListener('click', () => api.entities.requestImport({ actorId: null, actorType: 'pc' }));
 
       function activateEventSheet(event) {
         const record = recordForNode(event.target);
@@ -796,6 +783,11 @@ export function createEntityUiTool(options = {}) {
         if (await tokenController.handleSheetAction(actionNode, actor)) return;
         const action = actionNode.dataset.sheetAction;
         if (action === 'close') closeSheet(record.key);
+        else if (action === 'delete-template') {
+          if (!record.tokenId && requireActorStructureEdit(record) && requireStructure()) {
+            await tokenController.removeActor(record.actorId);
+          }
+        }
         else if (action === 'cycle-form') {
           if (!requireRuntimeEdit(actor, record)) return;
           await performCanonicalRuntimeOperation({ type: 'variant.cycle', direction: 1 }, {
@@ -803,7 +795,7 @@ export function createEntityUiTool(options = {}) {
             record,
           });
         } else if (action === 'add-form') {
-          if (requireActorStructureEdit(record)) chooseImport(record.actorId);
+          if (requireActorStructureEdit(record)) api.entities.requestImport({ actorId: record.actorId, actorType: 'pc' });
         }
         else if (action === 'avatar') {
           if (!record.tokenId && requireActorStructureEdit(record)) {

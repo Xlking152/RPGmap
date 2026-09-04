@@ -142,11 +142,13 @@ test('movement fast path validates once per direct commit and reuses same-contex
   assert.equal(fixture.api.movementFast.getNavigationCacheSize(), 1);
 });
 
-test('Movement V5 uses RAF preview updates, persistent Leaflet preview objects, and coalesced WASD segments', () => {
+test('Movement V5 uses visible RAF route previews and coalesced WASD segments', () => {
   assert.match(movementIndex, /createMovementController/);
   assert.match(movementIndex, /createMovementFastPathSystem/);
   assert.match(movementController, /requestAnimationFrame/);
-  assert.match(movementController, /previewLine\.setLatLngs/);
+  assert.match(movementController, /MOVEMENT_PREVIEW_PANE/);
+  assert.match(movementController, /previewPane\.style\.zIndex = '550'/);
+  assert.match(movementController, /addPathDistanceLabel/);
   assert.match(movementController, /sameDirection\(last, direction\)/);
   assert.match(movementController, /last\.count \+= 1/);
   assert.match(movementController, /setPointerCapture/);

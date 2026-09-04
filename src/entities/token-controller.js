@@ -363,13 +363,23 @@ export function createEntityTokenController({
     const actor = (world.actors || []).find(item => id(item?.id) === target);
     if (!actor) return null;
     const refs = listWorldActorTokens(world, target);
-    if (!confirmWith(documentNode, `删除角色“${actor.name || actor.id}”及其全部 ${refs.length} 个 Token（包含其他 Scene）？绑定范围会转为自由锚点，战斗中的缺失 Token 会自动移除。`)) return null;
+    const counts = new Map();
+    refs.forEach(entry => counts.set(entry.sceneId, (counts.get(entry.sceneId) || 0) + 1));
+    const sceneNames = new Map((world.scenes || []).map(scene => [id(scene.id), scene.name || scene.id]));
+    const detail = [...counts].map(([sceneId, count]) => `${sceneNames.get(sceneId) || sceneId}：${count} 个`).join('\n') || '无已放置实例';
+    const actorName = String(actor.name || actor.id);
+    const confirmation = promptWith(documentNode,
+      `危险操作：将删除模板“${actorName}”及所有场景中的 ${refs.length} 个 Token。\n${detail}\n\n绑定范围会转为自由锚点，战斗引用会被清理。请输入模板名称以确认：`, '');
+    if (confirmation !== actorName) {
+      if (confirmation !== null) setStatus('模板名称不匹配，已取消删除');
+      return null;
+    }
     const result = await deleteCanonicalActor(api, target);
     clearPlacement({ restoreTool: false });
     store.load({ migrateLegacy: false, dropMarkers: false });
     renderPanel();
     renderSheet();
-    setStatus(`已删除角色“${actor.name || actor.id}”及 ${result.tokens.length} 个 Token`);
+    setStatus(`已删除模板“${actor.name || actor.id}”及 ${result.tokens.length} 个 Token`);
     return result;
   }
 

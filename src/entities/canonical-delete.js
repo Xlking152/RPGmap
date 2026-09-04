@@ -73,34 +73,22 @@ export async function deleteCanonicalToken(api, tokenId) {
 }
 
 export async function deleteCanonicalActor(api, actorId) {
-  if (!api?.world?.get || !api?.world?.commit) {
-    throw new Error('Canonical Actor deletion requires World V2');
+  if (!api?.world?.get || !api?.documents?.dispatch) {
+    throw new Error('Canonical Actor deletion requires Document Protocol 3');
   }
-  const result = removeActorAndTokensFromWorld(api.world.get(), actorId);
-  await api.world.commit(result.world, {
-    source: 'world-v2:actor.remove',
-    reason: 'actor.remove',
-    render: true,
+  const before = api.world.get();
+  const actor = array(before?.actors).find(item => id(item?.id) === id(actorId));
+  if (!actor) throw new Error(`Unknown Actor: ${actorId}`);
+  const tokens = listWorldActorTokens(before, actorId);
+  await api.documents.dispatch({
+    action: 'delete',
+    document: { type: 'Actor', id: id(actorId), parent: null },
+    intent: 'actor.delete',
+    data: { actorId: id(actorId), deleteReferencedTokens: true },
+    precondition: {},
   });
-
-  const removedIds = result.tokens.map(entry => entry.token.id);
+  const result = { actor: clone(actor), tokens };
+  const removedIds = tokens.map(entry => entry.token.id);
   api.selection?.remove?.(removedIds);
-
-  for (const entry of result.tokens) {
-    api.emit?.('token:delete', {
-      id: entry.token.id,
-      tokenId: entry.token.id,
-      actorId: entry.token.actorId,
-      sceneId: entry.sceneId,
-      token: clone(entry.token),
-      actorDelete: true,
-    });
-  }
-  api.emit?.('actor:delete', {
-    id: result.actor.id,
-    actorId: result.actor.id,
-    actor: clone(result.actor),
-    tokenIds: removedIds,
-  });
   return result;
 }

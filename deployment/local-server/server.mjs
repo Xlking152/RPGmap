@@ -617,6 +617,20 @@ function cleanOwnershipForWorld(raw, defaultActorId = null) {
   if (defaultId) ownership[defaultId] = OWNERSHIP.OWNER;
   return { ownership, defaultActorId: defaultId };
 }
+async function pruneAccessForCurrentWorld() {
+  let changed = false;
+  for (const user of access.users) {
+    const cleaned = cleanOwnershipForWorld(user.ownership, user.defaultActorId);
+    if (JSON.stringify(cleaned.ownership) === JSON.stringify(user.ownership)
+      && cleaned.defaultActorId === user.defaultActorId) continue;
+    user.ownership = cleaned.ownership;
+    user.defaultActorId = cleaned.defaultActorId;
+    user.updatedAt = new Date().toISOString();
+    changed = true;
+  }
+  if (changed) await persistAccess();
+  return changed;
+}
 function publicSession(session) {
   const user = session.userId ? findUser(session.userId) : null;
   return {
@@ -1895,6 +1909,12 @@ server.on('upgrade', (req, socket) => {
       const baseRevision = world.revision;
       const beforeState = world.state;
       world = nextWorld;
+      const actorCatalogChanged = envelope.operations.some(operation =>
+        operation.type === 'actor.upsert' || operation.type === 'actor.delete');
+      if (actorCatalogChanged) {
+        try { await pruneAccessForCurrentWorld(); }
+        catch (error) { console.error('[RPGmap] failed to prune Actor access references:', error); }
+      }
       rememberStatusOperation(envelope.operationId, world.revision, applied.results);
       broadcastOperationCommit({
         beforeState,
@@ -1917,7 +1937,7 @@ server.on('upgrade', (req, socket) => {
         results: projectResultsForSession(applied.results, originProjection, session),
         duplicate: false,
       });
-      if (envelope.operations.some(operation => operation.type === 'actor.upsert' || operation.type === 'actor.delete')) {
+      if (actorCatalogChanged) {
         broadcastAccessSnapshots();
       }
       return;

@@ -151,7 +151,7 @@ export function createLightweightMarkerSystem() {
           const canPlace = capabilities.canPlaceActor?.(actor.id) !== false;
           const type = ({ monster: '怪物', npc: 'NPC', summon: '召唤物', other: '其他' })[actor.type] || '其他';
           const open = `<button type="button" class="small-button" data-marker-actor-open="${escapeHtml(actor.id)}">${actor.audienceRestricted === true ? '公开摘要' : '模板卡'}</button>`;
-          return `<article class="marker-template-row"><strong>${escapeHtml(actor.name)}</strong><small>${escapeHtml(type)} · 独立实例 · ${actorTokens(actor.id).length} 个</small><div class="marker-actions">${open}${canPlace ? `<button type="button" class="small-button" data-marker-actor-place="${escapeHtml(actor.id)}">放置</button>` : ''}<button type="button" class="small-button" data-marker-actor-manage="${escapeHtml(actor.id)}">实例</button></div></article>`;
+          return `<article class="marker-template-row"><strong>${escapeHtml(actor.name)}</strong><small>${escapeHtml(type)} · 独立实例 · ${actorTokens(actor.id).length} 个</small><div class="marker-actions">${open}${canPlace ? `<button type="button" class="small-button" data-marker-actor-place="${escapeHtml(actor.id)}">放置</button>` : ''}<button type="button" class="small-button" data-marker-actor-manage="${escapeHtml(actor.id)}">实例</button>${gm ? `<button type="button" class="small-button danger" data-marker-actor-delete="${escapeHtml(actor.id)}">删除模板</button>` : ''}</div></article>`;
         }).join('') || '<div class="ui-current-empty">没有可用模板。</div>';
         const monsterRows = actorRows(actorTemplates.filter(actor => actor.type === 'monster'));
         const npcRows = actorRows(actorTemplates.filter(actor => actor.type === 'npc'));
@@ -196,11 +196,20 @@ export function createLightweightMarkerSystem() {
       });
       panel?.addEventListener('click', async event => {
         const actorImport = event.target.closest('[data-marker-import-actor-type]');
-        if (actorImport) { api.entities?.requestImport?.(actorImport.dataset.markerImportActorType); return; }
+        if (actorImport) {
+          api.entities?.requestImport?.({ actorId: null, actorType: actorImport.dataset.markerImportActorType });
+          return;
+        }
         const actorOpen = event.target.closest('[data-marker-actor-open]');
         if (actorOpen) { api.entities?.openActor?.(actorOpen.dataset.markerActorOpen); return; }
         const actorPlace = event.target.closest('[data-marker-actor-place]');
         if (actorPlace) { api.entities?.placeActor?.(actorPlace.dataset.markerActorPlace, { actorLink: false }); return; }
+        const actorDelete = event.target.closest('[data-marker-actor-delete]');
+        if (actorDelete) {
+          try { await api.entities?.removeActor?.(actorDelete.dataset.markerActorDelete); }
+          catch (error) { api.showToast?.(`删除模板失败：${error?.message || error}`, 'error'); }
+          return;
+        }
         const actorManage = event.target.closest('[data-marker-actor-manage]');
         if (actorManage) {
           selectedTemplateId = actorManage.dataset.markerActorManage;

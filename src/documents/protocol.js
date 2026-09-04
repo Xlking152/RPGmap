@@ -133,6 +133,9 @@ export function documentWritesToWorldOperations(rawWrites) {
     const write = normalizeDocumentWrite(raw, `writes[${index}]`);
     const type = INTENT_TO_OPERATION.get(write.intent);
     const payload = withAddress(write);
+    if (type === 'actor.delete' && payload.deleteReferencedTokens !== true) {
+      fail('actor.delete must explicitly confirm deletion of referenced Tokens', 'actor_delete_confirmation_required');
+    }
     if (type === 'token.movePath') {
       const tokenIds = [...new Set((Array.isArray(payload.tokenIds) ? payload.tokenIds : [write.document.id])
         .map(value => identifier(value, 'tokenId')))];

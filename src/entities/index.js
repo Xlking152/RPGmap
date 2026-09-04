@@ -13,6 +13,13 @@ export function createEntitySystem(options = {}) {
       let destroyed = false;
       let drag = null;
       let geometryPointer = null;
+      let pendingImport = null;
+
+      const xlsxInput = documentNode.createElement('input');
+      xlsxInput.type = 'file';
+      xlsxInput.accept = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      xlsxInput.hidden = true;
+      (shell.querySelector('.toolbar-right') || shell).append(xlsxInput);
 
       function focusWindowFromEvent(event) {
         const sheet = event.target?.closest?.('.entity-sheet');
@@ -80,6 +87,36 @@ export function createEntitySystem(options = {}) {
         return load().then(entityApi => entityApi?.[method]?.(...args));
       }
 
+      function requestImport(request = {}) {
+        const normalized = typeof request === 'string' ? { actorType: request } : (request || {});
+        pendingImport = {
+          actorId: String(normalized.actorId || '').trim() || null,
+          actorType: ['pc', 'monster', 'npc', 'summon'].includes(String(normalized.actorType))
+            ? String(normalized.actorType)
+            : 'pc',
+        };
+        // This click must stay in the original trusted user gesture. Loading the
+        // XLSX runtime before opening the picker loses activation in Edge/Chrome.
+        xlsxInput.value = '';
+        xlsxInput.click();
+        return true;
+      }
+
+      async function handleImportFile() {
+        const file = xlsxInput.files?.[0] || null;
+        const context = pendingImport || { actorId: null, actorType: 'pc' };
+        pendingImport = null;
+        xlsxInput.value = '';
+        if (!file) return;
+        try {
+          const entityApi = await load();
+          await entityApi?.importFile?.(file, context);
+        } catch (error) {
+          console.error('[RPGmap Entity Import] failed', error);
+          api.showToast?.(`角色卡导入失败：${error?.message || error}`, 'error');
+        }
+      }
+
       function handleActorTabClick(event) {
         if (event.target?.closest?.('[data-ui-panel="actors"]')) void load();
       }
@@ -103,8 +140,10 @@ export function createEntitySystem(options = {}) {
         openActor: (...args) => invoke('openActor', ...args),
         openToken: (...args) => invoke('openToken', ...args),
         placeActor: (...args) => invoke('placeActor', ...args),
-        requestImport: (...args) => invoke('requestImport', ...args),
+        requestImport,
+        removeActor: (...args) => invoke('removeActor', ...args),
       };
+      xlsxInput.addEventListener('change', handleImportFile, { signal: abort.signal });
       actorTabbar?.addEventListener('click', handleActorTabClick, true);
       mapElement.addEventListener('dblclick', handleTokenDoubleClick, true);
       documentNode.addEventListener('keydown', handleCharacterSheetKey, true);
@@ -114,6 +153,8 @@ export function createEntitySystem(options = {}) {
         actorTabbar?.removeEventListener('click', handleActorTabClick, true);
         mapElement.removeEventListener('dblclick', handleTokenDoubleClick, true);
         documentNode.removeEventListener('keydown', handleCharacterSheetKey, true);
+        pendingImport = null;
+        xlsxInput.remove();
       });
     },
   };

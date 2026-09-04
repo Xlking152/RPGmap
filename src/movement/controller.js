@@ -1,11 +1,13 @@
 import L from 'leaflet';
 import { latLngToWorld, worldToLatLng, formatDistance } from '../engine/geometry.js';
+import { addPathDistanceLabel, ensurePathLabelPane, installPathLabelStyles } from '../path/labels.js';
 import { snapMovementPoint } from './snap.js';
 
 const DRAG_THRESHOLD_PX = 4;
 const MAX_KEYBOARD_STEPS = 48;
 const MAX_KEYBOARD_BATCH_STEPS = 8;
 const KEYBOARD_BATCH_DELAY_MS = 50;
+const MOVEMENT_PREVIEW_PANE = 'movementPreviewPane';
 
 function inside(point, mapPackage) {
   return point.x >= 0 && point.y >= 0 && point.x <= mapPackage.width && point.y <= mapPackage.height;
@@ -46,7 +48,16 @@ export function createMovementController({ settings } = {}) {
       const cancelFrame = id => windowNode.cancelAnimationFrame
         ? windowNode.cancelAnimationFrame(id)
         : windowNode.clearTimeout(id);
-      const routeLayer = L.layerGroup([], { pane: 'measurePane' }).addTo(api.map);
+      let previewPane = api.map.getPane?.(MOVEMENT_PREVIEW_PANE);
+      if (!previewPane) previewPane = api.map.createPane?.(MOVEMENT_PREVIEW_PANE);
+      if (previewPane) {
+        previewPane.style.zIndex = '550';
+        previewPane.style.pointerEvents = 'none';
+      }
+      ensurePathLabelPane(api.map);
+      installPathLabelStyles(documentNode);
+      const routeLayer = L.layerGroup([], { pane: MOVEMENT_PREVIEW_PANE }).addTo(api.map);
+      const labelLayer = L.layerGroup([], { pane: 'pathLabelPane' }).addTo(api.map);
       const status = message => api.setStatus?.(message);
       const off = [];
       let destroyed = false;
@@ -55,8 +66,6 @@ export function createMovementController({ settings } = {}) {
       let previousTool = 'pan';
       let pointerFrame = null;
       let pendingPointerClient = null;
-      let previewLine = null;
-      let previewEnd = null;
       let keyboardFrame = null;
       let keyboardRunning = false;
       let activePointerId = null;
@@ -109,45 +118,56 @@ export function createMovementController({ settings } = {}) {
           members,
           waypoints: [],
           pending: false,
+          validationPending: false,
+          validationSequence: 0,
+          modifierSeen: false,
         };
         api.selection.replace?.(members.map(member => member.tokenId), leader.id);
         return true;
       }
 
       function clearPreview() {
-        if (previewLine) routeLayer.removeLayer(previewLine);
-        if (previewEnd) routeLayer.removeLayer(previewEnd);
-        previewLine = null;
-        previewEnd = null;
+        routeLayer.clearLayers();
+        labelLayer.clearLayers();
       }
 
-      function drawPreview(target, { valid = true } = {}) {
+      function drawPreview(target, { valid = true, pending = false } = {}) {
         if (!interaction) return;
-        const color = valid ? '#176d76' : '#b52f2a';
-        const points = [
-          worldToLatLng(interaction.start, api.mapPackage.height),
-          ...interaction.waypoints.map(point => worldToLatLng(point, api.mapPackage.height)),
-          worldToLatLng(target, api.mapPackage.height),
-        ];
-        if (!previewLine) {
-          previewLine = L.polyline(points, {
-            pane: 'measurePane', color, weight: 4, dashArray: '10 7', interactive: false,
-            className: 'token-route-preview',
+        clearPreview();
+        const color = pending ? '#b77716' : valid ? '#176d76' : '#b52f2a';
+        const route = [interaction.start, ...interaction.waypoints, target];
+        const points = route.map(point => worldToLatLng(point, api.mapPackage.height));
+        L.polyline(points, {
+          pane: MOVEMENT_PREVIEW_PANE, color, weight: 4, dashArray: pending ? '4 7' : '10 7',
+          interactive: false, className: 'token-route-preview',
+        }).addTo(routeLayer);
+        route.slice(1, -1).forEach((point, index) => {
+          L.circleMarker(worldToLatLng(point, api.mapPackage.height), {
+            pane: MOVEMENT_PREVIEW_PANE, radius: 7, color, weight: 3,
+            fillColor: '#fff', fillOpacity: .95, interactive: false,
+            className: 'token-route-waypoint',
           }).addTo(routeLayer);
-        } else {
-          previewLine.setLatLngs(points);
-          previewLine.setStyle({ color });
+          L.tooltip({ permanent: true, direction: 'top', offset: [0, -12], pane: 'pathLabelPane', interactive: false })
+            .setLatLng(worldToLatLng(point, api.mapPackage.height))
+            .setContent(`拐点 ${index + 1}`)
+            .addTo(labelLayer);
+        });
+        L.circleMarker(points.at(-1), {
+          pane: MOVEMENT_PREVIEW_PANE, radius: 9, color, weight: 2,
+          fillColor: color, fillOpacity: .2, interactive: false,
+        }).addTo(routeLayer);
+        let total = 0;
+        for (let index = 1; index < route.length; index += 1) {
+          const from = route[index - 1];
+          const to = route[index];
+          const distance = Math.hypot(Number(to.x) - Number(from.x), Number(to.y) - Number(from.y));
+          total += distance;
+          addPathDistanceLabel(labelLayer, api.mapPackage, {
+            x: (Number(from.x) + Number(to.x)) / 2,
+            y: (Number(from.y) + Number(to.y)) / 2,
+          }, formatDistance(distance));
         }
-        const end = points.at(-1);
-        if (!previewEnd) {
-          previewEnd = L.circleMarker(end, {
-            pane: 'measurePane', radius: 9, color, weight: 2,
-            fillColor: color, fillOpacity: .2, interactive: false,
-          }).addTo(routeLayer);
-        } else {
-          previewEnd.setLatLng(end);
-          previewEnd.setStyle({ color, fillColor: color });
-        }
+        addPathDistanceLabel(labelLayer, api.mapPackage, target, `${pending ? '验证中 · ' : ''}总计 ${formatDistance(total)}`, { total: true });
       }
 
       function reset(message = '') {
@@ -214,7 +234,7 @@ export function createMovementController({ settings } = {}) {
         const current = interaction;
         const point = pendingPointerClient;
         pendingPointerClient = null;
-        if (!current || current.mode !== 'drag' || current.pending || !point) return;
+        if (!current || !['drag', 'click'].includes(current.mode) || current.pending || !point) return;
         const raw = worldPointFromClient(point);
         if (!inside(raw, api.mapPackage)) return;
         const target = snapPoint(raw);
@@ -241,6 +261,7 @@ export function createMovementController({ settings } = {}) {
         }
         settings.beginSession(api.map, api.mapPackage);
         if (!beginInteraction(token, { mode: 'drag', client: clientPoint(event) })) return;
+        interaction.modifierSeen = Boolean(event.ctrlKey || event.metaKey);
         event.preventDefault();
         event.stopPropagation();
         activePointerId = event.pointerId;
@@ -253,8 +274,14 @@ export function createMovementController({ settings } = {}) {
       }
 
       function pointerMove(event) {
-        if (!interaction || interaction.mode !== 'drag' || interaction.pending) return;
+        if (!interaction || interaction.pending) return;
         const point = clientPoint(event);
+        interaction.modifierSeen ||= Boolean(event.ctrlKey || event.metaKey);
+        if (interaction.mode === 'click') {
+          scheduleDragPreview(point);
+          return;
+        }
+        if (interaction.mode !== 'drag') return;
         if (!interaction.dragged) {
           if (distancePixels(interaction.clientStart, point) < DRAG_THRESHOLD_PX) return;
           interaction.dragged = true;
@@ -278,7 +305,7 @@ export function createMovementController({ settings } = {}) {
         const raw = worldPointFromClient(clientPoint(event));
         const target = inside(raw, api.mapPackage) ? snapPoint(raw) : current.current;
         current.current = target;
-        if (event.ctrlKey || event.metaKey) {
+        if (current.modifierSeen || event.ctrlKey || event.metaKey) {
           current.mode = 'click';
           mapElement.classList.remove('fvtt-token-dragging');
           if (api.map.dragging && !api.map.dragging.enabled() && mapElement.dataset.rpgMovementDisabledDragging === 'true') {
@@ -350,6 +377,10 @@ export function createMovementController({ settings } = {}) {
         const editable = 'input,textarea,select,[contenteditable="true"],.entity-sheet,.actor-sheet,[data-actor-sheet]';
         const focusTarget = event.target?.closest?.(editable) || documentNode.activeElement?.closest?.(editable);
         if (event.defaultPrevented || focusTarget) return;
+        if (interaction?.mode === 'drag' && (event.key === 'Control' || event.key === 'Meta')) {
+          interaction.modifierSeen = true;
+          return;
+        }
         if (event.key === 'Escape' && interaction) {
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -392,26 +423,35 @@ export function createMovementController({ settings } = {}) {
       }
 
       async function addWaypoint(point) {
-        if (!interaction || interaction.pending) return false;
+        if (!interaction || interaction.pending || interaction.validationPending) return false;
+        const current = interaction;
+        const sequence = ++current.validationSequence;
+        current.validationPending = true;
         const target = snapPoint(point);
-        const routePoints = [interaction.start, ...interaction.waypoints, target];
-        const result = interaction.members.length > 1
-          ? await api.movement.planTokenGroupMove?.(interaction.members.map(member => member.tokenId), interaction.tokenId, routePoints)
-          : await fastValidate(interaction.tokenId, target, routePoints.at(-2));
-        if (!result?.valid) {
-          drawPreview(target, { valid: false });
-          status('无法添加拐点：当前路径不可通行');
-          return false;
+        drawPreview(target, { valid: true, pending: true });
+        try {
+          const routePoints = [current.start, ...current.waypoints, target];
+          const result = current.members.length > 1
+            ? await api.movement.planTokenGroupMove?.(current.members.map(member => member.tokenId), current.tokenId, routePoints)
+            : await fastValidate(current.tokenId, target, routePoints.at(-2));
+          if (interaction !== current || sequence !== current.validationSequence) return false;
+          if (!result?.valid) {
+            drawPreview(target, { valid: false });
+            status('无法添加拐点：当前路径不可通行');
+            return false;
+          }
+          current.waypoints.push(target);
+          current.current = target;
+          drawPreview(target, { valid: true });
+          status(`已添加拐点 ${current.waypoints.length} · Ctrl/Cmd+点击继续添加，普通点击设置终点`);
+          return true;
+        } finally {
+          if (interaction === current && sequence === current.validationSequence) current.validationPending = false;
         }
-        interaction.waypoints.push(target);
-        interaction.current = target;
-        drawPreview(target, { valid: true });
-        status(`已添加拐点 ${interaction.waypoints.length} · Ctrl/Cmd+点击继续添加，普通点击设置终点`);
-        return true;
       }
 
       function removeWaypoint() {
-        if (!interaction?.waypoints?.length || interaction.pending) return false;
+        if (!interaction?.waypoints?.length || interaction.pending || interaction.validationPending) return false;
         interaction.waypoints.pop();
         interaction.current = interaction.waypoints.at(-1) || interaction.start;
         drawPreview(interaction.current, { valid: true });
@@ -420,7 +460,7 @@ export function createMovementController({ settings } = {}) {
       }
 
       function mapClick(event) {
-        if (!interaction || interaction.mode !== 'click' || interaction.pending) return;
+        if (!interaction || interaction.mode !== 'click' || interaction.pending || interaction.validationPending) return;
         if (event.target?.closest?.('.leaflet-control,.rpg-token-v2,[data-token-id]')) return;
         const raw = worldPointFromClient(clientPoint(event));
         if (!inside(raw, api.mapPackage)) return;
@@ -449,7 +489,7 @@ export function createMovementController({ settings } = {}) {
       }
 
       function windowBlur() {
-        if (interaction?.mode === 'drag') reset('窗口失去焦点，已取消 Token 拖动');
+        if (interaction) reset('窗口失去焦点，已取消 Token 移动');
       }
 
       function wheel(event) {
@@ -545,7 +585,9 @@ export function createMovementController({ settings } = {}) {
         documentNode.removeEventListener('dragstart', nativeDragStart, true);
         windowNode.removeEventListener?.('blur', windowBlur);
         routeLayer.clearLayers();
+        labelLayer.clearLayers();
         api.map.removeLayer?.(routeLayer);
+        api.map.removeLayer?.(labelLayer);
         off.splice(0).forEach(dispose => dispose?.());
       }));
     },

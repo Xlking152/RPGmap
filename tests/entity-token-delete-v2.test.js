@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { access } from 'node:fs/promises';
 import { removeSceneToken } from '../src/token/model.js';
 import {
+  deleteCanonicalActor,
   deleteCanonicalToken,
   listWorldActorTokens,
   removeActorAndTokensFromWorld,
@@ -86,6 +87,22 @@ test('deleteCanonicalToken delegates only to api.tokens.remove and clears canoni
   assert.deepEqual(calls, [['remove', 'token-a1'], ['selection', ['token-a1']]]);
 });
 
+test('deleteCanonicalActor dispatches one authoritative Document delete and clears every selected instance', async () => {
+  const world = worldFixture();
+  const calls = [];
+  const api = {
+    world: { get: () => structuredClone(world) },
+    documents: { async dispatch(write) { calls.push(['dispatch', write]); return { revision: 4 }; } },
+    selection: { remove(ids) { calls.push(['selection', ids]); } },
+  };
+  const result = await deleteCanonicalActor(api, 'actor-a');
+  assert.deepEqual(result.tokens.map(entry => entry.token.id), ['token-a1', 'token-a2']);
+  assert.equal(calls[0][1].action, 'delete');
+  assert.equal(calls[0][1].intent, 'actor.delete');
+  assert.equal(calls[0][1].data.deleteReferencedTokens, true);
+  assert.deepEqual(calls[1], ['selection', ['token-a1', 'token-a2']]);
+});
+
 test('Feature occupant views use canonical Token placement and resolved Synthetic Actor display', () => {
   const tokens = [
     { id: 'token-a', actorId: 'actor-a', actorLink: true, placement: 'feature', featureId: 'house-7' },
@@ -124,7 +141,8 @@ test('Entity deletion and Feature occupant paths have no Character-storage bridg
   const featureView = await readFile(new URL('../src/entities/feature-token-view.js', import.meta.url), 'utf8');
 
   assert.match(deleteCore, /api\.tokens\.remove\(/);
-  assert.match(deleteCore, /api\.world\.commit\(/);
+  assert.match(deleteCore, /api\.documents\.dispatch\(/);
+  assert.doesNotMatch(deleteCore, /api\.world\.commit\(/);
   assert.doesNotMatch(deleteCore, /deleteCharacter|character:delete|state\.characters|\.removeToken\(|\.removeActor\(/);
   assert.match(controller, /deleteCanonicalToken\(api, target\)/);
   assert.match(controller, /deleteCanonicalActor\(api, target\)/);
