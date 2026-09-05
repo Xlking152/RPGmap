@@ -386,7 +386,7 @@ if (loadedWorld !== undefined) {
 
 const worldWal = createWorldWal({
   filePath: WORLD_OPERATIONS_FILE,
-  applyPatch: applyWorldOperationPatch,
+  applyPatch: (state, patch) => applyWorldOperationPatch(state, patch, { acceptedSchemaVersions: [3, WORLD_OPERATION_SCHEMA_VERSION] }),
 });
 world = await worldWal.replay(world);
 if (world.state) assertWorldState(world.state);
@@ -567,7 +567,6 @@ function resumableCommits(session, revision, fingerprint) {
     if (expected !== requested && !beforeProjection) return null;
     beforeProjection ||= audienceStateFor(session, canonical);
     const afterProjection = audienceStateFor(session, nextCanonical);
-    const patch = createWorldOperationPatch(beforeProjection, afterProjection);
     const motion = projectMotionForSession(entry.results, beforeProjection, afterProjection);
     result.push({
       type: entry.documentBatch ? 'document.batch.committed' : 'world.operation.committed',
@@ -575,13 +574,8 @@ function resumableCommits(session, revision, fingerprint) {
       baseRevision: entry.baseRevision,
       revision: entry.revision,
       updatedAt: entry.updatedAt,
-      patch,
-      changeSet: audienceChangeSetFromPatch(patch, afterProjection, entry.changeSet),
-      ...(entry.documentBatch ? {
-        changes: createDocumentChanges(beforeProjection, afterProjection, patch, { motion }),
-        motion,
-      } : {}),
-      results: projectResultsForSession(entry.results, afterProjection, session),
+      changes: createDocumentChanges(beforeProjection, afterProjection, null, { motion }),
+      ...(motion.length ? { motion } : {}),
       originSessionId: entry.originSessionId,
       audienceRevision: session.audienceRevision,
     });
@@ -723,43 +717,6 @@ function projectResultsForSession(results, projectedState, session) {
     if (result?.markerId && !visible.markers.has(String(result.markerId))) return false;
     return true;
   }).map(result => structuredClone(result));
-}
-function audienceChangeSetFromPatch(patch, afterProjection, canonical = {}) {
-  const worldPatch = patch?.world || {};
-  const scenes = worldPatch.scenes || {};
-  const ids = values => (values || []).map(value => String(value?.id ?? value));
-  const dirtyFog = new Map((canonical.fog || []).map(entry => [String(entry.sceneId), entry.dirtyBounds ?? null]));
-  const visibleChatIds = new Set((afterProjection?.preferences?.chatSystem?.messages || []).map(message => String(message?.id || '')));
-  return {
-    actors: {
-      upsertIds: ids(worldPatch.actors?.upsert),
-      removeIds: ids(worldPatch.actors?.remove),
-    },
-    tokens: (scenes.tokens || []).map(entry => ({
-      sceneId: String(entry.sceneId),
-      upsertIds: ids(entry.upsert),
-      removeIds: ids(entry.remove),
-    })),
-    scenes: {
-      upsertIds: ids(scenes.upsert),
-      removeIds: ids(scenes.remove),
-      activeSceneChanged: worldPatch.activeSceneId !== undefined,
-    },
-    featureStates: (scenes.featureStates || []).map(entry => ({
-      sceneId: String(entry.sceneId),
-      featureIds: [...ids(entry.upsert), ...ids(entry.remove)],
-    })),
-    fog: (scenes.fog || []).map(entry => ({
-      sceneId: String(entry.sceneId),
-      dirtyBounds: dirtyFog.get(String(entry.sceneId)) ?? null,
-    })),
-    combatChanged: patch?.combatSystem !== undefined,
-    chat: {
-      appendedIds: (canonical.chat?.appendedIds || []).map(String).filter(id => visibleChatIds.has(id)),
-      cleared: Boolean(canonical.chat?.cleared && patch?.chatSystem !== undefined),
-    },
-    statusDefinitionsChanged: worldPatch.statusDefinitions !== undefined,
-  };
 }
 function visiblePreciseToken(state, tokenId) {
   const worldValue = state?.preferences?.worldV2;
@@ -923,61 +880,6 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
   return null;
 }
 
-function targetedAudiencePatch(beforeProjection, afterProjection, operations, results) {
-  const types = new Set((operations || []).map(operation => String(operation?.type || '')));
-  const worldPatch = {
-    updatedAt: String(afterProjection?.preferences?.worldV2?.updatedAt || new Date().toISOString()),
-  };
-  const patch = { schemaVersion: WORLD_OPERATION_SCHEMA_VERSION, world: worldPatch };
-  if ([...types].every(type => type === 'chat.append')) {
-    const ids = new Set((results || []).map(result => String(result?.chatId || '')).filter(Boolean));
-    patch.chatAppend = (afterProjection?.preferences?.chatSystem?.messages || [])
-      .filter(message => ids.has(String(message?.id || '')))
-      .map(message => structuredClone(message));
-    return patch;
-  }
-  if ([...types].every(type => type === 'token.movePath')) {
-    const tokenIds = new Set((results || []).flatMap(result => result?.motion || [])
-      .map(motion => String(motion?.tokenId || '')).filter(Boolean));
-    const beforeScenes = new Map((beforeProjection?.preferences?.worldV2?.scenes || [])
-      .map(scene => [String(scene?.id || ''), scene]));
-    const tokens = [];
-    for (const scene of afterProjection?.preferences?.worldV2?.scenes || []) {
-      const previousIds = new Set((beforeScenes.get(String(scene.id))?.tokens || [])
-        .map(token => String(token?.id || '')));
-      const upsert = (scene.tokens || []).filter(token => tokenIds.has(String(token?.id || '')))
-        .map(token => structuredClone(token));
-      const afterIds = new Set((scene.tokens || []).map(token => String(token?.id || '')));
-      const remove = [...tokenIds].filter(id => previousIds.has(id) && !afterIds.has(id));
-      if (upsert.length || remove.length) tokens.push({ sceneId: String(scene.id), upsert, remove });
-    }
-    if (tokens.length) worldPatch.scenes = { upsert: [], remove: [], tokens, content: [], featureStates: [], fog: [] };
-    return patch;
-  }
-  if ([...types].every(type => type.startsWith('status.'))) {
-    const actorIds = new Set();
-    const tokenIds = new Set();
-    for (const operation of operations || []) {
-      const payload = operation.payload || {};
-      const scope = String(payload.scope || payload.target?.scope || '');
-      const targetId = String(payload.targetId || payload.target?.targetId || '');
-      if (scope === 'actor' && targetId) actorIds.add(targetId);
-      else if (targetId) tokenIds.add(targetId);
-    }
-    const actors = (afterProjection?.preferences?.worldV2?.actors || [])
-      .filter(actor => actorIds.has(String(actor?.id || ''))).map(actor => structuredClone(actor));
-    if (actors.length) worldPatch.actors = { upsert: actors, remove: [] };
-    const tokens = [];
-    for (const scene of afterProjection?.preferences?.worldV2?.scenes || []) {
-      const upsert = (scene.tokens || []).filter(token => tokenIds.has(String(token?.id || '')))
-        .map(token => structuredClone(token));
-      if (upsert.length) tokens.push({ sceneId: String(scene.id), upsert, remove: [] });
-    }
-    if (tokens.length) worldPatch.scenes = { upsert: [], remove: [], tokens, content: [], featureStates: [], fog: [] };
-    return patch;
-  }
-  return null;
-}
 
 function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, changeSet, operations = [], documentBatch = false }) {
   for (const [socket, session] of sessions) {
@@ -988,21 +890,13 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
     );
     const afterProjection = incrementalProjection || audienceStateFor(session, afterState);
     session.audienceProjection = afterProjection;
-    const patch = (incrementalProjection
-      ? targetedAudiencePatch(beforeProjection, afterProjection, operations, results)
-      : null) || createWorldOperationPatch(beforeProjection, afterProjection);
     const motion = documentBatch
       ? projectMotionForSession(results, beforeProjection, afterProjection)
       : [];
     const response = {
       type: documentBatch ? 'document.batch.committed' : 'world.operation.committed', operationId, baseRevision, revision, updatedAt,
-      patch,
-      changeSet: audienceChangeSetFromPatch(patch, afterProjection, changeSet),
-      ...(documentBatch ? {
-        changes: createDocumentChanges(beforeProjection, afterProjection, patch, { motion }),
-        motion,
-      } : {}),
-      results: projectResultsForSession(results, afterProjection, session),
+      changes: createDocumentChanges(beforeProjection, afterProjection, null, { motion }),
+      ...(motion.length ? { motion } : {}),
       originSessionId,
       audienceRevision: session.audienceRevision,
     };

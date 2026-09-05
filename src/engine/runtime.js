@@ -14,7 +14,7 @@ import {
 } from './runtime-state.js';
 import { createMapPresentation } from '../render/map-presentation.js';
 import { createSceneRenderer } from '../render/scene-renderer.js';
-import { applyWorldOperationPatch } from '../world/operations.js';
+import { applyDocumentChanges, documentChangeSet } from '../documents/changes.js';
 
 const MAX_SAVE_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -282,13 +282,16 @@ export function createRpgMapRuntime({
     const tokenChanges = Array.isArray(changeSet.tokens) ? changeSet.tokens : [];
     const changedTokenIds = [];
     for (const entry of tokenChanges) {
+      if (entry.sceneId && String(entry.sceneId) !== String(state.preferences?.worldV2?.activeSceneId)) continue;
       for (const tokenId of entry?.removeIds || []) {
         emit('token:delete', { id: String(tokenId), tokenId: String(tokenId), canonical: true });
       }
       for (const tokenId of entry?.upsertIds || []) {
         const id = String(tokenId);
-        changedTokenIds.push(id);
-        emit('token:property-change', { id, tokenId: id, canonical: true });
+        const fields = entry.fields?.[id];
+        const positionOnly = fields?.length && fields.every(field => ['x', 'y', 'elevationFt', 'elevationMeters'].includes(field));
+        if (!positionOnly) changedTokenIds.push(id);
+        emit(positionOnly ? 'token:move' : 'token:property-change', { id, tokenId: id, fields, sceneId: entry.sceneId, canonical: true });
       }
     }
     if (actorIds.length) emit('actor:change', { actorIds, canonical: true });
@@ -307,6 +310,11 @@ export function createRpgMapRuntime({
     for (const entry of changeSet.fog || []) {
       emit('fog:change', { sceneId: entry.sceneId, dirtyBounds: clone(entry.dirtyBounds || null), canonical: true });
     }
+    for (const entry of changeSet.sceneContent || []) {
+      if (String(entry.sceneId) !== String(state.preferences?.worldV2?.activeSceneId)) continue;
+      if (entry.types.includes('SceneEvent')) renderScene();
+      emit('scene:content-change', { ...entry, canonical: true });
+    }
     if (changeSet.scenes?.activeSceneChanged || changeSet.scenes?.upsertIds?.length || changeSet.scenes?.removeIds?.length) {
       renderScene();
       emit('scene:activate', { sceneId: state.preferences?.worldV2?.activeSceneId || null, canonical: true });
@@ -324,10 +332,12 @@ export function createRpgMapRuntime({
     return emitAuthoritativeChanges({ source, changeSet, revision });
   }
 
-  function applyAuthoritativeDocumentPatch(patch, {
-    source = 'document.batch', changeSet = {}, revision = null,
+  function applyAuthoritativeDocumentChanges(changes, {
+    source = 'document.batch', revision = null, updatedAt = null, operationId = null,
   } = {}) {
-    state = applyWorldOperationPatch(state, patch, { mutate: true });
+    state = applyDocumentChanges(state, changes, { updatedAt });
+    const changeSet = documentChangeSet(changes);
+    api.documents?.applyCommitted?.(changes, { revision, operationId });
     return emitAuthoritativeChanges({ source, changeSet, revision });
   }
 
@@ -468,7 +478,7 @@ export function createRpgMapRuntime({
     getSelectedFeatureId: () => selectedFeatureId,
     commitState,
     applyAuthoritativePatchState,
-    applyAuthoritativeDocumentPatch,
+    applyAuthoritativeDocumentChanges,
     commitAuthoritativeState,
     persistNow,
     exportState,

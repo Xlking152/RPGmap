@@ -1,10 +1,11 @@
 import { isLocalHost, multiplayerSocketUrl, normalizeRequestedRole, sanitizeMultiplayerName } from './protocol.js';
 import { canControlActor, validateLocalPlayerChange } from './permissions.js';
 import {
-  applyWorldOperationPatch,
   deriveWorldOperations,
   WORLD_OPERATION_SCHEMA_VERSION,
 } from '../world/operations.js';
+import { applyDocumentChanges } from '../documents/changes.js';
+import { worldOperationsToDocumentWrites } from '../documents/protocol.js';
 import { STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { ACCESS_SCHEMA_VERSION } from '../permissions/model.js';
 import { escapeMultiplayerHtml as escapeHtml } from './access-ui.js';
@@ -639,10 +640,16 @@ export function createMultiplayerController() {
         const values = Array.isArray(operations) ? structuredClone(operations) : [];
         if (!values.length) return Promise.resolve({ unchanged: true, revision, results: [] });
         const id = String(requestedOperationId || operationId(kind === 'status' ? 'status' : 'operation'));
+        const world = (lastServerState || api.getState())?.preferences?.worldV2;
+        let writes;
+        try { writes = worldOperationsToDocumentWrites(values, { worldId: world?.id, sceneId: world?.activeSceneId, operationId: id }); }
+        catch (error) { return Promise.reject(error); }
         return new Promise((resolve, reject) => {
           operationQueue.push({
             operationId: id,
             operations: values,
+            writes,
+            documentBatch: true,
             kind,
             resolve,
             reject,
@@ -1016,13 +1023,11 @@ export function createMultiplayerController() {
             return;
           }
           let canonicalState;
-          let localState;
           try {
             for (const motion of documentBatch && Array.isArray(message.motion) ? message.motion : []) {
               api.renderer?.prepareTokenVisualRoute?.(motion.tokenId, motion.waypoints || []);
             }
-            canonicalState = applyWorldOperationPatch(lastServerState || api.exportState(), message.patch, { mutate: Boolean(lastServerState) });
-            localState = documentBatch ? null : applyWorldOperationPatch(api.exportState(), message.patch);
+            canonicalState = applyDocumentChanges(lastServerState || api.exportState(), message.changes, { updatedAt: message.updatedAt });
           } catch (cause) {
             const error = new Error(`无法应用服务器操作补丁：${cause.message}`);
             error.code = cause.code || 'world_operation_patch_invalid';
@@ -1033,10 +1038,9 @@ export function createMultiplayerController() {
           const matchesActive = activeOperation
             && String(message.operationId || '') === String(activeOperation.operationId);
           const expectedOperationId = matchesActive ? activeOperation.operationId : null;
-          const applyPromise = documentBatch
-            ? Promise.resolve().then(() => {
-                api.applyAuthoritativeDocumentPatch(message.patch, {
-                  source: 'document.batch', revision: incomingRevision, changeSet: message.changeSet || {},
+          const applyPromise = Promise.resolve().then(() => {
+                api.applyAuthoritativeDocumentChanges(message.changes, {
+                  source: 'document.batch', revision: incomingRevision, updatedAt: message.updatedAt, operationId: message.operationId,
                 });
                 revision = incomingRevision;
                 lastServerState = canonicalState;
@@ -1045,8 +1049,7 @@ export function createMultiplayerController() {
               }).catch(error => {
                 console.error('[RPGmap Multiplayer] authoritative Document patch apply failed', error);
                 return false;
-              })
-            : applyAuthoritativeOperationState(localState, incomingRevision, message.changeSet, canonicalState);
+              });
           applyPromise.then(applied => {
             if (!applied) {
               const error = new Error('服务器已经保存操作，但客户端无法载入操作补丁');
@@ -1055,16 +1058,11 @@ export function createMultiplayerController() {
               send({ type: 'world.snapshot.request' });
               return;
             }
-            if (documentBatch) api.documents?.applyCommitted?.(message.changes || [], {
-              revision: incomingRevision,
-              operationId: message.operationId,
-              source: 'document.batch.committed',
-            });
             if (expectedOperationId && activeOperation
               && String(activeOperation.operationId) === String(expectedOperationId)) {
               activeOperation.patchApplied = true;
               activeOperation.revision = incomingRevision;
-              activeOperation.results = Array.isArray(message.results) ? structuredClone(message.results) : [];
+              if (Array.isArray(message.results)) activeOperation.results = structuredClone(message.results);
               maybeFinishOperation();
             } else {
               flushPendingNetworkWork();

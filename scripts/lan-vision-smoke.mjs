@@ -342,7 +342,7 @@ try {
     } }],
   }));
   const [move, moved] = await Promise.all([moveCommitted, moveAck]);
-  assert(move.revision === moved.revision && move.patch.world.scenes.fog.length > 0,
+  assert(move.revision === moved.revision && move.changes.some(change => change.document.type === 'Fog'),
     'Token move did not atomically persist its fog sweep');
 
   const deniedPromise = waitForMessage(playerSocket, message =>

@@ -1,13 +1,16 @@
-export const DOCUMENT_OPERATION_SCHEMA_VERSION = 3;
+import { assertDocumentJson } from './changes.js';
+
+export const DOCUMENT_OPERATION_SCHEMA_VERSION = 4;
 export const DOCUMENT_BATCH_LIMIT = 64;
 export const DOCUMENT_MOVE_POINT_LIMIT = 64;
 
 const ACTIONS = new Set(['create', 'update', 'delete', 'move', 'append']);
 const DOCUMENT_TYPES = new Set([
-  'Actor', 'Token', 'Scene', 'ChatMessage', 'Combat', 'Status', 'Fog',
+  'World', 'Actor', 'Token', 'Scene', 'Marker', 'ChatMessage', 'Combat', 'Status', 'Fog',
 ]);
 
 const INTENT_TO_OPERATION = new Map([
+  ['world.rename', 'world.rename'],
   ['actor.upsert', 'actor.upsert'],
   ['actor.publicProfile.update', 'actor.publicProfile.update'],
   ['actor.delete', 'actor.delete'],
@@ -19,6 +22,10 @@ const INTENT_TO_OPERATION = new Map([
   ['token.updateActorDelta', 'token.actorDelta.replace'],
   ['token.delete', 'token.delete'],
   ['token.movePath', 'token.movePath'],
+  ['token.move', 'token.move'],
+  ['marker.upsert', 'marker.upsert'],
+  ['marker.move', 'marker.move'],
+  ['marker.delete', 'marker.delete'],
   ['scene.upsert', 'scene.upsert'],
   ['scene.activate', 'scene.activate'],
   ['scene.delete', 'scene.delete'],
@@ -84,6 +91,10 @@ export function normalizeDocumentWrite(raw, label = 'write') {
   if (!INTENT_TO_OPERATION.has(intent)) fail(`Unsupported document intent: ${intent || '(missing)'}`, 'unknown_document_intent');
   if (raw.data != null && !plainObject(raw.data)) fail(`${label}.data must be an object`);
   if (raw.precondition != null && !plainObject(raw.precondition)) fail(`${label}.precondition must be an object`);
+  try {
+    assertDocumentJson(raw.data || {});
+    assertDocumentJson(raw.precondition || {});
+  } catch { fail(`${label} must contain bounded safe JSON`, 'invalid_document_operation'); }
   return {
     action,
     document: { type, id, parent },
@@ -122,6 +133,29 @@ function withAddress(write) {
   }
   if (type === 'Scene') payload.sceneId ??= id;
   if (type === 'Fog') payload.sceneId ??= parent?.type === 'Scene' ? parent.id : id;
+  if (type === 'Marker') {
+    payload.markerId ??= id;
+    if (parent?.type === 'Scene') payload.sceneId ??= parent.id;
+  }
+  const targetType = write.intent === 'actor.runtime.perform' && payload.tokenId ? 'Token'
+    : write.intent.startsWith('actor.') ? 'Actor'
+      : write.intent.startsWith('token.') ? 'Token'
+        : write.intent.startsWith('marker.') ? 'Marker'
+          : write.intent.startsWith('scene.') ? 'Scene'
+            : write.intent.startsWith('fog.') ? 'Fog'
+              : write.intent.startsWith('status.') ? 'Status'
+                : write.intent.startsWith('chat.') ? 'ChatMessage'
+                  : write.intent.startsWith('combat.') ? 'Combat' : 'World';
+  if (type !== targetType) fail('Document type does not match intent', 'document_target_mismatch');
+  const targetId = type === 'Actor' ? payload.actor?.id ?? payload.actorId
+    : type === 'Token' ? payload.token?.id ?? payload.tokenId
+      : type === 'Scene' ? payload.scene?.id ?? payload.sceneId
+        : type === 'Marker' ? payload.marker?.id ?? payload.markerId : null;
+  if (targetId != null && String(targetId) !== id) fail('Document id does not match payload', 'document_target_mismatch');
+  if (parent && (!['Token', 'Marker', 'Status', 'Fog'].includes(type) || parent.type !== 'Scene'
+    || (payload.sceneId != null && String(payload.sceneId) !== parent.id))) {
+    fail('Document parent does not match payload', 'document_target_mismatch');
+  }
   return payload;
 }
 
@@ -157,63 +191,34 @@ export function documentWritesToWorldOperations(rawWrites) {
   });
 }
 
-function ids(items) {
-  return new Set((Array.isArray(items) ? items : []).map(item => String(item?.id ?? item ?? '')).filter(Boolean));
-}
+export { createDocumentChanges } from './changes.js';
 
-function changedFields(before, after) {
-  const result = {};
-  const previous = plainObject(before) ? before : {};
-  for (const [field, value] of Object.entries(plainObject(after) ? after : {})) {
-    if (JSON.stringify(previous[field]) !== JSON.stringify(value)) result[field] = structuredClone(value);
-  }
-  return result;
-}
-
-export function createDocumentChanges(beforeState, afterState, patch, { motion = [] } = {}) {
-  const beforeWorld = beforeState?.preferences?.worldV2 || {};
-  const afterWorld = afterState?.preferences?.worldV2 || {};
-  const beforeActors = ids(beforeWorld.actors);
-  const beforeActorsById = new Map((beforeWorld.actors || []).map(actor => [String(actor.id), actor]));
-  const beforeScenes = new Map((beforeWorld.scenes || []).map(scene => [String(scene.id), scene]));
-  const movedTokenIds = new Set((motion || []).map(item => String(item?.tokenId ?? '')).filter(Boolean));
-  const changes = [];
-  for (const actor of patch?.world?.actors?.upsert || []) {
-    const created = !beforeActors.has(String(actor.id));
-    changes.push({
-      action: created ? 'create' : 'update',
-      document: { type: 'Actor', id: String(actor.id), parent: null },
-      changed: created ? structuredClone(actor) : changedFields(beforeActorsById.get(String(actor.id)), actor),
-    });
-  }
-  for (const id of patch?.world?.actors?.remove || []) changes.push({ action: 'delete', document: { type: 'Actor', id: String(id), parent: null }, changed: null });
-  for (const scene of patch?.world?.scenes?.upsert || []) {
-    const beforeScene = beforeScenes.get(String(scene.id));
-    changes.push({
-      action: beforeScene ? 'update' : 'create',
-      document: { type: 'Scene', id: String(scene.id), parent: null },
-      changed: beforeScene ? changedFields(beforeScene, scene) : structuredClone(scene),
-    });
-  }
-  for (const id of patch?.world?.scenes?.remove || []) changes.push({ action: 'delete', document: { type: 'Scene', id: String(id), parent: null }, changed: null });
-  for (const tokenPatch of patch?.world?.scenes?.tokens || []) {
-    const beforeTokens = new Map((beforeScenes.get(String(tokenPatch.sceneId))?.tokens || [])
-      .map(token => [String(token.id), token]));
-    for (const token of tokenPatch.upsert || []) {
-      const beforeToken = beforeTokens.get(String(token.id));
-      changes.push({
-        action: beforeToken ? (movedTokenIds.has(String(token.id)) ? 'move' : 'update') : 'create',
-        document: { type: 'Token', id: String(token.id), parent: { type: 'Scene', id: String(tokenPatch.sceneId) } },
-        changed: beforeToken ? changedFields(beforeToken, token) : structuredClone(token),
-      });
-    }
-    for (const id of tokenPatch.remove || []) changes.push({ action: 'delete', document: { type: 'Token', id: String(id), parent: { type: 'Scene', id: String(tokenPatch.sceneId) } }, changed: null });
-  }
-  const beforeChat = ids(beforeState?.preferences?.chatSystem?.messages);
-  for (const message of afterState?.preferences?.chatSystem?.messages || []) {
-    if (!beforeChat.has(String(message.id))) changes.push({ action: 'append', document: { type: 'ChatMessage', id: String(message.id), parent: null }, changed: structuredClone(message) });
-  }
-  if (patch?.combatSystem !== undefined) changes.push({ action: 'update', document: { type: 'Combat', id: 'active', parent: null }, changed: structuredClone(patch.combatSystem) });
-  for (const fog of patch?.world?.scenes?.fog || []) changes.push({ action: 'update', document: { type: 'Fog', id: String(fog.sceneId), parent: { type: 'Scene', id: String(fog.sceneId) } }, changed: structuredClone(fog.fog) });
-  return changes;
+export function worldOperationsToDocumentWrites(operations, { worldId, sceneId, operationId = 'operation' } = {}) {
+  const intents = new Map([...INTENT_TO_OPERATION].map(([intent, type]) => [type, intent]));
+  return operations.map((operation, index) => {
+    const type = operation.type;
+    const data = structuredClone(operation.payload || {});
+    const intent = intents.get(type);
+    if (!intent) fail(`Unsupported document operation: ${type}`, 'unknown_document_intent');
+    let documentType;
+    let id;
+    let parent = null;
+    if (type === 'actor.runtime.perform' && data.tokenId) {
+      documentType = 'Token'; id = data.tokenId;
+    } else if (type.startsWith('actor.')) { documentType = 'Actor'; id = data.actor?.id ?? data.actorId; }
+    else if (type.startsWith('token.')) { documentType = 'Token'; id = data.token?.id ?? data.tokenId; }
+    else if (type.startsWith('marker.')) { documentType = 'Marker'; id = data.marker?.id ?? data.markerId; }
+    else if (type.startsWith('scene.fog.')) { documentType = 'Fog'; id = data.sceneId ?? sceneId; }
+    else if (type.startsWith('scene.')) { documentType = 'Scene'; id = data.scene?.id ?? data.sceneId ?? sceneId; }
+    else if (type.startsWith('status.')) { documentType = 'Status'; id = data.targetId ?? data.definition?.id ?? data.statusId ?? 'definitions'; }
+    else if (type.startsWith('chat.')) { documentType = 'ChatMessage'; id = data.id ?? `${operationId}:${index}`; }
+    else if (type.startsWith('combat.')) { documentType = 'Combat'; id = 'active'; }
+    else { documentType = 'World'; id = worldId; }
+    if (['Token', 'Marker', 'Fog'].includes(documentType)) parent = { type: 'Scene', id: String(data.sceneId ?? sceneId) };
+    const action = type.endsWith('.delete') || type === 'chat.clear' ? 'delete'
+      : type === 'chat.append' ? 'append'
+        : ['token.move', 'token.movePath', 'marker.move'].includes(type) ? 'move' : 'update';
+    if (type === 'actor.delete') data.deleteReferencedTokens = true;
+    return normalizeDocumentWrite({ action, document: { type: documentType, id: String(id ?? ''), parent }, intent, data });
+  });
 }

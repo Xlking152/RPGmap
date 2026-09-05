@@ -1,5 +1,6 @@
 import { createEmptyEntityState, normalizeEntityState } from './model.js';
 import { STATUS_SCHEMA_VERSION, resolveActorEffects } from '../status/model.js';
+import { applyDocumentValue } from '../documents/changes.js';
 
 const PREFERENCE_KEY = 'entitySystem';
 
@@ -94,6 +95,23 @@ export class EntityStore {
   }
 
   snapshot() { return this.materializeState(); }
+
+  applyDocumentChange(change) {
+    const type = change?.document?.type;
+    const field = type === 'Actor' ? 'actors' : type === 'StatusDefinition' ? 'statusDefinitions' : null;
+    if (!field) return false;
+    const id = String(change.document.id);
+    const values = this.state[field] || [];
+    const index = values.findIndex(value => String(value.id) === id);
+    const canonical = this.api.documents?.get?.(change.document);
+    const value = change.action === 'delete' ? undefined : canonical ?? applyDocumentValue(values[index], change);
+    const next = values.slice();
+    if (value === undefined) { if (index >= 0) next.splice(index, 1); }
+    else if (index < 0) next.push(value);
+    else next[index] = value;
+    this.state[field] = next;
+    return true;
+  }
 
   persist({ appState = null, source = 'entities', render = false, immediate = false } = {}) {
     const nextApp = appState || this.api.getState();

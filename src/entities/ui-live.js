@@ -958,6 +958,7 @@ export function createEntityUiTool(options = {}) {
       for (const eventName of ['document:create', 'document:update', 'document:delete', 'document:move']) {
         api.on(eventName, event => {
           const address = event.detail?.document || {};
+          store.applyDocumentChange(event.detail);
           if (address.type === 'Actor') renderRelatedSheets({ actorIds: [address.id] });
           if (address.type === 'Token') renderRelatedSheets({ tokenIds: [address.id] });
         });

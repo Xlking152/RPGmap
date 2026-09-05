@@ -400,6 +400,9 @@ export function createSceneAreaSystem() {
       for (const name of ['state:commit', 'state:import', 'token:move', 'token:delete', 'marker:move', 'marker:delete']) {
         off.push(api.on?.(name, render));
       }
+      off.push(api.on?.('scene:content-change', event => {
+        if (event.detail?.types?.some(type => ['AttackArea', 'Marker'].includes(type))) render();
+      }));
       off.push(api.on?.('app:destroy', () => {
         destroyed = true;
         api.map.off('click', mapClick);

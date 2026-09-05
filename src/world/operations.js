@@ -1143,10 +1143,10 @@ function applyIdPatch(items, patch) {
   return [...values.values()];
 }
 
-export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false } = {}) {
+export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false, acceptedSchemaVersions = [WORLD_OPERATION_SCHEMA_VERSION] } = {}) {
   const state = mutate ? object(rawState, 'state') : clone(object(rawState, 'state'));
   const patch = object(rawPatch, 'patch');
-  if (Number(patch.schemaVersion) !== WORLD_OPERATION_SCHEMA_VERSION) {
+  if (!acceptedSchemaVersions.includes(Number(patch.schemaVersion))) {
     fail('Unsupported World operation patch schema', 'operation_patch_incompatible');
   }
   state.preferences = mutate

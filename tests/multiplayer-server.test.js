@@ -10,6 +10,7 @@ import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js'
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 import { isFogCellExplored } from '../src/vision/fog.js';
 import { WORLD_OPERATION_SCHEMA_VERSION } from '../src/world/operations.js';
+import { applyDocumentChanges } from '../src/documents/changes.js';
 import { STATUS_SCHEMA_VERSION } from '../src/status/model.js';
 import { ACCESS_SCHEMA_VERSION } from '../src/permissions/model.js';
 
@@ -465,9 +466,10 @@ test('generic World operations commit atomically, broadcast patches, and recover
     assert.equal(committed.ack.revision, 2);
     assert.equal(committed.ack.duplicate, false);
     assert.equal(Object.hasOwn(committed.committed, 'state'), false);
-    assert.equal(committed.committed.patch.schemaVersion, WORLD_OPERATION_SCHEMA_VERSION);
-    assert.equal(committed.committed.patch.world.actors.upsert[0].notes, 'updated through actor.upsert');
-    assert.equal(committed.committed.patch.world.scenes.tokens[0].upsert[0].x, 37);
+    assert.equal(Object.hasOwn(committed.committed, 'patch'), false);
+    assert.equal(Object.hasOwn(committed.committed, 'changeSet'), false);
+    assert.equal(committed.committed.changes.find(change => change.document.type === 'Actor').changed.notes, 'updated through actor.upsert');
+    assert.equal(committed.committed.changes.find(change => change.document.type === 'Token').changed.x, 37);
 
     const requestedPromise = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.reason === 'request');
     gm.ws.send(JSON.stringify({ type: 'world.snapshot.request' }));
@@ -503,7 +505,7 @@ test('generic World operations commit atomically, broadcast patches, and recover
       }],
     });
     assert.equal(status.committed.revision, 3);
-    assert.equal(status.committed.patch.world.actors.upsert[0].effects[0].definitionId, 'status-rooted');
+    assert.equal(status.committed.changes.find(change => change.document.type === 'Actor').changed.effects[0].definitionId, 'status-rooted');
 
     const invalidPromise = waitForMessage(gm.ws, message =>
       message.type === 'world.operation.denied' && message.operationId === 'generic-invalid-1');
@@ -561,7 +563,7 @@ test('generic World operations reuse Player ownership and status permission chec
       }],
     });
     assert.equal(moved.committed.revision, 2);
-    assert.equal(moved.committed.patch.world.scenes.tokens[0].upsert[0].x, 16);
+    assert.equal(moved.committed.changes.find(change => change.document.type === 'Token').changed.x, 16);
 
     const combat = await sendWorldOperationsAndWait(gm.ws, {
       type: 'world.operation', operationId: 'generic-combat-start-1', baseRevision: 2,
@@ -623,7 +625,7 @@ test('generic World operations reuse Player ownership and status permission chec
       }],
     });
     assert.equal(playerStatus.committed.revision, 4);
-    assert.equal(playerStatus.committed.patch.world.actors.upsert[0].effects[0].definitionId, 'status-rooted');
+    assert.equal(playerStatus.committed.changes.find(change => change.document.type === 'Actor').changed.effects[0].definitionId, 'status-rooted');
 
     const featureStatePromise = waitForMessage(player.ws, message =>
       message.type === 'world.operation.denied' && message.operationId === 'player-feature-state-1');
@@ -659,7 +661,7 @@ test('generic World operation idempotency survives a LAN server restart', async 
     await initialized;
     const committed = await sendWorldOperationsAndWait(gm.ws, operation);
     assert.equal(committed.committed.revision, 2);
-    assert.equal(committed.committed.patch.world.name, 'Restart-safe World');
+    assert.equal(committed.committed.changes.find(change => change.document.type === 'World').changed.name, 'Restart-safe World');
     gm.ws.close();
 
     await stopServer(runtime, { removeMap: false });
@@ -880,8 +882,8 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
     });
     assert.equal(featureCommit.committed.originSessionId, gm.welcome.session.id);
     assert.equal(featureCommit.committed.revision, 8);
-    assert.equal(featureCommit.committed.patch.world.scenes.tokens[0].upsert[0].x, 42);
-    assert.equal(featureCommit.committed.patch.world.actors.upsert[0].effects[0].definitionId, 'status-rooted');
+    assert.equal(featureCommit.committed.changes.find(change => change.document.type === 'Token').changed.x, 42);
+    assert.equal(featureCommit.committed.changes.find(change => change.document.type === 'Actor').changed.effects[0].definitionId, 'status-rooted');
 
     const walRecord = await waitForWalRecord(path.join(runtime.mapDir, 'world.operations.ndjson'), value => value?.revision === 8);
     assert.equal(walRecord.operationId, 'feature-world-1');
@@ -1186,7 +1188,7 @@ test('LAN keeps same-template NPC Health isolated and requires a controlled Toke
       } }],
     });
     assert.equal(damaged.committed.revision, 3);
-    assert.equal(JSON.stringify(damaged.committed.patch).includes('token-b2'), false);
+    assert.equal(JSON.stringify(damaged.committed.changes).includes('token-b2'), false);
 
     const actorOnlyDenied = waitForMessage(player.ws, message =>
       message.type === 'world.operation.denied' && message.operationId === 'npc-actor-only');
@@ -1329,8 +1331,8 @@ test('LAN placement grants expose a restricted template and server-initialize a 
       } }],
     });
     assert.equal(placed.committed.revision, 2);
-    const projectedToken = placed.committed.patch.world.scenes.tokens
-      .flatMap(item => item.upsert || []).find(item => item.id === 'player-npc');
+    const projectedToken = placed.committed.changes
+      .find(item => item.document.type === 'Token' && item.document.id === 'player-npc').changed;
     assert.equal(projectedToken.actorLink, false);
     assert.deepEqual(projectedToken.controllerUserIds, [claim.user.id]);
     assert.deepEqual(projectedToken.visibility, { mode: 'users', userIds: [claim.user.id] });
@@ -1347,8 +1349,8 @@ test('LAN placement grants expose a restricted template and server-initialize a 
       } }],
     });
     assert.equal(markerCommit.committed.revision, 3);
-    const projectedMarker = markerCommit.committed.patch.world.scenes.content
-      .flatMap(item => item.markers || []).find(item => item.id === 'player-trap');
+    const projectedMarker = markerCommit.committed.changes
+      .find(item => item.document.type === 'Marker' && item.document.id === 'player-trap').changed;
     assert.deepEqual(projectedMarker.controllerUserIds, [claim.user.id]);
     assert.deepEqual(projectedMarker.visibility, { mode: 'users', userIds: [claim.user.id] });
 
@@ -1410,10 +1412,11 @@ test('hidden NPC commits advance Player revision without leaking canonical entit
     });
     const playerCommit = await playerCommitPromise;
     assert.equal(playerCommit.revision, 2);
-    assert.equal(playerCommit.results.length, 0);
-    assert.equal(JSON.stringify(playerCommit.patch).includes('token-b2'), false);
-    assert.equal(JSON.stringify(playerCommit.patch).includes('actor-b'), false);
-    assert.equal(JSON.stringify(playerCommit.patch).includes('Hostile Template'), false);
+    assert.equal(Object.hasOwn(playerCommit, 'results'), false);
+    assert.deepEqual(playerCommit.changes, []);
+    assert.equal(JSON.stringify(playerCommit).includes('token-b2'), false);
+    assert.equal(JSON.stringify(playerCommit).includes('actor-b'), false);
+    assert.equal(JSON.stringify(playerCommit).includes('Hostile Template'), false);
 
     const deniedPromise = waitForMessage(player.ws, message =>
       message.type === 'world.operation.denied' && message.operationId === 'forged-hidden-damage');
@@ -1535,7 +1538,7 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     const [ack, source, teammateCommit] = await Promise.all([sourceAck, sourceSnapshot, teammateFogCommit]);
     assert.equal(ack.revision, 2);
     assert.equal(source.state.preferences.audienceVision.source.tokenId, 'token-a');
-    assert.ok(teammateCommit.patch.world.scenes.fog.length > 0);
+    assert.ok(teammateCommit.changes.some(change => change.document.type === 'Fog'));
 
     const teammateBeforeMove = await requestWorldSnapshot(playerB.ws);
     assert.equal(teammateBeforeMove.state.preferences.audienceVision.source, null);
@@ -1555,7 +1558,7 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     });
     const teammateMove = await teammateMoveCommit;
     assert.equal(move.committed.revision, teammateMove.revision);
-    assert.ok(teammateMove.patch.world.scenes.fog.length > 0);
+    assert.ok(teammateMove.changes.some(change => change.document.type === 'Fog'));
     const sourceAfterMove = await requestWorldSnapshot(playerA.ws);
     assert.equal(sourceAfterMove.state.preferences.audienceVision.source.x, 45);
     assert.equal(sourceAfterMove.state.preferences.audienceVision.source.y, 10);
@@ -1612,7 +1615,7 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     assert.equal(commitB.operationId, acknowledged.operationId);
     assert.equal(acknowledged.revision, 4);
     assert.equal(denied.revision, 4);
-    assert.ok(commitB.patch.world.scenes.fog.length > 0);
+    assert.ok(commitB.changes.some(change => change.document.type === 'Fog'));
     assert.equal(denied.code, 'revision_conflict');
     assert.equal(Object.hasOwn(denied, 'state'), false);
     const deniedSocket = denied.operationId === 'fog-concurrent-a' ? playerA.ws : playerB.ws;
@@ -1758,7 +1761,8 @@ test('GM public profile update reaches a connected LIMITED player as a safe patc
     }));
     const [playerCommit, gmCommit] = await Promise.all([playerCommitPromise, gmCommitPromise]);
     assert.equal(gmCommit.revision, 2);
-    const projectedActor = playerCommit.patch.world.actors.upsert.find(actor => actor.id === 'actor-b');
+    const projectedActor = applyDocumentChanges(player.welcome.world.state, playerCommit.changes)
+      .preferences.worldV2.actors.find(actor => actor.id === 'actor-b');
     assert.deepEqual(projectedActor.publicProfile, {
       schemaVersion: 1, summary: '城门附近的已知敌人', appearance: '披着灰色斗篷',
       knownFacts: ['行动谨慎'], visibleStatusDefinitionIds: ['status-invisible'],

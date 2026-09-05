@@ -10,6 +10,7 @@ import { pruneProjectedWorldReferences } from './references.js';
 import { assertWorldRuleset } from './validation.js';
 import { reduceStatusOperation, STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { applyWorldOperations, deriveWorldOperations } from './operations.js';
+import { createDocumentChanges } from '../documents/changes.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -103,12 +104,12 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         const state = api.getState?.() || {};
         const raw = currentWorldFromState(state);
         const ruleset = raw ? requireRuntimeRuleset(raw, runtimeRuleset) : runtimeRuleset;
-        return normalizeWorldV2(raw || createWorldV2FromRuntimeState(state, {
+        return clone(raw || createWorldV2FromRuntimeState(state, {
           mapPackage,
           ruleset,
           worldId,
           worldName,
-        }), { mapPackage, ruleset });
+        }));
       }
 
       async function commitWorld(world, { source = 'world-v2', reason = source, render = true } = {}) {
@@ -162,10 +163,22 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           }
           return api.multiplayer.performOperations(operations, { kind, requestedOperationId });
         }
-        const applied = reduceOperations(api.getState?.() || {}, operations, { source });
-        coreCommitState(hydrateCanonical(applied.state), { source, render });
+        const before = api.getState?.() || {};
+        const applied = reduceOperations(before, operations, { source });
+        const changes = createDocumentChanges(before, applied.state, null, {
+          motion: applied.results.flatMap(result => result.motion || []),
+        });
+        if (typeof api.applyAuthoritativeDocumentChanges === 'function') {
+          api.applyAuthoritativeDocumentChanges(changes, {
+            source: `document.${source}`, operationId: requestedOperationId,
+            updatedAt: applied.state.preferences.worldV2.updatedAt,
+          });
+        } else {
+          coreCommitState(hydrateCanonical(applied.state), { source, render });
+          api.documents?.applyCommitted?.(changes, { operationId: requestedOperationId });
+        }
         api.persistNow?.();
-        return { offline: true, operations: clone(applied.operations), results: clone(applied.results) };
+        return { offline: true, operations: clone(applied.operations), results: clone(applied.results), changes };
       }
 
       api.world = {

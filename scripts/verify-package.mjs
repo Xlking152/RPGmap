@@ -105,7 +105,7 @@ if (version.version !== packageJson.version || version.releaseTag !== `v${packag
   fail(`VERSION.json does not match package version ${packageJson.version}`);
 }
 if (version.worldSchema !== 3) fail(`VERSION.json worldSchema must be 3, received ${version.worldSchema}`);
-if (version.operationSchema !== 3) fail(`VERSION.json operationSchema must be 3, received ${version.operationSchema}`);
+if (version.operationSchema !== 4) fail(`VERSION.json operationSchema must be 4, received ${version.operationSchema}`);
 if (version.statusSchema !== 4) fail(`VERSION.json statusSchema must be 4, received ${version.statusSchema}`);
 if (version.accessSchema !== 4) fail(`VERSION.json accessSchema must be 4, received ${version.accessSchema}`);
 if (!/^[0-9a-f]{40}$/i.test(String(version.commit || ''))) fail('VERSION.json commit must be a full Git commit');
