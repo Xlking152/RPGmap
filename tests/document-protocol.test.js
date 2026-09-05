@@ -170,3 +170,14 @@ test('authoritative chat append patches do not replace existing chat history', (
   ]);
   assert.deepEqual(initial.preferences.chatSystem.messages, [{ id: 'chat-old', kind: 'message', text: 'old' }]);
 });
+
+test('Legacy WAL patch schema is accepted only at an explicitly versioned replay boundary', () => {
+  const before = state();
+  const after = structuredClone(before);
+  after.preferences.worldV2.actors[0].name = 'replayed';
+  const patch = { ...createWorldOperationPatch(before, after), schemaVersion: 3 };
+  assert.throws(() => applyWorldOperationPatch(before, patch), /schema/i);
+  const applied = applyWorldOperationPatch(before, patch, { acceptedSchemaVersions: [3, WORLD_OPERATION_SCHEMA_VERSION] });
+  assert.equal(applied.preferences.worldV2.actors[0].name, 'replayed');
+  assert.throws(() => applyWorldOperationPatch(before, { ...patch, schemaVersion: 99 }, { acceptedSchemaVersions: [3, WORLD_OPERATION_SCHEMA_VERSION] }), /schema/i);
+});

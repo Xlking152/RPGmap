@@ -284,20 +284,20 @@ export function createRpgMapRuntime({
     for (const entry of tokenChanges) {
       if (entry.sceneId && String(entry.sceneId) !== String(state.preferences?.worldV2?.activeSceneId)) continue;
       for (const tokenId of entry?.removeIds || []) {
-        emit('token:delete', { id: String(tokenId), tokenId: String(tokenId), canonical: true });
+        emit('token:delete', { id: String(tokenId), tokenId: String(tokenId), source, canonical: true });
       }
       for (const tokenId of entry?.upsertIds || []) {
         const id = String(tokenId);
         const fields = entry.fields?.[id];
         const positionOnly = fields?.length && fields.every(field => ['x', 'y', 'elevationFt', 'elevationMeters'].includes(field));
         if (!positionOnly) changedTokenIds.push(id);
-        emit(positionOnly ? 'token:move' : 'token:property-change', { id, tokenId: id, fields, sceneId: entry.sceneId, canonical: true });
+        emit(positionOnly ? 'token:move' : 'token:property-change', { id, tokenId: id, fields, sceneId: entry.sceneId, source, canonical: true });
       }
     }
     if (actorIds.length) emit('actor:change', { actorIds, canonical: true });
     if (actorIds.length || changedTokenIds.length) {
       emit('health:change', { actorIds, tokenIds: changedTokenIds, canonical: true });
-      emit('status:change', { actorIds, tokenIds: changedTokenIds, canonical: true });
+      emit('status:change', { actorIds, tokenIds: changedTokenIds, source, canonical: true });
     }
     if (changeSet.statusDefinitionsChanged) emit('status:definitions-change', { canonical: true });
     if (changeSet.combatChanged) emit('combat:change', { canonical: true });
@@ -315,9 +315,12 @@ export function createRpgMapRuntime({
       if (entry.types.includes('SceneEvent')) renderScene();
       emit('scene:content-change', { ...entry, canonical: true });
     }
-    if (changeSet.scenes?.activeSceneChanged || changeSet.scenes?.upsertIds?.length || changeSet.scenes?.removeIds?.length) {
+    if (changeSet.scenes?.activeSceneChanged) {
       renderScene();
-      emit('scene:activate', { sceneId: state.preferences?.worldV2?.activeSceneId || null, canonical: true });
+      emit('scene:activate', { sceneId: state.preferences?.worldV2?.activeSceneId || null, source, canonical: true });
+    } else if (changeSet.scenes?.upsertIds?.length || changeSet.scenes?.removeIds?.length) {
+      if (changeSet.scenes.upsertIds?.includes(String(state.preferences?.worldV2?.activeSceneId))) renderScene();
+      emit('scene:update', { sceneIds: [...(changeSet.scenes.upsertIds || []), ...(changeSet.scenes.removeIds || [])], source, canonical: true });
     }
     const detail = { source, revision, changeSet: clone(changeSet) };
     if (!String(source || '').startsWith('document.')) detail.state = clone(state);

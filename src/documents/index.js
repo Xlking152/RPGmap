@@ -86,7 +86,9 @@ export function createDocumentBackendSystem() {
         },
       });
       api.on?.('state:import', rebuild);
-      api.on?.('scene:activate', rebuild);
+      api.on?.('scene:activate', event => {
+        if (!String(event.detail?.source || '').startsWith('document.')) rebuild();
+      });
     },
   });
 }

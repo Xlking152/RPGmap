@@ -53,6 +53,7 @@ export const WORLD_OPERATION_CACHE_LIMIT = 512;
 const OPERATION_TYPES = new Set([
   'world.rename',
   'actor.upsert',
+  'actor.metadata.update',
   'actor.publicProfile.update',
   'actor.delete',
   'actor.runtime.perform',
@@ -460,10 +461,40 @@ function applyCanonicalOperation(state, operation, context = {}) {
     return { action: type, actorId, created: index < 0 };
   }
 
+  if (type === 'actor.metadata.update') {
+    const actorId = identifier(payload.actorId, 'actorId');
+    const record = actorById(world, actorId);
+    const changes = object(payload.changes, 'actor.metadata.update.changes');
+    const fields = Object.keys(changes);
+    if (!fields.length || fields.some(key => !['name', 'type', 'partyId'].includes(key))) fail('Actor metadata fields are not allowed', 'actor_metadata_field_forbidden');
+    const expected = object(payload.expected, 'actor.metadata.update.expected');
+    if (Object.keys(expected).some(key => !fields.includes(key)) || fields.some(key => !Object.hasOwn(expected, key))) fail('Each metadata field requires its previous value', 'field_precondition_required');
+    for (const key of fields) {
+      if (String(record.actor[key] ?? '') !== String(expected[key] ?? '')) fail('Actor field changed since editing began', 'document_field_conflict');
+      if (changes[key] !== null && typeof changes[key] !== 'string') fail('Actor metadata must be text');
+    }
+    const next = { ...record.actor, ...changes };
+    next.name = String(next.name || '').trim().slice(0, 80) || '未命名角色';
+    if (Object.hasOwn(changes, 'type') && !['pc', 'npc', 'monster', 'summon', 'other'].includes(next.type)) fail('Unknown Actor classification');
+    if (Object.hasOwn(changes, 'partyId')) next.partyId = String(next.partyId || '').trim().slice(0, 80) || null;
+    if (actorUsesIndependentInstances(next) && allActorTokens(world, actorId).some(({ token }) => token.actorLink !== false)) fail('Independent templates require instance conversion', 'instance_detach_required');
+    next.updatedAt = String(context.now || new Date().toISOString());
+    world.actors[record.index] = next;
+    return { action: type, actorId };
+  }
+
   if (type === 'actor.publicProfile.update') {
     const actorId = identifier(payload.actorId, 'actorId');
     const record = actorById(world, actorId);
     const statusDefinitionIds = (world.statusDefinitions || []).map(definition => String(definition?.id || '')).filter(Boolean);
+    if (payload.expected !== undefined) {
+      const current = normalizeActorPublicProfile(record.actor.publicProfile, { statusDefinitionIds });
+      const expected = object(payload.expected, 'actor.publicProfile.update.expected');
+      for (const key of Object.keys(object(payload.publicProfile, 'publicProfile'))) {
+        if (!Object.hasOwn(current, key) || !Object.hasOwn(expected, key)) fail('Public profile field requires its previous value', 'field_precondition_required');
+        if (JSON.stringify(current[key]) !== JSON.stringify(expected[key])) fail('Public profile field changed since editing began', 'document_field_conflict');
+      }
+    }
     record.actor.publicProfile = normalizeActorPublicProfile(
       { ...record.actor.publicProfile, ...object(payload.publicProfile, 'actor.publicProfile.update.publicProfile') },
       { statusDefinitionIds },
@@ -511,6 +542,7 @@ function applyCanonicalOperation(state, operation, context = {}) {
 
   if (type === 'actor.instances.detach') {
     const record = actorById(world, payload.actorId);
+    if (Object.hasOwn(payload, 'expectedType') && payload.expectedType !== record.actor.type) fail('Actor classification changed since editing began', 'document_field_conflict');
     if (payload.actorType !== undefined) {
       record.actor.type = normalizeActorClassification({
         ...record.actor,

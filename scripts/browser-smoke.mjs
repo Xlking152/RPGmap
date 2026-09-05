@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
@@ -15,6 +16,11 @@ if (!['bootstrap', 'fog'].includes(mode)) throw new Error(`Unknown browser smoke
 const viewportMatch = /^(\d{2,4})x(\d{2,4})$/.exec(String(process.env.RPGMAP_SMOKE_VIEWPORT || ''));
 
 function edgePath() {
+  const override = process.env.RPGMAP_SMOKE_BROWSER_EXECUTABLE;
+  if (override) {
+    if (!existsSync(override)) throw new Error('Configured smoke browser executable was not found');
+    return path.resolve(override);
+  }
   const roots = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean);
   const suffixes = browserName === 'chrome'
     ? [['Google', 'Chrome', 'Application', 'chrome.exe'], ['Google', 'Chrome Beta', 'Application', 'chrome.exe']]
@@ -23,7 +29,7 @@ function edgePath() {
     for (const suffix of suffixes) {
       const candidate = path.join(root, ...suffix);
       try {
-        if (process.getBuiltinModule('fs').existsSync(candidate)) return candidate;
+        if (existsSync(candidate)) return candidate;
       } catch {}
     }
   }

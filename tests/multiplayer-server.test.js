@@ -424,6 +424,43 @@ async function requestWorldSnapshot(ws, reason = 'request') {
   return snapshotPromise;
 }
 
+test('Document field edits revalidate ownership and compare field values at the current revision', async () => {
+  const runtime = await startServer();
+  let gm; let player;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Field GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    await initialized;
+    const claim = waitForMessage(gm.ws, value => value.type === 'access.claim');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Field Player', defaultActorId: 'actor-a', ownership: { 'actor-a': 'owner' } }));
+    player = await openAndHello(runtime.url, { name: 'Field Player', requestedRole: 'player', claimCode: (await claim).claimCode });
+    let revision = 1;
+    async function submit(ws, operationId, actorId, changes, expected, code = null) {
+      const response = waitForMessage(ws, value => value.type === (code ? 'document.batch.denied' : 'document.batch.ack') && value.operationId === operationId);
+      const commit = code ? null : waitForMessage(ws, value => value.type === 'document.batch.committed' && value.operationId === operationId);
+      ws.send(JSON.stringify({ type: 'document.batch', operationSchema: WORLD_OPERATION_SCHEMA_VERSION, operationId, baseRevision: revision, writes: [{ action: 'update', document: { type: 'Actor', id: actorId }, intent: 'actor.metadata.update', data: { changes, expected } }] }));
+      const result = await response;
+      if (code) {
+        assert.equal(result.code, code); assert.equal(result.revision, revision);
+        assert.equal(Object.hasOwn(result, 'state'), false);
+      } else {
+        const committed = await commit;
+        assert.equal(committed.revision, ++revision);
+        assert.equal(Object.hasOwn(committed, 'patch'), false);
+        assert.deepEqual(committed.changes.find(change => change.document.type === 'Actor').changed.name, changes.name);
+      }
+    }
+    const actorName = initialWorldV2().preferences.worldV2.actors[0].name;
+    await submit(player.ws, 'owned-field', 'actor-a', { name: 'player edit' }, { name: actorName });
+    await submit(gm.ws, 'concurrent-field', 'actor-a', { name: 'GM edit' }, { name: 'player edit' });
+    await submit(player.ws, 'stale-field', 'actor-a', { name: 'stale overwrite' }, { name: 'player edit' }, 'document_field_conflict');
+    await submit(player.ws, 'unowned-field', 'actor-b', { name: 'forged' }, { name: '' }, 'actor_not_owned');
+    await submit(player.ws, 'classification-field', 'actor-a', { partyId: 'forged' }, { partyId: 'party-default' }, 'actor_classification_gm_only');
+    await submit(player.ws, 'retry-field', 'actor-a', { name: 'explicit retry' }, { name: 'GM edit' });
+  } finally { player?.ws.close(); gm?.ws.close(); await stopServer(runtime); }
+});
+
 function tokenRuntimeHealth(snapshot, tokenId) {
   const scene = snapshot.state.preferences.worldV2.scenes
     .find(item => item.id === snapshot.state.preferences.worldV2.activeSceneId);

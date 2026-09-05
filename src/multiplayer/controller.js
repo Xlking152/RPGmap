@@ -632,6 +632,9 @@ export function createMultiplayerController() {
         if (!send(message)) {
           activeOperation = null;
           operationQueue.unshift(operation);
+        } else if (api.diagnostics?.enabled) {
+          api.diagnostics.begin('network.confirm', operation.operationId);
+          api.diagnostics.record('network.requestBytes', new TextEncoder().encode(JSON.stringify(message)).byteLength);
         }
       }
 
@@ -1013,6 +1016,7 @@ export function createMultiplayerController() {
         }
 
         if (message.type === 'world.operation.committed' || message.type === 'document.batch.committed') {
+          if (api.diagnostics?.enabled) api.diagnostics.record('network.responseBytes', new TextEncoder().encode(JSON.stringify(message)).byteLength);
           const documentBatch = message.type === 'document.batch.committed';
           const incomingRevision = Number(message.revision);
           if (hasWorldOperationRevisionGap(message, revision)) {
@@ -1039,9 +1043,16 @@ export function createMultiplayerController() {
             && String(message.operationId || '') === String(activeOperation.operationId);
           const expectedOperationId = matchesActive ? activeOperation.operationId : null;
           const applyPromise = Promise.resolve().then(() => {
+                const nextWorld = canonicalState.preferences.worldV2;
+                const nextScene = nextWorld.scenes.find(scene => scene.id === nextWorld.activeSceneId);
+                if (nextScene?.mapPackage?.id && nextScene.mapPackage.id !== String(api.mapPackage?.id || api.mapPackage?.mapId || '')) {
+                  return applyRemoteState(canonicalState, incomingRevision, 'scene.map-package');
+                }
+                const started = api.diagnostics?.enabled ? windowNode.performance.now() : null;
                 api.applyAuthoritativeDocumentChanges(message.changes, {
                   source: 'document.batch', revision: incomingRevision, updatedAt: message.updatedAt, operationId: message.operationId,
                 });
+                if (started !== null) api.diagnostics.record('documents.apply', windowNode.performance.now() - started);
                 revision = incomingRevision;
                 lastServerState = canonicalState;
                 lastObservedLocalState = null;
@@ -1072,6 +1083,7 @@ export function createMultiplayerController() {
         }
 
         if (message.type === 'world.operation.ack' || message.type === 'document.batch.ack') {
+          api.diagnostics?.end('network.confirm', message.operationId);
           if (!activeOperation || String(message.operationId || '') !== String(activeOperation.operationId)) return;
           activeOperation.acknowledged = true;
           activeOperation.revision = Number(message.revision) || revision;
@@ -1085,6 +1097,7 @@ export function createMultiplayerController() {
         }
 
         if (message.type === 'world.operation.denied' || message.type === 'document.batch.denied') {
+          api.diagnostics?.end('network.confirm', message.operationId);
           if (!activeOperation || String(message.operationId || '') !== String(activeOperation.operationId)) return;
           const error = new Error(message.message || '服务器拒绝了 World 操作');
           error.code = message.code || 'world_operation_denied';

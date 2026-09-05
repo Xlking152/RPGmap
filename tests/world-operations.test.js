@@ -68,6 +68,39 @@ test('World operation envelope rejects unknown operations and invalid revisions'
   );
 });
 
+test('Actor metadata writes preserve newer runtime fields and reject stale field preconditions', () => {
+  const initial = state();
+  initial.preferences.worldV2.actors[0].type = 'pc';
+  initial.preferences.worldV2.actors[0].partyId = 'party-default';
+  const actorBefore = structuredClone(initial.preferences.worldV2.actors[0]);
+  const update = { type: 'actor.metadata.update', payload: { actorId: 'actor-a', changes: { name: 'renamed' }, expected: { name: 'actor-a' } } };
+  const committed = applyWorldOperations(initial, [update]);
+  const after = committed.state.preferences.worldV2.actors[0];
+  assert.equal(after.name, 'renamed');
+  assert.deepEqual(after.system, actorBefore.system);
+  assert.deepEqual(after.effects, actorBefore.effects);
+  assert.equal(initial.preferences.worldV2.actors[0].name, 'actor-a');
+  assert.throws(() => applyWorldOperations(committed.state, [update]), error => error.code === 'document_field_conflict');
+  assert.throws(() => applyWorldOperations(initial, [{ ...update, payload: { ...update.payload, changes: { system: {} } } }]), error => error.code === 'actor_metadata_field_forbidden');
+  assert.throws(() => applyWorldOperations(initial, [{ ...update, payload: { ...update.payload, expected: {} } }]), error => error.code === 'field_precondition_required');
+  const parallel = applyWorldOperations(committed.state, [{ type: 'actor.metadata.update', payload: {
+    actorId: 'actor-a', changes: { partyId: 'other-party' }, expected: { partyId: 'party-default' },
+  } }]);
+  assert.equal(parallel.state.preferences.worldV2.actors[0].name, 'renamed');
+});
+
+test('Public profile compare-and-set protects dirty fields without conflicting with unrelated fields', () => {
+  const initial = state();
+  const actor = initial.preferences.worldV2.actors[0];
+  actor.publicProfile = { summary: 'before', appearance: 'remote', knownFacts: [], visibleStatusDefinitionIds: [] };
+  const operation = { type: 'actor.publicProfile.update', payload: {
+    actorId: actor.id, publicProfile: { summary: 'after' }, expected: { summary: 'before' },
+  } };
+  const committed = applyWorldOperations(initial, [operation]);
+  assert.equal(committed.state.preferences.worldV2.actors[0].publicProfile.appearance, 'remote');
+  assert.throws(() => applyWorldOperations(committed.state, [operation]), error => error.code === 'document_field_conflict');
+});
+
 test('atomic operations update Actor, Token, Scene and Combat through one reducer', () => {
   const initial = state();
   const updatedActor = actor('actor-a', 7);

@@ -698,9 +698,30 @@ function healthResult(actor, operation, context = {}) {
   };
 }
 
+function fieldOperationValue(actor, operation, context) {
+  const runtime = actor.system.runtime;
+  if (operation.type === 'variant.set') return actor.system.currentFormId;
+  if (operation.type === 'attribute.set-adjustment') return runtime.attributeAdjustments[operation.attributeId] || 0;
+  if (operation.type === 'bad-status.set-current') return runtime.badStatuses[operation.statusId] || 0;
+  if (['resource.set-current', 'resource.set-max'].includes(operation.type)) {
+    const field = operation.type === 'resource.set-current' ? 'current' : 'max';
+    return resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.${field}`);
+  }
+  if (operation.type === 'detection.set-override') {
+    const detection = deriveInfiniteHorrorActor(actor, context).detection;
+    return operation.field === 'sense' ? detection.senses?.[operation.sense] : detection[operation.field];
+  }
+  return undefined;
+}
+
 export function applyInfiniteHorrorActorOperation(actor, operation = {}, context = {}) {
   actor.system = normalizeInfiniteHorrorSystem(actor.system);
   const type = String(operation?.type || '');
+  if (Object.hasOwn(operation, 'expectedValue')) {
+    const current = fieldOperationValue(actor, operation, context);
+    if (current === undefined) return { changed: false, blocked: 'field_precondition_unsupported' };
+    if (String(current ?? '') !== String(operation.expectedValue ?? '')) return { changed: false, blocked: 'document_field_conflict' };
+  }
   if (type === 'health.resolve') return { changed: false, value: deriveInfiniteHorrorActor(actor, context).health };
   if (['health.set-mode', 'health.runtime', 'health.damage', 'health.healing'].includes(type)) {
     return healthResult(actor, operation, context);

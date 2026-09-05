@@ -400,6 +400,8 @@ export function createTokenRendererSystem() {
       function renderEventTokens(event) {
         const detail = event?.detail || {};
         const address = detail.document || {};
+        if (address.type && !['Actor', 'Token', 'StatusDefinition'].includes(address.type)) return;
+        if (address.type === 'Token' && address.parent?.id !== String(api.world?.get?.()?.activeSceneId || '')) return;
         const ids = new Set([
           detail.tokenId, detail.id, ...(detail.tokenIds || []),
           address.type === 'Token' ? address.id : null,
@@ -411,6 +413,7 @@ export function createTokenRendererSystem() {
         if (actorIds.size) {
           for (const token of api.tokens.list()) if (actorIds.has(String(token.actorId))) ids.add(String(token.id));
         }
+        if (!ids.size && actorIds.size) return;
         if (!ids.size) pendingFullRender = true;
         else for (const id of ids) pendingRenderIds.add(id);
         if (eventRenderFrame === null) eventRenderFrame = requestFrame(flushEventRender);

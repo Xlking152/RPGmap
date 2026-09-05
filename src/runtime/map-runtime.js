@@ -33,6 +33,7 @@ import { createVisionFogSystem } from '../vision/index.js';
 import { createLightweightMarkerSystem } from '../marker/index.js';
 import { createPermissionSystem } from '../permissions/index.js';
 import { createDocumentBackendSystem } from '../documents/index.js';
+import { createPerformanceDiagnosticsSystem } from '../diagnostics/runtime.js';
 
 export async function startMapRuntime({
   appContainer,
@@ -74,6 +75,7 @@ export async function startMapRuntime({
     initialLoad,
     tools: [
       createAppLifecycleSystem(),
+      createPerformanceDiagnosticsSystem(),
       createWorldSystem({ worldId, worldName }),
       createDocumentBackendSystem(),
       createSceneManagerSystem({

@@ -11,6 +11,8 @@ import { upsertCanonicalActor } from './actor-operations.js';
 import { createEntityTokenController } from './token-controller.js';
 import { createActorSheetManager } from './sheet-manager.js';
 import { ActorSheet } from './sheet/actor-sheet.js';
+import { SheetFieldDrafts } from './sheet/field-drafts.js';
+import { initializeSheetFields, readSheetControl, reconcileSheetNode, writeSheetControl } from './sheet/reconcile.js';
 import { normalizeActorPublicProfile } from '../actor/public-profile.js';
 import {
   actorUiCapabilities,
@@ -81,6 +83,11 @@ export function createEntityUiTool(options = {}) {
       const publicProfileDrafts = new Map();
       const publicProfileFeedback = new Map();
       const sheetInstances = new Map();
+      const fieldDrafts = new Map();
+      const pendingSheetRenders = new Map();
+      let sheetRenderFrame = null;
+      let panelRenderFrame = null;
+      const actorCardCache = new Map();
       const rulesetCapabilities = actorUiCapabilities(api.ruleset);
 
       const panel = api.uiPanels?.actors;
@@ -101,9 +108,6 @@ export function createEntityUiTool(options = {}) {
 
       function entityState() { return store.state; }
       function canonicalTokens() { return api.tokens?.list?.() || []; }
-      function tokenCount(actorId) {
-        return canonicalTokens().filter(token => id(token.actorId) === id(actorId)).length;
-      }
       function setStatus(message) {
         const node = shell.querySelector('[data-role="map-status"]');
         if (node) node.textContent = message;
@@ -181,6 +185,9 @@ export function createEntityUiTool(options = {}) {
         backdropForKey(target)?.remove();
         sheetInstances.get(target)?.dispose?.();
         sheetInstances.delete(target);
+        fieldDrafts.delete(target);
+        pendingSheetRenders.delete(target);
+        publicProfileDrafts.delete(target);
         const closed = sheetManager.close(target);
         if (!closed) return false;
         if (activeSheetKey === target) activeSheetKey = sheetManager.list().at(-1)?.key || null;
@@ -188,7 +195,45 @@ export function createEntityUiTool(options = {}) {
         return true;
       }
 
-      function applySheetParts(record, html, actorSheet) {
+      function draftsFor(record) {
+        if (!fieldDrafts.has(record.key)) fieldDrafts.set(record.key, new SheetFieldDrafts());
+        return fieldDrafts.get(record.key);
+      }
+
+      function renderFieldNotices(record) {
+        const sheet = backdropForKey(record.key)?.querySelector('.entity-sheet');
+        if (!sheet) return;
+        let host = sheet.querySelector(':scope > [data-sheet-field-notices]');
+        if (!host) {
+          host = documentNode.createElement('div');
+          host.dataset.sheetFieldNotices = '';
+          host.className = 'entity-field-notices';
+          host.setAttribute('role', 'status');
+          sheet.append(host);
+        }
+        const notices = draftsFor(record).notices();
+        host.hidden = !notices.length;
+        host.replaceChildren(...notices.map(notice => {
+          const row = documentNode.createElement('div');
+          const label = documentNode.createElement('span');
+          const control = [...sheet.querySelectorAll('input,textarea,select')].find(node => node.dataset.sheetFieldKey === notice.key);
+          const fieldName = control?.matches('[data-actor-name]') ? '名称' : control?.matches('[data-actor-party]') ? '队伍' : control?.matches('[data-actor-type]') ? '分类' : control?.closest('label')?.textContent?.trim().slice(0, 40) || control?.name || '字段';
+          label.textContent = `${fieldName}：${notice.error || '服务器已更新，已保留你的输入'}`;
+          row.append(label);
+          for (const [action, text] of [['adopt', '采用服务器值'], ['retry', '重新提交']]) {
+            const button = documentNode.createElement('button');
+            button.type = 'button'; button.className = 'small-button'; button.textContent = text;
+            button.dataset.sheetFieldResolution = action;
+            button.dataset.sheetFieldKey = notice.key;
+            button.disabled = notice.pending;
+            row.append(button);
+          }
+          return row;
+        }));
+      }
+
+      function applySheetParts(record, html, actorSheet, affected = null) {
+        const started = api.diagnostics?.enabled ? windowNode.performance.now() : null;
         const template = documentNode.createElement('template');
         template.innerHTML = String(html || '').trim();
         const incomingBackdrop = template.content.firstElementChild;
@@ -198,6 +243,7 @@ export function createEntityUiTool(options = {}) {
         if (!backdrop) {
           documentNode.body.append(incomingBackdrop);
           backdrop = incomingBackdrop;
+          initializeSheetFields(backdrop, draftsFor(record));
         } else {
           const currentSheet = backdrop.querySelector('.entity-sheet');
           backdrop.className = incomingBackdrop.className;
@@ -214,17 +260,18 @@ export function createEntityUiTool(options = {}) {
               if (attribute.name !== 'style') currentSheet.setAttribute(attribute.name, attribute.value);
             }
             const selectors = [
-              ':scope > .entity-sheet-header',
-              ':scope > [data-sheet-edit-only]',
-              ':scope > .entity-sheet-tabs',
-              ':scope > .entity-sheet-body',
+              ['header', ':scope > .entity-sheet-header'],
+              ['classification', ':scope > [data-sheet-edit-only]'],
+              ['tabs', ':scope > .entity-sheet-tabs'],
+              ['body', ':scope > .entity-sheet-body'],
             ];
-            for (const selector of selectors) {
+            for (const [name, selector] of selectors) {
+              if (affected && !affected.has(name)) continue;
               const currentPart = currentSheet.querySelector(selector);
               const incomingPart = incomingSheet.querySelector(selector);
               if (!incomingPart) currentPart?.remove();
-              else if (!currentPart) currentSheet.append(incomingPart);
-              else if (currentPart.innerHTML !== incomingPart.innerHTML) currentPart.replaceChildren(...[...incomingPart.childNodes]);
+              else if (!currentPart) { currentSheet.append(incomingPart); initializeSheetFields(incomingPart, draftsFor(record)); }
+              else reconcileSheetNode(currentPart, incomingPart, { drafts: draftsFor(record) });
             }
           }
         }
@@ -232,6 +279,19 @@ export function createEntityUiTool(options = {}) {
         if (previous !== actorSheet) previous?.dispose?.();
         sheetInstances.set(record.key, actorSheet);
         applyGeometry(sheetManager.get(record.key) || record);
+        if (backdrop.dataset.renderedTab !== String(record.tab || '')) {
+          backdrop.dataset.renderedTab = String(record.tab || '');
+          const tabs = backdrop.querySelector('.entity-sheet-tabs');
+          const selected = tabs?.querySelector('.entity-sheet-tab.active');
+          if (selected) {
+            const tabRect = selected.getBoundingClientRect();
+            const hostRect = tabs.getBoundingClientRect();
+            if (tabRect.right > hostRect.right) tabs.scrollLeft += tabRect.right - hostRect.right;
+            else if (tabRect.left < hostRect.left) tabs.scrollLeft -= hostRect.left - tabRect.left;
+          }
+        }
+        renderFieldNotices(record);
+        if (started !== null) api.diagnostics.record('sheet.dom', windowNode.performance.now() - started);
         return true;
       }
       function closeAllSheets() {
@@ -382,13 +442,25 @@ export function createEntityUiTool(options = {}) {
       });
 
       function renderPanel() {
+        if (panelRenderFrame !== null || destroyed) return;
+        panelRenderFrame = windowNode.requestAnimationFrame(() => {
+          panelRenderFrame = null;
+          renderPanelNow();
+        });
+      }
+
+      function renderPanelNow() {
         if (!panel) return;
         renderingPanel = true;
         const actors = entityState().actors.filter(actor => String(actor.type || 'pc') === 'pc');
+        const counts = new Map();
+        for (const token of canonicalTokens()) counts.set(String(token.actorId), (counts.get(String(token.actorId)) || 0) + 1);
+        const actorIds = new Set(actors.map(actor => actor.id));
+        for (const key of actorCardCache.keys()) if (!actorIds.has(key)) actorCardCache.delete(key);
         const canManageStructure = capabilities().canManageStructure;
         const legacyMarkerCount = Array.isArray(api.getState().markers) ? api.getState().markers.length : 0;
         importButton.hidden = !canManageStructure || !rulesetCapabilities.canImportXlsx;
-        panel.innerHTML = `
+        const html = `
           <div class="entity-panel" data-entity-panel>
             <div class="entity-panel-head">
               ${canManageStructure && rulesetCapabilities.canImportXlsx ? '<button type="button" class="small-button primary" data-entity-action="import">导入角色卡</button>' : ''}${canManageStructure ? '<button type="button" class="small-button" data-entity-action="new">新建空白角色</button>' : ''}
@@ -396,16 +468,19 @@ export function createEntityUiTool(options = {}) {
             </div>
             <div class="entity-help">角色资料与地图棋子分别管理；同一角色可以放置多个棋子，独立棋子也可以保留自己的状态。${legacyMarkerCount ? `检测到 ${legacyMarkerCount} 个旧标记；它们会保留，只有 GM 确认迁移后才会删除。` : '双击地图棋子或按列表中的“角色卡”打开属性。选中有多个形态的棋子后按 <b>V</b> 切换形态。'}</div>
             <div data-entity-list>${actors.length ? actors.map(actor => {
-              const presentation = describeActor(actor, { ruleset: api.ruleset }) || {};
-              const sheetCapabilities = actorUiCapabilities(api.ruleset, describeActorSheet(actor));
-              const count = tokenCount(actor.id);
+              const count = counts.get(String(actor.id)) || 0;
               const canEditActor = capabilities().canEditActor?.(actor.id);
               const canPlaceActor = capabilities().canPlaceActor?.(actor.id);
+              const accessKey = `${canManageStructure}:${canEditActor}:${canPlaceActor}`;
+              const cached = actorCardCache.get(actor.id);
+              if (cached?.actor === actor && cached.count === count && cached.accessKey === accessKey) return cached.html;
+              const presentation = describeActor(actor, { ruleset: api.ruleset }) || {};
+              const sheetCapabilities = actorUiCapabilities(api.ruleset, describeActorSheet(actor));
               const statusSnapshot = actor.audienceRestricted
                 ? { actorStatuses: [], derivedStatuses: [] }
                 : resolveStatusUiSnapshot(api, { actorId: actor.id });
               const typeLabel = ({ pc: 'PC', monster: '怪物', npc: 'NPC', summon: '召唤物', other: '其他' })[actor.type] || 'PC';
-              return `<article class="entity-card" data-actor-id="${escapeEntityHtml(actor.id)}">
+              const html = `<article class="entity-card" data-actor-id="${escapeEntityHtml(actor.id)}">
                 <div class="entity-card-status"><small>${escapeEntityHtml(typeLabel)} · ${['monster', 'npc', 'summon'].includes(String(actor.type)) ? '独立实例' : '共享角色'}</small></div>
                 <div class="entity-card-top">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-card-copy"><strong>${escapeEntityHtml(actor.name)}</strong><small>${escapeEntityHtml(presentation.variantLabel || '无形态')} · ${count ? `${count} 个 Token` : '未放置'}</small></div></div>
                 <div class="entity-card-status">${renderStatusStrip([...statusSnapshot.actorStatuses, ...statusSnapshot.derivedStatuses], { limit: 4, emptyText: '无状态' })}</div>
@@ -416,8 +491,15 @@ export function createEntityUiTool(options = {}) {
                   ${!canEditActor ? '<small>只读</small>' : ''}
                 </div>
               </article>`;
+              actorCardCache.set(actor.id, { actor, count, accessKey, html });
+              return html;
             }).join('') : '<div class="entity-empty">还没有角色。可直接导入 XLSX 角色卡。</div>'}</div>
           </div>`;
+        const template = documentNode.createElement('template');
+        template.innerHTML = html.trim();
+        const existing = panel.querySelector(':scope > [data-entity-panel]');
+        if (existing) reconcileSheetNode(existing, template.content.firstElementChild);
+        else panel.replaceChildren(template.content.firstElementChild);
         queueMicrotask(() => { renderingPanel = false; });
       }
 
@@ -430,13 +512,13 @@ export function createEntityUiTool(options = {}) {
         const { actor, token } = context;
         if (tab === 'public-profile') {
           const draft = publicProfileDrafts.get(context.record.key);
-          const editorActor = draft ? { ...actor, publicProfile: draft } : actor;
-          const editorSheet = createLiveActorSheet(editorActor, null, context.record);
+          const editorSheet = createLiveActorSheet(actor, null, context.record);
           return editorSheet.renderPublicProfileEditor({
             statusDefinitions: api.world?.get?.()?.statusDefinitions || [],
             pending: publicProfilePending.has(context.record.key),
             feedback: publicProfileFeedback.get(context.record.key) || '',
             preview: publicProfilePreview.has(context.record.key),
+            previewProfile: draft,
           });
         }
         if (tab === 'status') {
@@ -466,14 +548,15 @@ export function createEntityUiTool(options = {}) {
           : '<div class="entity-empty">规则包没有提供这个角色卡页签。</div>';
       }
 
-      function publicProfileFromSheet(record) {
+      function publicProfileFromSheet(record, { baseline = false } = {}) {
         const root = backdropForKey(record?.key)?.querySelector('[data-public-profile-editor]');
         if (!root) return null;
+        const value = control => baseline ? draftsFor(record).get(control?.dataset.sheetFieldKey)?.base ?? readSheetControl(control) : readSheetControl(control);
         return normalizeActorPublicProfile({
-          summary: root.querySelector('[name="summary"]')?.value || '',
-          appearance: root.querySelector('[name="appearance"]')?.value || '',
-          knownFacts: String(root.querySelector('[name="knownFacts"]')?.value || '').split(/\r?\n/),
-          visibleStatusDefinitionIds: [...root.querySelectorAll('[name="visibleStatusDefinitionIds"]:checked')].map(input => input.value),
+          summary: value(root.querySelector('[name="summary"]')) || '',
+          appearance: value(root.querySelector('[name="appearance"]')) || '',
+          knownFacts: String(value(root.querySelector('[name="knownFacts"]')) || '').split(/\r?\n/),
+          visibleStatusDefinitionIds: [...root.querySelectorAll('[name="visibleStatusDefinitionIds"]')].filter(control => value(control)).map(input => input.value),
         }, { statusDefinitionIds: (api.world?.get?.()?.statusDefinitions || []).map(definition => definition.id) });
       }
 
@@ -485,48 +568,73 @@ export function createEntityUiTool(options = {}) {
           return false;
         }
         if (publicProfilePending.has(record.key)) return false;
+        const controls = [...backdropForKey(record.key).querySelectorAll('[data-public-profile-editor] input,[data-public-profile-editor] textarea')];
+        controls.forEach(control => trackFieldInput({ target: control }));
+        const drafts = draftsFor(record);
+        const keys = controls.map(control => control.dataset.sheetFieldKey).filter(key => drafts.get(key)?.dirty);
+        if (keys.some(key => drafts.get(key)?.conflict || drafts.get(key)?.pending)) { renderFieldNotices(record); return false; }
+        const baseline = publicProfileFromSheet(record, { baseline: true });
+        const changed = Object.keys(profile).filter(key => JSON.stringify(profile[key]) !== JSON.stringify(baseline[key]));
+        if (!changed.length) return true;
+        keys.forEach(key => drafts.begin(key));
         publicProfilePending.add(record.key);
         publicProfileFeedback.set(record.key, '正在等待服务器确认…');
         renderSheetRecord(record);
         try {
-          await api.world.performOperations([{ type: 'actor.publicProfile.update', payload: { actorId: actor.id, publicProfile: profile } }], { source: 'entities:actor.public-profile' });
+          await api.world.performOperations([{ type: 'actor.publicProfile.update', payload: {
+            actorId: actor.id,
+            publicProfile: Object.fromEntries(changed.map(key => [key, profile[key]])),
+            expected: Object.fromEntries(changed.map(key => [key, baseline[key]])),
+          } }], { source: 'entities:actor.public-profile' });
+          keys.forEach(key => drafts.settle(key, { success: true }));
           publicProfileDrafts.delete(record.key);
           publicProfileFeedback.set(record.key, '已由服务器确认');
           setStatus(`${actor.name} 的公开资料已更新`);
           return true;
         } catch (error) {
-          publicProfileDrafts.delete(record.key);
+          keys.forEach(key => drafts.settle(key, { success: false, error: String(error?.message || error) }));
           publicProfileFeedback.set(record.key, `保存失败：${error?.message || error}`);
           setStatus(`公开资料保存失败：${error?.message || error}`);
           return false;
         } finally {
           publicProfilePending.delete(record.key);
-          store.load({ migrateLegacy: false, dropMarkers: false });
           renderPanel();
-          renderAllSheets();
+          renderSheetRecord(record);
         }
       }
 
-      function renderSheetRecord(record) {
+      function renderSheetRecord(record, changes = null) {
         if (destroyed || !record) return false;
+        const previous = sheetInstances.get(record.key);
+        let affected = previous?.affectedParts(changes) || null;
+        if (affected && !['header', 'classification', 'tabs', 'body'].some(name => affected.has(name))) return false;
         const context = resolveSheetRecord(record);
         if (!context) {
           closeSheet(record.key);
           return false;
         }
         const { actor, token } = context;
+        if (previous && previous.actor.audienceRestricted !== actor.audienceRestricted) affected = null;
         const runtimeAllowed = token
           ? (!api.multiplayer?.getStatus?.()?.connected || api.permissions?.can?.('token.control', { token }) === true)
           : api.permissions?.can?.('actor.edit', { actorId: actor.id, actor }) === true;
         const actorSheet = createLiveActorSheet(actor, token, record, { canRuntimeEdit: runtimeAllowed });
+        if (previous && (actor.audienceRestricted === true || (['observer', 'limited', 'none'].includes(actorSheet.context.level) && actorSheet.context.level !== previous.context.level))) {
+          draftsFor(record).clear();
+          publicProfileDrafts.delete(record.key);
+        }
+        function renderLayoutPart(name, dependencies, render) {
+          actorSheet.definePart(name, { dependencies, render });
+          return !affected || affected.has(name) ? actorSheet.renderPart(name) : '';
+        }
         const windowAttrs = `data-sheet-window-key="${escapeEntityHtml(record.key)}" data-scene-id="${escapeEntityHtml(record.sceneId || '')}"`;
         if (actor.audienceRestricted === true) {
           const typeLabel = ({ pc: 'PC', monster: '怪物', npc: 'NPC', summon: '召唤物', other: '其他' })[actor.type] || '其他';
           const html = `<div class="entity-sheet-backdrop entity-sheet-window" ${windowAttrs}><div class="entity-sheet entity-sheet-v3 entity-limited-sheet" ${windowAttrs} data-actor-id="${escapeEntityHtml(actor.id)}" data-token-id="${escapeEntityHtml(token?.id || '')}" data-sheet-mode="limited" data-sheet-interaction-mode="limited" role="dialog" aria-modal="false">
-            <header class="entity-sheet-header">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><strong>${escapeEntityHtml(actor.name)}</strong><div class="entity-formbar"><span>${escapeEntityHtml(typeLabel)}</span><strong>公开摘要</strong></div>${actorSheet.renderBadges()}</div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>
-            <main class="entity-sheet-body">${actorSheet.renderLimited()}</main>
+            ${renderLayoutPart('header', { Actor: ['name', 'type', 'img', 'publicProfile', 'audienceRestricted'], Token: ['name', 'img', 'publicStatuses'] }, () => `<header class="entity-sheet-header">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><strong>${escapeEntityHtml(actor.name)}</strong><div class="entity-formbar"><span>${escapeEntityHtml(typeLabel)}</span><strong>公开摘要</strong></div>${actorSheet.renderBadges()}</div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>`)}
+            ${renderLayoutPart('body', { Actor: ['publicProfile', 'name', 'img', 'audienceRestricted'], Token: ['name', 'img', 'publicStatuses'] }, () => `<main class="entity-sheet-body">${actorSheet.renderLimited()}</main>`)}
           </div></div>`;
-          return applySheetParts(record, html, actorSheet);
+          return applySheetParts(record, html, actorSheet, affected);
         }
 
         const sheetDescription = describeActorSheet(actor) || { variants: [], tabs: [] };
@@ -560,11 +668,11 @@ export function createEntityUiTool(options = {}) {
           ? `<section class="entity-section entity-danger-zone" data-sheet-edit-only><h3>危险操作</h3><div class="entity-help">删除模板会同时删除所有 Scene 中的关联 Token，并清理战斗引用。</div><button type="button" class="small-button danger" data-sheet-action="delete-template">删除模板</button></section>`
           : '';
         const html = `<div class="entity-sheet-backdrop entity-sheet-window" ${windowAttrs}><div class="entity-sheet entity-sheet-v3 ${canEdit ? '' : 'entity-sheet-readonly'} ${independentTemplate ? 'entity-template-runtime-readonly' : ''}" ${windowAttrs} data-actor-id="${escapeEntityHtml(actor.id)}" data-token-id="${escapeEntityHtml(token?.id || '')}" data-sheet-kind="${escapeEntityHtml(sheetKind)}" data-sheet-mode="${instanceMode ? 'instance' : 'template'}" data-sheet-interaction-mode="${actorSheet.context.mode}" role="dialog" aria-modal="false">
-          <header class="entity-sheet-header">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><input type="text" maxlength="80" value="${escapeEntityHtml(actor.name)}" data-actor-name ${actorSheet.context.editable ? '' : 'disabled'}><div class="entity-formbar"><strong>${instanceMode ? 'Token 实例卡' : 'Actor 模板卡'}</strong>${sheetCapabilities.hasVariants ? `<span>当前形态</span><select data-form-select>${(sheetDescription.variants || []).map(item => `<option value="${escapeEntityHtml(item.id)}" ${id(item.id) === id(sheetDescription.currentVariantId) ? 'selected' : ''}>${escapeEntityHtml(item.label)}</option>`).join('')}</select>${sheetCapabilities.canCycleVariants ? '<button type="button" class="small-button primary" data-sheet-action="cycle-form">V · 切换</button>' : ''}${!instanceMode && sheetCapabilities.canImportXlsx && actorSheet.context.editable ? '<button type="button" class="small-button" data-sheet-edit-only data-sheet-action="add-form">+ 形态</button>' : ''}` : ''}${!instanceMode && actorSheet.context.editable ? '<button type="button" class="small-button" data-sheet-edit-only data-sheet-action="avatar">更换头像</button>' : ''}</div>${actorSheet.renderBadges(sheetDescription)}<div class="status-title-band">${renderStatusStrip(titleSnapshot.statuses, { limit: 8, emptyText: '无机械状态' })}</div></div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>
-          ${classificationControls}<nav class="entity-sheet-tabs">${tabs.map(([tabId, label]) => `<button type="button" class="entity-sheet-tab ${id(tab) === id(tabId) ? 'active' : ''}" data-sheet-tab="${escapeEntityHtml(tabId)}">${escapeEntityHtml(label)}</button>`).join('')}</nav>
-          <main class="entity-sheet-body">${actorSheetBody(context, tab, actorSheet)}${deleteTemplateDanger}</main>
+          ${renderLayoutPart('header', { Actor: ['name', 'type', 'img', 'prototypeToken', 'system', 'effects', 'publicProfile', 'audienceRestricted'], Token: ['actorLink', 'actorDelta', 'effects', 'name', 'img'], StatusDefinition: ['*'] }, () => `<header class="entity-sheet-header">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><input type="text" maxlength="80" value="${escapeEntityHtml(actor.name)}" data-actor-name ${actorSheet.context.editable ? '' : 'disabled'}><div class="entity-formbar"><strong>${instanceMode ? 'Token 实例卡' : 'Actor 模板卡'}</strong>${sheetCapabilities.hasVariants ? `<span>当前形态</span><select data-form-select>${(sheetDescription.variants || []).map(item => `<option value="${escapeEntityHtml(item.id)}" ${id(item.id) === id(sheetDescription.currentVariantId) ? 'selected' : ''}>${escapeEntityHtml(item.label)}</option>`).join('')}</select>${sheetCapabilities.canCycleVariants ? '<button type="button" class="small-button primary" data-sheet-action="cycle-form">V · 切换</button>' : ''}${!instanceMode && sheetCapabilities.canImportXlsx && actorSheet.context.editable ? '<button type="button" class="small-button" data-sheet-edit-only data-sheet-action="add-form">+ 形态</button>' : ''}` : ''}${!instanceMode && actorSheet.context.editable ? '<button type="button" class="small-button" data-sheet-edit-only data-sheet-action="avatar">更换头像</button>' : ''}</div>${actorSheet.renderBadges(sheetDescription)}<div class="status-title-band">${renderStatusStrip(titleSnapshot.statuses, { limit: 8, emptyText: '无机械状态' })}</div></div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>`)}
+          ${renderLayoutPart('classification', { Actor: ['type', 'partyId', 'audienceRestricted'], Token: ['actorLink'] }, () => classificationControls)}${renderLayoutPart('tabs', { Actor: ['type', 'system', 'audienceRestricted'], Token: ['actorLink'] }, () => `<nav class="entity-sheet-tabs">${tabs.map(([tabId, label]) => `<button type="button" class="entity-sheet-tab ${id(tab) === id(tabId) ? 'active' : ''}" data-sheet-tab="${escapeEntityHtml(tabId)}">${escapeEntityHtml(label)}</button>`).join('')}</nav>`)}
+          ${renderLayoutPart('body', { Actor: tab === 'public-profile' ? ['publicProfile', 'audienceRestricted'] : ['system', 'effects', 'name', 'img', 'type', 'prototypeToken', 'audienceRestricted'], Token: tab === 'token' ? ['*'] : tab === 'public-profile' ? [] : ['actorDelta', 'effects', 'actorLink'], StatusDefinition: ['*'] }, () => `<main class="entity-sheet-body">${actorSheetBody(context, tab, actorSheet)}${deleteTemplateDanger}</main>`)}
         </div></div>`;
-        return applySheetParts(record, html, actorSheet);
+        return applySheetParts(record, html, actorSheet, affected);
       }
 
       function renderAllSheets() {
@@ -572,15 +680,27 @@ export function createEntityUiTool(options = {}) {
         refreshZOrder();
       }
 
-      function renderRelatedSheets({ actorIds = [], tokenIds = [] } = {}) {
+      function renderRelatedSheets({ actorIds = [], tokenIds = [], changes = null } = {}) {
         const actors = new Set(actorIds.map(String));
         const tokens = new Set(tokenIds.map(String));
         for (const record of [...sheetManager.list()]) {
           if (actors.has(String(record.actorId)) || (record.tokenId && tokens.has(String(record.tokenId)))) {
-            renderSheetRecord(record);
+            if (!pendingSheetRenders.has(record.key)) api.diagnostics?.begin('sheet.queue', record.key);
+            const pending = pendingSheetRenders.get(record.key);
+            pendingSheetRenders.set(record.key, pending === null || changes === null ? null : [...(pending || []), ...changes]);
           }
         }
-        refreshZOrder();
+        if (sheetRenderFrame !== null) return;
+        sheetRenderFrame = windowNode.requestAnimationFrame(() => {
+          sheetRenderFrame = null;
+          const requests = [...pendingSheetRenders];
+          pendingSheetRenders.clear();
+          for (const [key, updates] of requests) {
+            renderSheetRecord(sheetManager.get(key), updates);
+            api.diagnostics?.end('sheet.queue', key);
+          }
+          refreshZOrder();
+        });
       }
 
       function openSheet(actorId, tab = null, tokenId = null) {
@@ -716,6 +836,21 @@ export function createEntityUiTool(options = {}) {
 
       documentNode.addEventListener('click', async event => {
         const record = activateEventSheet(event);
+        const resolution = event.target.closest?.('[data-sheet-field-resolution]');
+        if (record && resolution) {
+          const key = resolution.dataset.sheetFieldKey;
+          const drafts = draftsFor(record);
+          const control = [...backdropForKey(record.key).querySelectorAll('input,textarea,select')].find(node => node.dataset.sheetFieldKey === key);
+          if (resolution.dataset.sheetFieldResolution === 'adopt') {
+            const field = drafts.adopt(key);
+            if (control && field) writeSheetControl(control, field.value);
+          } else if (drafts.retry(key) && control) {
+            if (control.closest('[data-public-profile-editor]')) await savePublicProfile(record);
+            else control.dispatchEvent(new windowNode.Event('change', { bubbles: true }));
+          }
+          renderFieldNotices(record);
+          return;
+        }
         if (statusUi.handleClick(event)) return;
         if (event.target.closest?.('[data-entity-placement-cancel]')) {
           event.preventDefault();
@@ -807,8 +942,38 @@ export function createEntityUiTool(options = {}) {
 
       documentNode.addEventListener('submit', event => { statusUi.handleSubmit(event); });
 
+      function trackFieldInput(event) {
+        const record = recordForNode(event.target);
+        const key = event.target.dataset?.sheetFieldKey;
+        if (!record || !key || !draftsFor(record).get(key)) return;
+        draftsFor(record).edit(key, readSheetControl(event.target));
+        if (event.target.closest('[data-public-profile-editor]')) publicProfileDrafts.set(record.key, publicProfileFromSheet(record));
+      }
+      documentNode.addEventListener('input', trackFieldInput);
+
+      async function submitSheetField(record, control, submit) {
+        const drafts = draftsFor(record);
+        const key = control.dataset.sheetFieldKey;
+        trackFieldInput({ target: control });
+        const pending = drafts.begin(key);
+        if (!pending) { renderFieldNotices(record); return false; }
+        try {
+          const result = await submit(pending);
+          if (result === false) throw new Error('字段更新被拒绝');
+          drafts.settle(key, { success: true });
+          return true;
+        } catch (error) {
+          drafts.settle(key, { success: false, error: error?.code === 'document_field_conflict' ? '此字段已更新，请选择服务器值或重新提交' : String(error?.message || error) });
+          return false;
+        } finally {
+          renderSheetRecord(record);
+          renderFieldNotices(record);
+        }
+      }
+
       documentNode.addEventListener('change', async event => {
         const record = activateEventSheet(event);
+        trackFieldInput(event);
         if (statusUi.handleChange(event)) return;
         if (await tokenController.handleChange(event.target)) return;
         if (!record) return;
@@ -819,50 +984,45 @@ export function createEntityUiTool(options = {}) {
         if (event.target.matches('[data-actor-name]')) {
           const baseActor = store.actor(record.actorId);
           if (!baseActor || record.tokenId || !requireActorStructureEdit(record)) { renderSheetRecord(record); return; }
-          baseActor.name = String(event.target.value || '未命名角色').trim().slice(0, 80) || '未命名角色';
-          await persistActorAndRender(baseActor, { source: 'entities:actor.rename' });
+          await submitSheetField(record, event.target, ({ value, expected }) => api.world.performOperations([{
+            type: 'actor.metadata.update', payload: { actorId: baseActor.id, changes: { name: value }, expected: { name: expected } },
+          }], { source: 'entities:actor.rename' }));
         } else if (event.target.matches('[data-actor-type]')) {
           const baseActor = store.actor(record.actorId);
           if (!baseActor || record.tokenId || !requireActorStructureEdit(record) || !requireStructure()) { renderSheetRecord(record); return; }
-          const nextType = String(event.target.value || 'pc');
-          try {
+          await submitSheetField(record, event.target, async ({ value: nextType, expected }) => {
             if (['monster', 'npc', 'summon'].includes(nextType)) {
               await api.world.performOperations([{ type: 'actor.instances.detach', payload: {
                 actorId: baseActor.id,
                 actorType: nextType,
-                partyId: baseActor.partyId,
+                expectedType: expected,
               } }], { source: 'entities:actor.instances.detach' });
             } else {
-              baseActor.type = nextType;
-              await persistActorAndRender(baseActor, { source: 'entities:actor.classification' });
+              await api.world.performOperations([{ type: 'actor.metadata.update', payload: {
+                actorId: baseActor.id, changes: { type: nextType }, expected: { type: expected },
+              } }], { source: 'entities:actor.classification' });
             }
-          } catch (error) {
-            setStatus(`Actor 类型更新失败：${error?.message || error}`);
-          } finally {
-            store.load({ migrateLegacy: false, dropMarkers: false });
-            renderPanel();
-            renderAllSheets();
-          }
+          });
         } else if (event.target.matches('[data-actor-party]')) {
           const baseActor = store.actor(record.actorId);
           if (!baseActor || record.tokenId || !requireActorStructureEdit(record) || !requireStructure()) { renderSheetRecord(record); return; }
-          baseActor.partyId = String(event.target.value || '').trim().slice(0, 80) || null;
-          await persistActorAndRender(baseActor, { source: 'entities:actor.party' });
+          await submitSheetField(record, event.target, ({ value, expected }) => api.world.performOperations([{
+            type: 'actor.metadata.update', payload: { actorId: baseActor.id, changes: { partyId: value }, expected: { partyId: expected } },
+          }], { source: 'entities:actor.party' }));
         } else if (event.target.matches('[data-form-select]')) {
           if (!requireRuntimeEdit(actor, record)) { renderSheetRecord(record); return; }
-          await performCanonicalRuntimeOperation({ type: 'variant.set', variantId: event.target.value }, {
+          await submitSheetField(record, event.target, ({ value, expected }) => performCanonicalRuntimeOperation({ type: 'variant.set', variantId: value, expectedValue: expected }, {
             source: 'entities:actor.form.select',
             record,
-          });
+          }));
         } else if (event.target.matches('[data-actor-operation]')) {
           if (!requireRuntimeEdit(actor, record)) { renderSheetRecord(record); return; }
           const operation = decodeEntityData(event.target.dataset.actorOperation);
           if (!operation) return;
-          operation.value = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
-          await performCanonicalRuntimeOperation(operation, {
+          await submitSheetField(record, event.target, ({ value, expected }) => performCanonicalRuntimeOperation({ ...operation, value, expectedValue: expected }, {
             source: 'entities:actor.operation',
             record,
-          });
+          }));
         }
       });
 
@@ -923,16 +1083,24 @@ export function createEntityUiTool(options = {}) {
         renderAllSheets();
       });
       api.on('token:create', event => {
+        if (String(event.detail?.source || '').startsWith('document.')) return;
         renderPanel();
         renderRelatedSheets({ actorIds: [event.detail?.actorId].filter(Boolean), tokenIds: [event.detail?.tokenId || event.detail?.id].filter(Boolean) });
       });
       api.on('token:delete', event => {
+        if (String(event.detail?.source || '').startsWith('document.')) return;
         if (selectedTokenId && id(event.detail?.tokenId || event.detail?.id) === id(selectedTokenId)) selectedTokenId = null;
         renderPanel();
         renderRelatedSheets({ actorIds: [event.detail?.actorId].filter(Boolean), tokenIds: [event.detail?.tokenId || event.detail?.id].filter(Boolean) });
       });
-      api.on('token:move', event => { renderPanel(); renderRelatedSheets({ actorIds: [event.detail?.actorId].filter(Boolean), tokenIds: [event.detail?.tokenId || event.detail?.id].filter(Boolean) }); });
-      api.on('token:property-change', event => { renderPanel(); renderRelatedSheets({ actorIds: [event.detail?.actorId].filter(Boolean), tokenIds: [event.detail?.tokenId || event.detail?.id].filter(Boolean) }); });
+      api.on('token:move', event => {
+        if (String(event.detail?.source || '').startsWith('document.')) return;
+        renderRelatedSheets({ tokenIds: [event.detail?.tokenId || event.detail?.id].filter(Boolean), changes: [{ document: { type: 'Token' }, changed: { x: 0, y: 0 } }] });
+      });
+      api.on('token:property-change', event => {
+        if (String(event.detail?.source || '').startsWith('document.')) return;
+        renderPanel(); renderRelatedSheets({ actorIds: [event.detail?.actorId].filter(Boolean), tokenIds: [event.detail?.tokenId || event.detail?.id].filter(Boolean) });
+      });
       api.on('elevation:token-change', event => { renderPanel(); renderRelatedSheets({ tokenIds: [event.detail?.tokenId || event.detail?.id].filter(Boolean) }); });
       api.on('state:commit', event => {
         if (store.saving) return;
@@ -949,6 +1117,7 @@ export function createEntityUiTool(options = {}) {
         renderAllSheets();
       });
       api.on('status:change', event => {
+        if (String(event.detail?.source || '').startsWith('document.')) return;
         renderPanel();
         renderRelatedSheets({
           actorIds: [...(event.detail?.actorIds || []), event.detail?.actorId].filter(Boolean),
@@ -959,18 +1128,32 @@ export function createEntityUiTool(options = {}) {
         api.on(eventName, event => {
           const address = event.detail?.document || {};
           store.applyDocumentChange(event.detail);
-          if (address.type === 'Actor') renderRelatedSheets({ actorIds: [address.id] });
-          if (address.type === 'Token') renderRelatedSheets({ tokenIds: [address.id] });
+          if (address.type === 'Actor') {
+            renderPanel();
+            renderRelatedSheets({ actorIds: [address.id], changes: [event.detail] });
+          }
+          if (address.type === 'Token' && address.parent?.id === activeSceneId(api)) {
+            if (['create', 'delete'].includes(event.detail.action)) {
+              renderPanel();
+              if (event.detail.action === 'delete' && selectedTokenId === address.id) selectedTokenId = null;
+              renderRelatedSheets({ actorIds: [event.detail.changed?.actorId].filter(Boolean) });
+            }
+            renderRelatedSheets({ tokenIds: [address.id], changes: [event.detail] });
+          }
+          if (address.type === 'StatusDefinition') { actorCardCache.clear(); renderPanel(); renderAllSheets(); }
         });
       }
       api.on('multiplayer:capabilities', () => { renderPanel(); renderAllSheets(); });
       api.on('app:destroy', () => {
         destroyed = true;
+        if (sheetRenderFrame !== null) windowNode.cancelAnimationFrame(sheetRenderFrame);
+        if (panelRenderFrame !== null) windowNode.cancelAnimationFrame(panelRenderFrame);
         tokenController.destroy();
         statusUi.closeDefinitionEditor();
         statusUi.closeDetailEditor();
         closeAllSheets();
         documentNode.removeEventListener('pointerdown', activateEventSheet, true);
+        documentNode.removeEventListener('input', trackFieldInput);
         mapElement.removeEventListener('click', tokenController.handleMapClick, true);
         panel.removeEventListener('click', handlePanelClick);
         panelObserver?.disconnect();

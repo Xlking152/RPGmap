@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { spawn } from 'node:child_process';
@@ -211,6 +211,7 @@ try {
   ]));
   const statusId = INFINITE_HORROR_STATUS_DEFINITIONS.find(definition => definition.id === 'status-strengthened')?.id
     || INFINITE_HORROR_STATUS_DEFINITIONS[0].id;
+  const moveBytes = { requestMax: 0, responseMax: 0 };
 
   async function perform(type, index) {
     const operationId = `lan-bench-${type}-${index}-${revision}`;
@@ -243,10 +244,15 @@ try {
         intent: 'chat.append', data: { text: `Benchmark ${index}` }, precondition: {},
       };
     }
-    gm.socket.send({
+    const request = {
       type: 'document.batch', operationSchema, operationId, baseRevision: revision, writes: [write],
-    });
+    };
+    gm.socket.send(request);
     const messages = await Promise.all(received);
+    if (type === 'move') {
+      moveBytes.requestMax = Math.max(moveBytes.requestMax, Buffer.byteLength(JSON.stringify(request)));
+      moveBytes.responseMax = Math.max(moveBytes.responseMax, ...messages.map(message => Buffer.byteLength(JSON.stringify(message))));
+    }
     revision = Number(messages[0].revision);
     return performance.now() - startedAt;
   }
@@ -271,13 +277,16 @@ try {
     aggregate: summarize(aggregate),
   };
   console.log(JSON.stringify({
-    repo: root, version: health.version, schemas, fixture: { actors: ACTOR_COUNT, tokens: TOKEN_COUNT },
-    warmup: WARMUP_COUNT, measurement,
-    scope: 'GM + 6 Player fanout: send until all six remote sessions receive the authoritative Document update; browser DOM timing is covered by Edge/Chrome smoke',
+    repo: root, version: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, schemas, fixture: { actors: ACTOR_COUNT, tokens: TOKEN_COUNT },
+    warmup: WARMUP_COUNT, measurement, moveBytes,
+    scope: 'GM + 6 Player WebSocket fanout only. This does not measure browser DOM, Canvas, input preview or FPS; those require a separate foreground browser benchmark.',
   }, null, 2));
   if (process.argv.includes('--assert')) {
     if (measurement.aggregate.p95Ms > 60) {
       throw new Error(`LAN performance gate failed: aggregate p95 ${measurement.aggregate.p95Ms}ms exceeds 60ms`);
+    }
+    if (moveBytes.requestMax > 4096 || moveBytes.responseMax > 4096) {
+      throw new Error(`Single visible Token move packet exceeds 4 KiB: ${JSON.stringify(moveBytes)}`);
     }
   }
 } finally {

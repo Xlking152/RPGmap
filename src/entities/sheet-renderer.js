@@ -62,8 +62,8 @@ export function installEntityStyles(documentNode) {
     .entity-sheet-title input { width:100%; font-size:20px; font-weight:800; border:0; border-bottom:1px solid #aab5b3; background:transparent; padding:3px 0; }
     .entity-formbar { display:flex; gap:7px; align-items:center; flex-wrap:wrap; margin-top:7px; }
     .entity-formbar select { min-width:140px; }
-    .entity-sheet-tabs { position:sticky; top:93px; z-index:2; display:flex; gap:2px; padding:0 12px; background:#eef3ef; border-bottom:1px solid rgba(40,70,70,.16); }
-    .entity-sheet-tab { border:0; background:transparent; padding:10px 13px; cursor:pointer; font-weight:750; color:#4c5d5f; }
+    .entity-sheet-tabs { display:flex; gap:2px; padding:0 12px; min-width:0; overflow-x:auto; background:#eef3ef; border-bottom:1px solid rgba(40,70,70,.16); }
+    .entity-sheet-tab { flex:0 0 auto; white-space:nowrap; border:0; background:transparent; padding:10px 13px; cursor:pointer; font-weight:750; color:#4c5d5f; }
     .entity-sheet-tab.active { color:#176d76; box-shadow:inset 0 -3px #176d76; }
     .entity-sheet-body { padding:16px; display:grid; gap:14px; }
     .entity-section { border:1px solid rgba(60,80,80,.18); border-radius:10px; padding:12px; background:#fff; }
@@ -101,8 +101,13 @@ export function installEntityStyles(documentNode) {
     .entity-limited-sheet.entity-sheet-v3 .entity-sheet-header .entity-avatar,
     .entity-limited-sheet.entity-sheet-v3 .entity-sheet-header .entity-avatar img { width:78px; height:78px; border-radius:10px; }
     .entity-public-profile-editor { display:grid; gap:10px; }
+    .entity-field-notices { position:sticky; bottom:0; z-index:4; padding:8px 12px; background:#fff5df; border-top:1px solid #d3b263; color:#69451d; font-size:12px; }
+    .entity-field-notices[hidden] { display:none; }
+    .entity-field-notices > div { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:3px 0; }
+    .entity-field-notices span { flex:1 1 160px; overflow-wrap:anywhere; }
+    [data-sheet-field-state="conflict"] { outline:2px solid #ba741d; outline-offset:1px; }
     .entity-public-profile-editor > label { display:grid; gap:5px; font-weight:700; color:#526366; }
-    .entity-public-profile-editor textarea { width:100%; box-sizing:border-box; resize:vertical; }
+    .entity-public-profile-editor textarea { width:100%; box-sizing:border-box; resize:vertical; font:inherit; padding:7px; border:1px solid #aab8b4; border-radius:4px; }
     .entity-public-status-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px 10px; max-height:180px; overflow:auto; }
     .entity-public-status-option { display:flex; gap:5px; align-items:center; }
     .entity-public-profile-preview { display:grid; gap:10px; padding:10px; border:1px dashed #b8c6c1; border-radius:8px; background:#f5f7f4; }

@@ -1114,6 +1114,12 @@ function authorizeOperations(session, operations) {
       }
       return value;
     }
+    if (value.type === 'actor.metadata.update') {
+      const current = world.state?.preferences?.worldV2?.actors?.find(item => String(item.id) === String(payload.actorId));
+      if (!current || current.type !== 'pc' || user?.ownership?.[current.id] !== OWNERSHIP.OWNER) operationDenied('actor_not_owned', 'Only an owned PC template may be edited');
+      if (Object.keys(payload.changes || {}).some(key => key !== 'name')) operationDenied('actor_classification_gm_only', 'Only the GM can change Actor classification or party');
+      return value;
+    }
     if (value.type === 'actor.upsert') {
       const actorId = String(payload.actor?.id || '');
       const current = world.state?.preferences?.worldV2?.actors?.find(item => String(item?.id ?? '') === actorId);

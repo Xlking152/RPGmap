@@ -13,6 +13,11 @@ if (!/^http:\/\/127\.0\.0\.1:\d+\/?/.test(targetUrl)) throw new Error('Actor she
 const timeoutMs = Math.max(20_000, Number(process.argv[3]) || 45_000);
 
 function edgePath() {
+  const override = process.env.RPGMAP_SMOKE_BROWSER_EXECUTABLE;
+  if (override) {
+    if (!existsSync(override)) throw new Error('Configured smoke browser executable was not found');
+    return path.resolve(override);
+  }
   const roots = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean);
   const suffixes = browserName === 'chrome'
     ? [['Google', 'Chrome', 'Application', 'chrome.exe'], ['Google', 'Chrome Beta', 'Application', 'chrome.exe']]
@@ -278,6 +283,39 @@ try {
     const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || ''));
     return sheet?.dataset.sheetInteractionMode === 'edit' && sheet.querySelector('[data-sheet-mode-toggle]') ? { before: 'play', after: 'edit' } : null;
   })()`), 'Actor template Edit mode');
+  await evaluate(`(() => {
+    const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !node.dataset.tokenId);
+    const input = sheet.querySelector('[data-actor-name]');
+    input.focus(); input.value = 'local draft name'; input.setSelectionRange(3, 8);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const observer = new MutationObserver(() => {});
+    observer.observe(sheet.querySelector('.entity-sheet-header'), { attributes: true, childList: true, subtree: true, characterData: true });
+    window.sheetDraftProbe = { input, observer };
+    return true;
+  })()`);
+  await evaluate(`(async () => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const actor = api.world.get().actors.find(item => item.id === '${ids.actor}');
+    await api.world.performOperations([{ type: 'actor.metadata.update', payload: { actorId: actor.id, changes: { partyId: 'draft-probe-party' }, expected: { partyId: actor.partyId } } }]);
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const { input, observer } = window.sheetDraftProbe;
+    if (!input.isConnected || document.activeElement !== input || input.value !== 'local draft name' || input.selectionStart !== 3 || input.selectionEnd !== 8) throw new Error('Unrelated commit replaced or disturbed the active input');
+    if (observer.takeRecords().length) throw new Error('Unrelated classification field rendered the header Part');
+    observer.disconnect();
+    await api.world.performOperations([{ type: 'actor.metadata.update', payload: { actorId: actor.id, changes: { name: 'remote name' }, expected: { name: actor.name } } }]);
+    return true;
+  })()`);
+  const draftAudit = await retryWithSnapshot(() => evaluate(`(() => {
+    const input = window.sheetDraftProbe.input;
+    const sheet = input.closest('.entity-sheet');
+    const retry = sheet?.querySelector('[data-sheet-field-resolution="retry"]');
+    if (!retry) return null;
+    if (!input.isConnected || input !== sheet.querySelector('[data-actor-name]') || input.value !== 'local draft name' || input.selectionStart !== 3 || input.selectionEnd !== 8) throw new Error('Conflicting commit discarded the focused field draft');
+    retry.click();
+    return { stableNode: true, caret: [input.selectionStart, input.selectionEnd], conflict: true };
+  })()`), 'dirty field conflict and explicit resubmission');
+  await retryWithSnapshot(() => evaluate(`document.querySelector('#app').rpgMapApp.world.get().actors.find(item => item.id === '${ids.actor}')?.name === 'local draft name'`), 'field resubmission acknowledged with current field precondition');
+  await evaluate('delete window.sheetDraftProbe');
   await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); sheet?.querySelector('[data-sheet-tab="public-profile"]')?.click(); return true; })()`);
   await retryWithSnapshot(() => evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); return sheet?.querySelector('[data-public-profile-editor]') ? true : null; })()`), 'GM public profile editor');
   await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); const summary = sheet?.querySelector('[name="summary"]'); if (!summary) return false; summary.value = 'Smoke LIMITED profile'; sheet.querySelector('[data-public-profile-save]')?.click(); return true; })()`);
@@ -291,12 +329,30 @@ try {
     const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     await writeFile(path.join(directory, 'packaged-sheets.png'), Buffer.from(capture.data, 'base64'));
   }
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await evaluate(`(() => {
+    const api = document.querySelector('#app').rpgMapApp;
+    for (const sheet of api.entities.listOpenSheets()) api.entities.closeSheet(sheet.key);
+    api.entities.openActor('${ids.actor}', 'public-profile');
+    return true;
+  })()`);
+  const mobileAudit = await retryWithSnapshot(() => evaluate(`(() => {
+    const sheet = document.querySelector('.entity-sheet');
+    if (!sheet?.querySelector('[data-public-profile-editor]')) return null;
+    const rect = sheet.getBoundingClientRect();
+    if (document.documentElement.scrollWidth > 390 || rect.left < 0 || rect.right > 390 || sheet.scrollWidth > sheet.clientWidth) throw new Error('390px sheet has horizontal overflow');
+    return { viewport: innerWidth, sheetWidth: rect.width, scrollWidth: sheet.scrollWidth, clientWidth: sheet.clientWidth };
+  })()`), '390px Actor sheet without horizontal overflow');
+  if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
+    const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    await writeFile(path.join(path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR), 'packaged-sheet-mobile.png'), Buffer.from(capture.data, 'base64'));
+  }
   await new Promise(resolve => setTimeout(resolve, 400));
   if (failures.length) throw new Error(`Actor sheet browser requests failed: ${failures.join('; ')}`);
   if (exceptions.length) throw new Error(`Actor sheet browser runtime errors: ${exceptions.join('; ')}`);
 
   console.log(JSON.stringify({ ready, fixtureRevision: setup.revision, liveSheets: opened, drag: dragAudit, tabs: tabAudit,
-    health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit, publicProfile: publicProfileAudit }));
+    health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit, drafts: draftAudit, publicProfile: publicProfileAudit, mobile: mobileAudit }));
   await send('Browser.close');
   browserClosed = true;
 } catch (error) {
