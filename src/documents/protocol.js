@@ -13,6 +13,7 @@ const INTENT_TO_OPERATION = new Map([
   ['world.rename', 'world.rename'],
   ['actor.upsert', 'actor.upsert'],
   ['actor.metadata.update', 'actor.metadata.update'],
+  ['actor.portrait.update', 'actor.portrait.update'],
   ['actor.publicProfile.update', 'actor.publicProfile.update'],
   ['actor.delete', 'actor.delete'],
   ['actor.runtime.perform', 'actor.runtime.perform'],

@@ -99,6 +99,7 @@ export function createMultiplayerController() {
       let pendingVisionSource = null;
       let activeVisionSourceTokenId = null;
       let session = null;
+      let contentToken = null;
       let permissions = { worldWrite: false, worldReset: false, manageAccess: false, combatManage: false, actorOwnerIds: [], actorObserverIds: [], actorLimitedIds: [], defaultActorId: null, placementGrants: { actorTypes: [], actorIds: [], markerKinds: [] } };
       let clients = [];
       let access = { revision: 0, users: [], pending: [], actors: [], canManage: false, selfUserId: null };
@@ -874,6 +875,7 @@ export function createMultiplayerController() {
           clearReconnectTimer();
           if (message.resumeAccepted !== true) reconnectAttempt = 0;
           session = message.session || null;
+          contentToken = typeof message.contentToken === 'string' ? message.contentToken : null;
           permissions = message.permissions || permissions;
           publishCapabilities();
           if (message.resumeAccepted !== true) revision = Number(message.world?.revision) || 0;
@@ -1445,6 +1447,20 @@ export function createMultiplayerController() {
       });
 
       api.multiplayer = {
+        async fetchContent(path = '', options = {}) {
+          if (!connected || !contentToken || session?.identityStatus !== 'active') throw new Error('identity_required');
+          if (!/^\/?(?:[a-f0-9]{64}(?:\/references)?)?$/.test(path)) throw new Error('invalid_content_path');
+          const headers = new Headers(options.headers);
+          headers.set('Authorization', `Bearer ${contentToken}`);
+          const response = await windowNode.fetch(`/api/content${path.startsWith('/') || !path ? path : `/${path}`}`, {
+            ...options, headers, cache: 'no-store', credentials: 'omit', redirect: 'error',
+          });
+          if (!response.ok) {
+            const value = await response.json().catch(() => ({}));
+            throw Object.assign(new Error(value.error || 'content_request_failed'), { code: value.error, status: response.status });
+          }
+          return response;
+        },
         connect,
         disconnect,
         requestWorld: () => send({ type: 'world.snapshot.request' }),

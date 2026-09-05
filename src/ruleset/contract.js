@@ -215,6 +215,14 @@ export function prepareRuleset(raw = {}) {
         blocked: 'unknown_actor_operation',
       })),
       instances: prepareActorInstances(actor.instances),
+      portrait: Object.freeze({
+        describe: actorFunction(actor.portrait?.describe, document => ({ variantId: null, reference: document.img || null })),
+        update: actorFunction(actor.portrait?.update, (document, { reference }) => {
+          const previous = document.img;
+          document.img = reference;
+          if (document.prototypeToken?.texture && (!document.prototypeToken.texture.src || document.prototypeToken.texture.src === previous)) document.prototypeToken.texture.src = reference;
+        }),
+      }),
       presentation: prepareActorPresentation(actor.presentation),
     }),
     health: Object.freeze({

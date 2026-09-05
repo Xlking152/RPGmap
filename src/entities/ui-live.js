@@ -5,7 +5,7 @@ import {
   performActorOperation as performActorDocumentOperation,
 } from '../actor/index.js';
 import { importActorXlsx } from './xlsx-importer.js';
-import { imageToAvatarDataUrl } from './avatar.js';
+import { imageToAvatarBlob, imageToAvatarDataUrl } from './avatar.js';
 import { EntityStore } from './store.js';
 import { upsertCanonicalActor } from './actor-operations.js';
 import { createEntityTokenController } from './token-controller.js';
@@ -102,7 +102,8 @@ export function createEntityUiTool(options = {}) {
 
       const avatarInput = documentNode.createElement('input');
       avatarInput.type = 'file';
-      avatarInput.accept = 'image/*';
+      avatarInput.dataset.entityAvatarFile = '';
+      avatarInput.accept = 'image/png,image/jpeg,image/webp';
       avatarInput.hidden = true;
       toolbar?.append(avatarInput);
 
@@ -749,8 +750,9 @@ export function createEntityUiTool(options = {}) {
         try {
           const imported = await importActorXlsx(file, { ruleset: api.ruleset });
           if (imported.avatarImage) {
-            try { imported.avatarDataUrl = await imageToAvatarDataUrl(imported.avatarImage); }
-            catch (error) { console.warn('Excel 头像导入失败，保留空头像', error); }
+            imported.avatarDataUrl = api.content
+              ? (await api.content.putImage(await imageToAvatarBlob(imported.avatarImage))).reference
+              : await imageToAvatarDataUrl(imported.avatarImage);
           }
           let actor = actorId ? store.actor(actorId) : null;
           if (!actor) {
@@ -1036,11 +1038,24 @@ export function createEntityUiTool(options = {}) {
           return;
         }
         try {
-          const result = performActorOperation(actor, {
+          const portrait = api.ruleset.actor.portrait.describe(actor);
+          const avatarReference = api.content
+            ? (await api.content.putImage(await imageToAvatarBlob(file))).reference
+            : await imageToAvatarDataUrl(file);
+          const current = store.actor(actor.id);
+          if (!current) throw new Error('角色已删除');
+          if (api.content) {
+            await api.world.performOperations([{ type: 'actor.portrait.update', payload: {
+              actorId: actor.id, reference: avatarReference,
+              expectedReference: portrait.reference, variantId: portrait.variantId,
+            } }], { source: 'entities:actor.avatar' });
+            return;
+          }
+          const result = performActorOperation(current, {
             type: 'avatar.set',
-            avatarDataUrl: await imageToAvatarDataUrl(file),
+            avatarDataUrl: avatarReference,
           });
-          if (result.changed) await persistActorAndRender(actor, { source: 'entities:actor.avatar' });
+          if (result.changed) await persistActorAndRender(current, { source: 'entities:actor.avatar' });
         } catch (error) {
           windowNode.alert?.('头像处理失败：' + error.message);
         } finally {

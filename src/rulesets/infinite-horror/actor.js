@@ -714,6 +714,18 @@ function fieldOperationValue(actor, operation, context) {
   return undefined;
 }
 
+function updateInfiniteHorrorPortrait(actor, reference) {
+  const form = currentFormFromSystem(actor.system);
+  if (!form) return { changed: false, blocked: 'variant_not_found' };
+  const previous = form.avatarDataUrl;
+  form.avatarDataUrl = reference;
+  if (!actor.img || actor.img === previous) actor.img = reference;
+  if (actor.prototypeToken?.texture && (!actor.prototypeToken.texture.src || actor.prototypeToken.texture.src === previous)) {
+    actor.prototypeToken.texture.src = reference;
+  }
+  return { changed: true, value: reference };
+}
+
 export function applyInfiniteHorrorActorOperation(actor, operation = {}, context = {}) {
   actor.system = normalizeInfiniteHorrorSystem(actor.system);
   const type = String(operation?.type || '');
@@ -835,10 +847,7 @@ export function applyInfiniteHorrorActorOperation(actor, operation = {}, context
     return { changed: true, value };
   }
   if (type === 'avatar.set') {
-    const form = currentFormFromSystem(actor.system);
-    if (!form) return { changed: false, blocked: 'variant_not_found' };
-    form.avatarDataUrl = typeof operation.avatarDataUrl === 'string' ? operation.avatarDataUrl : null;
-    return { changed: true, value: form.avatarDataUrl };
+    return updateInfiniteHorrorPortrait(actor, typeof operation.avatarDataUrl === 'string' ? operation.avatarDataUrl : null);
   }
   return { changed: false, blocked: 'unknown_actor_operation' };
 }
@@ -1007,6 +1016,16 @@ export const INFINITE_HORROR_ACTOR = Object.freeze({
   attributePaths: infiniteHorrorAttributePaths,
   resolveAttribute: resolveInfiniteHorrorAttribute,
   applyRuntimeOperation: applyInfiniteHorrorActorOperation,
+  portrait: Object.freeze({
+    describe(actor) {
+      const form = currentFormFromSystem(actor.system);
+      return { variantId: form?.id || null, reference: form?.avatarDataUrl || actor.img || null };
+    },
+    update(actor, { reference }) {
+      const result = updateInfiniteHorrorPortrait(actor, reference);
+      if (!result.changed) throw Object.assign(new Error('Actor portrait is unavailable'), { code: result.blocked });
+    },
+  }),
   instances: Object.freeze({
     createDelta: createInfiniteHorrorInstanceDelta,
     normalizeDelta: normalizeInfiniteHorrorInstanceDelta,

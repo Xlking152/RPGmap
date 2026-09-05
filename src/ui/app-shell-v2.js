@@ -94,7 +94,7 @@ export function createAppShellUiV2() {
       const currentPanel = api.uiPanels?.get?.('current');
       const importInput = documentNode.createElement('input');
       importInput.type = 'file';
-      importInput.accept = 'application/json,.json';
+      importInput.accept = 'application/json,.json,application/zip,.zip';
       importInput.className = 'ui-file-input';
       shell.append(importInput);
 
@@ -149,7 +149,10 @@ export function createAppShellUiV2() {
       let importButton = null;
       if (toolbarRight) {
         toolbarRight.replaceChildren();
-        exportButton = button(documentNode, '导出', () => api.downloadState?.());
+        exportButton = button(documentNode, '导出', async () => {
+          try { await api.downloadState?.(); }
+          catch (error) { api.showToast?.(`导出失败：${error.message}`, 'error'); }
+        });
         importButton = button(documentNode, '导入', () => importInput.click());
         toolbarRight.append(exportButton, importButton, button(documentNode, '回到底图', () => api.resetView?.()));
       }
@@ -189,7 +192,7 @@ export function createAppShellUiV2() {
         const avatar = documentNode.createElement('span');
         avatar.className = 'ui-token-avatar';
         avatar.style.background = view.color;
-        if (view.avatar) avatar.innerHTML = `<img src="${escapeHtml(view.avatar)}" alt="">`;
+        if (view.avatar) avatar.innerHTML = `<img ${contentImageAttributes(view.avatar, escapeHtml)} alt="">`;
         else avatar.textContent = (Array.from(view.name.trim())[0] || '?').toUpperCase();
         const title = documentNode.createElement('div');
         const strong = documentNode.createElement('strong'); strong.textContent = view.name;
@@ -280,3 +283,4 @@ export function createAppShellUiV2() {
     },
   });
 }
+import { contentImageAttributes } from '../content/references.js';

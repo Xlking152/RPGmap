@@ -37,6 +37,7 @@ function nodeKey(node) {
 
 function synchronizeAttributes(current, incoming) {
   for (const { name } of [...current.attributes]) {
+    if (name === 'src' && current.dataset.contentRef && current.dataset.contentRef === incoming.dataset.contentRef) continue;
     if (name.startsWith('data-sheet-field-') || (name === 'open' && current.tagName === 'DETAILS')) continue;
     if (!incoming.hasAttribute(name)) current.removeAttribute(name);
   }

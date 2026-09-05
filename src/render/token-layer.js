@@ -72,7 +72,7 @@ function renderSize(api, model) {
 export function tokenIcon(api, model) {
   const size = renderSize(api, model);
   const portrait = model.avatarDataUrl
-    ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="" draggable="false">`
+    ? `<img ${contentImageAttributes(model.avatarDataUrl, escapeHtml)} alt="" draggable="false">`
     : `<span>${escapeHtml((Array.from(model.name)[0] || '?').toUpperCase())}</span>`;
   const flags = model.gmViewer ? [
     ...(model.gmOnly ? ['<span class="rpg-token-v2-flag gm-only">GM 专属</span>'] : []),
@@ -235,7 +235,7 @@ export function createTokenRendererSystem() {
           return;
         }
         const portrait = model.avatarDataUrl
-          ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="" draggable="false">`
+          ? `<img ${contentImageAttributes(model.avatarDataUrl, escapeHtml)} alt="" draggable="false">`
           : escapeHtml((Array.from(model.name)[0] || '?').toUpperCase());
         let healthText = '';
         if (!model.audienceRestricted) {
@@ -504,3 +504,4 @@ export function createTokenRendererSystem() {
     },
   });
 }
+import { contentImageAttributes } from '../content/references.js';

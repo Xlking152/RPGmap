@@ -59,6 +59,7 @@ async function bundleServerModule(entry, fileName) {
       emptyOutDir: false,
       minify: false,
       outDir: root,
+      rollupOptions: { external: id => id.startsWith('node:') },
       lib: {
         entry: path.join(projectRoot, entry),
         formats: ['es'],
@@ -73,6 +74,8 @@ await bundleServerModule('src/server/authority.js', 'ruleset-authority.mjs');
 await bundleServerModule('src/server/movement-authority-entry.js', 'movement-authority.mjs');
 await bundleServerModule('src/permissions/model.js', 'permissions-model.mjs');
 await bundleServerModule('deployment/local-server/status-operations.mjs', 'status-operations.mjs');
+await bundleServerModule('deployment/local-server/content-storage.mjs', 'content-storage.mjs');
+await bundleServerModule('deployment/local-server/content-history.mjs', 'content-history.mjs');
 await copy('文档/操作指南.md', 'docs/OPERATION-GUIDE.md');
 
 await writeFile(path.join(root, 'VERSION.json'), `${JSON.stringify({

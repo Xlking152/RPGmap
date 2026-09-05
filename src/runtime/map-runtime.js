@@ -34,6 +34,7 @@ import { createLightweightMarkerSystem } from '../marker/index.js';
 import { createPermissionSystem } from '../permissions/index.js';
 import { createDocumentBackendSystem } from '../documents/index.js';
 import { createPerformanceDiagnosticsSystem } from '../diagnostics/runtime.js';
+import { createContentSystem } from '../content/runtime.js';
 
 export async function startMapRuntime({
   appContainer,
@@ -43,7 +44,6 @@ export async function startMapRuntime({
   raw,
   ruleset,
   serverRuntime,
-  worldDescriptor,
   worldId,
   worldManager,
   worldName,
@@ -76,6 +76,7 @@ export async function startMapRuntime({
     tools: [
       createAppLifecycleSystem(),
       createPerformanceDiagnosticsSystem(),
+      createContentSystem({ serverRuntime, worldId }),
       createWorldSystem({ worldId, worldName }),
       createDocumentBackendSystem(),
       createSceneManagerSystem({

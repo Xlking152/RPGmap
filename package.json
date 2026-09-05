@@ -19,11 +19,13 @@
     "package:local-server": "node scripts/package-local-server.mjs"
   },
   "dependencies": {
+    "fflate": "0.8.3",
     "leaflet": "1.9.4",
     "lucide": "1.30.0",
     "polygon-clipping": "0.15.7"
   },
   "devDependencies": {
+    "fake-indexeddb": "6.2.5",
     "vite": "8.2.1",
     "vite-plugin-singlefile": "2.3.3"
   },

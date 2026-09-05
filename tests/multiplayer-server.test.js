@@ -297,6 +297,26 @@ function initialTokenVisionWorld() {
 
 function clone(value) { return structuredClone(value); }
 
+test('content HTTP credentials are bound to a live authenticated WebSocket session', async () => {
+  const runtime = await startServer();
+  const sockets = [];
+  try {
+    const gm = await openAndHello(runtime.url, { requestedRole: 'gm', name: 'GM' }); sockets.push(gm.ws);
+    assert.match(gm.welcome.contentToken, /^[a-f0-9]{64}$/);
+    assert.equal(gm.welcome.session.contentToken, undefined);
+    const pending = await openAndHello(runtime.url, { requestedRole: 'player', name: 'Pending' }); sockets.push(pending.ws);
+    assert.equal(pending.welcome.contentToken, null);
+    const request = (headers = {}) => fetch(`${runtime.httpUrl}/api/content`, { headers });
+    assert.equal((await request()).status, 401);
+    const headers = { Authorization: `Bearer ${gm.welcome.contentToken}` };
+    assert.equal((await request({ ...headers, Origin: 'http://hostile.example' })).status, 401);
+    assert.equal((await request(headers)).status, 200);
+    const closed = new Promise(resolve => gm.ws.addEventListener('close', resolve, { once: true }));
+    gm.ws.close(); await closed;
+    assert.equal((await request(headers)).status, 401);
+  } finally { sockets.forEach(socket => socket.close()); await stopServer(runtime); }
+});
+
 test('health exposes only World bootstrap metadata for empty and initialized LAN state', async () => {
   const runtime = await startServer();
   try {

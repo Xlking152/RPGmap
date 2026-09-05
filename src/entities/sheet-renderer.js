@@ -137,7 +137,7 @@ export function installEntityStyles(documentNode) {
 export function entityAvatarHtml(actor, ruleset) {
   const presentation = describeActor(actor, { ruleset }) || {};
   const avatar = presentation.avatarDataUrl;
-  if (avatar) return `<span class="entity-avatar"><img src="${escapeEntityHtml(avatar)}" alt=""></span>`;
+  if (avatar) return `<span class="entity-avatar"><img ${contentImageAttributes(avatar, escapeEntityHtml)} alt=""></span>`;
   return `<span class="entity-avatar">${escapeEntityHtml((actor?.name?.trim()?.[0] || '?').toUpperCase())}</span>`;
 }
 
@@ -224,3 +224,4 @@ export function classifyNewImportedActor(actor, actorType = 'pc') {
   });
   return { ...actor, type: classification.type, partyId: classification.partyId };
 }
+import { contentImageAttributes } from '../content/references.js';

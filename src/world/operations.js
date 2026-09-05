@@ -54,6 +54,7 @@ const OPERATION_TYPES = new Set([
   'world.rename',
   'actor.upsert',
   'actor.metadata.update',
+  'actor.portrait.update',
   'actor.publicProfile.update',
   'actor.delete',
   'actor.runtime.perform',
@@ -459,6 +460,20 @@ function applyCanonicalOperation(state, operation, context = {}) {
     if (index < 0) world.actors.push(actor);
     else world.actors[index] = actor;
     return { action: type, actorId, created: index < 0 };
+  }
+
+  if (type === 'actor.portrait.update') {
+    const actorId = identifier(payload.actorId, 'actorId');
+    const record = actorById(world, actorId);
+    const portrait = context.ruleset?.actor?.portrait;
+    if (!portrait) fail('Actor portrait contract is unavailable', 'actor_portrait_unsupported');
+    if (payload.reference !== null && !/^asset:[a-f0-9]{64}$/.test(payload.reference)) fail('Portrait requires a persisted image reference', 'invalid_content_reference');
+    if (!Object.hasOwn(payload, 'expectedReference') || !Object.hasOwn(payload, 'variantId')) fail('Portrait requires its previous reference and variant', 'field_precondition_required');
+    const current = portrait.describe(record.actor);
+    if ((current.reference || null) !== payload.expectedReference || (current.variantId || null) !== payload.variantId) fail('Portrait or variant changed since editing began', 'document_field_conflict');
+    portrait.update(record.actor, { reference: payload.reference });
+    record.actor.updatedAt = String(context.now || new Date().toISOString());
+    return { action: type, actorId };
   }
 
   if (type === 'actor.metadata.update') {

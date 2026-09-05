@@ -81,6 +81,8 @@ try {
   let nextId = 1;
   const pending = new Map();
   const failures = [];
+  const requests = new Map();
+  const expectedResponses = [];
   const exceptions = [];
   socket.addEventListener('message', event => {
     const message = JSON.parse(String(event.data));
@@ -91,7 +93,19 @@ try {
       return message.error ? item.reject(new Error(message.error.message)) : item.resolve(message.result);
     }
     if (message.method === 'Network.loadingFailed' && message.params?.errorText !== 'net::ERR_ABORTED') failures.push(message.params?.errorText || 'request failed');
-    if (message.method === 'Network.responseReceived' && Number(message.params?.response?.status) >= 400) failures.push(`${message.params.response.status} ${message.params.response.url}`);
+    if (message.method === 'Network.requestWillBeSent') {
+      const { requestId, request } = message.params;
+      requests.set(requestId, request.method);
+      const expected = expectedResponses.find(item => !item.requestId && item.url === request.url && item.method === request.method);
+      if (expected) expected.requestId = requestId;
+    }
+    if (message.method === 'Network.responseReceived' && Number(message.params?.response?.status) >= 400) {
+      const { response, requestId } = message.params;
+      const expected = expectedResponses.find(item => !item.seen && item.url === response.url
+        && item.method === requests.get(requestId) && item.status === response.status);
+      if (expected) expected.seen = true;
+      else failures.push(`${response.status} ${response.url}`);
+    }
     if (message.method === 'Runtime.exceptionThrown') {
       const detail = message.params?.exceptionDetails;
       exceptions.push(detail?.exception?.description || detail?.text || 'runtime exception');
@@ -100,7 +114,12 @@ try {
       const text = (message.params.args || []).map(arg => arg.value ?? arg.unserializableValue ?? arg.description ?? '').filter(Boolean).join(' ');
       exceptions.push(text || 'browser console error');
     }
-    if (message.method === 'Log.entryAdded' && message.params?.entry?.level === 'error') exceptions.push(message.params.entry.text || 'browser log error');
+    if (message.method === 'Log.entryAdded' && message.params?.entry?.level === 'error') {
+      const entry = message.params.entry;
+      const expected = expectedResponses.find(item => item.requestId && item.requestId === entry.networkRequestId
+        && item.url === entry.url && entry.source === 'network' && entry.text.includes(` ${item.status} `));
+      if (!expected) exceptions.push(entry.text || 'browser log error');
+    }
   });
   const rejectPending = message => {
     for (const item of pending.values()) { clearTimeout(item.timer); item.reject(new Error(message)); }
@@ -162,6 +181,12 @@ try {
   const setup = await evaluate(`(async () => {
     const api = document.querySelector('#app').rpgMapApp;
     const actorId = '${ids.actor}', tokenA = '${ids.a}', tokenB = '${ids.b}';
+    const canvas = document.createElement('canvas'); canvas.width = 8; canvas.height = 8;
+    const context = canvas.getContext('2d'); context.fillStyle = '#408d78'; context.fillRect(0, 0, 8, 8);
+    const avatar = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    const uploaded = await api.content.putImage(avatar);
+    const duplicate = await api.content.putImage(avatar);
+    if (uploaded.reference !== duplicate.reference || !/^asset:[a-f0-9]{64}$/.test(uploaded.reference)) throw new Error('content deduplication failed');
     if ((api.world.get().actors || []).some(actor => String(actor.id) === actorId)) {
       await api.world.performOperations([{ type: 'actor.delete', payload: { actorId } }], { source: 'smoke:sheets:reset' });
     }
@@ -169,6 +194,7 @@ try {
       formName: 'Smoke Form', identity: { name: 'Smoke Monster' }, description: {}, resources: { hp: { max: 20 } },
       attributes: [], checks: { skills: [], saves: [] }, badStatuses: [], combat: { attacks: [], defenses: [] }, detection: {},
       tokenAppearance: { color: '#3d9b63', scale: 1 }, source: { type: 'manual' },
+      avatarDataUrl: uploaded.reference,
     }, { actorId, name: 'Smoke Monster' });
     const actor = { ...created, id: actorId, name: 'Smoke Monster', type: 'monster', partyId: null, effects: [] };
     const sceneId = api.world.get().activeSceneId;
@@ -181,9 +207,25 @@ try {
     const openedA = present ? await api.entities.openToken(tokenA) : false;
     await new Promise(resolve => setTimeout(resolve, 50));
     const openedB = present ? await api.entities.openToken(tokenB) : false;
-    return { actorId, tokenA, tokenB, sceneId, commit, present, openedA, openedB, revision: api.multiplayer.getStatus().revision };
+    return { actorId, tokenA, tokenB, sceneId, commit, present, openedA, openedB, asset: uploaded.reference, revision: api.multiplayer.getStatus().revision };
   })()`);
   if (!setup?.present || !setup.openedA || !setup.openedB) throw new Error(`authoritative fixture/openToken failed: ${JSON.stringify(setup)}; snapshot=${JSON.stringify(await snapshot('fixture setup'))}`);
+
+  await retryWithSnapshot(() => evaluate(`(() => {
+    const images = [...document.querySelectorAll('img[data-content-ref="${setup.asset}"]')];
+    return images.length >= 2 && images.every(image => image.complete && image.naturalWidth === 8 && image.src.startsWith('blob:'));
+  })()`), 'authenticated content hydrates map and sheet portraits without data URLs');
+  const refusedDelete = { method: 'DELETE', url: new URL(`/api/content/${setup.asset.slice(6)}`, targetUrl).href, status: 409, seen: false };
+  expectedResponses.push(refusedDelete);
+  await evaluate(`(async () => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const refs = await api.content.references('${setup.asset}');
+    if (refs.count < 1) throw new Error('content reference accounting failed');
+    try { await api.content.remove('${setup.asset}'); throw new Error('referenced content was removed'); }
+    catch (error) { if (error.message !== 'content_in_use') throw error; }
+    return true;
+  })()`);
+  if (!refusedDelete.seen) throw new Error('referenced asset deletion did not produce the required HTTP 409');
 
   const opened = await retryWithSnapshot(() => evaluate(`(() => {
     const api = document.querySelector('#app').rpgMapApp;
@@ -320,6 +362,26 @@ try {
   await retryWithSnapshot(() => evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); return sheet?.querySelector('[data-public-profile-editor]') ? true : null; })()`), 'GM public profile editor');
   await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); const summary = sheet?.querySelector('[name="summary"]'); if (!summary) return false; summary.value = 'Smoke LIMITED profile'; sheet.querySelector('[data-public-profile-save]')?.click(); return true; })()`);
   const publicProfileAudit = await retryWithSnapshot(() => evaluate(`(() => { const actor = document.querySelector('#app').rpgMapApp.world.get().actors.find(item => item.id === '${ids.actor}'); return actor?.publicProfile?.summary === 'Smoke LIMITED profile' ? { summary: actor.publicProfile.summary } : null; })()`), 'GM public profile authoritative update');
+  const portraitBefore = await evaluate(`(async () => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const actor = api.world.get().actors.find(item => item.id === '${ids.actor}');
+    const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !node.dataset.tokenId);
+    sheet.querySelector('[data-sheet-action="avatar"]').click();
+    const source = await api.content.get('${setup.asset}');
+    const transfer = new DataTransfer(); transfer.items.add(new File([source], 'portrait.png', { type: source.type }));
+    const input = document.querySelector('input[data-entity-avatar-file]');
+    input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+    return JSON.stringify(actor.system.runtime);
+  })()`);
+  const portraitAudit = await retryWithSnapshot(() => evaluate(`(() => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const actor = api.world.get().actors.find(item => item.id === '${ids.actor}');
+    const portrait = api.ruleset.actor.portrait.describe(actor);
+    if (!portrait.reference?.startsWith('asset:') || portrait.reference === '${setup.asset}') return null;
+    const image = document.querySelector('img[data-content-ref="' + portrait.reference + '"]');
+    return image?.complete && image.naturalWidth === 8 ? { reference: portrait.reference, runtime: JSON.stringify(actor.system.runtime) } : null;
+  })()`), 'portrait upload uses its field-specific authoritative intent and hydrates the WebP asset');
+  if (portraitAudit.runtime !== portraitBefore) throw new Error('portrait update overwrote Actor runtime data');
   await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); sheet?.querySelector('[data-sheet-mode-toggle]')?.click(); return true; })()`);
   await retryWithSnapshot(() => evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); return sheet?.dataset.sheetInteractionMode === 'play' ? true : null; })()`), 'Actor template Play mode restored');
 
@@ -352,7 +414,8 @@ try {
   if (exceptions.length) throw new Error(`Actor sheet browser runtime errors: ${exceptions.join('; ')}`);
 
   console.log(JSON.stringify({ ready, fixtureRevision: setup.revision, liveSheets: opened, drag: dragAudit, tabs: tabAudit,
-    health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit, drafts: draftAudit, publicProfile: publicProfileAudit, mobile: mobileAudit }));
+    health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit, drafts: draftAudit, publicProfile: publicProfileAudit,
+    portrait: { reference: portraitAudit.reference, runtimePreserved: true }, mobile: mobileAudit }));
   await send('Browser.close');
   browserClosed = true;
 } catch (error) {

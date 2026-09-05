@@ -383,13 +383,15 @@ export function createRpgMapRuntime({
     return exportRuntimeState(state, { mapPackage, ruleset });
   }
 
-  function downloadState() {
+  async function downloadState() {
     const payload = exportState();
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const blob = api.content
+      ? await (await import('../content/archive.js')).exportContentArchive(payload, api.content)
+      : new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = documentNode.createElement('a');
     link.href = url;
-    link.download = `${worldId || mapPackage.id}-world-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `${worldId || mapPackage.id}-world-${new Date().toISOString().slice(0, 10)}.${api.content ? 'zip' : 'json'}`;
     documentNode.body.append(link);
     link.click();
     link.remove();
@@ -400,6 +402,16 @@ export function createRpgMapRuntime({
 
   async function importFile(file) {
     if (!file) return false;
+    if (/\.zip$/i.test(file.name) || file.type === 'application/zip') {
+      const { MAX_ARCHIVE_BYTES, readContentArchive, persistArchiveContent } = await import('../content/archive.js');
+      if (!api.content || file.size > MAX_ARCHIVE_BYTES) throw new Error('archive_size_exceeded');
+      const archive = readContentArchive(new Uint8Array(await file.arrayBuffer()));
+      // Validate before writing any dependencies; publish the World only after
+      // every immutable content record has committed successfully.
+      prepareRuntimeState(archive.state, { mapPackage, ruleset });
+      await persistArchiveContent(archive.records, api.content);
+      return importState(archive.state, { source: 'file-import', persist: true });
+    }
     if (file.size > MAX_SAVE_FILE_BYTES) throw new Error('存档文件超过 5 MB 上限');
     const text = await file.text();
     return importState(JSON.parse(text), { source: 'file-import', persist: true });

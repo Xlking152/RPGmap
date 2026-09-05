@@ -25,6 +25,8 @@ const EXPECTED_ROOT_ENTRIES = [
   'app',
   'docs',
   'http-runtime.mjs',
+  'content-storage.mjs',
+  'content-history.mjs',
   'launcher.mjs',
   'map',
   'permissions-model.mjs',

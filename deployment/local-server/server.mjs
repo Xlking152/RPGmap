@@ -66,6 +66,8 @@ import {
 } from './websocket-runtime.mjs';
 import { createWorldWal } from './world-wal.mjs';
 import { validateAuthoritativeTokenMovePath } from './movement-authority.mjs';
+import { createContentStorage } from './content-storage.mjs';
+import { hasRetainedContentReference } from './content-history.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '0.0.0.0';
@@ -1265,6 +1267,7 @@ function worldBootstrapInfo() {
   };
 }
 function sendWelcome(socket, session, { includeWorld = true, pendingApproval = false } = {}) {
+  session.contentToken ||= randomBytes(32).toString('hex');
   const fingerprint = audienceFingerprint(session);
   const resumed = includeWorld
     ? resumableCommits(session, session.resumeRevision, session.resumeAudienceFingerprint)
@@ -1274,6 +1277,7 @@ function sendWelcome(socket, session, { includeWorld = true, pendingApproval = f
   session.audienceProjection = projectedState ? structuredClone(projectedState) : null;
   sendSocket(socket, {
     type: 'welcome',
+    contentToken: session.identityStatus === 'active' ? session.contentToken : null,
     operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
     statusSchema: STATUS_SCHEMA_VERSION,
     accessSchema: ACCESS_SCHEMA_VERSION,
@@ -1312,8 +1316,31 @@ function refreshOnlineUser(userId) {
   }
 }
 
+const contentStorage = createContentStorage({
+  directory: path.join(STORAGE.uploadsDir, 'content'),
+  getState: () => world.state,
+  getProjection: session => audienceStateFor(session),
+  retainedReference: reference => hasRetainedContentReference(STORAGE, reference),
+  authenticate(req) {
+    if (req.headers.origin && !requestHasSameOrigin(req)) return null;
+    const match = /^Bearer ([a-f0-9]{64})$/.exec(String(req.headers.authorization || ''));
+    if (!match) return null;
+    for (const session of sessions.values()) {
+      if (session.contentToken !== match[1] || session.identityStatus !== 'active') continue;
+      if (session.role === 'gm' || (findUser(session.userId) && !findUser(session.userId).disabled)) return session;
+    }
+    return null;
+  },
+  serialize(task) {
+    const pending = messageChain.then(task);
+    messageChain = pending.catch(() => {});
+    return pending;
+  },
+});
+
 const server = http.createServer(async (req, res) => {
   try {
+    if (await contentStorage.handle(req, res, sendJson)) return;
     if (!['GET', 'HEAD'].includes(req.method || 'GET')) return sendJson(res, 405, { error: 'method_not_allowed' });
     if (req.url === '/api/health') return sendJson(res, 200, {
       status: 'ok', app: version.app || 'RPGmap', version: packageVersion,
@@ -1734,6 +1761,7 @@ server.on('upgrade', (req, socket) => {
       try {
         const now = new Date().toISOString();
         const authorizedOperations = authorizeOperations(session, envelope.operations);
+        await contentStorage.validateReferences(authorizedOperations, session);
         const operations = appendVisionExplorationOperations(authorizedOperations);
         committedOperations = operations;
         applied = applyWorldOperations(world.state, operations, {
@@ -1869,6 +1897,7 @@ server.on('upgrade', (req, socket) => {
           statusDefinitions: serverRuleset.statuses?.definitions,
         }).state;
         assertWorldState(incomingState);
+        await contentStorage.validateReferences(incomingState, session);
       } catch (error) {
         return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: error?.code || 'invalid_state', message: error?.message || 'World state 无效' });
       }
