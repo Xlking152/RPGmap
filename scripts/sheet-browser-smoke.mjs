@@ -171,6 +171,7 @@ try {
       records: api?.entities?.listOpenSheets?.() || [],
       sheets: [...document.querySelectorAll('.entity-sheet')].map(sheet => ({ key: sheet.dataset.sheetWindowKey || '', actorId: sheet.dataset.actorId || '', tokenId: sheet.dataset.tokenId || '', sceneId: sheet.dataset.sceneId || '', mode: sheet.dataset.sheetMode || '', kind: sheet.dataset.sheetKind || '', tab: sheet.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab || '' })),
       mapStatus: document.querySelector('[data-role="map-status"]')?.textContent || '',
+      libraryStatus: document.querySelector('[data-library-dialog] [data-status]')?.textContent || '',
     };
   })()`);
   const retryWithSnapshot = async (task, label) => {
@@ -385,6 +386,106 @@ try {
   await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); sheet?.querySelector('[data-sheet-mode-toggle]')?.click(); return true; })()`);
   await retryWithSnapshot(() => evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); return sheet?.dataset.sheetInteractionMode === 'play' ? true : null; })()`), 'Actor template Play mode restored');
 
+  await evaluate(`document.querySelector('[data-template-library]').click()`);
+  await retryWithSnapshot(() => evaluate(`Boolean(document.querySelector('dialog[data-library-dialog][open] [data-library-id="${ids.actor}"]'))`), 'lazy GM template library');
+  await evaluate(`(() => {
+    const dialog = document.querySelector('[data-library-dialog]');
+    dialog.querySelector('[data-library-id="${ids.actor}"] button').click();
+    dialog.querySelector('[aria-label="存入资料库"]').click();
+  })()`);
+  const libraryEntry = await retryWithSnapshot(() => evaluate(`(() => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const entry = api.library.list().find(value => value.name === 'local draft name');
+    return entry?.bodyRef?.startsWith('body:') && !document.querySelector('[data-library-dialog]').hasAttribute('aria-busy') ? entry : null;
+  })()`), 'template body persisted before its metadata reference');
+  const libraryBefore = await evaluate(`(() => {
+    const api = document.querySelector('#app').rpgMapApp;
+    return { ids: api.world.get().actors.map(actor => actor.id), tokens: JSON.stringify(api.world.get().scenes[0].tokens) };
+  })()`);
+  await evaluate(`document.querySelector('[data-library-dialog] [data-tab="library"]').click()`);
+  await retryWithSnapshot(() => evaluate(`Boolean(document.querySelector('[data-library-id="${libraryEntry.id}"]'))`), 'library metadata index');
+  await evaluate(`document.querySelector('[data-library-id="${libraryEntry.id}"] button').click()`);
+  await retryWithSnapshot(() => evaluate(`document.querySelector('[aria-label="导入为新模板"]')?.disabled === false`), 'on-demand template body and dependency preview');
+  await evaluate(`document.querySelector('[aria-label="导入为新模板"]').click()`);
+  const libraryAudit = await retryWithSnapshot(() => evaluate(`(() => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const previous = ${JSON.stringify(libraryBefore.ids)};
+    const imported = api.world.get().actors.find(actor => !previous.includes(actor.id));
+    if (!imported || document.querySelector('[data-library-dialog]').hasAttribute('aria-busy')) return null;
+    if (JSON.stringify(api.world.get().scenes[0].tokens) !== ${JSON.stringify(libraryBefore.tokens)}) throw new Error('Library import changed existing Token instances');
+    return { actorId: imported.id, name: imported.name, bodyRef: '${libraryEntry.bodyRef}', instanceIsolation: true };
+  })()`), 'library import creates a new template without changing existing instances');
+  await evaluate(`(() => {
+    const dialog = document.querySelector('[data-library-dialog]');
+    dialog.querySelector('[data-library-id="${libraryEntry.id}"] button').click();
+    dialog.querySelector('[aria-label="标签"]').value = 'smoke, library';
+    dialog.querySelector('[aria-label="保存标签"]').click();
+  })()`);
+  await retryWithSnapshot(() => evaluate(`document.querySelector('#app').rpgMapApp.library.list().find(entry => entry.id === '${libraryEntry.id}')?.tags.join(',') === 'smoke,library' && !document.querySelector('[data-library-dialog]').hasAttribute('aria-busy')`), 'library tag metadata commit');
+  await evaluate(`(async () => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const input = document.querySelector('[data-library-dialog] [aria-label="标签"]');
+    input.focus(); input.value = 'local draft'; input.setSelectionRange(2, 5); input.dispatchEvent(new Event('input', { bubbles: true }));
+    window.libraryDraftProbe = input;
+    const entry = api.library.list().find(entry => entry.id === '${libraryEntry.id}');
+    await api.library.update({ ...entry, tags: ['server'] }, entry);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    if (!input.isConnected || input.value !== 'local draft' || input.selectionStart !== 2 || input.selectionEnd !== 5) throw new Error('Library remote update discarded input');
+    document.querySelector('[data-library-dialog] [aria-label="保存标签"]').click();
+  })()`);
+  await retryWithSnapshot(() => evaluate(`(() => {
+    const conflict = document.querySelector('[data-library-conflict]');
+    if (!conflict || conflict.hidden) return null;
+    const input = window.libraryDraftProbe;
+    if (!input.isConnected || input.value !== 'local draft' || input.selectionStart !== 2 || input.selectionEnd !== 5) throw new Error('Library conflict replaced its field draft');
+    [...conflict.querySelectorAll('button')].find(button => button.textContent === '重新提交').click();
+    return true;
+  })()`), 'library metadata conflict preserves its input and supports explicit resubmission');
+  await retryWithSnapshot(() => evaluate(`document.querySelector('#app').rpgMapApp.library.list().find(entry => entry.id === '${libraryEntry.id}')?.tags[0] === 'local draft' && !document.querySelector('[data-library-dialog]').hasAttribute('aria-busy')`), 'library field resubmission');
+  await evaluate('delete window.libraryDraftProbe');
+  libraryAudit.draftConflict = true;
+  await evaluate(`(() => {
+    const dialog = document.querySelector('[data-library-dialog]');
+    let tags = dialog.querySelector('[aria-label="标签"]');
+    tags.value = 'retained library draft'; tags.setSelectionRange(3, 8); tags.dispatchEvent(new Event('input', { bubbles: true }));
+    dialog.querySelector('[data-tab="actors"]').click();
+    dialog.querySelector('[data-library-id="${ids.actor}"] button').click();
+    tags = dialog.querySelector('[aria-label="标签"]');
+    if (tags.value === 'retained library draft') throw new Error('Draft crossed template targets');
+    tags.value = 'separate Actor draft'; tags.dispatchEvent(new Event('input', { bubbles: true }));
+    dialog.querySelector('[data-tab="library"]').click();
+    dialog.querySelector('[data-library-id="${libraryEntry.id}"] button').click();
+    tags = dialog.querySelector('[aria-label="标签"]');
+    if (tags.value !== 'retained library draft' || tags.selectionStart !== 3 || tags.selectionEnd !== 8) throw new Error('Library target switch lost field draft or selection');
+  })()`);
+  libraryAudit.targetDrafts = true;
+  const packageBefore = await evaluate(`(async () => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const before = { actors: api.world.get().actors.length, entries: api.library.list().length, images: (await api.content.list()).filter(value => value.kind === 'asset').length };
+    const blob = await api.library.export('${libraryEntry.id}');
+    const input = document.querySelector('[data-library-dialog] input[accept=".zip,application/zip"]');
+    const transfer = new DataTransfer(); transfer.items.add(new File([blob], 'template.zip', { type: 'application/zip' }));
+    input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+    return before;
+  })()`);
+  await retryWithSnapshot(() => evaluate(`Boolean(document.querySelector('[aria-label="确认导入模板包"]')) && !document.querySelector('[data-library-dialog]').hasAttribute('aria-busy')`), 'ZIP dependency preview before template import');
+  await evaluate(`document.querySelector('[aria-label="确认导入模板包"]').click()`);
+  await retryWithSnapshot(() => evaluate(`(async () => {
+    const api = document.querySelector('#app').rpgMapApp;
+    if (document.querySelector('[data-library-dialog]').hasAttribute('aria-busy')) return null;
+    if (api.world.get().actors.length !== ${packageBefore.actors + 1} || api.library.list().length !== ${packageBefore.entries + 1}) return null;
+    if ((await api.content.list()).filter(value => value.kind === 'asset').length !== ${packageBefore.images}) throw new Error('ZIP import duplicated immutable images');
+    if (JSON.stringify(api.world.get().scenes[0].tokens) !== ${JSON.stringify(libraryBefore.tokens)}) throw new Error('ZIP import changed existing instances');
+    return true;
+  })()`), 'template ZIP commits references atomically and deduplicates images');
+  libraryAudit.templatePackage = true;
+  await evaluate(`document.querySelector('[data-library-id="${libraryEntry.id}"] button').click()`);
+  if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
+    const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    await writeFile(path.join(path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR), 'packaged-library.png'), Buffer.from(capture.data, 'base64'));
+  }
+  await evaluate(`document.querySelector('[data-library-dialog] [aria-label="关闭"]').click()`);
+
   if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
     const directory = path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR);
     await mkdir(directory, { recursive: true });
@@ -409,13 +510,33 @@ try {
     const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     await writeFile(path.join(path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR), 'packaged-sheet-mobile.png'), Buffer.from(capture.data, 'base64'));
   }
+  await evaluate(`document.querySelector('[data-template-library]').click()`);
+  await retryWithSnapshot(() => evaluate(`Boolean(document.querySelector('[data-library-dialog][open] [data-library-id="${libraryEntry.id}"] button'))`), 'mobile library record');
+  await evaluate(`document.querySelector('[data-library-dialog] [data-library-id="${libraryEntry.id}"] button').click()`);
+  await retryWithSnapshot(() => evaluate(`(() => {
+    const dialog = document.querySelector('[data-library-dialog][open]');
+    if (!dialog) return null;
+    const rect = dialog.getBoundingClientRect();
+    if (rect.left < 0 || rect.right > 390 || dialog.scrollWidth > dialog.clientWidth || document.documentElement.scrollWidth > 390) throw new Error('390px library overflow');
+    for (const control of dialog.querySelectorAll('[data-detail] input, [data-detail] button')) {
+      if (!control.getClientRects().length) continue;
+      const bounds = control.getBoundingClientRect();
+      if (bounds.left < rect.left || bounds.right > rect.right) throw new Error('390px library detail control clipped');
+    }
+    return true;
+  })()`), '390px template library layout');
+  if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
+    const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    await writeFile(path.join(path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR), 'packaged-library-mobile.png'), Buffer.from(capture.data, 'base64'));
+  }
+  await evaluate(`document.querySelector('[data-library-dialog] [aria-label="关闭"]').click()`);
   await new Promise(resolve => setTimeout(resolve, 400));
   if (failures.length) throw new Error(`Actor sheet browser requests failed: ${failures.join('; ')}`);
   if (exceptions.length) throw new Error(`Actor sheet browser runtime errors: ${exceptions.join('; ')}`);
 
   console.log(JSON.stringify({ ready, fixtureRevision: setup.revision, liveSheets: opened, drag: dragAudit, tabs: tabAudit,
     health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit, drafts: draftAudit, publicProfile: publicProfileAudit,
-    portrait: { reference: portraitAudit.reference, runtimePreserved: true }, mobile: mobileAudit }));
+    portrait: { reference: portraitAudit.reference, runtimePreserved: true }, library: libraryAudit, mobile: mobileAudit }));
   await send('Browser.close');
   browserClosed = true;
 } catch (error) {

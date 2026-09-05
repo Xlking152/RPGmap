@@ -1,5 +1,5 @@
 import { assertStatusState, STATUS_SCHEMA_VERSION } from './status-operations.mjs';
-import { assertFeatureStatePatch, isPlainObject } from './world-operations.mjs';
+import { assertFeatureStatePatch, assertTemplateLibrary, isPlainObject } from './world-operations.mjs';
 
 const ACTOR_TYPES = new Set(['pc', 'monster', 'npc', 'summon', 'other']);
 const VISIBILITY_MODES = new Set(['public', 'party', 'gm', 'users']);
@@ -158,6 +158,7 @@ function assertMarker(marker, label) {
 }
 
 export function assertWorldV2(value) {
+  assertTemplateLibrary(value?.templateLibrary);
   const world = object(value, 'worldV2');
   if (Number(world.schemaVersion) !== WORLD_V2_SCHEMA_VERSION) fail('worldV2.schemaVersion must be 3');
   cleanId(world.id, 'worldV2.id');

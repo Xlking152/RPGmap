@@ -46,12 +46,19 @@ export {
   migrateWorldSchema3State,
 };
 
+import { normalizeLibraryEntry, normalizeTemplateOrganization, assertTemplateLibrary, copyActorTemplate } from '../library/model.js';
+export { assertTemplateLibrary } from '../library/model.js';
+
 export const WORLD_OPERATION_SCHEMA_VERSION = DOCUMENT_OPERATION_SCHEMA_VERSION;
 export const WORLD_OPERATION_BATCH_LIMIT = 64;
 export const WORLD_OPERATION_CACHE_LIMIT = 512;
 
 const OPERATION_TYPES = new Set([
   'world.rename',
+  'world.library.upsert',
+  'world.library.delete',
+  'actor.copy',
+  'actor.organization.update',
   'actor.upsert',
   'actor.metadata.update',
   'actor.portrait.update',
@@ -437,6 +444,34 @@ function applyCanonicalOperation(state, operation, context = {}) {
     if (!name) fail('world.rename requires name');
     world.name = name.slice(0, 160);
     return { action: type, worldId: String(world.id) };
+  }
+
+  if (type === 'world.library.upsert' || type === 'world.library.delete') {
+    if (payload.worldId != null && payload.worldId !== world.id) fail('Library World target mismatch', 'document_target_mismatch');
+    const id = identifier(payload.entry?.id ?? payload.entryId, 'entryId');
+    const previous = world.templateLibrary?.[id] ?? null;
+    if (!Object.hasOwn(payload, 'expectedBodyRef') || payload.expectedBodyRef !== (previous?.bodyRef ?? null)) fail('Library entry changed', 'document_field_conflict');
+    if (!Object.hasOwn(payload, 'expectedEntry') || !same(payload.expectedEntry, previous)) fail('Library metadata changed', 'document_field_conflict');
+    world.templateLibrary = { ...world.templateLibrary };
+    if (type === 'world.library.delete') delete world.templateLibrary[id];
+    else world.templateLibrary[id] = normalizeLibraryEntry(payload.entry);
+    assertTemplateLibrary(world.templateLibrary);
+    return { changed: true };
+  }
+
+  if (type === 'actor.copy') {
+    const { actor: source } = actorById(world, identifier(payload.actorId, 'actorId'));
+    const id = identifier(payload.newActorId, 'newActorId');
+    if (world.actors.some(actor => actor.id === id)) fail('Actor already exists', 'duplicate_id');
+    world.actors.push(copyActorTemplate(source, { id, name: payload.name || source.name, ruleset: context.ruleset }));
+    return { changed: true };
+  }
+
+  if (type === 'actor.organization.update') {
+    const { actor } = actorById(world, identifier(payload.actorId, 'actorId'));
+    if (!Object.hasOwn(payload, 'expected') || !same(payload.expected, actor.organization || {})) fail('Template organization changed', 'document_field_conflict');
+    actor.organization = normalizeTemplateOrganization(payload.organization);
+    return { changed: true };
   }
 
   if (type === 'actor.upsert') {
@@ -1141,6 +1176,9 @@ export function createWorldOperationPatch(beforeState, afterState) {
     patch.world.activeSceneId = String(afterWorld.activeSceneId ?? '');
   }
   patch.world.updatedAt = String(afterWorld.updatedAt || new Date().toISOString());
+  if (!same(beforeWorld.templateLibrary, afterWorld.templateLibrary)) {
+    patch.world.templateLibrary = diffById(Object.values(beforeWorld.templateLibrary || {}), Object.values(afterWorld.templateLibrary || {}));
+  }
   const actors = diffById(beforeWorld.actors, afterWorld.actors);
   if (actors.upsert.length || actors.remove.length) patch.world.actors = actors;
   if (!same(beforeWorld.statusDefinitions, afterWorld.statusDefinitions)) {
@@ -1204,6 +1242,10 @@ export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false, a
   if (worldPatch.name !== undefined) world.name = String(worldPatch.name);
   if (worldPatch.activeSceneId !== undefined) world.activeSceneId = String(worldPatch.activeSceneId);
   if (worldPatch.updatedAt !== undefined) world.updatedAt = String(worldPatch.updatedAt);
+  if (worldPatch.templateLibrary) {
+    world.templateLibrary = Object.fromEntries(applyIdPatch(Object.values(world.templateLibrary || {}), worldPatch.templateLibrary).map(entry => [entry.id, entry]));
+    assertTemplateLibrary(world.templateLibrary);
+  }
   if (worldPatch.actors) world.actors = applyIdPatch(world.actors, worldPatch.actors);
   if (worldPatch.statusDefinitions !== undefined) world.statusDefinitions = clone(array(worldPatch.statusDefinitions, 'statusDefinitions'));
   if (worldPatch.scenes) {

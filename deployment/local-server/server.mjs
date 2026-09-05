@@ -5,7 +5,7 @@ import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { canPermission } from './permissions-model.mjs';
+import { canPermission, canPlaceActorTemplate } from './permissions-model.mjs';
 import {
   ACCESS_SCHEMA_VERSION,
   OWNERSHIP,
@@ -1056,7 +1056,7 @@ function authorizeOperations(session, operations) {
       }
       const actorId = String(payload.token.actorId || '');
       const actor = world.state?.preferences?.worldV2?.actors?.find(item => String(item?.id ?? '') === actorId);
-      if (!actor || (!grants.actorIds?.includes(actorId) && !grants.actorTypes?.includes(String(actor.type)))) {
+      if (!canPlaceActorTemplate(actor, grants)) {
         operationDenied('token_placement_forbidden', 'Actor template placement is not granted');
       }
       if (['monster', 'npc', 'summon'].includes(String(actor.type))) {
@@ -1133,6 +1133,9 @@ function authorizeOperations(session, operations) {
       }
       if (JSON.stringify(payload.actor.publicProfile ?? null) !== JSON.stringify(current.publicProfile ?? null)) {
         operationDenied('actor_public_profile_gm_only', 'Only the GM can edit the public Actor profile');
+      }
+      if (JSON.stringify(payload.actor.organization ?? null) !== JSON.stringify(current.organization ?? null)) {
+        operationDenied('actor_organization_gm_only', 'Only the GM can organize templates');
       }
       return value;
     }

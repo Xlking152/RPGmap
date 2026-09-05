@@ -7,7 +7,7 @@ import {
 import { applyDocumentChanges } from '../documents/changes.js';
 import { worldOperationsToDocumentWrites } from '../documents/protocol.js';
 import { STATUS_SCHEMA_VERSION } from '../status/model.js';
-import { ACCESS_SCHEMA_VERSION } from '../permissions/model.js';
+import { ACCESS_SCHEMA_VERSION, canPlaceActorTemplate } from '../permissions/model.js';
 import { escapeMultiplayerHtml as escapeHtml } from './access-ui.js';
 import { createMultiplayerSessionStorage } from './session.js';
 import { createOperationId, parseTransportMessage, sendTransportMessage } from './transport.js';
@@ -469,7 +469,7 @@ export function createMultiplayerController() {
             if (gm) return true;
             const grants = permissions.placementGrants || {};
             const actor = api.world?.get?.()?.actors?.find(item => String(item?.id) === String(actorId));
-            return Boolean(grants.actorIds?.includes(String(actorId)) || grants.actorTypes?.includes(String(actor?.type || '')));
+            return canPlaceActorTemplate(actor, grants);
           },
           canPlaceMarker: kind => gm || permissions.placementGrants?.markerKinds?.includes(String(kind)),
         };

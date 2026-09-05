@@ -7,6 +7,7 @@ import { normalizeLightweightMarker } from '../marker/model.js';
 import { normalizeFeatureStateRecords } from './feature-states.js';
 import { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 import { STATUS_SCHEMA_VERSION } from '../status/model.js';
+import { assertTemplateLibrary } from '../library/model.js';
 
 export { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 
@@ -139,6 +140,7 @@ function normalizeScene(raw, {
 
 export function normalizeWorldV2(raw, { mapPackage = null, ruleset = null } = {}) {
   const source = object(raw);
+  assertTemplateLibrary(source.templateLibrary);
   const rawActors = array(source.actors).filter(Boolean);
   const actors = rawActors
     .map(actor => normalizeActorDocument(actor, ruleset ? { ruleset } : {}));

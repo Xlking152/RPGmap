@@ -11,6 +11,10 @@ const DOCUMENT_TYPES = new Set([
 
 const INTENT_TO_OPERATION = new Map([
   ['world.rename', 'world.rename'],
+  ['world.library.upsert', 'world.library.upsert'],
+  ['world.library.delete', 'world.library.delete'],
+  ['actor.copy', 'actor.copy'],
+  ['actor.organization.update', 'actor.organization.update'],
   ['actor.upsert', 'actor.upsert'],
   ['actor.metadata.update', 'actor.metadata.update'],
   ['actor.portrait.update', 'actor.portrait.update'],
@@ -128,6 +132,10 @@ export function assertDocumentBatchMessage(raw) {
 function withAddress(write) {
   const payload = structuredClone(write.data || {});
   const { type, id, parent } = write.document;
+  if (write.intent.startsWith('world.library.')) {
+    if (payload.worldId != null && payload.worldId !== id) fail('Document id does not match payload', 'document_target_mismatch');
+    payload.worldId = id;
+  }
   if (type === 'Actor') payload.actorId ??= id;
   if (type === 'Token') {
     payload.tokenId ??= id;

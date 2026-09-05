@@ -20,26 +20,40 @@ export function createContentSystem({ serverRuntime = false, worldId = 'default'
           return network() ? (await request('', { method: 'POST', body: blob, headers: { 'Content-Type': blob.type } })).json()
             : (await storage()).put(blob);
         },
+        async putTemplate(value) {
+          const { templateBodyBlob } = await import('./body.js');
+          return content.putBody(templateBodyBlob(value));
+        },
+        async putBody(blob) {
+          const { inspectContent } = await import('./body.js');
+          if (inspectContent(new Uint8Array(await blob.arrayBuffer()), blob.type).kind !== 'body') throw new Error('content_type_unsupported');
+          return network() ? (await request('', { method: 'POST', body: blob, headers: { 'Content-Type': blob.type } })).json()
+            : (await storage()).put(blob);
+        },
         async get(reference) {
           const value = contentReference(reference);
-          if (value?.kind !== 'asset') throw new Error('content_not_found');
-          return network() ? (await request(`/${value.id}`)).blob() : (await storage()).get(value.id);
+          if (!value) throw new Error('content_not_found');
+          const blob = network() ? await (await request(`/${value.id}`)).blob() : await (await storage()).get(value.id);
+          const { inspectContent } = await import('./body.js');
+          if (inspectContent(new Uint8Array(await blob.arrayBuffer()), blob.type).kind !== value.kind) throw new Error('content_type_unsupported');
+          return blob;
         },
         async list() { return network() ? (await (await request('')).json()).records : (await storage()).list(); },
         async references(reference) {
           const value = contentReference(reference);
-          if (value?.kind !== 'asset') throw new Error('content_not_found');
+          if (!value) throw new Error('content_not_found');
           if (network()) return (await request(`/${value.id}/references`)).json();
           const paths = collectContentReferences(api.getState()?.preferences?.worldV2).get(reference) || [];
           return { paths, count: paths.length };
         },
         async remove(reference) {
           const value = contentReference(reference);
-          if (value?.kind !== 'asset') throw new Error('content_not_found');
+          if (!value) throw new Error('content_not_found');
           if (network()) await request(`/${value.id}`, { method: 'DELETE' });
           else {
             if (collectContentReferences(api.getState()).has(reference)) throw new Error('content_in_use');
             if (hasStoredContentReference(documentNode.defaultView.localStorage, reference)) throw new Error('content_in_use');
+            if ((await (await storage()).list()).some(record => record.dependencies?.includes(reference))) throw new Error('content_in_use');
             await (await storage()).remove(value.id);
           }
           clear();

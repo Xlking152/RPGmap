@@ -35,6 +35,7 @@ import { createPermissionSystem } from '../permissions/index.js';
 import { createDocumentBackendSystem } from '../documents/index.js';
 import { createPerformanceDiagnosticsSystem } from '../diagnostics/runtime.js';
 import { createContentSystem } from '../content/runtime.js';
+import { createTemplateLibrarySystem } from '../library/runtime.js';
 
 export async function startMapRuntime({
   appContainer,
@@ -99,6 +100,7 @@ export async function startMapRuntime({
       createSceneAreaSystem(),
       createSceneAreaHandleSystem(),
       createAppShellUi(),
+      createTemplateLibrarySystem({ serverRuntime }),
       createLightweightMarkerSystem(),
       createMeasurementSystem(),
       createHealthSystem(),

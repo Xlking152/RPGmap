@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { createActorFromRulesetImport } from '../src/actor/index.js';
+import { createActorFromRulesetImport, createDefaultActor } from '../src/actor/index.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 import { isFogCellExplored } from '../src/vision/fog.js';
@@ -443,6 +443,66 @@ async function requestWorldSnapshot(ws, reason = 'request') {
   ws.send(JSON.stringify({ type: 'world.snapshot.request' }));
   return snapshotPromise;
 }
+
+test('LAN library commits remain private, reject Player writes and replay indexes with their durable bodies', async () => {
+  let runtime = await startServer(), gm, player;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Library GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    const canonical = (await initialized).state.preferences.worldV2;
+    const claim = waitForMessage(gm.ws, value => value.type === 'access.claim');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Library Player', defaultActorId: 'actor-a', ownership: { 'actor-a': 'owner' } }));
+    player = await openAndHello(runtime.url, { name: 'Library Player', requestedRole: 'player', claimCode: (await claim).claimCode });
+    const body = { schemaVersion: 1, kind: 'actor-template', actor: createDefaultActor({ id: 'private-template', ruleset: infiniteHorrorRuleset }), ruleset: canonical.ruleset, statusDefinitions: [] };
+    const uploaded = await fetch(`${runtime.httpUrl}/api/content`, { method: 'POST', headers: {
+      Authorization: `Bearer ${gm.welcome.contentToken}`, 'Content-Type': 'application/vnd.rpgmap.actor-template+json',
+    }, body: JSON.stringify(body) });
+    assert.equal(uploaded.status, 201, await uploaded.clone().text());
+    const content = await uploaded.json();
+    const entry = { id: 'secret-library-entry', name: 'Private Library Title', type: 'pc', tags: [], archived: false,
+      bodyRef: content.reference, ruleset: canonical.ruleset };
+    const message = { type: 'document.batch', operationSchema: WORLD_OPERATION_SCHEMA_VERSION, operationId: 'library-create', baseRevision: 1,
+      writes: [{ action: 'create', document: { type: 'World', id: canonical.id }, intent: 'world.library.upsert',
+        data: { entry, expectedBodyRef: null, expectedEntry: null } }] };
+    const ack = waitForMessage(gm.ws, value => value.type === 'document.batch.ack' && value.operationId === message.operationId);
+    const change = waitForMessage(player.ws, value => value.type === 'document.batch.committed' && value.operationId === message.operationId);
+    gm.ws.send(JSON.stringify(message));
+    assert.equal((await ack).revision, 2);
+    const playerChange = await change;
+    assert.equal(playerChange.revision, 2); assert.deepEqual(playerChange.changes, []);
+    for (const privateValue of [entry.id, entry.name, content.reference]) assert.equal(JSON.stringify(playerChange).includes(privateValue), false);
+    const retryAck = waitForMessage(gm.ws, value => value.type === 'document.batch.ack' && value.operationId === message.operationId);
+    gm.ws.send(JSON.stringify(message)); assert.equal((await retryAck).revision, 2);
+    const denied = waitForMessage(player.ws, value => value.type === 'document.batch.denied' && value.operationId === 'forged-library');
+    player.ws.send(JSON.stringify({ ...message, operationId: 'forged-library', baseRevision: 2 }));
+    const rejected = await denied;
+    assert.equal(rejected.code, 'world_library_upsert_gm_only');
+    assert.equal(Object.hasOwn(rejected, 'state'), false);
+    assert.equal(JSON.stringify(rejected).includes(entry.name), false);
+    const snapshot = await requestWorldSnapshot(player.ws);
+    assert.equal(snapshot.state.preferences.worldV2.templateLibrary, undefined);
+    const owned = snapshot.state.preferences.worldV2.actors.find(actor => actor.id === 'actor-a');
+    for (const [intent, data, code] of [
+      ['actor.upsert', { actor: { ...owned, organization: { tags: ['forged'], archived: true } } }, 'actor_organization_gm_only'],
+      ['actor.copy', { newActorId: 'forged-copy' }, 'actor_copy_gm_only'],
+    ]) {
+      const operationId = `deny-${intent}`;
+      const response = waitForMessage(player.ws, value => value.type === 'document.batch.denied' && value.operationId === operationId);
+      player.ws.send(JSON.stringify({ type: 'document.batch', operationSchema: WORLD_OPERATION_SCHEMA_VERSION, baseRevision: 2, operationId,
+        writes: [{ action: 'update', document: { type: 'Actor', id: owned.id }, intent, data }] }));
+      assert.equal((await response).code, code);
+    }
+    assert.equal((await fetch(`${runtime.httpUrl}/api/content/${content.id}`, { headers: { Authorization: `Bearer ${player.welcome.contentToken}` } })).status, 404);
+    player.ws.close(); gm.ws.close();
+    await stopServer(runtime, { removeMap: false });
+    runtime = await startServer({}, runtime.mapDir);
+    gm = await openAndHello(runtime.url, { name: 'Restored GM', requestedRole: 'gm' });
+    const restored = await requestWorldSnapshot(gm.ws);
+    assert.deepEqual(restored.state.preferences.worldV2.templateLibrary[entry.id], entry);
+    assert.deepEqual(await (await fetch(`${runtime.httpUrl}/api/content/${content.id}`, { headers: { Authorization: `Bearer ${gm.welcome.contentToken}` } })).json(), body);
+  } finally { player?.ws.close(); gm?.ws.close(); await stopServer(runtime); }
+});
 
 test('Document field edits revalidate ownership and compare field values at the current revision', async () => {
   const runtime = await startServer();

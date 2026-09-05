@@ -6,20 +6,142 @@ import { mkdtemp, readdir, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { zipSync, strToU8 } from 'fflate';
+import { zipSync, unzipSync, strToU8 } from 'fflate';
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 import { inspectImage, MAX_IMAGE_BYTES } from '../src/content/image.js';
 import { collectContentReferences, contentImageAttributes, readableImageReferences, hasStoredContentReference } from '../src/content/references.js';
-import { exportContentArchive, readContentArchive, persistArchiveContent } from '../src/content/archive.js';
+import { exportContentArchive, readContentArchive, persistArchiveContent, exportTemplateArchive, readTemplateArchive } from '../src/content/archive.js';
 import { createIndexedContentStorage } from '../src/content/indexed-storage.js';
 import { createContentStorage } from '../deployment/local-server/content-storage.mjs';
 import { sendJson } from '../deployment/local-server/http-runtime.mjs';
 import { hasRetainedContentReference } from '../deployment/local-server/content-history.mjs';
+import { inspectContent, templateBodyBlob, TEMPLATE_BODY_TYPE, MAX_BODY_BYTES } from '../src/content/body.js';
+import { decodeImageDataUrl, persistInlineImages } from '../src/content/data-url.js';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOc8AAAAASUVORK5CYII=', 'base64');
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const reference = `asset:${digest(png)}`;
 const makeState = img => ({ preferences: { worldV2: { actors: [{ id: 'actor-a', img }], scenes: [] } } });
+const body = () => ({ schemaVersion: 1, kind: 'actor-template', ruleset: { id: 'test', version: '1' },
+  actor: { id: 'template', img: reference, system: {}, notes: 'Private notes' }, statusDefinitions: [] });
+
+test('immutable template bodies validate safe bounded JSON and expose only image dependencies', async () => {
+  const blob = templateBodyBlob(body());
+  const metadata = inspectContent(new Uint8Array(await blob.arrayBuffer()), blob.type);
+  assert.equal(metadata.kind, 'body');
+  assert.deepEqual(metadata.dependencies, [reference]);
+  assert.throws(() => inspectContent(new Uint8Array(MAX_BODY_BYTES + 1), TEMPLATE_BODY_TYPE), { code: 'body_size_exceeded' });
+  assert.throws(() => inspectContent(new TextEncoder().encode('{"__proto__":{}}'), TEMPLATE_BODY_TYPE), { code: 'invalid_content_body' });
+  assert.throws(() => templateBodyBlob({ ...body(), actor: { ...body().actor, img: `body:${'b'.repeat(64)}` } }), { code: 'nested_body_forbidden' });
+  assert.throws(() => templateBodyBlob({ ...body(), actor: { ...body().actor, system: [] } }), { code: 'invalid_template_body' });
+  assert.throws(() => templateBodyBlob({ ...body(), actor: { ...body().actor, img: 'data:image/png;base64,broken' } }), { code: 'template_inline_image_forbidden' });
+});
+
+test('standalone template ZIP preserves dependency bytes across separate World stores without importing a World', async () => {
+  const source = createIndexedContentStorage(new IDBFactory()), target = createIndexedContentStorage(new IDBFactory());
+  await source.put(new Blob([png], { type: 'image/png' }));
+  const blob = await exportTemplateArchive(body(), { get: ref => source.get(ref.split(':')[1]) });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const decoded = await readTemplateArchive(bytes);
+  assert.deepEqual(decoded.bundle, body());
+  assert.equal(decoded.records.length, 1);
+  assert.throws(() => readContentArchive(bytes), /invalid_archive_entry/);
+  await persistArchiveContent(decoded.records, { putImage: value => target.put(value) });
+  await persistArchiveContent(decoded.records, { putImage: value => target.put(value) });
+  assert.equal((await target.list()).length, 1);
+  assert.deepEqual(Buffer.from(await (await target.get(digest(png))).arrayBuffer()), png);
+});
+
+test('template package hash validation precedes preview and every write including unrelated valid records', async () => {
+  const blob = await exportTemplateArchive(body(), { get: async () => new Blob([png], { type: 'image/png' }) });
+  const files = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+  files[`content/${digest(png)}`][29] ^= 1;
+  await assert.rejects(readTemplateArchive(zipSync(files)), /archive_content_hash_mismatch/);
+  let writes = 0;
+  const valid = { reference, blob: new Blob([png], { type: 'image/png' }) };
+  await assert.rejects(persistArchiveContent([valid, { ...valid, reference: `asset:${'0'.repeat(64)}` }], {
+    putImage() { writes++; return { reference }; },
+  }), /archive_content_hash_mismatch/);
+  assert.equal(writes, 0);
+  const safe = await exportTemplateArchive(body(), { get: async () => valid.blob });
+  const missing = unzipSync(new Uint8Array(await safe.arrayBuffer()));
+  delete missing[`content/${digest(png)}`];
+  await assert.rejects(readTemplateArchive(zipSync(missing)), /invalid_archive_reference/);
+});
+
+test('offline body transactions require durable image dependencies and prevent deleting them', async () => {
+  const storage = createIndexedContentStorage(new IDBFactory());
+  await assert.rejects(storage.put(templateBodyBlob(body())), /content_not_found/);
+  assert.deepEqual(await storage.list(), []);
+  const image = await storage.put(new Blob([png], { type: 'image/png' }));
+  const stored = await storage.put(templateBodyBlob(body()));
+  assert.equal(stored.reference, `body:${stored.id}`);
+  assert.deepEqual(JSON.parse(await (await storage.get(stored.id)).text()), body());
+  await assert.rejects(storage.remove(image.id), /content_in_use/);
+  await storage.remove(stored.id);
+  await storage.remove(image.id);
+  assert.deepEqual(await storage.list(), []);
+});
+
+test('ZIP exports transitive body images and restores their exact bytes before World references', async () => {
+  const source = createIndexedContentStorage(new IDBFactory());
+  await source.put(new Blob([png], { type: 'image/png' }));
+  const bytes = new TextEncoder().encode(JSON.stringify(body(), null, 2));
+  const stored = await source.put(new Blob([bytes], { type: TEMPLATE_BODY_TYPE }));
+  const state = makeState(null);
+  state.preferences.worldV2.templateLibrary = { entry: { bodyRef: stored.reference } };
+  const archive = await exportContentArchive(state, { get: ref => source.get(ref.split(':')[1]) });
+  const parsed = readContentArchive(new Uint8Array(await archive.arrayBuffer()));
+  assert.equal(parsed.records.length, 2);
+  const destination = createIndexedContentStorage(new IDBFactory());
+  await persistArchiveContent(parsed.records, { putImage: blob => destination.put(blob), putBody: blob => destination.put(blob) });
+  assert.deepEqual(new Uint8Array(await (await destination.get(stored.id)).arrayBuffer()), bytes);
+});
+
+test('inline image extraction preserves the original Actor and reports the exact damaged field path', async () => {
+  const value = { system: { forms: [{ avatarDataUrl: `data:image/png;base64,${png.toString('base64')}` }] } };
+  const original = structuredClone(value);
+  const migrated = await persistInlineImages(value, { putImage: async blob => {
+    assert.deepEqual(Buffer.from(await blob.arrayBuffer()), png); return { reference };
+  } });
+  assert.deepEqual(value, original);
+  assert.equal(migrated.system.forms[0].avatarDataUrl, reference);
+  assert.throws(() => decodeImageDataUrl('data:image/png;base64,broken', ['system', 'forms', '0', 'avatarDataUrl']), error => {
+    assert.equal(error.code, 'invalid_image_data_url');
+    assert.deepEqual(error.path, ['system', 'forms', '0', 'avatarDataUrl']); return true;
+  });
+});
+
+test('LAN template bodies remain GM-only even when a body hash is forged into an image field', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rpgmap-template-content-'));
+  let state = makeState(null), projection = makeState(null);
+  const roles = { gm: { role: 'gm' }, player: { role: 'player' } };
+  const store = createContentStorage({ directory, getState: () => state, getProjection: () => projection,
+    authenticate: req => roles[req.headers.authorization], serialize: task => task() });
+  const server = http.createServer(async (req, res) => { await store.handle(req, res, sendJson); });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); });
+  const url = `http://127.0.0.1:${server.address().port}/api/content`;
+  const request = (suffix = '', role = 'gm', options = {}) => fetch(url + suffix, { ...options, headers: { Authorization: role, ...options.headers } });
+  const blob = templateBodyBlob(body());
+  const post = { method: 'POST', body: blob, headers: { 'Content-Type': blob.type } };
+  assert.equal((await request('', 'gm', post)).status, 404);
+  await request('', 'gm', { method: 'POST', body: png, headers: { 'Content-Type': 'image/png' } });
+  const stored = await (await request('', 'gm', post)).json();
+  assert.equal(stored.reference, `body:${stored.id}`);
+  assert.equal((await request(`/${stored.id}`, 'player')).status, 404);
+  projection = makeState(`asset:${stored.id}`);
+  assert.equal((await request(`/${stored.id}`, 'player')).status, 404);
+  await assert.rejects(store.validateReferences({ img: `asset:${stored.id}` }, roles.player), { code: 'content_type_unsupported' });
+  await store.validateReferences({ bodyRef: stored.reference }, roles.gm);
+  assert.equal((await request(`/${digest(png)}`, 'gm', { method: 'DELETE' })).status, 409);
+  assert.deepEqual(await (await request(`/${stored.id}`)).json(), body());
+  state.preferences.worldV2.templateLibrary = { private: { bodyRef: stored.reference } };
+  assert.equal((await request(`/${stored.id}`, 'gm', { method: 'DELETE' })).status, 409);
+  delete state.preferences.worldV2.templateLibrary;
+  assert.equal((await request(`/${stored.id}`, 'gm', { method: 'DELETE' })).status, 200);
+  assert.equal((await request(`/${digest(png)}`, 'gm', { method: 'DELETE' })).status, 200);
+});
 
 test('image container validation checks signature, dimensions, size and declared MIME', () => {
   assert.deepEqual(inspectImage(png), { type: 'image/png', width: 1, height: 1, size: png.length });

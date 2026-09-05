@@ -237,6 +237,24 @@ export function createDefaultInfiniteHorrorActor(context = {}) {
   }, context);
 }
 
+export function copyInfiniteHorrorTemplateSystem(actor) {
+  const system = normalizeInfiniteHorrorSystem(actor.system);
+  const form = system.forms.find(item => item.id === system.currentFormId) || system.forms[0];
+  if (!form) throw Object.assign(new Error('Template form is missing'), { code: 'template_form_missing' });
+  const initial = initialRuntime(form);
+  const health = system.runtime.health;
+  const maximum = health.maxOverride ?? form.healthBase.baseMax;
+  initial.health = { ...health, ...INFINITE_HORROR_HEALTH.createRuntime({ mode: health.mode, max: maximum, simpleCurrent: maximum }), maxOverride: health.maxOverride };
+  for (const [id, resource] of Object.entries(initial.resources)) {
+    const prior = system.runtime.resources[id] || {};
+    initial.resources[id] = { ...prior, ...resource, maxOverride: prior.maxOverride ?? null, current: prior.maxOverride ?? resource.current };
+  }
+  const customResources = system.runtime.customResources.map(resource => ({
+    ...clone(resource), current: Math.max(0, finite(resource.max)),
+  }));
+  return { ...system, runtime: { ...system.runtime, ...initial, customResources } };
+}
+
 export function migrateInfiniteHorrorActor(rawActor = {}) {
   const actor = object(rawActor);
   const existing = clone(object(actor.system));
@@ -1016,6 +1034,7 @@ export const INFINITE_HORROR_ACTOR = Object.freeze({
   attributePaths: infiniteHorrorAttributePaths,
   resolveAttribute: resolveInfiniteHorrorAttribute,
   applyRuntimeOperation: applyInfiniteHorrorActorOperation,
+  templates: Object.freeze({ copySystem: copyInfiniteHorrorTemplateSystem }),
   portrait: Object.freeze({
     describe(actor) {
       const form = currentFormFromSystem(actor.system);

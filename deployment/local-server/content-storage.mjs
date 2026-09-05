@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, link, rm, readdir, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { CONTENT_ID, collectContentReferences, readableImageReferences } from '../../src/content/references.js';
-import { inspectImage } from '../../src/content/image.js';
+import { inspectContent } from '../../src/content/body.js';
 
 const fail = (code, status = 400) => { throw Object.assign(new Error(code), { code, status }); };
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -28,7 +28,7 @@ export function createContentStorage({ directory, getState, getProjection, authe
       const record = JSON.parse(await readFile(target, 'utf8'));
       const bytes = Buffer.from(record.data, 'base64');
       if (hash(bytes) !== id || record.id !== id) fail('content_corrupt', 500);
-      const metadata = inspectImage(bytes, record.type);
+      const metadata = inspectContent(bytes, record.type);
       return { ...metadata, id, bytes };
     } catch (error) {
       if (error.code === 'ENOENT') fail('content_not_found', 404);
@@ -56,10 +56,14 @@ export function createContentStorage({ directory, getState, getProjection, authe
             if (length > limit) fail('image_size_exceeded', 413);
             chunks.push(chunk);
           }
-          const bytes = Buffer.concat(chunks), metadata = inspectImage(bytes, req.headers['content-type']);
+          const bytes = Buffer.concat(chunks), metadata = inspectContent(bytes, req.headers['content-type']);
           const id = hash(bytes), record = { id, ...metadata, data: bytes.toString('base64') };
           await serialize(async () => {
             if (!authenticate(req)) fail('identity_required', 401);
+            for (const ref of metadata.dependencies || []) {
+              const dependency = await read(ref.slice(6));
+              if (dependency.kind !== 'asset') fail('content_type_unsupported');
+            }
             await mkdir(root, { recursive: true });
             await syncDirectory(path.dirname(root));
             const temporary = path.join(root, `.${randomUUID()}.tmp`);
@@ -72,7 +76,7 @@ export function createContentStorage({ directory, getState, getProjection, authe
               await syncDirectory(root);
             } finally { await rm(temporary, { force: true }); }
           });
-          sendJson(res, 201, { id, reference: `asset:${id}`, ...metadata });
+          sendJson(res, 201, { id, reference: `${metadata.kind}:${id}`, ...metadata });
         } else if (req.method === 'GET' && !id) {
           if (!isGm) fail('content_gm_only', 403);
           const entries = await readdir(root).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
@@ -81,17 +85,19 @@ export function createContentStorage({ directory, getState, getProjection, authe
             const match = /^([a-f0-9]{64})\.content$/.exec(name);
             if (!match) continue;
             const { bytes, ...metadata } = await read(match[1]);
-            records.push({ ...metadata, reference: `asset:${metadata.id}` });
+            records.push({ ...metadata, reference: `${metadata.kind}:${metadata.id}` });
           }
           if (!authenticate(req)) fail('identity_required', 401);
           sendJson(res, 200, { records });
         } else if (id && references && req.method === 'GET') {
           if (!isGm) fail('content_gm_only', 403);
-          const paths = collectContentReferences(getState()?.preferences?.worldV2).get(`asset:${id}`) || [];
+          const record = await read(id);
+          const paths = collectContentReferences(getState()?.preferences?.worldV2).get(`${record.kind}:${id}`) || [];
           sendJson(res, 200, { count: paths.length, paths });
         } else if (id && !references && ['GET', 'HEAD'].includes(req.method)) {
           if (!authorized(session, id)) fail('content_not_found', 404);
           const record = await read(id);
+          if (record.kind === 'body' && !isGm) fail('content_not_found', 404);
           if (!authenticate(req) || !authorized(session, id)) fail('content_not_found', 404);
           res.writeHead(200, {
             'Content-Type': record.type, 'Content-Length': record.bytes.length,
@@ -103,8 +109,15 @@ export function createContentStorage({ directory, getState, getProjection, authe
           if (!isGm) fail('content_gm_only', 403);
           await serialize(async () => {
             if (!authenticate(req)) fail('identity_required', 401);
-            if (collectContentReferences(getState()).has(`asset:${id}`)) fail('content_in_use', 409);
-            if (await retainedReference(`asset:${id}`)) fail('content_in_use', 409);
+            const record = await read(id), reference = `${record.kind}:${id}`;
+            if (collectContentReferences(getState()).has(reference)) fail('content_in_use', 409);
+            if (await retainedReference(reference)) fail('content_in_use', 409);
+            if (record.kind === 'asset') {
+              for (const name of await readdir(root)) {
+                const match = /^([a-f0-9]{64})\.content$/.exec(name);
+                if (match && (await read(match[1])).dependencies?.includes(reference)) fail('content_in_use', 409);
+              }
+            }
             await rm(file(id), { force: true });
           });
           sendJson(res, 200, { removed: true });
@@ -121,8 +134,12 @@ export function createContentStorage({ directory, getState, getProjection, authe
       const granted = session.role === 'gm' ? null : readableImageReferences(getProjection(session));
       for (const ref of references.keys()) {
         if (session.role !== 'gm' && !granted.has(ref)) fail('content_reference_forbidden', 403);
-        if (!ref.startsWith('asset:')) fail('content_type_unsupported');
-        await read(ref.slice(6));
+        const [kind, id] = ref.split(':');
+        const record = await read(id);
+        if (kind !== record.kind || (kind === 'body' && session.role !== 'gm')) fail('content_type_unsupported');
+        for (const dependency of record.dependencies || []) {
+          if ((await read(dependency.slice(6))).kind !== 'asset') fail('content_type_unsupported');
+        }
       }
     },
   };
