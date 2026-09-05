@@ -24,10 +24,13 @@ function canvasBlob(canvas, quality) {
   return new Promise(resolve => canvas.toBlob(resolve, 'image/webp', quality));
 }
 
-export async function imageToAvatarDataUrl(source, { maxBytes = 96 * 1024, maxSize = 256 } = {}) {
+export async function imageToAvatarBlob(source, { maxBytes = 96 * 1024, maxSize = 256 } = {}) {
   if (!source) return null;
   const blob = source instanceof Blob ? source : new Blob([source.data || source], { type: source.mime || 'image/png' });
+  const { inspectImage } = await import('../content/image.js');
+  inspectImage(new Uint8Array(await blob.arrayBuffer()), blob.type);
   const image = await bitmapFromBlob(blob);
+  try {
   const width = image.width || image.naturalWidth;
   const height = image.height || image.naturalHeight;
   if (!width || !height) throw new Error('无法读取角色头像尺寸');
@@ -41,9 +44,15 @@ export async function imageToAvatarDataUrl(source, { maxBytes = 96 * 1024, maxSi
     context.drawImage(image, (width - crop) / 2, (height - crop) / 2, crop, crop, 0, 0, size, size);
     for (const quality of [0.86, 0.74, 0.62, 0.5, 0.4]) {
       const output = await canvasBlob(canvas, quality);
-      if (output && output.size <= maxBytes) return blobToDataUrl(output);
+      if (output && output.size <= maxBytes) return output;
     }
     size = Math.max(72, Math.floor(size * 0.82));
   }
   throw new Error('头像压缩后仍超过 96 KB，请换用更简单的图片');
+  } finally { image.close?.(); }
+}
+
+export async function imageToAvatarDataUrl(source, options) {
+  const blob = await imageToAvatarBlob(source, options);
+  return blob ? blobToDataUrl(blob) : null;
 }

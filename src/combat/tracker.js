@@ -70,7 +70,7 @@ export function renderCombatTracker(root, combat, appState, resolveTokenView = n
   const rows = combat.combatants.map(combatant => {
     const view = combatantView(combatant, appState, resolveTokenView);
     const avatar = view.avatar
-      ? `<span class="combatant-avatar"><img src="${escapeHtml(view.avatar)}" alt=""></span>`
+      ? `<span class="combatant-avatar"><img ${contentImageAttributes(view.avatar, escapeHtml)} alt=""></span>`
       : `<span class="combatant-avatar">${escapeHtml(view.name.trim()[0] || '?')}</span>`;
     return `<div class="combatant-row ${combatant.id === currentId ? 'current' : ''}" data-combatant-id="${escapeHtml(combatant.id)}" data-token-id="${escapeHtml(combatant.tokenId)}">
       <span class="combatant-drag" draggable="true" title="拖动调整顺序">⋮⋮</span>${avatar}
@@ -92,3 +92,4 @@ export function renderCombatTopbar(root, combat, appState, selectedCount = 0, ad
   const currentName = current ? combatantView(current, appState, resolveTokenView).name : '—';
   root.innerHTML = `<span class="combat-top-status">第 ${combat.round} 轮 · ${escapeHtml(currentName)}</span><button type="button" class="ui-primary-tool" data-combat-action="add">加入所选${addableCount ? ` · ${addableCount}` : ''}</button><button type="button" class="ui-primary-tool active" data-combat-action="next">下一回合</button><button type="button" class="ui-primary-tool danger" data-combat-action="end">结束战斗</button>`;
 }
+import { contentImageAttributes } from '../content/references.js';

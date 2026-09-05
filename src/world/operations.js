@@ -46,13 +46,22 @@ export {
   migrateWorldSchema3State,
 };
 
+import { normalizeLibraryEntry, normalizeTemplateOrganization, assertTemplateLibrary, copyActorTemplate } from '../library/model.js';
+export { assertTemplateLibrary } from '../library/model.js';
+
 export const WORLD_OPERATION_SCHEMA_VERSION = DOCUMENT_OPERATION_SCHEMA_VERSION;
 export const WORLD_OPERATION_BATCH_LIMIT = 64;
 export const WORLD_OPERATION_CACHE_LIMIT = 512;
 
 const OPERATION_TYPES = new Set([
   'world.rename',
+  'world.library.upsert',
+  'world.library.delete',
+  'actor.copy',
+  'actor.organization.update',
   'actor.upsert',
+  'actor.metadata.update',
+  'actor.portrait.update',
   'actor.publicProfile.update',
   'actor.delete',
   'actor.runtime.perform',
@@ -437,6 +446,34 @@ function applyCanonicalOperation(state, operation, context = {}) {
     return { action: type, worldId: String(world.id) };
   }
 
+  if (type === 'world.library.upsert' || type === 'world.library.delete') {
+    if (payload.worldId != null && payload.worldId !== world.id) fail('Library World target mismatch', 'document_target_mismatch');
+    const id = identifier(payload.entry?.id ?? payload.entryId, 'entryId');
+    const previous = world.templateLibrary?.[id] ?? null;
+    if (!Object.hasOwn(payload, 'expectedBodyRef') || payload.expectedBodyRef !== (previous?.bodyRef ?? null)) fail('Library entry changed', 'document_field_conflict');
+    if (!Object.hasOwn(payload, 'expectedEntry') || !same(payload.expectedEntry, previous)) fail('Library metadata changed', 'document_field_conflict');
+    world.templateLibrary = { ...world.templateLibrary };
+    if (type === 'world.library.delete') delete world.templateLibrary[id];
+    else world.templateLibrary[id] = normalizeLibraryEntry(payload.entry);
+    assertTemplateLibrary(world.templateLibrary);
+    return { changed: true };
+  }
+
+  if (type === 'actor.copy') {
+    const { actor: source } = actorById(world, identifier(payload.actorId, 'actorId'));
+    const id = identifier(payload.newActorId, 'newActorId');
+    if (world.actors.some(actor => actor.id === id)) fail('Actor already exists', 'duplicate_id');
+    world.actors.push(copyActorTemplate(source, { id, name: payload.name || source.name, ruleset: context.ruleset }));
+    return { changed: true };
+  }
+
+  if (type === 'actor.organization.update') {
+    const { actor } = actorById(world, identifier(payload.actorId, 'actorId'));
+    if (!Object.hasOwn(payload, 'expected') || !same(payload.expected, actor.organization || {})) fail('Template organization changed', 'document_field_conflict');
+    actor.organization = normalizeTemplateOrganization(payload.organization);
+    return { changed: true };
+  }
+
   if (type === 'actor.upsert') {
     let actor = clone(object(payload.actor, 'actor.upsert.actor'));
     const actorId = identifier(actor.id, 'actor.id');
@@ -460,10 +497,54 @@ function applyCanonicalOperation(state, operation, context = {}) {
     return { action: type, actorId, created: index < 0 };
   }
 
+  if (type === 'actor.portrait.update') {
+    const actorId = identifier(payload.actorId, 'actorId');
+    const record = actorById(world, actorId);
+    const portrait = context.ruleset?.actor?.portrait;
+    if (!portrait) fail('Actor portrait contract is unavailable', 'actor_portrait_unsupported');
+    if (payload.reference !== null && !/^asset:[a-f0-9]{64}$/.test(payload.reference)) fail('Portrait requires a persisted image reference', 'invalid_content_reference');
+    if (!Object.hasOwn(payload, 'expectedReference') || !Object.hasOwn(payload, 'variantId')) fail('Portrait requires its previous reference and variant', 'field_precondition_required');
+    const current = portrait.describe(record.actor);
+    if ((current.reference || null) !== payload.expectedReference || (current.variantId || null) !== payload.variantId) fail('Portrait or variant changed since editing began', 'document_field_conflict');
+    portrait.update(record.actor, { reference: payload.reference });
+    record.actor.updatedAt = String(context.now || new Date().toISOString());
+    return { action: type, actorId };
+  }
+
+  if (type === 'actor.metadata.update') {
+    const actorId = identifier(payload.actorId, 'actorId');
+    const record = actorById(world, actorId);
+    const changes = object(payload.changes, 'actor.metadata.update.changes');
+    const fields = Object.keys(changes);
+    if (!fields.length || fields.some(key => !['name', 'type', 'partyId'].includes(key))) fail('Actor metadata fields are not allowed', 'actor_metadata_field_forbidden');
+    const expected = object(payload.expected, 'actor.metadata.update.expected');
+    if (Object.keys(expected).some(key => !fields.includes(key)) || fields.some(key => !Object.hasOwn(expected, key))) fail('Each metadata field requires its previous value', 'field_precondition_required');
+    for (const key of fields) {
+      if (String(record.actor[key] ?? '') !== String(expected[key] ?? '')) fail('Actor field changed since editing began', 'document_field_conflict');
+      if (changes[key] !== null && typeof changes[key] !== 'string') fail('Actor metadata must be text');
+    }
+    const next = { ...record.actor, ...changes };
+    next.name = String(next.name || '').trim().slice(0, 80) || '未命名角色';
+    if (Object.hasOwn(changes, 'type') && !['pc', 'npc', 'monster', 'summon', 'other'].includes(next.type)) fail('Unknown Actor classification');
+    if (Object.hasOwn(changes, 'partyId')) next.partyId = String(next.partyId || '').trim().slice(0, 80) || null;
+    if (actorUsesIndependentInstances(next) && allActorTokens(world, actorId).some(({ token }) => token.actorLink !== false)) fail('Independent templates require instance conversion', 'instance_detach_required');
+    next.updatedAt = String(context.now || new Date().toISOString());
+    world.actors[record.index] = next;
+    return { action: type, actorId };
+  }
+
   if (type === 'actor.publicProfile.update') {
     const actorId = identifier(payload.actorId, 'actorId');
     const record = actorById(world, actorId);
     const statusDefinitionIds = (world.statusDefinitions || []).map(definition => String(definition?.id || '')).filter(Boolean);
+    if (payload.expected !== undefined) {
+      const current = normalizeActorPublicProfile(record.actor.publicProfile, { statusDefinitionIds });
+      const expected = object(payload.expected, 'actor.publicProfile.update.expected');
+      for (const key of Object.keys(object(payload.publicProfile, 'publicProfile'))) {
+        if (!Object.hasOwn(current, key) || !Object.hasOwn(expected, key)) fail('Public profile field requires its previous value', 'field_precondition_required');
+        if (JSON.stringify(current[key]) !== JSON.stringify(expected[key])) fail('Public profile field changed since editing began', 'document_field_conflict');
+      }
+    }
     record.actor.publicProfile = normalizeActorPublicProfile(
       { ...record.actor.publicProfile, ...object(payload.publicProfile, 'actor.publicProfile.update.publicProfile') },
       { statusDefinitionIds },
@@ -511,6 +592,7 @@ function applyCanonicalOperation(state, operation, context = {}) {
 
   if (type === 'actor.instances.detach') {
     const record = actorById(world, payload.actorId);
+    if (Object.hasOwn(payload, 'expectedType') && payload.expectedType !== record.actor.type) fail('Actor classification changed since editing began', 'document_field_conflict');
     if (payload.actorType !== undefined) {
       record.actor.type = normalizeActorClassification({
         ...record.actor,
@@ -1094,6 +1176,9 @@ export function createWorldOperationPatch(beforeState, afterState) {
     patch.world.activeSceneId = String(afterWorld.activeSceneId ?? '');
   }
   patch.world.updatedAt = String(afterWorld.updatedAt || new Date().toISOString());
+  if (!same(beforeWorld.templateLibrary, afterWorld.templateLibrary)) {
+    patch.world.templateLibrary = diffById(Object.values(beforeWorld.templateLibrary || {}), Object.values(afterWorld.templateLibrary || {}));
+  }
   const actors = diffById(beforeWorld.actors, afterWorld.actors);
   if (actors.upsert.length || actors.remove.length) patch.world.actors = actors;
   if (!same(beforeWorld.statusDefinitions, afterWorld.statusDefinitions)) {
@@ -1143,10 +1228,10 @@ function applyIdPatch(items, patch) {
   return [...values.values()];
 }
 
-export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false } = {}) {
+export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false, acceptedSchemaVersions = [WORLD_OPERATION_SCHEMA_VERSION] } = {}) {
   const state = mutate ? object(rawState, 'state') : clone(object(rawState, 'state'));
   const patch = object(rawPatch, 'patch');
-  if (Number(patch.schemaVersion) !== WORLD_OPERATION_SCHEMA_VERSION) {
+  if (!acceptedSchemaVersions.includes(Number(patch.schemaVersion))) {
     fail('Unsupported World operation patch schema', 'operation_patch_incompatible');
   }
   state.preferences = mutate
@@ -1157,6 +1242,10 @@ export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false } 
   if (worldPatch.name !== undefined) world.name = String(worldPatch.name);
   if (worldPatch.activeSceneId !== undefined) world.activeSceneId = String(worldPatch.activeSceneId);
   if (worldPatch.updatedAt !== undefined) world.updatedAt = String(worldPatch.updatedAt);
+  if (worldPatch.templateLibrary) {
+    world.templateLibrary = Object.fromEntries(applyIdPatch(Object.values(world.templateLibrary || {}), worldPatch.templateLibrary).map(entry => [entry.id, entry]));
+    assertTemplateLibrary(world.templateLibrary);
+  }
   if (worldPatch.actors) world.actors = applyIdPatch(world.actors, worldPatch.actors);
   if (worldPatch.statusDefinitions !== undefined) world.statusDefinitions = clone(array(worldPatch.statusDefinitions, 'statusDefinitions'));
   if (worldPatch.scenes) {

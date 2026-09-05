@@ -1,6 +1,7 @@
 import { mergeActorDelta } from '../token/actor.js';
 import { normalizeFogState } from './fog.js';
 import { normalizeActorPublicProfile } from '../actor/public-profile.js';
+import { canPlaceActorTemplate } from '../permissions/model.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -216,8 +217,7 @@ function publicStatusesForToken(token, actor, definitions) {
 
 function actorPlacementGranted(actor, context) {
   const grants = context.user?.placementGrants || {};
-  return (Array.isArray(grants.actorIds) && grants.actorIds.map(String).includes(String(actor.id)))
-    || (Array.isArray(grants.actorTypes) && grants.actorTypes.map(String).includes(String(actor.type)));
+  return canPlaceActorTemplate(actor, grants);
 }
 
 function restrictedToken(token, {
@@ -335,6 +335,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     } else if (state.preferences) delete state.preferences.audienceVision;
     return state;
   }
+  delete world.templateLibrary;
   const parties = viewerParties(world, context);
   const definitions = new Map((world.statusDefinitions || []).map(item => [String(item?.id ?? ''), item]));
   const vision = currentVision(world, context, actors);

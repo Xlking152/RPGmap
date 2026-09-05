@@ -13,6 +13,11 @@ if (!/^http:\/\/127\.0\.0\.1:\d+\/?/.test(targetUrl)) throw new Error('Final she
 const timeoutMs = Math.max(20_000, Number(process.argv[3]) || 45_000);
 
 function edgePath() {
+  const override = process.env.RPGMAP_SMOKE_BROWSER_EXECUTABLE;
+  if (override) {
+    if (!existsSync(override)) throw new Error('Configured smoke browser executable was not found');
+    return path.resolve(override);
+  }
   const roots = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean);
   const suffixes = browserName === 'chrome'
     ? [['Google','Chrome','Application','chrome.exe'], ['Google','Chrome Beta','Application','chrome.exe']]

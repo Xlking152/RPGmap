@@ -237,6 +237,24 @@ export function createDefaultInfiniteHorrorActor(context = {}) {
   }, context);
 }
 
+export function copyInfiniteHorrorTemplateSystem(actor) {
+  const system = normalizeInfiniteHorrorSystem(actor.system);
+  const form = system.forms.find(item => item.id === system.currentFormId) || system.forms[0];
+  if (!form) throw Object.assign(new Error('Template form is missing'), { code: 'template_form_missing' });
+  const initial = initialRuntime(form);
+  const health = system.runtime.health;
+  const maximum = health.maxOverride ?? form.healthBase.baseMax;
+  initial.health = { ...health, ...INFINITE_HORROR_HEALTH.createRuntime({ mode: health.mode, max: maximum, simpleCurrent: maximum }), maxOverride: health.maxOverride };
+  for (const [id, resource] of Object.entries(initial.resources)) {
+    const prior = system.runtime.resources[id] || {};
+    initial.resources[id] = { ...prior, ...resource, maxOverride: prior.maxOverride ?? null, current: prior.maxOverride ?? resource.current };
+  }
+  const customResources = system.runtime.customResources.map(resource => ({
+    ...clone(resource), current: Math.max(0, finite(resource.max)),
+  }));
+  return { ...system, runtime: { ...system.runtime, ...initial, customResources } };
+}
+
 export function migrateInfiniteHorrorActor(rawActor = {}) {
   const actor = object(rawActor);
   const existing = clone(object(actor.system));
@@ -698,9 +716,42 @@ function healthResult(actor, operation, context = {}) {
   };
 }
 
+function fieldOperationValue(actor, operation, context) {
+  const runtime = actor.system.runtime;
+  if (operation.type === 'variant.set') return actor.system.currentFormId;
+  if (operation.type === 'attribute.set-adjustment') return runtime.attributeAdjustments[operation.attributeId] || 0;
+  if (operation.type === 'bad-status.set-current') return runtime.badStatuses[operation.statusId] || 0;
+  if (['resource.set-current', 'resource.set-max'].includes(operation.type)) {
+    const field = operation.type === 'resource.set-current' ? 'current' : 'max';
+    return resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.${field}`);
+  }
+  if (operation.type === 'detection.set-override') {
+    const detection = deriveInfiniteHorrorActor(actor, context).detection;
+    return operation.field === 'sense' ? detection.senses?.[operation.sense] : detection[operation.field];
+  }
+  return undefined;
+}
+
+function updateInfiniteHorrorPortrait(actor, reference) {
+  const form = currentFormFromSystem(actor.system);
+  if (!form) return { changed: false, blocked: 'variant_not_found' };
+  const previous = form.avatarDataUrl;
+  form.avatarDataUrl = reference;
+  if (!actor.img || actor.img === previous) actor.img = reference;
+  if (actor.prototypeToken?.texture && (!actor.prototypeToken.texture.src || actor.prototypeToken.texture.src === previous)) {
+    actor.prototypeToken.texture.src = reference;
+  }
+  return { changed: true, value: reference };
+}
+
 export function applyInfiniteHorrorActorOperation(actor, operation = {}, context = {}) {
   actor.system = normalizeInfiniteHorrorSystem(actor.system);
   const type = String(operation?.type || '');
+  if (Object.hasOwn(operation, 'expectedValue')) {
+    const current = fieldOperationValue(actor, operation, context);
+    if (current === undefined) return { changed: false, blocked: 'field_precondition_unsupported' };
+    if (String(current ?? '') !== String(operation.expectedValue ?? '')) return { changed: false, blocked: 'document_field_conflict' };
+  }
   if (type === 'health.resolve') return { changed: false, value: deriveInfiniteHorrorActor(actor, context).health };
   if (['health.set-mode', 'health.runtime', 'health.damage', 'health.healing'].includes(type)) {
     return healthResult(actor, operation, context);
@@ -814,10 +865,7 @@ export function applyInfiniteHorrorActorOperation(actor, operation = {}, context
     return { changed: true, value };
   }
   if (type === 'avatar.set') {
-    const form = currentFormFromSystem(actor.system);
-    if (!form) return { changed: false, blocked: 'variant_not_found' };
-    form.avatarDataUrl = typeof operation.avatarDataUrl === 'string' ? operation.avatarDataUrl : null;
-    return { changed: true, value: form.avatarDataUrl };
+    return updateInfiniteHorrorPortrait(actor, typeof operation.avatarDataUrl === 'string' ? operation.avatarDataUrl : null);
   }
   return { changed: false, blocked: 'unknown_actor_operation' };
 }
@@ -986,6 +1034,17 @@ export const INFINITE_HORROR_ACTOR = Object.freeze({
   attributePaths: infiniteHorrorAttributePaths,
   resolveAttribute: resolveInfiniteHorrorAttribute,
   applyRuntimeOperation: applyInfiniteHorrorActorOperation,
+  templates: Object.freeze({ copySystem: copyInfiniteHorrorTemplateSystem }),
+  portrait: Object.freeze({
+    describe(actor) {
+      const form = currentFormFromSystem(actor.system);
+      return { variantId: form?.id || null, reference: form?.avatarDataUrl || actor.img || null };
+    },
+    update(actor, { reference }) {
+      const result = updateInfiniteHorrorPortrait(actor, reference);
+      if (!result.changed) throw Object.assign(new Error('Actor portrait is unavailable'), { code: result.blocked });
+    },
+  }),
   instances: Object.freeze({
     createDelta: createInfiniteHorrorInstanceDelta,
     normalizeDelta: normalizeInfiniteHorrorInstanceDelta,

@@ -13,6 +13,11 @@ if (!/^http:\/\/127\.0\.0\.1:\d+\/?/.test(targetUrl)) throw new Error('Actor she
 const timeoutMs = Math.max(20_000, Number(process.argv[3]) || 45_000);
 
 function edgePath() {
+  const override = process.env.RPGMAP_SMOKE_BROWSER_EXECUTABLE;
+  if (override) {
+    if (!existsSync(override)) throw new Error('Configured smoke browser executable was not found');
+    return path.resolve(override);
+  }
   const roots = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean);
   const suffixes = browserName === 'chrome'
     ? [['Google', 'Chrome', 'Application', 'chrome.exe'], ['Google', 'Chrome Beta', 'Application', 'chrome.exe']]
@@ -76,6 +81,8 @@ try {
   let nextId = 1;
   const pending = new Map();
   const failures = [];
+  const requests = new Map();
+  const expectedResponses = [];
   const exceptions = [];
   socket.addEventListener('message', event => {
     const message = JSON.parse(String(event.data));
@@ -86,7 +93,19 @@ try {
       return message.error ? item.reject(new Error(message.error.message)) : item.resolve(message.result);
     }
     if (message.method === 'Network.loadingFailed' && message.params?.errorText !== 'net::ERR_ABORTED') failures.push(message.params?.errorText || 'request failed');
-    if (message.method === 'Network.responseReceived' && Number(message.params?.response?.status) >= 400) failures.push(`${message.params.response.status} ${message.params.response.url}`);
+    if (message.method === 'Network.requestWillBeSent') {
+      const { requestId, request } = message.params;
+      requests.set(requestId, request.method);
+      const expected = expectedResponses.find(item => !item.requestId && item.url === request.url && item.method === request.method);
+      if (expected) expected.requestId = requestId;
+    }
+    if (message.method === 'Network.responseReceived' && Number(message.params?.response?.status) >= 400) {
+      const { response, requestId } = message.params;
+      const expected = expectedResponses.find(item => !item.seen && item.url === response.url
+        && item.method === requests.get(requestId) && item.status === response.status);
+      if (expected) expected.seen = true;
+      else failures.push(`${response.status} ${response.url}`);
+    }
     if (message.method === 'Runtime.exceptionThrown') {
       const detail = message.params?.exceptionDetails;
       exceptions.push(detail?.exception?.description || detail?.text || 'runtime exception');
@@ -95,7 +114,12 @@ try {
       const text = (message.params.args || []).map(arg => arg.value ?? arg.unserializableValue ?? arg.description ?? '').filter(Boolean).join(' ');
       exceptions.push(text || 'browser console error');
     }
-    if (message.method === 'Log.entryAdded' && message.params?.entry?.level === 'error') exceptions.push(message.params.entry.text || 'browser log error');
+    if (message.method === 'Log.entryAdded' && message.params?.entry?.level === 'error') {
+      const entry = message.params.entry;
+      const expected = expectedResponses.find(item => item.requestId && item.requestId === entry.networkRequestId
+        && item.url === entry.url && entry.source === 'network' && entry.text.includes(` ${item.status} `));
+      if (!expected) exceptions.push(entry.text || 'browser log error');
+    }
   });
   const rejectPending = message => {
     for (const item of pending.values()) { clearTimeout(item.timer); item.reject(new Error(message)); }
@@ -147,6 +171,7 @@ try {
       records: api?.entities?.listOpenSheets?.() || [],
       sheets: [...document.querySelectorAll('.entity-sheet')].map(sheet => ({ key: sheet.dataset.sheetWindowKey || '', actorId: sheet.dataset.actorId || '', tokenId: sheet.dataset.tokenId || '', sceneId: sheet.dataset.sceneId || '', mode: sheet.dataset.sheetMode || '', kind: sheet.dataset.sheetKind || '', tab: sheet.querySelector('.entity-sheet-tab.active')?.dataset.sheetTab || '' })),
       mapStatus: document.querySelector('[data-role="map-status"]')?.textContent || '',
+      libraryStatus: document.querySelector('[data-library-dialog] [data-status]')?.textContent || '',
     };
   })()`);
   const retryWithSnapshot = async (task, label) => {
@@ -157,6 +182,12 @@ try {
   const setup = await evaluate(`(async () => {
     const api = document.querySelector('#app').rpgMapApp;
     const actorId = '${ids.actor}', tokenA = '${ids.a}', tokenB = '${ids.b}';
+    const canvas = document.createElement('canvas'); canvas.width = 8; canvas.height = 8;
+    const context = canvas.getContext('2d'); context.fillStyle = '#408d78'; context.fillRect(0, 0, 8, 8);
+    const avatar = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    const uploaded = await api.content.putImage(avatar);
+    const duplicate = await api.content.putImage(avatar);
+    if (uploaded.reference !== duplicate.reference || !/^asset:[a-f0-9]{64}$/.test(uploaded.reference)) throw new Error('content deduplication failed');
     if ((api.world.get().actors || []).some(actor => String(actor.id) === actorId)) {
       await api.world.performOperations([{ type: 'actor.delete', payload: { actorId } }], { source: 'smoke:sheets:reset' });
     }
@@ -164,6 +195,7 @@ try {
       formName: 'Smoke Form', identity: { name: 'Smoke Monster' }, description: {}, resources: { hp: { max: 20 } },
       attributes: [], checks: { skills: [], saves: [] }, badStatuses: [], combat: { attacks: [], defenses: [] }, detection: {},
       tokenAppearance: { color: '#3d9b63', scale: 1 }, source: { type: 'manual' },
+      avatarDataUrl: uploaded.reference,
     }, { actorId, name: 'Smoke Monster' });
     const actor = { ...created, id: actorId, name: 'Smoke Monster', type: 'monster', partyId: null, effects: [] };
     const sceneId = api.world.get().activeSceneId;
@@ -176,9 +208,25 @@ try {
     const openedA = present ? await api.entities.openToken(tokenA) : false;
     await new Promise(resolve => setTimeout(resolve, 50));
     const openedB = present ? await api.entities.openToken(tokenB) : false;
-    return { actorId, tokenA, tokenB, sceneId, commit, present, openedA, openedB, revision: api.multiplayer.getStatus().revision };
+    return { actorId, tokenA, tokenB, sceneId, commit, present, openedA, openedB, asset: uploaded.reference, revision: api.multiplayer.getStatus().revision };
   })()`);
   if (!setup?.present || !setup.openedA || !setup.openedB) throw new Error(`authoritative fixture/openToken failed: ${JSON.stringify(setup)}; snapshot=${JSON.stringify(await snapshot('fixture setup'))}`);
+
+  await retryWithSnapshot(() => evaluate(`(() => {
+    const images = [...document.querySelectorAll('img[data-content-ref="${setup.asset}"]')];
+    return images.length >= 2 && images.every(image => image.complete && image.naturalWidth === 8 && image.src.startsWith('blob:'));
+  })()`), 'authenticated content hydrates map and sheet portraits without data URLs');
+  const refusedDelete = { method: 'DELETE', url: new URL(`/api/content/${setup.asset.slice(6)}`, targetUrl).href, status: 409, seen: false };
+  expectedResponses.push(refusedDelete);
+  await evaluate(`(async () => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const refs = await api.content.references('${setup.asset}');
+    if (refs.count < 1) throw new Error('content reference accounting failed');
+    try { await api.content.remove('${setup.asset}'); throw new Error('referenced content was removed'); }
+    catch (error) { if (error.message !== 'content_in_use') throw error; }
+    return true;
+  })()`);
+  if (!refusedDelete.seen) throw new Error('referenced asset deletion did not produce the required HTTP 409');
 
   const opened = await retryWithSnapshot(() => evaluate(`(() => {
     const api = document.querySelector('#app').rpgMapApp;
@@ -278,12 +326,165 @@ try {
     const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || ''));
     return sheet?.dataset.sheetInteractionMode === 'edit' && sheet.querySelector('[data-sheet-mode-toggle]') ? { before: 'play', after: 'edit' } : null;
   })()`), 'Actor template Edit mode');
+  await evaluate(`(() => {
+    const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !node.dataset.tokenId);
+    const input = sheet.querySelector('[data-actor-name]');
+    input.focus(); input.value = 'local draft name'; input.setSelectionRange(3, 8);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const observer = new MutationObserver(() => {});
+    observer.observe(sheet.querySelector('.entity-sheet-header'), { attributes: true, childList: true, subtree: true, characterData: true });
+    window.sheetDraftProbe = { input, observer };
+    return true;
+  })()`);
+  await evaluate(`(async () => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const actor = api.world.get().actors.find(item => item.id === '${ids.actor}');
+    await api.world.performOperations([{ type: 'actor.metadata.update', payload: { actorId: actor.id, changes: { partyId: 'draft-probe-party' }, expected: { partyId: actor.partyId } } }]);
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const { input, observer } = window.sheetDraftProbe;
+    if (!input.isConnected || document.activeElement !== input || input.value !== 'local draft name' || input.selectionStart !== 3 || input.selectionEnd !== 8) throw new Error('Unrelated commit replaced or disturbed the active input');
+    if (observer.takeRecords().length) throw new Error('Unrelated classification field rendered the header Part');
+    observer.disconnect();
+    await api.world.performOperations([{ type: 'actor.metadata.update', payload: { actorId: actor.id, changes: { name: 'remote name' }, expected: { name: actor.name } } }]);
+    return true;
+  })()`);
+  const draftAudit = await retryWithSnapshot(() => evaluate(`(() => {
+    const input = window.sheetDraftProbe.input;
+    const sheet = input.closest('.entity-sheet');
+    const retry = sheet?.querySelector('[data-sheet-field-resolution="retry"]');
+    if (!retry) return null;
+    if (!input.isConnected || input !== sheet.querySelector('[data-actor-name]') || input.value !== 'local draft name' || input.selectionStart !== 3 || input.selectionEnd !== 8) throw new Error('Conflicting commit discarded the focused field draft');
+    retry.click();
+    return { stableNode: true, caret: [input.selectionStart, input.selectionEnd], conflict: true };
+  })()`), 'dirty field conflict and explicit resubmission');
+  await retryWithSnapshot(() => evaluate(`document.querySelector('#app').rpgMapApp.world.get().actors.find(item => item.id === '${ids.actor}')?.name === 'local draft name'`), 'field resubmission acknowledged with current field precondition');
+  await evaluate('delete window.sheetDraftProbe');
   await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); sheet?.querySelector('[data-sheet-tab="public-profile"]')?.click(); return true; })()`);
   await retryWithSnapshot(() => evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); return sheet?.querySelector('[data-public-profile-editor]') ? true : null; })()`), 'GM public profile editor');
   await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); const summary = sheet?.querySelector('[name="summary"]'); if (!summary) return false; summary.value = 'Smoke LIMITED profile'; sheet.querySelector('[data-public-profile-save]')?.click(); return true; })()`);
   const publicProfileAudit = await retryWithSnapshot(() => evaluate(`(() => { const actor = document.querySelector('#app').rpgMapApp.world.get().actors.find(item => item.id === '${ids.actor}'); return actor?.publicProfile?.summary === 'Smoke LIMITED profile' ? { summary: actor.publicProfile.summary } : null; })()`), 'GM public profile authoritative update');
+  const portraitBefore = await evaluate(`(async () => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const actor = api.world.get().actors.find(item => item.id === '${ids.actor}');
+    const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !node.dataset.tokenId);
+    sheet.querySelector('[data-sheet-action="avatar"]').click();
+    const source = await api.content.get('${setup.asset}');
+    const transfer = new DataTransfer(); transfer.items.add(new File([source], 'portrait.png', { type: source.type }));
+    const input = document.querySelector('input[data-entity-avatar-file]');
+    input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+    return JSON.stringify(actor.system.runtime);
+  })()`);
+  const portraitAudit = await retryWithSnapshot(() => evaluate(`(() => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const actor = api.world.get().actors.find(item => item.id === '${ids.actor}');
+    const portrait = api.ruleset.actor.portrait.describe(actor);
+    if (!portrait.reference?.startsWith('asset:') || portrait.reference === '${setup.asset}') return null;
+    const image = document.querySelector('img[data-content-ref="' + portrait.reference + '"]');
+    return image?.complete && image.naturalWidth === 8 ? { reference: portrait.reference, runtime: JSON.stringify(actor.system.runtime) } : null;
+  })()`), 'portrait upload uses its field-specific authoritative intent and hydrates the WebP asset');
+  if (portraitAudit.runtime !== portraitBefore) throw new Error('portrait update overwrote Actor runtime data');
   await evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); sheet?.querySelector('[data-sheet-mode-toggle]')?.click(); return true; })()`);
   await retryWithSnapshot(() => evaluate(`(() => { const sheet = [...document.querySelectorAll('.entity-sheet[data-actor-id="${ids.actor}"]')].find(node => !String(node.dataset.tokenId || '')); return sheet?.dataset.sheetInteractionMode === 'play' ? true : null; })()`), 'Actor template Play mode restored');
+
+  await evaluate(`document.querySelector('[data-template-library]').click()`);
+  await retryWithSnapshot(() => evaluate(`Boolean(document.querySelector('dialog[data-library-dialog][open] [data-library-id="${ids.actor}"]'))`), 'lazy GM template library');
+  await evaluate(`(() => {
+    const dialog = document.querySelector('[data-library-dialog]');
+    dialog.querySelector('[data-library-id="${ids.actor}"] button').click();
+    dialog.querySelector('[aria-label="存入资料库"]').click();
+  })()`);
+  const libraryEntry = await retryWithSnapshot(() => evaluate(`(() => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const entry = api.library.list().find(value => value.name === 'local draft name');
+    return entry?.bodyRef?.startsWith('body:') && !document.querySelector('[data-library-dialog]').hasAttribute('aria-busy') ? entry : null;
+  })()`), 'template body persisted before its metadata reference');
+  const libraryBefore = await evaluate(`(() => {
+    const api = document.querySelector('#app').rpgMapApp;
+    return { ids: api.world.get().actors.map(actor => actor.id), tokens: JSON.stringify(api.world.get().scenes[0].tokens) };
+  })()`);
+  await evaluate(`document.querySelector('[data-library-dialog] [data-tab="library"]').click()`);
+  await retryWithSnapshot(() => evaluate(`Boolean(document.querySelector('[data-library-id="${libraryEntry.id}"]'))`), 'library metadata index');
+  await evaluate(`document.querySelector('[data-library-id="${libraryEntry.id}"] button').click()`);
+  await retryWithSnapshot(() => evaluate(`document.querySelector('[aria-label="导入为新模板"]')?.disabled === false`), 'on-demand template body and dependency preview');
+  await evaluate(`document.querySelector('[aria-label="导入为新模板"]').click()`);
+  const libraryAudit = await retryWithSnapshot(() => evaluate(`(() => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const previous = ${JSON.stringify(libraryBefore.ids)};
+    const imported = api.world.get().actors.find(actor => !previous.includes(actor.id));
+    if (!imported || document.querySelector('[data-library-dialog]').hasAttribute('aria-busy')) return null;
+    if (JSON.stringify(api.world.get().scenes[0].tokens) !== ${JSON.stringify(libraryBefore.tokens)}) throw new Error('Library import changed existing Token instances');
+    return { actorId: imported.id, name: imported.name, bodyRef: '${libraryEntry.bodyRef}', instanceIsolation: true };
+  })()`), 'library import creates a new template without changing existing instances');
+  await evaluate(`(() => {
+    const dialog = document.querySelector('[data-library-dialog]');
+    dialog.querySelector('[data-library-id="${libraryEntry.id}"] button').click();
+    dialog.querySelector('[aria-label="标签"]').value = 'smoke, library';
+    dialog.querySelector('[aria-label="保存标签"]').click();
+  })()`);
+  await retryWithSnapshot(() => evaluate(`document.querySelector('#app').rpgMapApp.library.list().find(entry => entry.id === '${libraryEntry.id}')?.tags.join(',') === 'smoke,library' && !document.querySelector('[data-library-dialog]').hasAttribute('aria-busy')`), 'library tag metadata commit');
+  await evaluate(`(async () => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const input = document.querySelector('[data-library-dialog] [aria-label="标签"]');
+    input.focus(); input.value = 'local draft'; input.setSelectionRange(2, 5); input.dispatchEvent(new Event('input', { bubbles: true }));
+    window.libraryDraftProbe = input;
+    const entry = api.library.list().find(entry => entry.id === '${libraryEntry.id}');
+    await api.library.update({ ...entry, tags: ['server'] }, entry);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    if (!input.isConnected || input.value !== 'local draft' || input.selectionStart !== 2 || input.selectionEnd !== 5) throw new Error('Library remote update discarded input');
+    document.querySelector('[data-library-dialog] [aria-label="保存标签"]').click();
+  })()`);
+  await retryWithSnapshot(() => evaluate(`(() => {
+    const conflict = document.querySelector('[data-library-conflict]');
+    if (!conflict || conflict.hidden) return null;
+    const input = window.libraryDraftProbe;
+    if (!input.isConnected || input.value !== 'local draft' || input.selectionStart !== 2 || input.selectionEnd !== 5) throw new Error('Library conflict replaced its field draft');
+    [...conflict.querySelectorAll('button')].find(button => button.textContent === '重新提交').click();
+    return true;
+  })()`), 'library metadata conflict preserves its input and supports explicit resubmission');
+  await retryWithSnapshot(() => evaluate(`document.querySelector('#app').rpgMapApp.library.list().find(entry => entry.id === '${libraryEntry.id}')?.tags[0] === 'local draft' && !document.querySelector('[data-library-dialog]').hasAttribute('aria-busy')`), 'library field resubmission');
+  await evaluate('delete window.libraryDraftProbe');
+  libraryAudit.draftConflict = true;
+  await evaluate(`(() => {
+    const dialog = document.querySelector('[data-library-dialog]');
+    let tags = dialog.querySelector('[aria-label="标签"]');
+    tags.value = 'retained library draft'; tags.setSelectionRange(3, 8); tags.dispatchEvent(new Event('input', { bubbles: true }));
+    dialog.querySelector('[data-tab="actors"]').click();
+    dialog.querySelector('[data-library-id="${ids.actor}"] button').click();
+    tags = dialog.querySelector('[aria-label="标签"]');
+    if (tags.value === 'retained library draft') throw new Error('Draft crossed template targets');
+    tags.value = 'separate Actor draft'; tags.dispatchEvent(new Event('input', { bubbles: true }));
+    dialog.querySelector('[data-tab="library"]').click();
+    dialog.querySelector('[data-library-id="${libraryEntry.id}"] button').click();
+    tags = dialog.querySelector('[aria-label="标签"]');
+    if (tags.value !== 'retained library draft' || tags.selectionStart !== 3 || tags.selectionEnd !== 8) throw new Error('Library target switch lost field draft or selection');
+  })()`);
+  libraryAudit.targetDrafts = true;
+  const packageBefore = await evaluate(`(async () => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const before = { actors: api.world.get().actors.length, entries: api.library.list().length, images: (await api.content.list()).filter(value => value.kind === 'asset').length };
+    const blob = await api.library.export('${libraryEntry.id}');
+    const input = document.querySelector('[data-library-dialog] input[accept=".zip,application/zip"]');
+    const transfer = new DataTransfer(); transfer.items.add(new File([blob], 'template.zip', { type: 'application/zip' }));
+    input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+    return before;
+  })()`);
+  await retryWithSnapshot(() => evaluate(`Boolean(document.querySelector('[aria-label="确认导入模板包"]')) && !document.querySelector('[data-library-dialog]').hasAttribute('aria-busy')`), 'ZIP dependency preview before template import');
+  await evaluate(`document.querySelector('[aria-label="确认导入模板包"]').click()`);
+  await retryWithSnapshot(() => evaluate(`(async () => {
+    const api = document.querySelector('#app').rpgMapApp;
+    if (document.querySelector('[data-library-dialog]').hasAttribute('aria-busy')) return null;
+    if (api.world.get().actors.length !== ${packageBefore.actors + 1} || api.library.list().length !== ${packageBefore.entries + 1}) return null;
+    if ((await api.content.list()).filter(value => value.kind === 'asset').length !== ${packageBefore.images}) throw new Error('ZIP import duplicated immutable images');
+    if (JSON.stringify(api.world.get().scenes[0].tokens) !== ${JSON.stringify(libraryBefore.tokens)}) throw new Error('ZIP import changed existing instances');
+    return true;
+  })()`), 'template ZIP commits references atomically and deduplicates images');
+  libraryAudit.templatePackage = true;
+  await evaluate(`document.querySelector('[data-library-id="${libraryEntry.id}"] button').click()`);
+  if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
+    const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    await writeFile(path.join(path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR), 'packaged-library.png'), Buffer.from(capture.data, 'base64'));
+  }
+  await evaluate(`document.querySelector('[data-library-dialog] [aria-label="关闭"]').click()`);
 
   if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
     const directory = path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR);
@@ -291,12 +492,51 @@ try {
     const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     await writeFile(path.join(directory, 'packaged-sheets.png'), Buffer.from(capture.data, 'base64'));
   }
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await evaluate(`(() => {
+    const api = document.querySelector('#app').rpgMapApp;
+    for (const sheet of api.entities.listOpenSheets()) api.entities.closeSheet(sheet.key);
+    api.entities.openActor('${ids.actor}', 'public-profile');
+    return true;
+  })()`);
+  const mobileAudit = await retryWithSnapshot(() => evaluate(`(() => {
+    const sheet = document.querySelector('.entity-sheet');
+    if (!sheet?.querySelector('[data-public-profile-editor]')) return null;
+    const rect = sheet.getBoundingClientRect();
+    if (document.documentElement.scrollWidth > 390 || rect.left < 0 || rect.right > 390 || sheet.scrollWidth > sheet.clientWidth) throw new Error('390px sheet has horizontal overflow');
+    return { viewport: innerWidth, sheetWidth: rect.width, scrollWidth: sheet.scrollWidth, clientWidth: sheet.clientWidth };
+  })()`), '390px Actor sheet without horizontal overflow');
+  if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
+    const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    await writeFile(path.join(path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR), 'packaged-sheet-mobile.png'), Buffer.from(capture.data, 'base64'));
+  }
+  await evaluate(`document.querySelector('[data-template-library]').click()`);
+  await retryWithSnapshot(() => evaluate(`Boolean(document.querySelector('[data-library-dialog][open] [data-library-id="${libraryEntry.id}"] button'))`), 'mobile library record');
+  await evaluate(`document.querySelector('[data-library-dialog] [data-library-id="${libraryEntry.id}"] button').click()`);
+  await retryWithSnapshot(() => evaluate(`(() => {
+    const dialog = document.querySelector('[data-library-dialog][open]');
+    if (!dialog) return null;
+    const rect = dialog.getBoundingClientRect();
+    if (rect.left < 0 || rect.right > 390 || dialog.scrollWidth > dialog.clientWidth || document.documentElement.scrollWidth > 390) throw new Error('390px library overflow');
+    for (const control of dialog.querySelectorAll('[data-detail] input, [data-detail] button')) {
+      if (!control.getClientRects().length) continue;
+      const bounds = control.getBoundingClientRect();
+      if (bounds.left < rect.left || bounds.right > rect.right) throw new Error('390px library detail control clipped');
+    }
+    return true;
+  })()`), '390px template library layout');
+  if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
+    const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    await writeFile(path.join(path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR), 'packaged-library-mobile.png'), Buffer.from(capture.data, 'base64'));
+  }
+  await evaluate(`document.querySelector('[data-library-dialog] [aria-label="关闭"]').click()`);
   await new Promise(resolve => setTimeout(resolve, 400));
   if (failures.length) throw new Error(`Actor sheet browser requests failed: ${failures.join('; ')}`);
   if (exceptions.length) throw new Error(`Actor sheet browser runtime errors: ${exceptions.join('; ')}`);
 
   console.log(JSON.stringify({ ready, fixtureRevision: setup.revision, liveSheets: opened, drag: dragAudit, tabs: tabAudit,
-    health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit, publicProfile: publicProfileAudit }));
+    health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit, drafts: draftAudit, publicProfile: publicProfileAudit,
+    portrait: { reference: portraitAudit.reference, runtimePreserved: true }, library: libraryAudit, mobile: mobileAudit }));
   await send('Browser.close');
   browserClosed = true;
 } catch (error) {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createActorFromRulesetImport, normalizeActorDocument } from '../src/actor/model.js';
+import { createActorFromRulesetImport, normalizeActorDocument, performActorOperation } from '../src/actor/model.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { createTokenViewModel } from '../src/render/token-view-model.js';
 
@@ -35,6 +35,18 @@ test('Infinite Horror import seeds Core Actor defaults while keeping Form presen
   assert.equal(actor.img, 'data:image/png;base64,FORM');
   assert.equal(actor.prototypeToken.texture.src, 'data:image/png;base64,FORM');
   assert.equal(actor.prototypeToken.color, '#224466');
+});
+
+test('avatar references update inherited Core portraits but preserve explicit prototype overrides', () => {
+  const actor = createActorFromRulesetImport(importedCard(), { id: 'actor-avatar', ruleset: infiniteHorrorRuleset });
+  const reference = `asset:${'a'.repeat(64)}`;
+  performActorOperation(actor, { type: 'avatar.set', avatarDataUrl: reference }, { ruleset: infiniteHorrorRuleset });
+  assert.equal(actor.img, reference);
+  assert.equal(actor.prototypeToken.texture.src, reference);
+  actor.img = 'core-override.png'; actor.prototypeToken.texture.src = 'token-override.png';
+  performActorOperation(actor, { type: 'avatar.set', avatarDataUrl: `asset:${'b'.repeat(64)}` }, { ruleset: infiniteHorrorRuleset });
+  assert.equal(actor.img, 'core-override.png');
+  assert.equal(actor.prototypeToken.texture.src, 'token-override.png');
 });
 
 test('Token appearance precedence is explicit Token override then Form then Core Actor fallback', () => {

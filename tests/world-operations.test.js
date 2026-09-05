@@ -8,6 +8,9 @@ import {
   deriveWorldOperations,
 } from '../src/world/operations.js';
 import { reduceStatusOperation } from '../src/status/model.js';
+import { createDefaultActor } from '../src/actor/model.js';
+import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
+import { prepareRuleset } from '../src/ruleset/contract.js';
 
 function actor(id, current = 10) {
   return { id, name: id, system: { resources: { hp: { current, max: 10 } } }, effects: [], notes: '' };
@@ -66,6 +69,70 @@ test('World operation envelope rejects unknown operations and invalid revisions'
     }),
     error => error.code === 'invalid_revision',
   );
+});
+
+test('Actor metadata writes preserve newer runtime fields and reject stale field preconditions', () => {
+  const initial = state();
+  initial.preferences.worldV2.actors[0].type = 'pc';
+  initial.preferences.worldV2.actors[0].partyId = 'party-default';
+  const actorBefore = structuredClone(initial.preferences.worldV2.actors[0]);
+  const update = { type: 'actor.metadata.update', payload: { actorId: 'actor-a', changes: { name: 'renamed' }, expected: { name: 'actor-a' } } };
+  const committed = applyWorldOperations(initial, [update]);
+  const after = committed.state.preferences.worldV2.actors[0];
+  assert.equal(after.name, 'renamed');
+  assert.deepEqual(after.system, actorBefore.system);
+  assert.deepEqual(after.effects, actorBefore.effects);
+  assert.equal(initial.preferences.worldV2.actors[0].name, 'actor-a');
+  assert.throws(() => applyWorldOperations(committed.state, [update]), error => error.code === 'document_field_conflict');
+  assert.throws(() => applyWorldOperations(initial, [{ ...update, payload: { ...update.payload, changes: { system: {} } } }]), error => error.code === 'actor_metadata_field_forbidden');
+  assert.throws(() => applyWorldOperations(initial, [{ ...update, payload: { ...update.payload, expected: {} } }]), error => error.code === 'field_precondition_required');
+  const parallel = applyWorldOperations(committed.state, [{ type: 'actor.metadata.update', payload: {
+    actorId: 'actor-a', changes: { partyId: 'other-party' }, expected: { partyId: 'party-default' },
+  } }]);
+  assert.equal(parallel.state.preferences.worldV2.actors[0].name, 'renamed');
+});
+
+test('portrait intent compares only the edited image and keeps concurrent runtime data intact', () => {
+  const initial = state(), ruleset = infiniteHorrorRuleset;
+  const document = createDefaultActor({ id: 'actor-a', ruleset });
+  document.system.runtime.customExtension = { consumed: 3 };
+  initial.preferences.worldV2.actors[0] = document;
+  const current = ruleset.actor.portrait.describe(document);
+  const update = { type: 'actor.portrait.update', payload: {
+    actorId: document.id, reference: `asset:${'a'.repeat(64)}`,
+    expectedReference: current.reference, variantId: current.variantId,
+  } };
+  const next = applyWorldOperations(initial, [update], { ruleset }).state;
+  const saved = next.preferences.worldV2.actors[0];
+  assert.equal(saved.img, update.payload.reference);
+  assert.deepEqual(saved.system.runtime, document.system.runtime);
+  assert.deepEqual(saved.effects, document.effects);
+  assert.deepEqual(next.preferences.worldV2.scenes, initial.preferences.worldV2.scenes);
+  assert.throws(() => applyWorldOperations(next, [update], { ruleset }), { code: 'document_field_conflict' });
+  assert.throws(() => applyWorldOperations(initial, [{ ...update, payload: { ...update.payload, variantId: 'another-variant' } }], { ruleset }), { code: 'document_field_conflict' });
+  assert.throws(() => applyWorldOperations(initial, [{ ...update, payload: { ...update.payload, reference: 'https://invalid.example/image.png' } }], { ruleset }), { code: 'invalid_content_reference' });
+});
+
+test('minimal Rulesets use the Core portrait contract without any variant or health paths', () => {
+  const initial = state();
+  const ruleset = prepareRuleset({ id: 'portrait-test', version: '1', title: 'Portrait Test', actor: {} });
+  const next = applyWorldOperations(initial, [{ type: 'actor.portrait.update', payload: {
+    actorId: 'actor-a', reference: `asset:${'b'.repeat(64)}`, expectedReference: null, variantId: null,
+  } }], { ruleset }).state;
+  assert.equal(next.preferences.worldV2.actors[0].img, `asset:${'b'.repeat(64)}`);
+  assert.deepEqual(next.preferences.worldV2.actors[0].system, initial.preferences.worldV2.actors[0].system);
+});
+
+test('Public profile compare-and-set protects dirty fields without conflicting with unrelated fields', () => {
+  const initial = state();
+  const actor = initial.preferences.worldV2.actors[0];
+  actor.publicProfile = { summary: 'before', appearance: 'remote', knownFacts: [], visibleStatusDefinitionIds: [] };
+  const operation = { type: 'actor.publicProfile.update', payload: {
+    actorId: actor.id, publicProfile: { summary: 'after' }, expected: { summary: 'before' },
+  } };
+  const committed = applyWorldOperations(initial, [operation]);
+  assert.equal(committed.state.preferences.worldV2.actors[0].publicProfile.appearance, 'remote');
+  assert.throws(() => applyWorldOperations(committed.state, [operation]), error => error.code === 'document_field_conflict');
 });
 
 test('atomic operations update Actor, Token, Scene and Combat through one reducer', () => {

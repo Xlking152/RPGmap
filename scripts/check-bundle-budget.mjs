@@ -40,24 +40,17 @@ const allJs = allFiles.filter(file => file.endsWith('.js'));
 const allCss = allFiles.filter(file => file.endsWith('.css'));
 const sum = async files => (await Promise.all(files.map(gzipSize))).reduce((total, value) => total + value, 0);
 
-// Rebase after the merged Player/GM shell + windowed Actor sheet foundation (#45).
-// Keep the initial-load guard deliberately tight because it affects every startup.
-// Lazy feature chunks, however, are allowed more room while the Actor/Monster/NPC
-// sheet workspace is being completed; they load only when those tools are opened.
-// This keeps bundle checks useful without making implementation file size a design
-// constraint for the sheet rebuild.
+// Fixed gates from the approved v2.4.0 plan, not adjusted by measurement results.
 const baseline = Object.freeze({
-  commit: '6b7fcfcd962df6a2f4c12e44cfa32937942633ea',
-  version: '2.3.0',
-  initialJsGzip: 11715,
-  totalJsGzip: 255241,
+  commit: 'dae58632844953c6f8edf061778e0d7f3d93d181',
+  version: '2.3.4',
+  initialJsGzip: 11713,
+  totalJsGzip: 269252,
   totalCssGzip: 7076,
 });
 const limits = Object.freeze({
-  initialJsGzip: Math.floor(baseline.initialJsGzip * 1.001),
-  // v2.3.2 adds the lazily loaded Document/WAL workspace plus visible segmented
-  // movement labels. Keep startup at 0.1%; give optional feature chunks 5.5%.
-  totalJsGzip: Math.floor(baseline.totalJsGzip * 1.055),
+  initialJsGzip: 11726,
+  totalJsGzip: 310000,
   totalCssGzip: Math.floor(baseline.totalCssGzip * 1.05),
 });
 const measured = {

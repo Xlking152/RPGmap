@@ -94,7 +94,7 @@ export function createAppShellUiV2() {
       const currentPanel = api.uiPanels?.get?.('current');
       const importInput = documentNode.createElement('input');
       importInput.type = 'file';
-      importInput.accept = 'application/json,.json';
+      importInput.accept = 'application/json,.json,application/zip,.zip';
       importInput.className = 'ui-file-input';
       shell.append(importInput);
 
@@ -149,7 +149,10 @@ export function createAppShellUiV2() {
       let importButton = null;
       if (toolbarRight) {
         toolbarRight.replaceChildren();
-        exportButton = button(documentNode, '导出', () => api.downloadState?.());
+        exportButton = button(documentNode, '导出', async () => {
+          try { await api.downloadState?.(); }
+          catch (error) { api.showToast?.(`导出失败：${error.message}`, 'error'); }
+        });
         importButton = button(documentNode, '导入', () => importInput.click());
         toolbarRight.append(exportButton, importButton, button(documentNode, '回到底图', () => api.resetView?.()));
       }
@@ -168,7 +171,6 @@ export function createAppShellUiV2() {
 
       function renderCurrent() {
         if (!currentPanel) return;
-        currentPanel.replaceChildren();
         const player = playerShell();
         const tokenId = api.selection.getPrimaryTokenId?.();
         const token = tokenId ? api.tokens.get(tokenId) : null;
@@ -178,18 +180,19 @@ export function createAppShellUiV2() {
           empty.textContent = player
             ? '选择 Token 查看信息；顶部可打开自己的角色卡。'
             : '选择 Token 后，这里会显示实例信息与快捷操作。';
-          currentPanel.append(empty);
+          currentPanel.replaceChildren(empty);
           return;
         }
         const view = actorView(api, token);
         const card = documentNode.createElement('div');
         card.className = 'ui-current-card';
+        card.dataset.tokenId = token.id;
         const head = documentNode.createElement('div');
         head.className = 'ui-current-head';
         const avatar = documentNode.createElement('span');
         avatar.className = 'ui-token-avatar';
         avatar.style.background = view.color;
-        if (view.avatar) avatar.innerHTML = `<img src="${escapeHtml(view.avatar)}" alt="">`;
+        if (view.avatar) avatar.innerHTML = `<img ${contentImageAttributes(view.avatar, escapeHtml)} alt="">`;
         else avatar.textContent = (Array.from(view.name.trim())[0] || '?').toUpperCase();
         const title = documentNode.createElement('div');
         const strong = documentNode.createElement('strong'); strong.textContent = view.name;
@@ -223,7 +226,13 @@ export function createAppShellUiV2() {
         if (canControl) actions.append(button(documentNode, '高度', event => api.elevation?.openTokenElevationEditor?.(token.id, event), 'small-button'));
         if (view.actor?.id) actions.append(button(documentNode, view.actor.audienceRestricted ? '公开摘要' : '角色卡', () => api.entities?.openToken?.(token.id), 'small-button'));
         card.append(actions);
-        currentPanel.append(card);
+        const existing = currentPanel.querySelector('.ui-current-card');
+        if (!existing || existing.dataset.tokenId !== String(token.id)) currentPanel.replaceChildren(card);
+        else for (const part of [...card.children]) {
+          const current = [...existing.children].find(node => node.className === part.className);
+          if (!current) existing.append(part);
+          else if (current.outerHTML !== part.outerHTML) current.replaceWith(part);
+        }
       }
 
       function applySessionShell() {
@@ -237,10 +246,24 @@ export function createAppShellUiV2() {
       }
 
       const off = [];
-      const selectionOff = api.selection.subscribe?.(renderCurrent);
+      let summaryFrame = null;
+      const windowNode = documentNode.defaultView || globalThis;
+      function scheduleCurrent(event) {
+        const detail = event?.detail || {};
+        const tokenIds = [detail.tokenId, detail.id, ...(detail.tokenIds || [])].filter(Boolean).map(String);
+        const actorIds = [detail.actorId, ...(detail.actorIds || [])].filter(Boolean).map(String);
+        const primaryId = api.selection.getPrimaryTokenId?.();
+        if (primaryId && (tokenIds.length || actorIds.length)) {
+          const token = api.tokens.get(primaryId);
+          if (!tokenIds.includes(String(primaryId)) && !actorIds.includes(String(token?.actorId))) return;
+        }
+        if (summaryFrame !== null) return;
+        summaryFrame = windowNode.requestAnimationFrame(() => { summaryFrame = null; renderCurrent(); });
+      }
+      const selectionOff = api.selection.subscribe?.(scheduleCurrent);
       if (selectionOff) off.push(selectionOff);
       for (const eventName of ['token:create', 'token:delete', 'token:move', 'token:property-change', 'elevation:token-change', 'actor:change', 'health:change', 'status:change', 'state:import']) {
-        off.push(api.on?.(eventName, renderCurrent));
+        off.push(api.on?.(eventName, scheduleCurrent));
       }
       off.push(api.on?.('multiplayer:capabilities', applySessionShell));
       off.push(api.on?.('tool:change', event => {
@@ -248,6 +271,7 @@ export function createAppShellUiV2() {
         toolbar?.querySelectorAll('[data-main-tool]').forEach(node => node.classList.toggle('active', node.dataset.mainTool === tool));
       }));
       off.push(api.on?.('app:destroy', () => {
+        if (summaryFrame !== null) windowNode.cancelAnimationFrame(summaryFrame);
         off.splice(0).forEach(dispose => dispose?.());
         importInput.remove();
       }));
@@ -259,3 +283,4 @@ export function createAppShellUiV2() {
     },
   });
 }
+import { contentImageAttributes } from '../content/references.js';

@@ -72,7 +72,7 @@ function renderSize(api, model) {
 export function tokenIcon(api, model) {
   const size = renderSize(api, model);
   const portrait = model.avatarDataUrl
-    ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="" draggable="false">`
+    ? `<img ${contentImageAttributes(model.avatarDataUrl, escapeHtml)} alt="" draggable="false">`
     : `<span>${escapeHtml((Array.from(model.name)[0] || '?').toUpperCase())}</span>`;
   const flags = model.gmViewer ? [
     ...(model.gmOnly ? ['<span class="rpg-token-v2-flag gm-only">GM 专属</span>'] : []),
@@ -235,7 +235,7 @@ export function createTokenRendererSystem() {
           return;
         }
         const portrait = model.avatarDataUrl
-          ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="" draggable="false">`
+          ? `<img ${contentImageAttributes(model.avatarDataUrl, escapeHtml)} alt="" draggable="false">`
           : escapeHtml((Array.from(model.name)[0] || '?').toUpperCase());
         let healthText = '';
         if (!model.audienceRestricted) {
@@ -400,6 +400,8 @@ export function createTokenRendererSystem() {
       function renderEventTokens(event) {
         const detail = event?.detail || {};
         const address = detail.document || {};
+        if (address.type && !['Actor', 'Token', 'StatusDefinition'].includes(address.type)) return;
+        if (address.type === 'Token' && address.parent?.id !== String(api.world?.get?.()?.activeSceneId || '')) return;
         const ids = new Set([
           detail.tokenId, detail.id, ...(detail.tokenIds || []),
           address.type === 'Token' ? address.id : null,
@@ -411,6 +413,7 @@ export function createTokenRendererSystem() {
         if (actorIds.size) {
           for (const token of api.tokens.list()) if (actorIds.has(String(token.actorId))) ids.add(String(token.id));
         }
+        if (!ids.size && actorIds.size) return;
         if (!ids.size) pendingFullRender = true;
         else for (const id of ids) pendingRenderIds.add(id);
         if (eventRenderFrame === null) eventRenderFrame = requestFrame(flushEventRender);
@@ -501,3 +504,4 @@ export function createTokenRendererSystem() {
     },
   });
 }
+import { contentImageAttributes } from '../content/references.js';

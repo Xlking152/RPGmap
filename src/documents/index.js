@@ -3,30 +3,18 @@ import {
   documentWritesToWorldOperations,
   normalizeDocumentWrite,
 } from './protocol.js';
+import { applyDocumentValue, documentEntries, documentKey } from './changes.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
 }
 
 function key(address) {
-  const parent = address?.parent ? `${address.parent.type}:${address.parent.id}/` : '';
-  return `${parent}${address?.type || ''}:${address?.id || ''}`;
+  return documentKey(address);
 }
 
 function currentDocuments(api) {
-  const world = api.world?.get?.() || {};
-  const values = [];
-  for (const actor of world.actors || []) values.push([{ type: 'Actor', id: String(actor.id), parent: null }, actor]);
-  for (const scene of world.scenes || []) {
-    values.push([{ type: 'Scene', id: String(scene.id), parent: null }, scene]);
-    values.push([{ type: 'Fog', id: String(scene.id), parent: { type: 'Scene', id: String(scene.id) } }, scene.fog || null]);
-    for (const token of scene.tokens || []) values.push([{ type: 'Token', id: String(token.id), parent: { type: 'Scene', id: String(scene.id) } }, token]);
-  }
-  for (const message of api.getState?.()?.preferences?.chatSystem?.messages || []) {
-    values.push([{ type: 'ChatMessage', id: String(message.id), parent: null }, message]);
-  }
-  values.push([{ type: 'Combat', id: 'active', parent: null }, api.getState?.()?.preferences?.combatSystem || null]);
-  return values;
+  return documentEntries(api.getState?.() || { preferences: { worldV2: api.world.get() } });
 }
 
 export function createDocumentBackendSystem() {
@@ -45,14 +33,7 @@ export function createDocumentBackendSystem() {
         if (!address?.type || !address?.id) return;
         const addressKey = key(address);
         if (change.action === 'delete') collection.delete(addressKey);
-        else if (change.action === 'create' || change.action === 'append' || !collection.has(addressKey)) {
-          collection.set(addressKey, clone(change.changed));
-        } else {
-          const previous = collection.get(addressKey);
-          collection.set(addressKey, previous && typeof previous === 'object' && !Array.isArray(previous)
-            ? { ...clone(previous), ...clone(change.changed || {}) }
-            : clone(change.changed));
-        }
+        else collection.set(addressKey, applyDocumentValue(collection.get(addressKey), change));
       }
 
       function emitChanges(changes, { revision = null, operationId = null } = {}) {
@@ -62,7 +43,9 @@ export function createDocumentBackendSystem() {
           const action = change.action === 'append' ? 'update' : change.action;
           api.emit?.(`document:${action}`, {
             document: clone(change.document),
+            action: change.action,
             changed: clone(change.changed),
+            removed: clone(change.removed || []),
             revision,
             operationId,
           });
@@ -89,18 +72,13 @@ export function createDocumentBackendSystem() {
           kind: 'document',
           requestedOperationId,
         });
-        rebuild();
-        emitChanges(writes.map(write => ({
-          action: write.action,
-          document: write.document,
-          changed: collection.get(key(write.document)) ?? null,
-        })), { operationId: result?.operationId || requestedOperationId });
         return result;
       }
 
       rebuild();
       api.documents = Object.freeze({
         schemaVersion: DOCUMENT_OPERATION_SCHEMA_VERSION,
+        get(address) { return clone(collection.get(key(address))); },
         dispatch(write, options = {}) { return dispatchBatch([write], options); },
         dispatchBatch,
         applyCommitted(changes, metadata = {}) {
@@ -108,7 +86,9 @@ export function createDocumentBackendSystem() {
         },
       });
       api.on?.('state:import', rebuild);
-      api.on?.('scene:activate', rebuild);
+      api.on?.('scene:activate', event => {
+        if (!String(event.detail?.source || '').startsWith('document.')) rebuild();
+      });
     },
   });
 }

@@ -1,12 +1,13 @@
 import { isLocalHost, multiplayerSocketUrl, normalizeRequestedRole, sanitizeMultiplayerName } from './protocol.js';
 import { canControlActor, validateLocalPlayerChange } from './permissions.js';
 import {
-  applyWorldOperationPatch,
   deriveWorldOperations,
   WORLD_OPERATION_SCHEMA_VERSION,
 } from '../world/operations.js';
+import { applyDocumentChanges } from '../documents/changes.js';
+import { worldOperationsToDocumentWrites } from '../documents/protocol.js';
 import { STATUS_SCHEMA_VERSION } from '../status/model.js';
-import { ACCESS_SCHEMA_VERSION } from '../permissions/model.js';
+import { ACCESS_SCHEMA_VERSION, canPlaceActorTemplate } from '../permissions/model.js';
 import { escapeMultiplayerHtml as escapeHtml } from './access-ui.js';
 import { createMultiplayerSessionStorage } from './session.js';
 import { createOperationId, parseTransportMessage, sendTransportMessage } from './transport.js';
@@ -98,6 +99,7 @@ export function createMultiplayerController() {
       let pendingVisionSource = null;
       let activeVisionSourceTokenId = null;
       let session = null;
+      let contentToken = null;
       let permissions = { worldWrite: false, worldReset: false, manageAccess: false, combatManage: false, actorOwnerIds: [], actorObserverIds: [], actorLimitedIds: [], defaultActorId: null, placementGrants: { actorTypes: [], actorIds: [], markerKinds: [] } };
       let clients = [];
       let access = { revision: 0, users: [], pending: [], actors: [], canManage: false, selfUserId: null };
@@ -467,7 +469,7 @@ export function createMultiplayerController() {
             if (gm) return true;
             const grants = permissions.placementGrants || {};
             const actor = api.world?.get?.()?.actors?.find(item => String(item?.id) === String(actorId));
-            return Boolean(grants.actorIds?.includes(String(actorId)) || grants.actorTypes?.includes(String(actor?.type || '')));
+            return canPlaceActorTemplate(actor, grants);
           },
           canPlaceMarker: kind => gm || permissions.placementGrants?.markerKinds?.includes(String(kind)),
         };
@@ -631,6 +633,9 @@ export function createMultiplayerController() {
         if (!send(message)) {
           activeOperation = null;
           operationQueue.unshift(operation);
+        } else if (api.diagnostics?.enabled) {
+          api.diagnostics.begin('network.confirm', operation.operationId);
+          api.diagnostics.record('network.requestBytes', new TextEncoder().encode(JSON.stringify(message)).byteLength);
         }
       }
 
@@ -639,10 +644,16 @@ export function createMultiplayerController() {
         const values = Array.isArray(operations) ? structuredClone(operations) : [];
         if (!values.length) return Promise.resolve({ unchanged: true, revision, results: [] });
         const id = String(requestedOperationId || operationId(kind === 'status' ? 'status' : 'operation'));
+        const world = (lastServerState || api.getState())?.preferences?.worldV2;
+        let writes;
+        try { writes = worldOperationsToDocumentWrites(values, { worldId: world?.id, sceneId: world?.activeSceneId, operationId: id }); }
+        catch (error) { return Promise.reject(error); }
         return new Promise((resolve, reject) => {
           operationQueue.push({
             operationId: id,
             operations: values,
+            writes,
+            documentBatch: true,
             kind,
             resolve,
             reject,
@@ -864,6 +875,7 @@ export function createMultiplayerController() {
           clearReconnectTimer();
           if (message.resumeAccepted !== true) reconnectAttempt = 0;
           session = message.session || null;
+          contentToken = typeof message.contentToken === 'string' ? message.contentToken : null;
           permissions = message.permissions || permissions;
           publishCapabilities();
           if (message.resumeAccepted !== true) revision = Number(message.world?.revision) || 0;
@@ -1006,6 +1018,7 @@ export function createMultiplayerController() {
         }
 
         if (message.type === 'world.operation.committed' || message.type === 'document.batch.committed') {
+          if (api.diagnostics?.enabled) api.diagnostics.record('network.responseBytes', new TextEncoder().encode(JSON.stringify(message)).byteLength);
           const documentBatch = message.type === 'document.batch.committed';
           const incomingRevision = Number(message.revision);
           if (hasWorldOperationRevisionGap(message, revision)) {
@@ -1016,13 +1029,11 @@ export function createMultiplayerController() {
             return;
           }
           let canonicalState;
-          let localState;
           try {
             for (const motion of documentBatch && Array.isArray(message.motion) ? message.motion : []) {
               api.renderer?.prepareTokenVisualRoute?.(motion.tokenId, motion.waypoints || []);
             }
-            canonicalState = applyWorldOperationPatch(lastServerState || api.exportState(), message.patch, { mutate: Boolean(lastServerState) });
-            localState = documentBatch ? null : applyWorldOperationPatch(api.exportState(), message.patch);
+            canonicalState = applyDocumentChanges(lastServerState || api.exportState(), message.changes, { updatedAt: message.updatedAt });
           } catch (cause) {
             const error = new Error(`无法应用服务器操作补丁：${cause.message}`);
             error.code = cause.code || 'world_operation_patch_invalid';
@@ -1033,11 +1044,17 @@ export function createMultiplayerController() {
           const matchesActive = activeOperation
             && String(message.operationId || '') === String(activeOperation.operationId);
           const expectedOperationId = matchesActive ? activeOperation.operationId : null;
-          const applyPromise = documentBatch
-            ? Promise.resolve().then(() => {
-                api.applyAuthoritativeDocumentPatch(message.patch, {
-                  source: 'document.batch', revision: incomingRevision, changeSet: message.changeSet || {},
+          const applyPromise = Promise.resolve().then(() => {
+                const nextWorld = canonicalState.preferences.worldV2;
+                const nextScene = nextWorld.scenes.find(scene => scene.id === nextWorld.activeSceneId);
+                if (nextScene?.mapPackage?.id && nextScene.mapPackage.id !== String(api.mapPackage?.id || api.mapPackage?.mapId || '')) {
+                  return applyRemoteState(canonicalState, incomingRevision, 'scene.map-package');
+                }
+                const started = api.diagnostics?.enabled ? windowNode.performance.now() : null;
+                api.applyAuthoritativeDocumentChanges(message.changes, {
+                  source: 'document.batch', revision: incomingRevision, updatedAt: message.updatedAt, operationId: message.operationId,
                 });
+                if (started !== null) api.diagnostics.record('documents.apply', windowNode.performance.now() - started);
                 revision = incomingRevision;
                 lastServerState = canonicalState;
                 lastObservedLocalState = null;
@@ -1045,8 +1062,7 @@ export function createMultiplayerController() {
               }).catch(error => {
                 console.error('[RPGmap Multiplayer] authoritative Document patch apply failed', error);
                 return false;
-              })
-            : applyAuthoritativeOperationState(localState, incomingRevision, message.changeSet, canonicalState);
+              });
           applyPromise.then(applied => {
             if (!applied) {
               const error = new Error('服务器已经保存操作，但客户端无法载入操作补丁');
@@ -1055,16 +1071,11 @@ export function createMultiplayerController() {
               send({ type: 'world.snapshot.request' });
               return;
             }
-            if (documentBatch) api.documents?.applyCommitted?.(message.changes || [], {
-              revision: incomingRevision,
-              operationId: message.operationId,
-              source: 'document.batch.committed',
-            });
             if (expectedOperationId && activeOperation
               && String(activeOperation.operationId) === String(expectedOperationId)) {
               activeOperation.patchApplied = true;
               activeOperation.revision = incomingRevision;
-              activeOperation.results = Array.isArray(message.results) ? structuredClone(message.results) : [];
+              if (Array.isArray(message.results)) activeOperation.results = structuredClone(message.results);
               maybeFinishOperation();
             } else {
               flushPendingNetworkWork();
@@ -1074,6 +1085,7 @@ export function createMultiplayerController() {
         }
 
         if (message.type === 'world.operation.ack' || message.type === 'document.batch.ack') {
+          api.diagnostics?.end('network.confirm', message.operationId);
           if (!activeOperation || String(message.operationId || '') !== String(activeOperation.operationId)) return;
           activeOperation.acknowledged = true;
           activeOperation.revision = Number(message.revision) || revision;
@@ -1087,6 +1099,7 @@ export function createMultiplayerController() {
         }
 
         if (message.type === 'world.operation.denied' || message.type === 'document.batch.denied') {
+          api.diagnostics?.end('network.confirm', message.operationId);
           if (!activeOperation || String(message.operationId || '') !== String(activeOperation.operationId)) return;
           const error = new Error(message.message || '服务器拒绝了 World 操作');
           error.code = message.code || 'world_operation_denied';
@@ -1434,6 +1447,20 @@ export function createMultiplayerController() {
       });
 
       api.multiplayer = {
+        async fetchContent(path = '', options = {}) {
+          if (!connected || !contentToken || session?.identityStatus !== 'active') throw new Error('identity_required');
+          if (!/^\/?(?:[a-f0-9]{64}(?:\/references)?)?$/.test(path)) throw new Error('invalid_content_path');
+          const headers = new Headers(options.headers);
+          headers.set('Authorization', `Bearer ${contentToken}`);
+          const response = await windowNode.fetch(`/api/content${path.startsWith('/') || !path ? path : `/${path}`}`, {
+            ...options, headers, cache: 'no-store', credentials: 'omit', redirect: 'error',
+          });
+          if (!response.ok) {
+            const value = await response.json().catch(() => ({}));
+            throw Object.assign(new Error(value.error || 'content_request_failed'), { code: value.error, status: response.status });
+          }
+          return response;
+        },
         connect,
         disconnect,
         requestWorld: () => send({ type: 'world.snapshot.request' }),

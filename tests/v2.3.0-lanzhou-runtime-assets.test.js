@@ -31,10 +31,11 @@ test('production Lanzhou package loads generated data and SVG as local runtime a
   assert.equal(new Set(placeholders).size, 28);
 });
 
-test('LAN operation broadcasts derive audience change sets from cropped patches', async () => {
+test('LAN operation broadcasts carry one changes representation from audience projections', async () => {
   const server = await read('deployment/local-server/server.mjs');
-  assert.match(server, /audienceChangeSetFromPatch/);
-  assert.match(server, /changeSet:\s*audienceChangeSetFromPatch\(patch, afterProjection, changeSet\)/);
+  const broadcast = server.slice(server.indexOf('function broadcastOperationCommit('), server.indexOf('function sendAudienceSnapshot('));
+  assert.match(broadcast, /changes:\s*createDocumentChanges\(beforeProjection, afterProjection/);
+  assert.doesNotMatch(broadcast, /changeSet:\s*audienceChangeSetFromPatch|\n\s*patch,/);
   assert.doesNotMatch(server, /createWorldOperationChangeSet\(beforeProjection, afterProjection\)/);
   assert.match(server, /operation\.type === 'actor\.upsert' \|\| operation\.type === 'actor\.delete'/);
 });

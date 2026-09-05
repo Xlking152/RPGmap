@@ -25,6 +25,7 @@ export function normalizeUserIds(value, { max = 64 } = {}) {
 }
 
 export function defaultTokenVisibility(actor) {
+  if (actor?.organization?.placementRestricted === true) return 'gm';
   if (actor?.type === 'pc') return actor.partyId ? 'party' : 'public';
   if (actor?.type === 'summon' && actor.partyId) return 'party';
   return 'gm';

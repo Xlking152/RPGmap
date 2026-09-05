@@ -69,7 +69,8 @@ function portrait(documentNode, view) {
   node.style.setProperty('--token-color', view.color || '#3d9b63');
   if (view.avatarDataUrl) {
     const image = documentNode.createElement('img');
-    image.src = view.avatarDataUrl;
+    if (contentReference(view.avatarDataUrl)?.kind === 'asset') image.dataset.contentRef = view.avatarDataUrl;
+    else image.src = view.avatarDataUrl;
     image.alt = '';
     node.append(image);
   } else {
@@ -401,3 +402,4 @@ export function createFeatureInteractionSystem() {
     },
   });
 }
+import { contentReference } from '../content/references.js';

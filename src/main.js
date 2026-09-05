@@ -70,21 +70,17 @@ export async function startRpgMap() {
   let worldDescriptor = null;
   let raw = null;
   let worldBootstrap;
-  let ruleset;
   let worldId;
   let worldName;
 
   if (serverRuntime) {
     worldBootstrap = readServerWorldBootstrap(serverBootstrap.world, { defaultRuleset });
+    worldId = worldBootstrap.worldId || serverBootstrap.world?.worldId || 'world-default';
     if (worldBootstrap.kind === 'empty') {
       const choice = await chooseLocalWorld(appContainer, createMemoryStorage(), defaultRuleset);
       worldDescriptor = choice.descriptor;
-      ruleset = resolveBuiltInRulesetReference(worldDescriptor.ruleset);
-      worldId = worldBootstrap.worldId || serverBootstrap.world?.worldId || 'world-default';
       worldName = worldDescriptor.name;
     } else {
-      ruleset = resolveBuiltInRulesetReference(worldBootstrap.ruleset);
-      worldId = worldBootstrap.worldId || serverBootstrap.world?.worldId || 'world-default';
       worldName = worldBootstrap.worldName || 'RPGmap Server World';
     }
   } else {
@@ -93,11 +89,12 @@ export async function startRpgMap() {
     worldDescriptor = choice.descriptor;
     raw = choice.raw;
     worldBootstrap = readWorldBootstrap(raw, { defaultRuleset: worldDescriptor.ruleset });
-    ruleset = resolveBuiltInRulesetReference(worldBootstrap.ruleset);
     worldId = worldDescriptor.id;
     worldName = worldBootstrap.worldName || worldDescriptor.name;
   }
 
+  let ruleset = resolveBuiltInRulesetReference(serverRuntime && worldBootstrap.kind === 'empty'
+    ? worldDescriptor.ruleset : worldBootstrap.ruleset);
   const mapReference = worldBootstrap.mapPackage
     || worldDescriptor?.mapPackage
     || defaultMapReference();
@@ -113,7 +110,6 @@ export async function startRpgMap() {
     raw,
     ruleset,
     serverRuntime,
-    worldDescriptor,
     worldId,
     worldManager,
     worldName,
