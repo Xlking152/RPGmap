@@ -871,8 +871,26 @@ function connectionIsClear(connector, blockers) {
     });
 }
 
-export function deriveFloodRegions(scene, liquidBodies = [], features = [], rules = {}) {
+export function deriveFloodRegions(scene, liquidBodies = [], features = [], rules = {}, metersPerUnit = 1) {
     if (!scene) return [];
+    const scale = Number(metersPerUnit);
+    if (!Number.isFinite(scale) || scale <= 0) throw new Error('flood map scale must be positive and finite');
+    if (scale !== 1) {
+        // Evaluate distances, widths and numeric tolerances in meters; only
+        // derived render geometry is converted back to map coordinates.
+        const polygonInMeters = polygon => polygon.map(point => tuple(point).map(value => value * scale));
+        const mapRegions = regions => (regions || []).map(region => ({ ...region, polygon: polygonInMeters(region.polygon) }));
+        const metricFeatures = features.map(feature => {
+            try { return { ...feature, geometry: { type: 'polygon', points: polygonInMeters(featureToPolygon(feature)) } }; }
+            catch { return feature; }
+        });
+        return deriveFloodRegions({
+            ...scene, clipHits: mapRegions(scene.clipHits), craterRegions: mapRegions(scene.craterRegions),
+        }, mapRegions(liquidBodies), metricFeatures, rules).map(region => ({
+            ...region, polygon: region.polygon.map(point => tuple(point).map(value => value / scale)),
+            ...(region.flowLine ? { flowLine: region.flowLine.map(point => tuple(point).map(value => value / scale)) } : {}),
+        }));
+    }
     const maxGap = Number(rules.maxInflowGapMeters ?? 12);
     const inletWidth = Number(rules.inletWidthMeters ?? 6);
     const propagationGap = Number(rules.propagationGapMeters ?? 1);
@@ -988,8 +1006,8 @@ export function deriveFloodRegions(scene, liquidBodies = [], features = [], rule
     return regions;
 }
 
-export function deriveFloodPolygons(scene, liquidBodies = [], features = [], rules = {}) {
-    return deriveFloodRegions(scene, liquidBodies, features, rules).map((region) => region.polygon);
+export function deriveFloodPolygons(scene, liquidBodies = [], features = [], rules = {}, metersPerUnit = 1) {
+    return deriveFloodRegions(scene, liquidBodies, features, rules, metersPerUnit).map((region) => region.polygon);
 }
 
 function flattenMultiPolygonRings(multi) {

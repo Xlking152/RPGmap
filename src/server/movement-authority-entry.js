@@ -6,7 +6,7 @@ import {
 import { deriveSceneState } from '../engine/state.js';
 import { tokenDiameterMeters, tokenElevationFt } from '../elevation/model.js';
 import { createMinimalReferencePackage } from '../../reference/maps/minimal/package.js';
-import { lanzhouMapPackage } from '../../reference/maps/lanzhou/package.js';
+import lanzhouMapPackage from '../../reference/maps/lanzhou/runtime.json' with { type: 'json' };
 
 const packages = new Map([
   [String(lanzhouMapPackage.id), lanzhouMapPackage],

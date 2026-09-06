@@ -135,7 +135,7 @@ test('direct inspection returns the first blocking tag cell and honours Token di
   assert.equal(wide.valid, false, 'wide Token must be stopped even when its centre line clears the blocker');
 });
 
-test('generic openable Feature changes collision and direct movement without gate/building category rules', () => {
+test('generic openable Feature changes only its own collision without gate/building category rules', () => {
   const barrier = {
     id: 'generic-barrier',
     category: 'mechanism',
@@ -170,8 +170,11 @@ test('generic openable Feature changes collision and direct movement without gat
 
   recordFeatureInteractionEffects(door, { open: true });
   const opened = createNavigationGrid(mapPackage, deriveSceneState([]), base);
-  assert.equal(opened.tileAt({ x: 45, y: 25 }), NAVIGATION_TILES.open);
-  assert.ok(findDirectNavigationPath(opened, { x: 5, y: 25 }, { x: 95, y: 25 }));
+  assert.equal(opened.tileAt({ x: 45, y: 25 }), NAVIGATION_TILES.blocked, 'opening a door does not erase the separate barrier');
+  assert.equal(findDirectNavigationPath(opened, { x: 5, y: 25 }, { x: 95, y: 25 }), null);
+  const doorOnly = createNavigationGrid({ ...mapPackage, features: [door] }, deriveSceneState([]));
+  assert.equal(doorOnly.tileAt({ x: 45, y: 25 }), NAVIGATION_TILES.open);
+  assert.ok(findDirectNavigationPath(doorOnly, { x: 5, y: 25 }, { x: 95, y: 25 }));
 });
 
 test('structure bypass ignores only structure Features and still respects water', () => {
@@ -330,5 +333,6 @@ test('Lanzhou yamen walls seal the compound while the existing gate controls its
     }],
   }]);
   const breached = createNavigationGrid(mapPackage, breachedScene, base);
-  assert.notEqual(breached.tileAt({ x: 2470, y: 2500 }), NAVIGATION_TILES.blocked);
+  assert.equal(breached.tileAt({ x: 2470, y: 2500 }), NAVIGATION_TILES.blocked, 'the overlapping workshop still blocks the wall breach');
+  assert.notEqual(breached.tileAt({ x: 2470, y: 2524 }), NAVIGATION_TILES.blocked, 'a breached wall-only cell becomes passable');
 });

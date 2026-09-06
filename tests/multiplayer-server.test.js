@@ -14,6 +14,7 @@ import { applyDocumentChanges } from '../src/documents/changes.js';
 import { STATUS_SCHEMA_VERSION } from '../src/status/model.js';
 import { ACCESS_SCHEMA_VERSION } from '../src/permissions/model.js';
 import { createWorldWal } from '../deployment/local-server/world-wal.mjs';
+import { BUILT_IN_LANZHOU_MAP } from '../src/map-package/constants.js';
 
 const WEBSOCKET_WAIT_TIMEOUT_MS = 15_000;
 
@@ -493,6 +494,66 @@ async function requestWorldSnapshot(ws, reason = 'request') {
   ws.send(JSON.stringify({ type: 'world.snapshot.request' }));
   return snapshotPromise;
 }
+
+test('LAN validates closed gates and rolls back an entire group when one route hits a separate wall', async () => {
+  const runtime = await startServer();
+  let gm, player;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Navigation GM', requestedRole: 'gm' });
+    const state = initialWorldV2();
+    const scene = state.preferences.worldV2.scenes[0];
+    scene.mapPackage = { id: BUILT_IN_LANZHOU_MAP.id, version: BUILT_IN_LANZHOU_MAP.version, width: 6000, height: 5000 };
+    scene.tokens[0].x = 3364;
+    scene.tokens[1].x = 3420;
+    for (const token of scene.tokens) token.y = 1470;
+    state.mapId = BUILT_IN_LANZHOU_MAP.id;
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' }));
+    await initialized;
+    const claimed = waitForMessage(gm.ws, message => message.type === 'access.claim');
+    gm.ws.send(JSON.stringify({
+      type: 'access.user.create', name: 'Navigation Player', defaultActorId: 'actor-a',
+      ownership: { 'actor-a': 'owner', 'actor-b': 'owner' },
+    }));
+    player = await openAndHello(runtime.url, { name: 'Navigation Player', requestedRole: 'player', claimCode: (await claimed).claimCode });
+    const move = (operationId, baseRevision, tokenIds = ['token-a']) => ({
+      type: 'world.operation', operationId, baseRevision, operations: [{
+        type: 'token.movePath', payload: {
+          sceneId: 'scene-test', tokenId: 'token-a', tokenIds, method: 'drag',
+          waypoints: [{ x: 3364, y: 1630 }],
+          expectedOrigins: { 'token-a': { x: 3364, y: 1470 }, 'token-b': { x: 3420, y: 1470 } },
+        },
+      }],
+    });
+    const reject = async message => {
+      const pending = waitForMessage(player.ws, reply => reply.type === 'world.operation.denied' && reply.operationId === message.operationId);
+      player.ws.send(JSON.stringify(message));
+      const denied = await pending;
+      assert.equal(denied.code, 'path_blocked');
+      assert.equal(denied.revision, message.baseRevision);
+      assert.equal(denied.state, undefined);
+      assert.equal(denied.world, undefined);
+    };
+    await reject(move('closed-gate-route', 1));
+    await sendWorldOperationsAndWait(gm.ws, {
+      type: 'world.operation', operationId: 'open-navigation-gate', baseRevision: 1,
+      operations: [{ type: 'scene.featureState.patch', payload: { sceneId: scene.id, featureId: 'gate-north', patch: { open: true } } }],
+    });
+    await reject(move('group-separate-wall', 2, ['token-a', 'token-b']));
+    const unchanged = await requestWorldSnapshot(gm.ws);
+    assert.equal(unchanged.revision, 2);
+    assert.deepEqual(unchanged.state.preferences.worldV2.scenes[0].tokens.map(token => [token.x, token.y]), [[3364, 1470], [3420, 1470]]);
+    const passed = await sendWorldOperationsAndWait(player.ws, move('open-gate-route', 2));
+    assert.equal(passed.ack.revision, 3);
+    const final = await requestWorldSnapshot(gm.ws);
+    assert.deepEqual(final.state.preferences.worldV2.scenes[0].tokens.map(token => [token.x, token.y]), [[3364, 1630], [3420, 1470]]);
+    const wal = await waitForWalRecord(path.join(runtime.mapDir, 'world.operations.ndjson'), record => record.revision === 3);
+    assert.equal(wal.operationId, 'open-gate-route');
+  } finally {
+    gm?.ws.close(); player?.ws.close();
+    await stopServer(runtime);
+  }
+});
 
 test('LAN library commits remain private, reject Player writes and replay indexes with their durable bodies', async () => {
   let runtime = await startServer(), gm, player;
