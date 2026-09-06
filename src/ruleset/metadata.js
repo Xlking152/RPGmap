@@ -7,4 +7,3 @@ const BUILT_IN_RULESETS = Object.freeze([Object.freeze({
 export function listBuiltInRulesets() {
   return BUILT_IN_RULESETS.map(item => ({ ...item }));
 }
-

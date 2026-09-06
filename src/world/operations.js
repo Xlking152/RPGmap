@@ -111,6 +111,11 @@ const OPERATION_TYPES = new Set([
 ]);
 
 const STATUS_TYPES = new Set([...OPERATION_TYPES].filter(type => type.startsWith('status.')));
+const COPY_ON_WRITE_TYPES = new Set([
+  'token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch',
+  'scene.door.use', 'scene.featureState.patch', 'scene.activate',
+]);
+const TOKEN_POSITION_TYPES = new Set(['token.move', 'token.reposition']);
 const GRANULAR_OPERATION_TYPES = new Set([
   'token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch', 'scene.door.use', 'scene.featureState.patch', 'scene.activate',
   'scene.fog.explore', 'scene.fog.hide', 'scene.fog.reset',
@@ -121,6 +126,14 @@ const GRANULAR_OPERATION_TYPES = new Set([
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
+}
+
+function cloneProjection(value) {
+  if (Array.isArray(value)) return value.map(cloneProjection);
+  if (!plainObject(value)) return value;
+  const result = {};
+  for (const [key, item] of Object.entries(value)) result[key] = cloneProjection(item);
+  return result;
 }
 
 function plainObject(value) {
@@ -197,8 +210,7 @@ export function markMovementAdjudicationRequired(state, ruleset) {
 }
 
 function cloneOperationInput(rawState, operations) {
-  const copyOnWriteTypes = new Set(['token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch', 'scene.door.use', 'scene.featureState.patch', 'scene.activate']);
-  if (operations.some(operation => !copyOnWriteTypes.has(operation.type) && !STATUS_TYPES.has(operation.type))) return clone(rawState);
+  if (operations.some(operation => !COPY_ON_WRITE_TYPES.has(operation.type) && !STATUS_TYPES.has(operation.type))) return clone(rawState);
   const source = object(rawState, 'state');
   const preferences = { ...object(source.preferences, 'state.preferences') };
   const rawWorld = object(preferences.worldV2, 'state.preferences.worldV2');
@@ -406,11 +418,11 @@ function projectGranularOperationState(state, operations) {
   entity.schemaVersion = STATUS_SCHEMA_VERSION;
   state.preferences.entitySystem = entity;
   if (operations.some(operation => operation.type === 'scene.activate')) {
-    entity.tokens = clone(scene.tokens || []);
-    state.markers = clone(scene.markers || []);
-    state.attackAreas = clone(scene.attackAreas || []);
-    state.sceneEvents = clone(scene.sceneEvents || []);
-    state.preferences.featureStates = clone(scene.featureStates || {});
+    entity.tokens = cloneProjection(scene.tokens || []);
+    state.markers = cloneProjection(scene.markers || []);
+    state.attackAreas = cloneProjection(scene.attackAreas || []);
+    state.sceneEvents = cloneProjection(scene.sceneEvents || []);
+    state.preferences.featureStates = cloneProjection(scene.featureStates || {});
     if (plainObject(scene.settings) && scene.settings.gridVisible !== undefined) {
       state.preferences.gridVisible = scene.settings.gridVisible !== false;
     }
@@ -419,9 +431,13 @@ function projectGranularOperationState(state, operations) {
   }
   for (const operation of operations) {
     const payload = operation.payload || {};
-    if (['token.move', 'token.reposition'].includes(operation.type) && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
-      const token = scene.tokens?.find(item => String(item?.id ?? '') === String(payload.tokenId ?? ''));
-      const index = entity.tokens?.findIndex(item => String(item?.id ?? '') === String(payload.tokenId ?? '')) ?? -1;
+    if (TOKEN_POSITION_TYPES.has(operation.type) && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
+      const tokenId = String(payload.tokenId ?? '');
+      const sceneIndex = scene.tokens?.findIndex(item => String(item?.id ?? '') === tokenId) ?? -1;
+      const token = sceneIndex >= 0 ? scene.tokens[sceneIndex] : null;
+      const index = String(entity.tokens?.[sceneIndex]?.id ?? '') === tokenId
+        ? sceneIndex
+        : (entity.tokens?.findIndex(item => String(item?.id ?? '') === tokenId) ?? -1);
       if (token && index >= 0) entity.tokens[index] = clone(token);
       state.attackAreas = clone(scene.attackAreas || []);
     }
@@ -802,7 +818,7 @@ function applyCanonicalOperation(state, operation, context = {}) {
         fail('Only the GM can reposition Tokens', 'token_reposition_gm_only');
       }
       if (type === 'token.reposition' && payload.placement === 'feature') fail('Reposition requires a map destination', 'invalid_destination');
-      const next = clone(token);
+      const next = { ...token };
       if (payload.placement === 'feature') {
         next.placement = 'feature';
         next.featureId = identifier(payload.featureId, 'featureId');
@@ -965,7 +981,6 @@ function applyCanonicalOperation(state, operation, context = {}) {
     const scene = sceneById(world, payload.sceneId);
     const featureId = identifier(payload.featureId, 'featureId');
     const patch = payload.patch === null ? null : object(payload.patch, 'scene.featureState.patch.patch');
-    assertFeatureStatePatch(patch);
     scene.featureStates = plainObject(scene.featureStates) ? scene.featureStates : {};
     const next = applyFeatureStateMergePatch(scene.featureStates[featureId], patch);
     if (next === null || Object.keys(next).length === 0) delete scene.featureStates[featureId];
@@ -1150,7 +1165,7 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
   else projectGranularOperationState(state, operations);
   return {
     state,
-    operations: clone(operations),
+    operations,
     results,
   };
 }

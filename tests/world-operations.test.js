@@ -97,6 +97,27 @@ test('Scene settings use a bounded granular operation', () => {
   }]), { code: 'scene_setting_forbidden' });
 });
 
+test('Scene activation creates independent read projections without mutating canonical World data', () => {
+  const initial = state();
+  const sceneB = structuredClone(initial.preferences.worldV2.scenes[0]);
+  sceneB.id = 'scene-b';
+  sceneB.name = 'Scene B';
+  sceneB.tokens[0].visibility = { mode: 'public', userIds: [] };
+  sceneB.featureStates = { 'door-b': { open: true, custom: { extension: { keep: true } } } };
+  initial.preferences.worldV2.scenes.push(sceneB);
+
+  const committed = applyWorldOperations(initial, [{
+    type: 'scene.activate', payload: { sceneId: 'scene-b' },
+  }]);
+  const canonical = committed.state.preferences.worldV2.scenes[1];
+  committed.state.preferences.entitySystem.tokens[0].visibility.mode = 'gm';
+  committed.state.preferences.featureStates['door-b'].custom.extension.keep = false;
+
+  assert.equal(canonical.tokens[0].visibility.mode, 'public');
+  assert.equal(canonical.featureStates['door-b'].custom.extension.keep, true);
+  assert.equal(initial.preferences.worldV2.activeSceneId, 'scene-a');
+});
+
 test('Actor metadata writes preserve newer runtime fields and reject stale field preconditions', () => {
   const initial = state();
   initial.preferences.worldV2.actors[0].type = 'pc';

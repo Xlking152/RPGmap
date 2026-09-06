@@ -13,7 +13,6 @@ export function upgradeBuiltInRulesetReference(reference, schemaVersion = null) 
   }
   return Object.freeze(clone(source));
 }
-
 export function upgradeBuiltInMapReference(reference, schemaVersion = null) {
   const source = plainObject(reference) ? reference : {};
   if (Number(schemaVersion) < 4 && source.id === 'northern-song-lanzhou-1104'
@@ -22,4 +21,3 @@ export function upgradeBuiltInMapReference(reference, schemaVersion = null) {
   }
   return Object.freeze(clone(source));
 }
-
