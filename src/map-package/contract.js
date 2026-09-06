@@ -143,6 +143,25 @@ function normalizeNavigationCapability(feature, declared) {
   });
 }
 
+function normalizeVisionCapability(feature, declared, navigation) {
+  const source = declared.vision ?? feature.vision;
+  if (!source || typeof source !== 'object' || source.occluder !== true) return null;
+  return Object.freeze({
+    ...source,
+    occluder: true,
+    blockingHeightMeters: asOptionalNonNegativeNumber(
+      source.blockingHeightMeters ?? navigation?.blockingHeightMeters,
+      'feature vision blockingHeightMeters',
+    ),
+    polygon: normalizeNavigationPolygon(
+      source.polygon ?? navigation?.blockingPolygon ?? feature.geometry?.points,
+      'feature vision polygon',
+    ),
+    passableWhenOpen: source.passableWhenOpen === true,
+    passableWhenDestroyed: source.passableWhenDestroyed !== false,
+  });
+}
+
 function normalizeStatusIdList(value, label) {
   if (value == null) return Object.freeze([]);
   if (!Array.isArray(value) || value.length > 64) {
@@ -247,6 +266,7 @@ function normalizeFeature(feature, index, destructibleCategories) {
     ?? feature.interactive
     ?? Object.values(actions).some(Boolean);
   const navigation = normalizeNavigationCapability(feature, declared);
+  const vision = normalizeVisionCapability(feature, declared, navigation);
   const statusRules = normalizeStatusRulesCapability(declared);
 
   const capabilities = Object.freeze({
@@ -258,6 +278,7 @@ function normalizeFeature(feature, index, destructibleCategories) {
     openable: Boolean(openable),
     actions,
     navigation,
+    vision,
     statusRules,
   });
   return Object.freeze({ ...feature, id, category, capabilities });

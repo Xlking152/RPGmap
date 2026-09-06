@@ -151,10 +151,20 @@ export function createFeatureInteractionSystem() {
       function actionPermission(action, tokenId) {
         const capabilities = api.multiplayer?.getCapabilities?.();
         if (!capabilities || capabilities.connected === false) return { ok: true, reason: '' };
-        if (['damage', 'restore', 'open', 'close'].includes(action)) {
+        if (['damage', 'restore'].includes(action)) {
           return capabilities.canManageStructure === true
             ? { ok: true, reason: '' }
             : { ok: false, reason: '只有 GM 可以修改 Feature 与场景结构' };
+        }
+        if (['open', 'close'].includes(action)) {
+          if (!tokenId) return { ok: false, reason: '请先选择一个受控 Token' };
+          const token = api.tokens.get?.(tokenId);
+          const allowed = token && (api.permissions?.can
+            ? api.permissions.can('token.control', { token, tokenId: token.id })
+            : api.multiplayer?.canControlToken?.(token.id) !== false);
+          return allowed
+            ? { ok: true, reason: '' }
+            : { ok: false, reason: '当前 Token 没有开门权限' };
         }
         if (['enter', 'exit'].includes(action)) {
           if (!tokenId) return { ok: false, reason: '请先选择 Token' };

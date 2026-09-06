@@ -1,5 +1,7 @@
 import { worldToLatLng } from '../engine/geometry.js';
-import { FOG_CELL_SIZE_METERS, normalizeFogState } from './fog.js';
+import { FOG_CELL_SIZE_METERS, normalizeFogState, visibleFogRowsForCircle } from './fog.js';
+import { deriveSceneState } from '../engine/state.js';
+import { deriveVisionOccluders, sphereGroundRadiusMeters } from '../spatial/kernel.js';
 
 const FOG_PANE = 'fogVisionPane';
 
@@ -58,6 +60,7 @@ export function resolveLiveAudienceVision(audience, scene, sourceTokenId = undef
       tokenId,
       x: Number(token.x),
       y: Number(token.y),
+      elevationMeters: Number(token.elevationMeters) || 0,
     },
   };
 }
@@ -93,6 +96,7 @@ export function createVisionFogSystem() {
       let pendingDirtyBounds;
       let lastVisionSignature = '';
       let explorationDirty = true;
+      let visibilityRowsCache = null;
       const off = [];
 
       function removeOverlay() {
@@ -127,9 +131,14 @@ export function createVisionFogSystem() {
         return {
           sceneId: String(scene.id), tokenId: String(token.id),
           x: Number(api.renderer?.getVisualTokenPoint?.(token.id)?.x ?? token.x),
-          y: Number(api.renderer?.getVisualTokenPoint?.(token.id)?.y ?? token.y), rangeMeters: preciseRangeMeters,
+          y: Number(api.renderer?.getVisualTokenPoint?.(token.id)?.y ?? token.y),
+          elevationMeters: Number(token.elevationMeters) || 0,
+          rangeMeters: preciseRangeMeters,
           preciseRangeMeters, vagueRangeMeters,
+          preciseGroundRangeMeters: sphereGroundRadiusMeters(preciseRangeMeters, token.elevationMeters) ?? 0,
+          vagueGroundRangeMeters: sphereGroundRadiusMeters(vagueRangeMeters, token.elevationMeters) ?? 0,
           senses: structuredClone(description.senses || {}), lighting: description.lighting || 'normal',
+          lineOfSightEnabled: scene.settings?.lineOfSightEnabled === true,
           partyId: actor.partyId ? String(actor.partyId) : null,
         };
       }
@@ -141,11 +150,15 @@ export function createVisionFogSystem() {
           schemaVersion: 1,
           source: {
             tokenId: subject.tokenId, x: subject.x, y: subject.y,
+            elevationMeters: subject.elevationMeters,
             rangeMeters: subject.rangeMeters,
             preciseRangeMeters: subject.preciseRangeMeters,
             vagueRangeMeters: subject.vagueRangeMeters,
+            preciseGroundRangeMeters: subject.preciseGroundRangeMeters,
+            vagueGroundRangeMeters: subject.vagueGroundRangeMeters,
             senses: subject.senses,
             lighting: subject.lighting,
+            lineOfSightEnabled: subject.lineOfSightEnabled,
           },
           partyIds: subject.partyId ? [subject.partyId] : [],
           gmPreview: true,
@@ -153,16 +166,18 @@ export function createVisionFogSystem() {
       }
 
       function queueLocalExploration(subject, previous = null) {
-        if (!subject?.partyId || subject.vagueRangeMeters <= 0) return Promise.resolve(null);
+        if (!subject?.partyId || subject.vagueGroundRangeMeters <= 0) return Promise.resolve(null);
         const payload = previous && previous.sceneId === subject.sceneId
           ? {
               sceneId: subject.sceneId, partyId: subject.partyId,
-              from: { x: previous.x, y: previous.y }, to: { x: subject.x, y: subject.y },
-              radiusMeters: subject.vagueRangeMeters,
+              from: { x: previous.x, y: previous.y, elevationMeters: previous.elevationMeters },
+              to: { x: subject.x, y: subject.y, elevationMeters: subject.elevationMeters },
+              radiusMeters: subject.vagueGroundRangeMeters,
             }
           : {
               sceneId: subject.sceneId, partyId: subject.partyId,
-              x: subject.x, y: subject.y, radiusMeters: subject.vagueRangeMeters,
+              x: subject.x, y: subject.y, elevationMeters: subject.elevationMeters,
+              radiusMeters: subject.vagueGroundRangeMeters,
             };
         localExploreChain = localExploreChain.catch(() => null).then(() => api.world.performOperations([
           { type: 'scene.fog.explore', payload },
@@ -211,7 +226,8 @@ export function createVisionFogSystem() {
         const moved = previous
           && previous.tokenId === subject.tokenId
           && previous.sceneId === subject.sceneId
-          && (previous.x !== subject.x || previous.y !== subject.y);
+          && (previous.x !== subject.x || previous.y !== subject.y
+            || previous.elevationMeters !== subject.elevationMeters);
         const changed = JSON.stringify(previous) !== JSON.stringify(subject);
         lastLocalVision = subject;
         if (moved) queueLocalExploration(subject, previous).catch(error => api.showToast?.(error.message, 'error'));
@@ -284,14 +300,15 @@ export function createVisionFogSystem() {
             context.clearRect(x, y, Math.max(0, width), Math.max(0, height));
           } else context.clearRect(0, 0, size.x, size.y);
         }
-        const drawExplored = context => {
-          for (const [row, spans] of rows) {
+        const drawRows = (context, rowEntries) => {
+          for (const [row, spans] of rowEntries) {
             for (const [start, end] of spans) {
               const rect = worldRect(start * cellUnits, Number(row) * cellUnits, (end - start + 1) * cellUnits, cellUnits);
               context.fillRect(rect.x, rect.y, rect.width + 1, rect.height + 1);
             }
           }
         };
+        const drawExplored = context => drawRows(context, rows);
         const source = audience.source;
         const drawCurrentCircle = (context, rawRange) => {
           const range = Number(rawRange) || 0;
@@ -304,6 +321,37 @@ export function createVisionFogSystem() {
           context.beginPath();
           context.arc(center.x, center.y, Math.abs(edge.x - center.x), 0, Math.PI * 2);
           context.fill();
+        };
+        const drawCurrent = (context, rawRange, kind) => {
+          const rangeMeters = Number(rawRange) || 0;
+          if (!source || rangeMeters <= 0) return;
+          if (source.lineOfSightEnabled !== true) {
+            drawCurrentCircle(context, rangeMeters);
+            return;
+          }
+          const signature = JSON.stringify({
+            sceneId: scene.id,
+            source: { x: source.x, y: source.y, elevationMeters: source.elevationMeters },
+            precise: source.preciseGroundRangeMeters,
+            vague: source.vagueGroundRangeMeters,
+            featureStates: scene.featureStates || {},
+            sceneEvents: scene.sceneEvents || [],
+          });
+          if (!visibilityRowsCache || visibilityRowsCache.signature !== signature) {
+            const occluders = deriveVisionOccluders(api.mapPackage, scene, deriveSceneState(scene.sceneEvents || []));
+            const values = range => Object.entries(visibleFogRowsForCircle({
+              x: Number(source.x), y: Number(source.y), radiusMeters: Number(range) || 0,
+            }, api.mapPackage, {
+              sourceElevationMeters: Number(source.elevationMeters) || 0,
+              occluders,
+            }));
+            visibilityRowsCache = {
+              signature,
+              precise: values(source.preciseGroundRangeMeters ?? source.preciseRangeMeters ?? source.rangeMeters),
+              vague: values(source.vagueGroundRangeMeters ?? source.vagueRangeMeters ?? source.rangeMeters),
+            };
+          }
+          drawRows(context, visibilityRowsCache[kind] || []);
         };
 
         if (explorationDirty || resized) {
@@ -324,13 +372,13 @@ export function createVisionFogSystem() {
         perception.drawImage(explorationCanvas, 0, 0, size.x, size.y);
         perception.globalCompositeOperation = 'destination-out';
         perception.fillStyle = '#000';
-        drawCurrentCircle(perception, source?.vagueRangeMeters ?? source?.rangeMeters);
+        drawCurrent(perception, source?.vagueGroundRangeMeters ?? source?.vagueRangeMeters ?? source?.rangeMeters, 'vague');
         perception.globalCompositeOperation = 'source-over';
         perception.fillStyle = 'rgba(218,226,228,0.20)';
-        drawCurrentCircle(perception, source?.vagueRangeMeters ?? source?.rangeMeters);
+        drawCurrent(perception, source?.vagueGroundRangeMeters ?? source?.vagueRangeMeters ?? source?.rangeMeters, 'vague');
         perception.globalCompositeOperation = 'destination-out';
         perception.fillStyle = '#000';
-        drawCurrentCircle(perception, source?.preciseRangeMeters ?? source?.rangeMeters);
+        drawCurrent(perception, source?.preciseGroundRangeMeters ?? source?.preciseRangeMeters ?? source?.rangeMeters, 'precise');
         perception.globalCompositeOperation = 'source-over';
         lastVisionSignature = visionSignature();
         perception.restore();

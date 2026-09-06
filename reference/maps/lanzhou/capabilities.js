@@ -98,6 +98,9 @@ export function applyLanzhouCapabilities(features = [], navigation = {}) {
     const declaredNavigation = declared.navigation && typeof declared.navigation === 'object'
       ? declared.navigation
       : {};
+    const declaredVision = declared.vision && typeof declared.vision === 'object'
+      ? declared.vision
+      : {};
     const declaredHeight = finiteHeight(declaredNavigation.blockingHeightMeters);
     const openable = OPENABLE_FEATURE_IDS.has(feature?.id);
     const gateway = gatewayByFeatureId.get(String(feature?.id));
@@ -137,6 +140,19 @@ export function applyLanzhouCapabilities(features = [], navigation = {}) {
 
     if (!openable && !navigationCapability) return feature;
 
+    const visionOccluder = feature.category === 'wall' || openable || declaredVision.occluder === true
+      ? Object.freeze({
+          ...declaredVision,
+          occluder: true,
+          blockingHeightMeters: finiteHeight(declaredVision.blockingHeightMeters)
+            ?? navigationCapability?.blockingHeightMeters
+            ?? LANZHOU_DEFAULT_BLOCKING_HEIGHT_METERS.wall,
+          polygon: declaredVision.polygon || navigationCapability?.blockingPolygon || feature.geometry?.points || null,
+          passableWhenOpen: openable || declaredVision.passableWhenOpen === true,
+          passableWhenDestroyed: declaredVision.passableWhenDestroyed !== false,
+        })
+      : null;
+
     return Object.freeze({
       ...feature,
       ...(openable ? { openable: true } : {}),
@@ -154,6 +170,7 @@ export function applyLanzhouCapabilities(features = [], navigation = {}) {
           }),
         } : {}),
         navigation: navigationCapability,
+        ...(visionOccluder ? { vision: visionOccluder } : {}),
       }),
       ...(openable ? {
         interaction: Object.freeze({

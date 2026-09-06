@@ -1,3 +1,5 @@
+import { distance3dMeters } from '../spatial/kernel.js';
+
 export const MOVEMENT_MODES = Object.freeze(['walk', 'swim', 'waterWalk', 'fly']);
 export const MOVEMENT_VERTICAL_ACTIONS = Object.freeze(['takeoff', 'landing']);
 
@@ -38,10 +40,7 @@ export function movementTurnKey(combat) {
 }
 
 export function spatialDistanceMeters(from, to, metersPerUnit = 1) {
-  const scale = Number(metersPerUnit);
-  const horizontal = Math.hypot(Number(to.x) - Number(from.x), Number(to.y) - Number(from.y))
-    * (Number.isFinite(scale) && scale > 0 ? scale : 1);
-  return Math.hypot(horizontal, Number(to.elevationMeters) - Number(from.elevationMeters));
+  return distance3dMeters(from, to, metersPerUnit);
 }
 
 export function movementCostMeters(distanceMeters, {

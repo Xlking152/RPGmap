@@ -2,6 +2,14 @@ import { mergeActorDelta } from '../token/actor.js';
 import { normalizeFogState } from './fog.js';
 import { normalizeActorPublicProfile } from '../actor/public-profile.js';
 import { canPlaceActorTemplate } from '../permissions/model.js';
+import { deriveSceneState } from '../engine/state.js';
+import {
+  deriveVisionOccluders,
+  distance3dMeters,
+  inspectLineOfSight,
+  resolveLineOfSightEnabled,
+  sphereGroundRadiusMeters,
+} from '../spatial/kernel.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -164,19 +172,27 @@ function currentVision(world, context, actors) {
   if (token.vision?.enabled === false || vagueRangeMeters <= 0) return null;
   return {
     tokenId: String(token.id), x: Number(token.x), y: Number(token.y),
+    elevationMeters: Number(token.elevationMeters) || 0,
     rangeMeters: effectivePreciseRangeMeters,
     preciseRangeMeters: effectivePreciseRangeMeters,
     vagueRangeMeters: Math.max(effectivePreciseRangeMeters, vagueRangeMeters),
+    preciseGroundRangeMeters: sphereGroundRadiusMeters(effectivePreciseRangeMeters, token.elevationMeters) ?? 0,
+    vagueGroundRangeMeters: sphereGroundRadiusMeters(
+      Math.max(effectivePreciseRangeMeters, vagueRangeMeters), token.elevationMeters,
+    ) ?? 0,
+    lineOfSightEnabled: resolveLineOfSightEnabled(scene, context.lineOfSightOverride),
     senses: clone(description.senses || {}), lighting: description.lighting || 'normal',
   };
 }
 
-function detectionLevel(token, vision, metersPerUnit) {
+function detectionLevel(token, vision, metersPerUnit, { lineOfSightEnabled = false, occluders = [] } = {}) {
   if (!vision || token?.placement !== 'map') return 'none';
-  const distance = Math.hypot(Number(token.x) - vision.x, Number(token.y) - vision.y) * metersPerUnit;
-  if (distance <= vision.preciseRangeMeters) return 'precise';
-  if (distance <= vision.vagueRangeMeters) return 'vague';
-  return 'none';
+  const target = { x: Number(token.x), y: Number(token.y), elevationMeters: Number(token.elevationMeters) || 0 };
+  const distance = distance3dMeters(vision, target, metersPerUnit);
+  const level = distance <= vision.preciseRangeMeters ? 'precise'
+    : distance <= vision.vagueRangeMeters ? 'vague' : 'none';
+  if (level === 'none' || !lineOfSightEnabled) return level;
+  return inspectLineOfSight({ from: vision, to: target, occluders, metersPerUnit }).clear ? level : 'none';
 }
 
 function restrictedActor(actor) {
@@ -340,6 +356,11 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const definitions = new Map((world.statusDefinitions || []).map(item => [String(item?.id ?? ''), item]));
   const vision = currentVision(world, context, actors);
   const metersPerUnit = Math.max(0.000001, Number(context.mapMetrics?.metersPerUnit) || 1);
+  const currentScene = activeScene(world);
+  const lineOfSightEnabled = resolveLineOfSightEnabled(currentScene, context.lineOfSightOverride);
+  const occluders = lineOfSightEnabled && context.mapPackage
+    ? deriveVisionOccluders(context.mapPackage, currentScene, deriveSceneState(currentScene?.sceneEvents || []))
+    : [];
   const visibleTokenIds = new Set();
   const privateActorIds = new Set();
   const referencedActorIds = new Set();
@@ -358,7 +379,9 @@ export function projectStateForAudience(rawState, rawContext = {}) {
       if (tokenInvisible(rawToken, actor, definitions) && !authorized && !visibilityOverride) return [];
       const hostile = !authorized;
       const requiresDetection = hostile && !visibilityOverride;
-      const level = requiresDetection && isActive ? detectionLevel(rawToken, vision, metersPerUnit) : 'precise';
+      const level = requiresDetection && isActive
+        ? detectionLevel(rawToken, vision, metersPerUnit, { lineOfSightEnabled, occluders })
+        : 'precise';
       if (requiresDetection && (!isActive || level === 'none')) return [];
       let token = clone(rawToken);
       if (authorized) {

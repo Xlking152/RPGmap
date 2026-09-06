@@ -194,7 +194,8 @@ test('live audience vision follows the latest authoritative Token coordinates an
   };
   const scene = { tokens: [{ id: 'scout', placement: 'map', x: 45, y: 60 }] };
   assert.deepEqual(resolveLiveAudienceVision(audience, scene, 'scout').source, {
-    tokenId: 'scout', x: 45, y: 60, preciseRangeMeters: 15, vagueRangeMeters: 30,
+    tokenId: 'scout', x: 45, y: 60, elevationMeters: 0,
+    preciseRangeMeters: 15, vagueRangeMeters: 30,
   });
   assert.equal(resolveLiveAudienceVision(audience, { tokens: [] }, 'scout').source, null);
   assert.equal(resolveLiveAudienceVision(audience, scene, null).source, null);

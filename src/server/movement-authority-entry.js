@@ -8,7 +8,7 @@ const packages = new Map([
 const minimal = createMinimalReferencePackage();
 packages.set(String(minimal.id), minimal);
 
-function mapForScene(scene) {
+export function mapForScene(scene) {
   const reference = scene?.mapPackage || {};
   const mapPackage = packages.get(String(reference.id ?? reference.mapId ?? '')) || null;
   if (!mapPackage) return null;

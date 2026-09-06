@@ -47,8 +47,10 @@ import {
 import {
   canUserControlToken,
   describeVisionForToken,
+  motionPathPreciselyVisible,
   projectStateForAudience,
   serverRuleset,
+  sphereGroundRadiusMeters,
 } from './ruleset-authority.mjs';
 import {
   networkUrls as listNetworkUrls,
@@ -64,7 +66,7 @@ import {
   websocketAccept,
 } from './websocket-runtime.mjs';
 import { createWorldWal } from './world-wal.mjs';
-import { validateAuthoritativeTokenMovePath } from './movement-authority.mjs';
+import { mapForScene, validateAuthoritativeTokenMovePath } from './movement-authority.mjs';
 import { createContentStorage, prepareContentUpgrade } from './content-storage.mjs';
 import { hasRetainedContentReference } from './content-history.mjs';
 import { commitStorageUpgrade, recoverStorageUpgrade } from './storage-upgrade.mjs';
@@ -585,7 +587,7 @@ function resumableCommits(session, revision, fingerprint) {
     if (expected !== requested && !beforeProjection) return null;
     beforeProjection ||= audienceStateFor(session, canonical);
     const afterProjection = audienceStateFor(session, nextCanonical);
-    const motion = projectMotionForSession(entry.results, beforeProjection, afterProjection);
+    const motion = projectMotionForSession(entry.results, beforeProjection, afterProjection, session);
     result.push({
       type: entry.documentBatch ? 'document.batch.committed' : 'world.operation.committed',
       operationId: entry.operationId,
@@ -694,6 +696,8 @@ function audienceStateFor(session, state = world.state) {
     }
     return session.audienceOpaqueIds.get(key);
   };
+  const worldValue = state?.preferences?.worldV2;
+  const activeScene = worldValue?.scenes?.find(scene => String(scene?.id ?? '') === String(worldValue?.activeSceneId ?? ''));
   const projected = projectStateForAudience(state, {
     role: session.role,
     userId: session.userId,
@@ -701,6 +705,7 @@ function audienceStateFor(session, state = world.state) {
     visionSourceTokenId: session.visionSourceTokenId,
     ruleset: serverRuleset,
     mapMetrics: { metersPerUnit: 1 },
+    mapPackage: mapForScene(activeScene),
     opaqueIdFor,
   });
   assertWorldState(projected);
@@ -760,9 +765,18 @@ async function persistWorldCommit(snapshot, beforeState, operationId) {
     await worldWal.reset();
   }
 }
-function projectMotionForSession(results, beforeProjection, afterProjection) {
+function projectMotionForSession(results, beforeProjection, afterProjection, session = null) {
+  if (session?.role === 'gm') {
+    return (results || []).flatMap(result => result?.motion || []).map(motion => structuredClone(motion));
+  }
+  const worldValue = beforeProjection?.preferences?.worldV2;
+  const scene = worldValue?.scenes?.find(item => String(item?.id ?? '') === String(worldValue?.activeSceneId ?? '')) || null;
+  const vision = beforeProjection?.preferences?.audienceVision?.source || null;
+  const mapPackage = mapForScene(scene);
   return (results || []).flatMap(result => result?.motion || []).filter(motion =>
-    visiblePreciseToken(beforeProjection, motion.tokenId) && visiblePreciseToken(afterProjection, motion.tokenId))
+    visiblePreciseToken(beforeProjection, motion.tokenId)
+      && visiblePreciseToken(afterProjection, motion.tokenId)
+      && motionPathPreciselyVisible({ motion, vision, mapPackage, scene }))
     .map(motion => structuredClone(motion));
 }
 
@@ -909,7 +923,7 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
     const afterProjection = incrementalProjection || audienceStateFor(session, afterState);
     session.audienceProjection = afterProjection;
     const motion = documentBatch
-      ? projectMotionForSession(results, beforeProjection, afterProjection)
+      ? projectMotionForSession(results, beforeProjection, afterProjection, session)
       : [];
     const response = {
       type: documentBatch ? 'document.batch.committed' : 'world.operation.committed', operationId, baseRevision, revision, updatedAt,
@@ -1141,6 +1155,15 @@ function authorizeOperations(session, operations) {
       if (Object.keys(payload.changes || {}).some(key => key !== 'name')) operationDenied('actor_classification_gm_only', 'Only the GM can change Actor classification or party');
       return value;
     }
+    if (value.type === 'scene.door.use') {
+      const tokenId = String(payload.tokenId || '');
+      const sceneId = String(payload.sceneId || world.state?.preferences?.worldV2?.activeSceneId || '');
+      if (sceneId !== String(world.state?.preferences?.worldV2?.activeSceneId || '')) {
+        operationDenied('scene_not_active', 'Players may interact with doors only in the active Scene');
+      }
+      authorizeMovedToken(tokenId);
+      return value;
+    }
     if (value.type === 'actor.upsert') {
       const actorId = String(payload.actor?.id || '');
       const current = world.state?.preferences?.worldV2?.actors?.find(item => String(item?.id ?? '') === actorId);
@@ -1200,20 +1223,33 @@ function appendVisionExplorationOperations(operations) {
         const canonical = canonicalRecord(tokenId).token;
         const leader = canonicalRecord(operation.payload?.tokenId).token;
         const offset = operation.type === 'token.movePath' && canonical && leader
-          ? { x: Number(canonical.x) - Number(leader.x), y: Number(canonical.y) - Number(leader.y) }
-          : { x: 0, y: 0 };
+          ? {
+              x: Number(canonical.x) - Number(leader.x),
+              y: Number(canonical.y) - Number(leader.y),
+              elevationMeters: Number(canonical.elevationMeters || 0) - Number(leader.elevationMeters || 0),
+            }
+          : { x: 0, y: 0, elevationMeters: 0 };
         const route = operation.type === 'token.movePath'
-          ? (operation.payload.waypoints || []).map(point => ({ x: Number(point.x) + offset.x, y: Number(point.y) + offset.y }))
-          : [{ x: Number(operation.payload.x), y: Number(operation.payload.y) }];
+          ? (operation.payload.waypoints || []).map(point => ({
+              x: Number(point.x) + offset.x,
+              y: Number(point.y) + offset.y,
+              elevationMeters: Math.max(0, Number(point.elevationMeters ?? leader?.elevationMeters ?? 0) + offset.elevationMeters),
+            }))
+          : [{
+              x: Number(operation.payload.x), y: Number(operation.payload.y),
+              elevationMeters: Number(operation.payload.elevationMeters ?? canonical?.elevationMeters ?? 0),
+            }];
         const to = route.at(-1);
         if (to) next.push({
           type: 'scene.fog.explore',
           payload: {
             sceneId: vision.sceneId,
             partyId: vision.partyId,
-            from: operation.type === 'token.reposition' ? to : { x: vision.x, y: vision.y },
+            from: operation.type === 'token.reposition' ? to : {
+              x: vision.x, y: vision.y, elevationMeters: vision.elevationMeters,
+            },
             to,
-            radiusMeters: vision.vagueRangeMeters,
+            radiusMeters: sphereGroundRadiusMeters(vision.vagueRangeMeters, to.elevationMeters) ?? 0,
           },
         });
       }
@@ -1710,9 +1746,15 @@ server.on('upgrade', (req, socket) => {
             type: 'scene.fog.explore',
             payload: {
               sceneId: vision.sceneId, partyId: vision.partyId,
-              x: vision.x, y: vision.y, radiusMeters: vision.vagueRangeMeters,
+              x: vision.x, y: vision.y, elevationMeters: vision.elevationMeters,
+              radiusMeters: vision.vagueGroundRangeMeters,
             },
-          }], { ruleset: serverRuleset, now: new Date().toISOString(), mapMetrics: { metersPerUnit: 1 } });
+          }], {
+            ruleset: serverRuleset,
+            now: new Date().toISOString(),
+            mapMetrics: mapForScene(canonicalScene(vision.sceneId)) || { metersPerUnit: 1 },
+            mapPackage: mapForScene(canonicalScene(vision.sceneId)),
+          });
           assertWorldState(applied.state);
         } catch (error) {
           session.visionSourceTokenId = null;
@@ -1797,7 +1839,8 @@ server.on('upgrade', (req, socket) => {
         applied = applyWorldOperations(world.state, operations, {
           now,
           ruleset: serverRuleset,
-          mapMetrics: { metersPerUnit: 1 },
+          mapMetrics: mapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)) || { metersPerUnit: 1 },
+          mapPackage: mapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)),
           userId: session.userId,
           sessionId: session.id,
           source: { role: session.role, userId: session.userId },

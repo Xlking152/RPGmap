@@ -20,15 +20,20 @@ import { normalizeSceneToken } from '../token/model.js';
 import {
   exploreFogCircle,
   exploreFogSweep,
+  exploreFogVisibleCircle,
+  exploreFogVisibleSweep,
   hideFogCircle,
   normalizeFogState,
   resetFogParty,
 } from '../vision/fog.js';
+import { deriveSceneState } from '../engine/state.js';
+import { deriveVisionOccluders } from '../spatial/kernel.js';
 import { migrateWorldSchema3State } from './migration.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { advanceStatusDurations, STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { DOCUMENT_OPERATION_SCHEMA_VERSION } from '../documents/protocol.js';
 import { normalizeMovementBudget } from '../movement/model.js';
+import { validateDoorInteraction } from '../interaction/door-authority.js';
 
 export {
   DOCUMENT_BATCH_LIMIT,
@@ -83,6 +88,7 @@ const OPERATION_TYPES = new Set([
   'scene.delete',
   'scene.content.replace',
   'scene.settings.patch',
+  'scene.door.use',
   'scene.featureState.patch',
   'scene.fog.explore',
   'scene.fog.reset',
@@ -102,7 +108,7 @@ const OPERATION_TYPES = new Set([
 
 const STATUS_TYPES = new Set([...OPERATION_TYPES].filter(type => type.startsWith('status.')));
 const GRANULAR_OPERATION_TYPES = new Set([
-  'token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch', 'scene.featureState.patch', 'scene.activate',
+  'token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch', 'scene.door.use', 'scene.featureState.patch', 'scene.activate',
   'scene.fog.explore', 'scene.fog.hide', 'scene.fog.reset',
   'status.apply', 'status.remove', 'status.setStacks', 'status.batch',
   'status.definition.upsert', 'status.definition.delete', 'status.definition.import',
@@ -165,7 +171,7 @@ function worldFromState(state) {
 }
 
 function cloneOperationInput(rawState, operations) {
-  const copyOnWriteTypes = new Set(['token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch', 'scene.featureState.patch', 'scene.activate']);
+  const copyOnWriteTypes = new Set(['token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch', 'scene.door.use', 'scene.featureState.patch', 'scene.activate']);
   if (operations.some(operation => !copyOnWriteTypes.has(operation.type) && !STATUS_TYPES.has(operation.type))) return clone(rawState);
   const source = object(rawState, 'state');
   const preferences = { ...object(source.preferences, 'state.preferences') };
@@ -182,7 +188,7 @@ function cloneOperationInput(rawState, operations) {
     const sceneId = String(operation.payload?.sceneId || world.activeSceneId || '');
     const entry = sceneChanges.get(sceneId) || { tokens: false, featureStates: false, settings: false };
     if (['token.move', 'token.reposition', 'token.movePath'].includes(operation.type)) entry.tokens = true;
-    if (operation.type === 'scene.featureState.patch') entry.featureStates = true;
+    if (operation.type === 'scene.featureState.patch' || operation.type === 'scene.door.use') entry.featureStates = true;
     if (operation.type === 'scene.settings.patch') entry.settings = true;
     sceneChanges.set(sceneId, entry);
   }
@@ -401,7 +407,7 @@ function projectGranularOperationState(state, operations) {
       }
       state.attackAreas = clone(scene.attackAreas || []);
     }
-    if (operation.type === 'scene.featureState.patch'
+    if ((operation.type === 'scene.featureState.patch' || operation.type === 'scene.door.use')
       && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
       state.preferences.featureStates = plainObject(state.preferences.featureStates)
         ? state.preferences.featureStates
@@ -885,6 +891,30 @@ function applyCanonicalOperation(state, operation, context = {}) {
     return { action: type, sceneId: String(scene.id), settings: clone(next) };
   }
 
+  if (type === 'scene.door.use') {
+    const scene = sceneById(world, payload.sceneId);
+    const featureId = identifier(payload.featureId, 'featureId');
+    const tokenId = identifier(payload.tokenId, 'tokenId');
+    const action = String(payload.action || '');
+    if (!['open', 'close'].includes(action)) fail('Door action must be open or close', 'door_action_invalid');
+    const { token } = tokenById(scene, tokenId);
+    const mapPackage = plainObject(context.mapPackage)
+      ? context.mapPackage
+      : plainObject(context.mapMetrics) ? context.mapMetrics : null;
+    const feature = mapPackage?.features?.find(item => String(item?.id ?? '') === featureId) || null;
+    const validation = validateDoorInteraction({ scene, token, feature, mapPackage, action, source: context.source });
+    if (!validation.valid) fail(validation.reason, validation.code);
+    scene.featureStates = plainObject(scene.featureStates) ? scene.featureStates : {};
+    scene.featureStates[featureId] = {
+      ...(plainObject(scene.featureStates[featureId]) ? scene.featureStates[featureId] : {}),
+      open: action === 'open',
+    };
+    return {
+      action: type, sceneId: String(scene.id), featureId, tokenId,
+      open: action === 'open', distanceMeters: validation.distanceMeters,
+    };
+  }
+
   if (type === 'scene.featureState.patch') {
     const scene = sceneById(world, payload.sceneId);
     const featureId = identifier(payload.featureId, 'featureId');
@@ -900,7 +930,13 @@ function applyCanonicalOperation(state, operation, context = {}) {
   if (type.startsWith('scene.fog.')) {
     const scene = sceneById(world, payload.sceneId);
     const partyId = identifier(payload.partyId, 'partyId');
-    const map = plainObject(context.mapMetrics) ? context.mapMetrics : {};
+    const map = plainObject(context.mapPackage)
+      ? context.mapPackage
+      : plainObject(context.mapMetrics) ? context.mapMetrics : {};
+    const lineOfSightEnabled = scene.settings?.lineOfSightEnabled === true;
+    const occluders = lineOfSightEnabled
+      ? deriveVisionOccluders(map, scene, deriveSceneState(scene.sceneEvents || []))
+      : [];
     if (type === 'scene.fog.reset') scene.fog = resetFogParty(scene.fog, partyId);
     else if (type === 'scene.fog.hide') {
       const radiusMeters = Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
@@ -910,13 +946,21 @@ function applyCanonicalOperation(state, operation, context = {}) {
       }, map);
     } else if (payload.from && payload.to) {
       const radiusMeters = Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
-      scene.fog = exploreFogSweep(scene.fog, partyId, payload.from, payload.to, radiusMeters, map);
+      scene.fog = lineOfSightEnabled
+        ? exploreFogVisibleSweep(scene.fog, partyId, payload.from, payload.to, radiusMeters, map, { occluders })
+        : exploreFogSweep(scene.fog, partyId, payload.from, payload.to, radiusMeters, map);
     } else {
       const radiusMeters = Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
-      scene.fog = exploreFogCircle(scene.fog, partyId, {
+      const circle = {
         x: finite(payload.x, 'x'), y: finite(payload.y, 'y'),
+        elevationMeters: Math.max(0, finite(payload.elevationMeters ?? 0, 'elevationMeters')),
         radiusMeters,
-      }, map);
+      };
+      scene.fog = lineOfSightEnabled
+        ? exploreFogVisibleCircle(scene.fog, partyId, circle, map, {
+            sourceElevationMeters: circle.elevationMeters, occluders,
+          })
+        : exploreFogCircle(scene.fog, partyId, circle, map);
     }
     return { action: type, sceneId: String(scene.id), partyId };
   }
@@ -1094,11 +1138,12 @@ function createOperationChangeSet(operations, results, beforeState, afterState) 
       for (const tokenId of payload.tokenIds || []) addToken(payload.sceneId, tokenId);
     }
     else if (operation.type === 'scene.settings.patch') changedSceneIds.add(String(payload.sceneId || activeSceneId));
-    else if (operation.type === 'scene.featureState.patch') {
+    else if (operation.type === 'scene.door.use' || operation.type === 'scene.featureState.patch') {
       const sceneId = String(payload.sceneId || activeSceneId);
       if (!featureIdsByScene.has(sceneId)) featureIdsByScene.set(sceneId, new Set());
       featureIdsByScene.get(sceneId).add(String(payload.featureId));
-    } else if (operation.type === 'scene.activate') activeSceneChanged = true;
+    }
+    else if (operation.type === 'scene.activate') activeSceneChanged = true;
     else if (operation.type.startsWith('scene.fog.')) fogSceneIds.add(String(payload.sceneId || activeSceneId));
     else if (operation.type.startsWith('status.definition.')) statusDefinitionsChanged = true;
     else if (operation.type.startsWith('status.')) collectStatusTarget({ type: operation.type, ...payload });
