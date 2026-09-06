@@ -39,6 +39,7 @@ const EXPECTED_ROOT_ENTRIES = [
   'world-operations.mjs',
   'movement-authority.mjs',
   'world-wal.mjs',
+  'storage-upgrade.mjs',
   'world-schema.mjs',
   'world-v2.mjs',
   'websocket-runtime.mjs',

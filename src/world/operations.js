@@ -1228,7 +1228,7 @@ function applyIdPatch(items, patch) {
   return [...values.values()];
 }
 
-export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false, acceptedSchemaVersions = [WORLD_OPERATION_SCHEMA_VERSION] } = {}) {
+export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false, project = true, acceptedSchemaVersions = [WORLD_OPERATION_SCHEMA_VERSION] } = {}) {
   const state = mutate ? object(rawState, 'state') : clone(object(rawState, 'state'));
   const patch = object(rawPatch, 'patch');
   if (!acceptedSchemaVersions.includes(Number(patch.schemaVersion))) {
@@ -1295,6 +1295,7 @@ export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false, a
   }
   if (patch.audienceVision === null) delete state.preferences.audienceVision;
   else if (patch.audienceVision !== undefined) state.preferences.audienceVision = clone(object(patch.audienceVision, 'audienceVision'));
+  if (!project) return state;
   return mutate ? projectPatchedOperationState(state, patch) : projectWorldOperationState(state);
 }
 

@@ -43,9 +43,24 @@ test('WAL refuses checksum corruption in the middle of history', async t => {
   const record = JSON.parse(lines[0]);
   record.patch.count = 999;
   lines[0] = JSON.stringify(record);
-  await writeFile(filePath, `${lines.join('\n')}\n`);
+  const source = `${lines.join('\n')}\n{"incomplete":`;
+  await writeFile(filePath, source);
   await assert.rejects(
     () => wal.replay({ revision: 0, state: { count: 0 } }),
     error => error.code === 'world_wal_corrupt' && /checksum mismatch/.test(error.message),
   );
+  assert.equal(await readFile(filePath, 'utf8'), source);
+});
+
+test('upgrade WAL replay preserves a torn tail until the complete original can be backed up', async t => {
+  const { filePath, wal } = await temporaryWal(t);
+  await wal.append({ baseRevision: 0, revision: 1, operationId: 'one', patch: { count: 1 } });
+  await appendFile(filePath, '{"baseRevision":1');
+  const original = await readFile(filePath);
+  const replayed = await wal.replay({ revision: 0, state: { count: 0 } }, { repairTail: false });
+  assert.equal(replayed.revision, 1);
+  assert.equal(replayed.state.count, 1);
+  assert.deepEqual(await readFile(filePath), original);
+  await wal.replay(replayed);
+  assert.equal((await readFile(filePath, 'utf8')).endsWith('\n'), true);
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,7 @@ import { WORLD_OPERATION_SCHEMA_VERSION } from '../src/world/operations.js';
 import { applyDocumentChanges } from '../src/documents/changes.js';
 import { STATUS_SCHEMA_VERSION } from '../src/status/model.js';
 import { ACCESS_SCHEMA_VERSION } from '../src/permissions/model.js';
+import { createWorldWal } from '../deployment/local-server/world-wal.mjs';
 
 const WEBSOCKET_WAIT_TIMEOUT_MS = 15_000;
 
@@ -399,10 +400,59 @@ test('LAN startup migrates global Feature State once and backs up the original W
     assert.equal(Object.hasOwn(durable.state.preferences, 'featureStates'), false);
     assert.equal(durable.state.preferences.worldV2.scenes[0].featureStates.gate.custom.extension, 4);
     const backups = await readdir(path.join(mapDir, 'backups'));
-    assert.ok(backups.some(name => name.startsWith('world.backup.')));
+    const upgrade = backups.find(name => name.startsWith('upgrade-'));
+    assert.ok(upgrade);
+    const checkpoint = path.join(mapDir, 'backups', upgrade);
+    const original = JSON.parse(await readFile(path.join(checkpoint, 'before', 'world.json'), 'utf8'));
+    assert.deepEqual(original.state, state);
+    const manifest = JSON.parse(await readFile(path.join(checkpoint, 'manifest.json'), 'utf8'));
+    assert.deepEqual(manifest.before.map(record => record.path), ['world.json', 'users.json', 'world.operations.ndjson']);
+    assert.equal(await readFile(path.join(mapDir, 'world.operations.ndjson'), 'utf8'), '');
   } finally {
     await stopServer(runtime);
   }
+});
+
+test('LAN replays old WAL semantics before migration and checkpoints all original files without repeat conversion', async () => {
+  const mapDir = await mkdtemp(path.join(tmpdir(), 'rpgmap-wal-upgrade-'));
+  const state = initialWorldV2();
+  const snapshot = { schemaVersion: 1, worldId: 'default', revision: 1, updatedAt: null, state };
+  const original = JSON.stringify(snapshot);
+  await writeFile(path.join(mapDir, 'world.json'), original);
+  const users = '{"schemaVersion":3,"users":[],"extension":{"retain":true}}';
+  await writeFile(path.join(mapDir, 'users.json'), users);
+  await mkdir(path.join(mapDir, 'uploads', 'content'), { recursive: true });
+  await writeFile(path.join(mapDir, 'uploads', 'content', 'legacy.content'), 'retained dependency');
+  const walFile = path.join(mapDir, 'world.operations.ndjson');
+  const wal = createWorldWal({ filePath: walFile, applyPatch: state => state });
+  const target = { ...state.preferences.worldV2.scenes[0].tokens[0], x: 44, hidden: true, extension: { newest: true } };
+  await wal.append({ baseRevision: 1, revision: 2, operationId: 'legacy-durable-move', patch: {
+    schemaVersion: 3, world: { scenes: { tokens: [{ sceneId: 'scene-test', upsert: [target], remove: [] }] } },
+  }, results: [{ operationId: 'legacy-durable-move', revision: 2, results: [] }] });
+  await appendFile(walFile, '{"torn":');
+  const originalWal = await readFile(walFile);
+  let runtime = await startServer({}, mapDir);
+  try {
+    const durable = JSON.parse(await readFile(path.join(mapDir, 'world.json'), 'utf8'));
+    assert.equal(durable.revision, 2);
+    assert.equal(durable.state.preferences.worldV2.schemaVersion, 3);
+    const token = durable.state.preferences.worldV2.scenes[0].tokens[0];
+    assert.equal(token.x, 44);
+    assert.equal(token.visibility.mode, 'gm');
+    assert.equal(Object.hasOwn(token, 'hidden'), false);
+    assert.equal(token.extension.newest, true);
+    assert.equal(durable.recentStatusOperations[0].operationId, 'legacy-durable-move');
+    const backups = await readdir(path.join(mapDir, 'backups'));
+    const checkpoint = path.join(mapDir, 'backups', backups.find(name => name.startsWith('upgrade-')), 'before');
+    assert.equal(await readFile(path.join(checkpoint, 'world.json'), 'utf8'), original);
+    assert.equal(await readFile(path.join(checkpoint, 'users.json'), 'utf8'), users);
+    assert.deepEqual(await readFile(path.join(checkpoint, 'world.operations.ndjson')), originalWal);
+    assert.equal(await readFile(path.join(checkpoint, 'uploads', 'content', 'legacy.content'), 'utf8'), 'retained dependency');
+    await stopServer(runtime, { removeMap: false });
+    runtime = await startServer({}, mapDir);
+    assert.deepEqual(await readdir(path.join(mapDir, 'backups')), backups);
+    assert.deepEqual(JSON.parse(await readFile(path.join(mapDir, 'world.json'), 'utf8')), durable);
+  } finally { await stopServer(runtime); }
 });
 
 async function sendStatusAndWait(ws, message) {

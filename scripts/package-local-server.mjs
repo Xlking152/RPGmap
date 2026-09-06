@@ -45,6 +45,7 @@ for (const file of [
   'world-v2.mjs',
   'websocket-runtime.mjs',
   'world-wal.mjs',
+  'storage-upgrade.mjs',
   'launcher.mjs',
   'start-rpgmap.bat',
 ]) {

@@ -79,10 +79,11 @@ export function assertSafeJson(value, label = 'world') {
       current.forEach((entry, index) => visit(entry, `${path}[${index}]`, depth + 1));
       return;
     }
-    if (!current || typeof current !== 'object') fail(`${path} is not JSON-safe`);
+    if (!current || typeof current !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(current))) fail(`${path} is not JSON-safe`);
     const entries = Object.entries(current);
     if (entries.length > objectKeyLimit(path)) fail(`${path} has too many keys`, 'world_limit');
     for (const [key, entry] of entries) {
+      if (['__proto__', 'prototype', 'constructor'].includes(key)) fail(`${path} contains an unsafe key`);
       if (key.length > 160) fail(`${path} has an oversized key`, 'world_limit');
       visit(entry, `${path}.${key}`, depth + 1);
     }

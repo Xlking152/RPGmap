@@ -69,10 +69,15 @@ export function migrateWorldSchema3State(rawState, { statusDefinitions = null } 
   });
   world.actors = normalizedStatus.actors;
   world.statusDefinitions = normalizedStatus.statusDefinitions;
-  const tokensById = new Map(normalizedStatus.tokens.map(token => [String(token.id), token]));
-  world.scenes = world.scenes.map(scene => ({
-    ...scene,
-    tokens: (scene.tokens || []).map(token => clone(tokensById.get(String(token.id)) || token)),
+  if (normalizedStatus.tokens.length !== allTokens.length
+    || normalizedStatus.tokens.some((token, index) => String(token.id) !== String(allTokens[index].id))) {
+    throw Object.assign(new Error('Status migration changed Token identities'), { code: 'migration_token_identity_changed' });
+  }
+  // Status normalization preserves order; Token IDs are unique within a Scene,
+  // not across the World. Rebuild the original Scene partitions without an ID map.
+  let tokenOffset = 0;
+  world.scenes = world.scenes.map(scene => ({ ...scene,
+    tokens: normalizedStatus.tokens.slice(tokenOffset, tokenOffset += scene.tokens.length),
   }));
   world.schemaVersion = 3;
   state.preferences ||= {};

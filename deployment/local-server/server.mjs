@@ -68,6 +68,7 @@ import { createWorldWal } from './world-wal.mjs';
 import { validateAuthoritativeTokenMovePath } from './movement-authority.mjs';
 import { createContentStorage } from './content-storage.mjs';
 import { hasRetainedContentReference } from './content-history.mjs';
+import { commitStorageUpgrade, recoverStorageUpgrade } from './storage-upgrade.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '0.0.0.0';
@@ -268,6 +269,7 @@ function attachFrameReader(socket, onText, onClose) {
 }
 
 await ensureRuntimeDirs();
+await recoverStorageUpgrade(STORAGE);
 const legacyMigrations = await migrateLegacyStorage(STORAGE);
 async function quarantineCorruptFile(filePath, label, error) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -351,22 +353,6 @@ let world = {
 const loadedWorld = await loadRequiredJson(WORLD_FILE, 'world');
 if (loadedWorld !== undefined) {
   if (!loadedWorld || typeof loadedWorld !== 'object' || Array.isArray(loadedWorld)) await quarantineCorruptFile(WORLD_FILE, 'world', new Error('root must be an object'));
-  if (loadedWorld.state !== null && loadedWorld.state !== undefined) {
-    try {
-      const featureMigration = migrateLegacySceneFeatureStates(loadedWorld.state);
-      const schemaMigration = migrateWorldSchema3State(featureMigration.state, {
-        statusDefinitions: serverRuleset.statuses?.definitions,
-      });
-      assertWorldState(schemaMigration.state);
-      loadedWorld.state = schemaMigration.state;
-      if (featureMigration.migrated || schemaMigration.migrated) {
-        await writeJsonWithBackup(WORLD_FILE, 'world', loadedWorld);
-      }
-    } catch (error) {
-      if (error?.code === 'feature_state_migration_conflict') throw error;
-      await quarantineCorruptFile(WORLD_FILE, 'world', error);
-    }
-  }
   world = {
     schemaVersion: 1,
     worldId: WORLD_ID,
@@ -388,10 +374,41 @@ if (loadedWorld !== undefined) {
 
 const worldWal = createWorldWal({
   filePath: WORLD_OPERATIONS_FILE,
-  applyPatch: (state, patch) => applyWorldOperationPatch(state, patch, { acceptedSchemaVersions: [3, WORLD_OPERATION_SCHEMA_VERSION] }),
+  applyPatch: (state, patch) => applyWorldOperationPatch(state, patch, { project: false, acceptedSchemaVersions: [3, WORLD_OPERATION_SCHEMA_VERSION] }),
 });
+world = await worldWal.replay(world, { repairTail: false });
+let access = createAccessState();
+const loadedAccess = await loadRequiredJson(ACCESS_FILE, 'users');
+if (loadedAccess !== undefined) {
+  if (!loadedAccess || typeof loadedAccess !== 'object' || Array.isArray(loadedAccess) || !Array.isArray(loadedAccess.users)) {
+    throw Object.assign(new Error('Access users must be an array'), { code: 'invalid_access' });
+  }
+  access = normalizeAccessState(loadedAccess);
+}
+let upgradeRequired = loadedAccess !== undefined && JSON.stringify(access) !== JSON.stringify(loadedAccess);
+if (world.state) {
+  const oldCanonical = world.state.preferences?.worldV2;
+  const oldStatusSchema = world.state.preferences?.entitySystem?.schemaVersion;
+  const featureMigration = migrateLegacySceneFeatureStates(world.state);
+  const schemaMigration = migrateWorldSchema3State(featureMigration.state, {
+    statusDefinitions: serverRuleset.statuses?.definitions,
+  });
+  assertWorldState(schemaMigration.state);
+  world.state = schemaMigration.state;
+  const schemaChanged = JSON.stringify(oldCanonical) !== JSON.stringify(schemaMigration.state.preferences?.worldV2)
+    || oldStatusSchema !== schemaMigration.state.preferences?.entitySystem?.schemaVersion;
+  upgradeRequired ||= featureMigration.migrated || schemaChanged;
+}
+if (upgradeRequired) {
+  await commitStorageUpgrade(STORAGE, {
+    'world.json': Buffer.from(JSON.stringify(world)),
+    'world.operations.ndjson': Buffer.alloc(0),
+    ...(loadedAccess === undefined ? {} : { 'users.json': Buffer.from(JSON.stringify(access)) }),
+  });
+}
+// No upgrade is needed now. Only after validation may a torn WAL tail be trimmed.
 world = await worldWal.replay(world);
-if (world.state) assertWorldState(world.state);
+if (world.state?.preferences?.worldV2) world.state = projectWorldOperationState(world.state);
 
 // Idempotency is intentionally bounded. A reconnect can safely retry a recent
 // GM status mutation without applying it twice, while unbounded client keys can
@@ -421,15 +438,6 @@ function statusOperationIdForReply(value) {
   if (typeof value !== 'string') return null;
   const result = value.trim().slice(0, 160);
   return result || null;
-}
-
-let access = createAccessState();
-const loadedAccess = await loadRequiredJson(ACCESS_FILE, 'users');
-if (loadedAccess !== undefined) {
-  if (!loadedAccess || typeof loadedAccess !== 'object' || Array.isArray(loadedAccess) || !Array.isArray(loadedAccess.users)) {
-    await quarantineCorruptFile(ACCESS_FILE, 'users', new Error('users must be an array'));
-  }
-  access = normalizeAccessState(loadedAccess);
 }
 
 let persistChain = Promise.resolve();

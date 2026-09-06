@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { assertWorldState, isSameChat } from './world-schema.mjs';
+import { assertSafeJson, assertWorldState, isSameChat } from './world-schema.mjs';
 import { statusStateChanged } from './status-operations.mjs';
 import { resolveStatusCapabilitiesForToken } from './status-capabilities-v2.mjs';
 
@@ -188,11 +188,15 @@ export function normalizeOwnership(raw) {
 }
 export function normalizeAccessState(raw) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : createAccessState();
+  assertSafeJson(source);
+  if (![1, 2, 3, 4].includes(Number(source.schemaVersion ?? 1))) {
+    throw Object.assign(new Error('Access schema is incompatible'), { code: 'access_schema_incompatible' });
+  }
   const users = [];
   const seen = new Set();
   for (const item of Array.isArray(source.users) ? source.users : []) {
     const id = String(item?.id || '').trim();
-    if (!id || seen.has(id)) continue;
+    if (!id || seen.has(id)) throw Object.assign(new Error('Access User IDs must be nonempty and unique'), { code: 'invalid_access_user_id' });
     seen.add(id);
     const ownership = normalizeOwnership(item.ownership);
     let defaultActorId = cleanActorId(item.defaultActorId);
@@ -200,9 +204,13 @@ export function normalizeAccessState(raw) {
     const keyHash = typeof item.playerKeyHash === 'string' && item.playerKeyHash.length === 64
       ? item.playerKeyHash
       : typeof item.claimHash === 'string' && item.claimHash.length === 64 ? item.claimHash : null;
+    const retained = structuredClone(item);
+    for (const key of ['authToken', 'playerKey', 'claimCode']) delete retained[key];
     users.push({
+      ...retained,
       id, name: cleanName(item.name), role: 'player', defaultActorId, ownership,
-      placementGrants: normalizePlacementGrants(item.placementGrants),
+      placementGrants: { ...(item.placementGrants && typeof item.placementGrants === 'object' && !Array.isArray(item.placementGrants) ? structuredClone(item.placementGrants) : {}),
+        ...normalizePlacementGrants(item.placementGrants) },
       tokenHash: typeof item.tokenHash === 'string' && item.tokenHash.length === 64 ? item.tokenHash : null,
       playerKeyHash: keyHash, claimHash: keyHash, disabled: item.disabled === true,
       createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
@@ -210,6 +218,7 @@ export function normalizeAccessState(raw) {
     });
   }
   return {
+    ...structuredClone(source),
     schemaVersion: ACCESS_SCHEMA_VERSION,
     revision: Number.isSafeInteger(Number(source.revision)) && Number(source.revision) >= 0 ? Number(source.revision) : 0,
     users,
@@ -257,7 +266,7 @@ export function updateUserRecord(user, patch = {}) {
   if (!user) return null;
   if (patch.name !== undefined) user.name = cleanName(patch.name, user.name);
   if (patch.ownership !== undefined) user.ownership = normalizeOwnership(patch.ownership);
-  if (patch.placementGrants !== undefined) user.placementGrants = normalizePlacementGrants(patch.placementGrants);
+  if (patch.placementGrants !== undefined) user.placementGrants = { ...user.placementGrants, ...normalizePlacementGrants(patch.placementGrants) };
   if (patch.defaultActorId !== undefined) {
     const actorId = cleanActorId(patch.defaultActorId);
     if (actorId) user.ownership[actorId] = OWNERSHIP.OWNER;

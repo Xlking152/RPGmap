@@ -6,6 +6,7 @@ import {
   createClaimableUser,
   bindWithPlayerKey,
   normalizeAccessState,
+  publicUser,
   resetUserPlayerKey,
   validatePlayerWorldPush,
   verifyPlayerKey,
@@ -146,6 +147,26 @@ test('access normalization preserves formal monster placement grants', () => {
     placementGrants: { actorTypes: ['monster', 'npc', 'forged'], actorIds: [], markerKinds: [] },
   }] });
   assert.deepEqual(normalized.users[0].placementGrants.actorTypes, ['monster', 'npc']);
+});
+
+test('Access migration preserves safe extensions without publishing them or retaining plaintext credentials', () => {
+  const original = { schemaVersion: 3, extension: { private: true }, users: [{ id: 'owner', name: 'Owner', extension: { private: 'note' },
+    playerKey: 'PLAINTEXT', placementGrants: { actorTypes: ['npc'], extension: { source: 'legacy' } } }] };
+  const normalized = normalizeAccessState(original);
+  assert.deepEqual(normalized.extension, original.extension);
+  assert.deepEqual(normalized.users[0].extension, original.users[0].extension);
+  assert.deepEqual(normalized.users[0].placementGrants.extension, { source: 'legacy' });
+  assert.equal(normalized.users[0].playerKey, undefined);
+  assert.equal(publicUser(normalized.users[0]).extension, undefined);
+  assert.equal(publicUser(normalized.users[0]).placementGrants.extension, undefined);
+  assert.deepEqual(normalizeAccessState(normalized), normalized);
+  assert.equal(original.schemaVersion, 3);
+});
+
+test('Access migration rejects unknown schemas, duplicate identities and dangerous extension keys', () => {
+  assert.throws(() => normalizeAccessState({ schemaVersion: 99, users: [] }), { code: 'access_schema_incompatible' });
+  assert.throws(() => normalizeAccessState({ users: [{ id: 'duplicate' }, { id: 'duplicate' }] }), { code: 'invalid_access_user_id' });
+  assert.throws(() => normalizeAccessState(JSON.parse('{"users":[],"extension":{"__proto__":{}}}')));
 });
 
 test('Player may change owned Actor but not unowned Actor or Combat state in World V2', () => {

@@ -168,6 +168,25 @@ test('Infinite Horror describes bounded vision without exposing private storage 
   assert.equal(infiniteHorrorRuleset.actor.instances.supported, true);
 });
 
+test('migration keeps same-ID Tokens isolated by Scene instead of overwriting placement and Synthetic Delta', () => {
+  const original = state({ actors: [actor({ id: 'shared' })], tokens: [token({ id: 'same-token', actorId: 'shared', actorLink: false })] });
+  const world = original.preferences.worldV2;
+  const second = structuredClone(world.scenes[0]);
+  second.id = 'scene-b';
+  second.tokens[0].x = 200;
+  second.tokens[0].actorDelta = { system: { runtime: { extension: { isolated: 'second' } } } };
+  world.scenes[0].tokens[0].actorDelta = { system: { runtime: { extension: { isolated: 'first' } } } };
+  world.scenes.push(second);
+  const before = structuredClone(original);
+  const migrated = migrateWorldSchema3State(original);
+  assert.equal(migrated.state.preferences.worldV2.scenes[0].tokens[0].x, 10);
+  assert.equal(migrated.state.preferences.worldV2.scenes[1].tokens[0].x, 200);
+  assert.equal(migrated.state.preferences.worldV2.scenes[0].tokens[0].actorDelta.system.runtime.extension.isolated, 'first');
+  assert.equal(migrated.state.preferences.worldV2.scenes[1].tokens[0].actorDelta.system.runtime.extension.isolated, 'second');
+  assert.deepEqual(original, before);
+  assert.deepEqual(migrateWorldSchema3State(migrated.state).state, migrated.state);
+});
+
 test('live audience vision follows the latest authoritative Token coordinates and clears invalid sources', () => {
   const audience = {
     source: { tokenId: 'scout', x: 10, y: 10, preciseRangeMeters: 15, vagueRangeMeters: 30 },
