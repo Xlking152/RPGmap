@@ -156,17 +156,23 @@ try {
   }
 
   if (mode === 'bootstrap') {
-    await retry(
-      () => evaluate(`Boolean(document.querySelector('[data-world-create-form]')) && document.body.innerText.includes('北宋兰州城')`),
+    const entryState = await retry(
+      () => evaluate(`(() => {
+        if (document.querySelector('[data-world-create-form]') && document.body.innerText.includes('北宋兰州城')) return 'manager';
+        if (document.querySelector('#app')?.rpgMapApp && document.querySelector('.leaflet-container')) return 'runtime';
+        return null;
+      })()`),
       'World Manager with built-in Lanzhou metadata',
       deadline,
     );
-    await evaluate(`(() => {
-      const form = document.querySelector('[data-world-create-form]');
-      form.querySelector('[name="name"]').value = 'Packaged Smoke World';
-      form.requestSubmit();
-      return true;
-    })()`);
+    if (entryState === 'manager') {
+      await evaluate(`(() => {
+        const form = document.querySelector('[data-world-create-form]');
+        form.querySelector('[name="name"]').value = 'Packaged Smoke World';
+        form.requestSubmit();
+        return true;
+      })()`);
+    }
   }
   let runtime;
   try {
@@ -189,9 +195,11 @@ try {
           baseSvgWidth: bounds?.width || 0,
           baseSvgHeight: bounds?.height || 0,
           mapImages: baseSvg?.querySelectorAll('image').length || 0,
+          rulesetId: api?.ruleset?.id || '',
         };
       })()`).then(value => value?.leaflet
         && value.title.includes('北宋兰州城')
+        && value.rulesetId === 'infinite-horror'
         && value.mapReady
         && value.baseSvg
         && value.baseSvgWidth > 0
@@ -237,7 +245,15 @@ try {
     const response = await fetch('./.vite/manifest.json', { cache: 'no-store' });
     if (!response.ok) throw new Error('manifest request failed: ' + response.status);
     const manifest = await response.json();
+    const htmlEntry = manifest['index.html'];
     const entry = manifest['src/map-package/default-map.js'];
+    const runtimeKey = (htmlEntry?.dynamicImports || []).find(key => key === 'src/runtime/map-runtime.js'
+      || manifest[key]?.name === 'map-runtime-core');
+    const runtimeEntry = runtimeKey ? manifest[runtimeKey] : null;
+    if (!runtimeEntry?.file?.endsWith('.js')) throw new Error('dynamic Map Runtime entry is missing');
+    if (!(htmlEntry?.dynamicImports || []).includes('src/map-package/default-map.js')) {
+      throw new Error('default MapPackage is not a dynamic application dependency');
+    }
     const assets = (entry?.assets || []).filter(file => file.endsWith('.webp'));
     const runtimeAssets = [
       manifest['reference/maps/lanzhou/runtime.json']?.file,
@@ -273,6 +289,7 @@ try {
       bytes: sizes.reduce((sum, value) => sum + value, 0),
       runtimeCount: runtimeSizes.length,
       runtimeBytes: runtimeSizes.reduce((sum, value) => sum + value, 0),
+      runtimeFile: runtimeEntry.file,
     };
   })()`);
   await new Promise(resolve => setTimeout(resolve, 750));
@@ -309,7 +326,7 @@ try {
   }
   if (failures.length) throw new Error(`Browser requests failed: ${failures.join('; ')}`);
   if (exceptions.length) throw new Error(`Browser runtime errors: ${exceptions.join('; ')}`);
-  for (const pattern of [/\/assets\/ruleset-[^/]+\.js$/, /\/assets\/map-runtime-[^/]+\.js$/, /\/assets\/default-map-[^/]+\.js$/, /\/assets\/runtime-[^/]+\.json$/, /\/assets\/runtime-[^/]+\.svg$/, /\.webp$/]) {
+  for (const pattern of [/\/assets\/map-runtime-[^/]+\.js$/, /\/assets\/default-map-[^/]+\.js$/, /\/assets\/runtime-[^/]+\.json$/, /\/assets\/runtime-[^/]+\.svg$/, /\.webp$/]) {
     if (!responses.some(url => pattern.test(url))) {
       throw new Error(`Browser did not load required Runtime asset: ${pattern}; visual=${JSON.stringify(visualState)}; responses=${JSON.stringify(responses.slice(-20))}`);
     }

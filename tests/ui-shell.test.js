@@ -19,6 +19,7 @@ const indexSource = readFileSync(new URL('../index.html', import.meta.url), 'utf
 const viteSource = readFileSync(new URL('../vite.config.js', import.meta.url), 'utf8');
 const packageSource = readFileSync(new URL('../scripts/package-local-server.mjs', import.meta.url), 'utf8');
 const packageVerifierSource = readFileSync(new URL('../scripts/verify-package.mjs', import.meta.url), 'utf8');
+const browserSmokeSource = readFileSync(new URL('../scripts/browser-smoke.mjs', import.meta.url), 'utf8');
 
 test('application entry boots the Character-free World/Scene Token runtime', () => {
   assert.match(mainSource, /await import\('\.\/runtime\/map-runtime\.js'\)/);
@@ -62,6 +63,9 @@ test('production registry splits the built-in map and large vendors without supp
   assert.match(packageSource, /worldSchema: 4/);
   assert.match(packageVerifierSource, /version\.worldSchema !== 4/);
   assert.match(packageVerifierSource, /manifest\[key\]\?\.name === 'map-runtime-core'/);
+  assert.match(browserSmokeSource, /value\.rulesetId === 'infinite-horror'/);
+  assert.match(browserSmokeSource, /manifest\[key\]\?\.name === 'map-runtime-core'/);
+  assert.doesNotMatch(browserSmokeSource, /assets\\\/ruleset-/);
 });
 
 test('modern shell owns Actor/current panels and Token-first tools without legacy proxies', () => {
