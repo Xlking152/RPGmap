@@ -167,6 +167,17 @@ function prepareMovement(raw = {}) {
   });
 }
 
+function prepareCalculations(raw = {}) {
+  return Object.freeze({
+    explain: actorFunction(raw.explain, (_actor, request = {}) => Object.freeze({
+      target: text(request.target),
+      baseValue: Number(request.baseValue) || 0,
+      sources: Object.freeze([]),
+      result: Number(request.baseValue) || 0,
+    })),
+  });
+}
+
 function presentationOptions(value) {
   return Object.freeze((Array.isArray(value) ? value : []).map(option => Object.freeze({ ...option })));
 }
@@ -198,6 +209,7 @@ export function prepareRuleset(raw = {}) {
   const importers = raw.importers && typeof raw.importers === 'object' ? raw.importers : {};
   const vision = raw.vision && typeof raw.vision === 'object' ? raw.vision : {};
   const movement = raw.movement && typeof raw.movement === 'object' ? raw.movement : {};
+  const calculations = raw.calculations && typeof raw.calculations === 'object' ? raw.calculations : {};
 
   return Object.freeze({
     apiVersion,
@@ -261,6 +273,7 @@ export function prepareRuleset(raw = {}) {
     }),
     vision: prepareVision(vision),
     movement: prepareMovement(movement),
+    calculations: prepareCalculations(calculations),
     importers: Object.freeze({ ...importers }),
     metadata: Object.freeze({ ...(raw.metadata || {}) }),
   });

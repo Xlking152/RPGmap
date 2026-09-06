@@ -44,6 +44,9 @@ export const infiniteHorrorRuleset = prepareRuleset({
       return defaultCostMeters;
     },
   },
+  calculations: {
+    explain: INFINITE_HORROR_ACTOR.explainCalculation,
+  },
   importers: {
     xlsx: {
       id: 'character-card-v1',

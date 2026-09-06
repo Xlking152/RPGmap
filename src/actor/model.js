@@ -202,6 +202,15 @@ export function resolveActorAttribute(actor, path, context = {}) {
   return actorRules(ruleset).resolveAttribute(compatibleActor(actor, ruleset), String(path || ''), context);
 }
 
+export function explainActorCalculation(actor, target, context = {}) {
+  if (!actor) return null;
+  const ruleset = getCompatibilityRuleset(context.ruleset);
+  return ruleset.calculations.explain(compatibleActor(actor, ruleset), {
+    target: String(target || ''),
+    context,
+  });
+}
+
 export function performActorOperation(actor, operation = {}, context = {}) {
   if (!actor) return { changed: false, blocked: 'missing_actor' };
   const ruleset = getCompatibilityRuleset(context.ruleset);

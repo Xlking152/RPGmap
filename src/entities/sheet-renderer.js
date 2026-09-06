@@ -170,7 +170,7 @@ export function renderEntitySheetSection(section) {
       const ratio = Number(item.max) > 0
         ? Math.max(0, Math.min(100, Number(item.current) / Number(item.max) * 100))
         : 0;
-      return `<div class="entity-resource" data-sheet-role="${escapeEntityHtml(item.role || '')}">
+      return `<div class="entity-resource" data-sheet-role="${escapeEntityHtml(item.role || '')}" title="${escapeEntityHtml(item.explanation || '')}">
         <strong>${escapeEntityHtml(item.label || item.id)}</strong>
         <button type="button" class="small-button"${operationData(item.decrementOperation)}>−</button>
         <label><input type="number" step="1" value="${escapeEntityHtml(item.current)}"${operationData(item.currentOperation)}> / </label>
