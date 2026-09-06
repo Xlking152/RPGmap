@@ -82,7 +82,7 @@ await copy('文档/操作指南.md', 'docs/OPERATION-GUIDE.md');
 await writeFile(path.join(root, 'VERSION.json'), `${JSON.stringify({
   app: 'RPGmap', version, releaseTag: `v${version}`,
   commit: await sourceCommit(),
-  worldSchema: 3,
+  worldSchema: 4,
   operationSchema: 4,
   statusSchema: 4,
   accessSchema: 4,
