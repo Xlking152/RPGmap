@@ -24,6 +24,10 @@ export function createContentSystem({ serverRuntime = false, worldId = 'default'
           const { templateBodyBlob } = await import('./body.js');
           return content.putBody(templateBodyBlob(value));
         },
+        async putJournal(value) {
+          const { journalBodyBlob } = await import('./body.js');
+          return content.putBody(journalBodyBlob(value));
+        },
         async putBody(blob) {
           const { inspectContent } = await import('./body.js');
           if (inspectContent(new Uint8Array(await blob.arrayBuffer()), blob.type).kind !== 'body') throw new Error('content_type_unsupported');

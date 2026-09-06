@@ -14,6 +14,7 @@ import {
   mergeActorDelta,
   normalizeActorDelta,
   rebaseActorDelta,
+  resolveTokenActor,
 } from '../token/actor.js';
 import { normalizeTokenAccess } from '../token/access.js';
 import { normalizeSceneToken } from '../token/model.js';
@@ -32,8 +33,9 @@ import { migrateWorldSchema3State } from './migration.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { advanceStatusDurations, STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { DOCUMENT_OPERATION_SCHEMA_VERSION } from '../documents/protocol.js';
-import { normalizeMovementBudget } from '../movement/model.js';
+import { movementCapabilityFailure, normalizeMovementBudget } from '../movement/model.js';
 import { validateDoorInteraction } from '../interaction/door-authority.js';
+import { normalizeJournalEntry } from '../journal/model.js';
 
 export {
   DOCUMENT_BATCH_LIMIT,
@@ -63,6 +65,8 @@ const OPERATION_TYPES = new Set([
   'world.rename',
   'world.library.upsert',
   'world.library.delete',
+  'journal.upsert',
+  'journal.delete',
   'actor.copy',
   'actor.organization.update',
   'actor.upsert',
@@ -168,6 +172,28 @@ function worldFromState(state) {
     fail('World operation requires initialized World V2', 'world_v2_required');
   }
   return world;
+}
+
+export function markMovementAdjudicationRequired(state, ruleset) {
+  if (!ruleset?.movement?.describe) return false;
+  const world = worldFromState(state);
+  let changed = false;
+  for (const scene of world.scenes || []) {
+    for (let index = 0; index < (scene.tokens || []).length; index += 1) {
+      const token = scene.tokens[index];
+      const movement = token?.movement || {};
+      let actor;
+      try { actor = resolveTokenActor({ ...world, activeSceneId: scene.id }, token.id, { ruleset })?.actor; }
+      catch { continue; }
+      const descriptor = ruleset.movement.describe(actor, { token, scene, world }) || {};
+      const unavailable = Boolean(movementCapabilityFailure(descriptor, movement.mode || 'walk'))
+        || (Number(token.elevationMeters) > 0 && descriptor.fly !== true);
+      if (!unavailable || movement.adjudicationRequired === true) continue;
+      if (!changed) changed = true;
+      scene.tokens[index] = { ...token, movement: { ...structuredClone(movement), adjudicationRequired: true } };
+    }
+  }
+  return changed;
 }
 
 function cloneOperationInput(rawState, operations) {
@@ -479,6 +505,26 @@ function applyCanonicalOperation(state, operation, context = {}) {
     else world.templateLibrary[id] = normalizeLibraryEntry(payload.entry);
     assertTemplateLibrary(world.templateLibrary);
     return { changed: true };
+  }
+
+  if (type === 'journal.upsert' || type === 'journal.delete') {
+    const journalId = identifier(payload.journal?.id ?? payload.journalId, 'journalId');
+    const index = (world.journals || []).findIndex(entry => String(entry?.id) === journalId);
+    const previous = index < 0 ? null : world.journals[index];
+    if (!Object.hasOwn(payload, 'expected') || !same(payload.expected, previous)) {
+      fail('Journal changed since editing began', 'document_field_conflict');
+    }
+    world.journals = [...(world.journals || [])];
+    if (type === 'journal.delete') {
+      if (index < 0) fail('Journal is missing', 'journal_not_found');
+      world.journals.splice(index, 1);
+    } else {
+      const entry = normalizeJournalEntry(payload.journal);
+      if (entry.id !== journalId) fail('Journal target mismatch', 'document_target_mismatch');
+      if (index < 0) world.journals.push(entry);
+      else world.journals[index] = entry;
+    }
+    return { action: type, journalId, created: type === 'journal.upsert' && index < 0 };
   }
 
   if (type === 'actor.copy') {
@@ -1087,10 +1133,16 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
       }
     }
   }
+  const shouldRecheckMovement = operations.some(operation => operation.type.startsWith('actor.')
+    || operation.type.startsWith('status.')
+    || ['token.actorDelta.replace', 'token.upsert', 'token.create'].includes(operation.type));
+  const movementAdjudicationChanged = shouldRecheckMovement
+    && markMovementAdjudicationRequired(state, context.ruleset);
   const world = worldFromState(state);
   world.updatedAt = String(context.now || new Date().toISOString());
-  projectGranularOperationState(state, operations);
-  const changeSet = createOperationChangeSet(operations, results, rawState, state)
+  if (movementAdjudicationChanged) projectWorldOperationState(state);
+  else projectGranularOperationState(state, operations);
+  const changeSet = (movementAdjudicationChanged ? null : createOperationChangeSet(operations, results, rawState, state))
     || createWorldOperationChangeSet(rawState, state);
   applyFogOperationDirtyBounds(changeSet, operations, context.mapMetrics);
   return {
@@ -1288,6 +1340,7 @@ export function createWorldOperationChangeSet(beforeState, afterState) {
   );
   return {
     actors: changedIds(beforeWorld.actors || [], afterWorld.actors || []),
+    journals: changedIds(beforeWorld.journals || [], afterWorld.journals || []),
     tokens,
     scenes: {
       ...sceneChanges,
@@ -1313,6 +1366,8 @@ export function createWorldOperationPatch(beforeState, afterState) {
   if (!same(beforeWorld.templateLibrary, afterWorld.templateLibrary)) {
     patch.world.templateLibrary = diffById(Object.values(beforeWorld.templateLibrary || {}), Object.values(afterWorld.templateLibrary || {}));
   }
+  const journals = diffById(beforeWorld.journals || [], afterWorld.journals || []);
+  if (journals.upsert.length || journals.remove.length) patch.world.journals = journals;
   const actors = diffById(beforeWorld.actors, afterWorld.actors);
   if (actors.upsert.length || actors.remove.length) patch.world.actors = actors;
   if (!same(beforeWorld.statusDefinitions, afterWorld.statusDefinitions)) {
@@ -1381,6 +1436,7 @@ export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false, p
     assertTemplateLibrary(world.templateLibrary);
   }
   if (worldPatch.actors) world.actors = applyIdPatch(world.actors, worldPatch.actors);
+  if (worldPatch.journals) world.journals = applyIdPatch(world.journals || [], worldPatch.journals);
   if (worldPatch.statusDefinitions !== undefined) world.statusDefinitions = clone(array(worldPatch.statusDefinitions, 'statusDefinitions'));
   if (worldPatch.scenes) {
     world.scenes = applyIdPatch(world.scenes, worldPatch.scenes);
@@ -1519,6 +1575,16 @@ export function deriveWorldOperations(beforeState, afterState) {
   if (!same(beforeState?.preferences?.chatSystem, afterState?.preferences?.chatSystem)) unsupported.push('chat');
   if (!same(unsupportedProjection(beforeState), unsupportedProjection(afterState))) unsupported.push('runtime_state');
   if (!same(beforeWorld.statusDefinitions, afterWorld.statusDefinitions)) unsupported.push('status_definitions');
+
+  const journals = diffById(beforeWorld.journals || [], afterWorld.journals || []);
+  journals.upsert.forEach(journal => operations.push({ type: 'journal.upsert', payload: {
+    journal,
+    expected: beforeWorld.journals?.find(entry => String(entry.id) === String(journal.id)) || null,
+  } }));
+  journals.remove.forEach(journalId => operations.push({ type: 'journal.delete', payload: {
+    journalId,
+    expected: beforeWorld.journals?.find(entry => String(entry.id) === String(journalId)) || null,
+  } }));
 
   if (String(beforeWorld.name ?? '') !== String(afterWorld.name ?? '')) {
     operations.push({ type: 'world.rename', payload: { name: afterWorld.name } });

@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, link, rm, readdir, lstat } from 'node:fs/promises';
 import path from 'node:path';
-import { CONTENT_ID, collectContentReferences, readableImageReferences } from '../../src/content/references.js';
-import { inspectContent } from '../../src/content/body.js';
+import { CONTENT_ID, collectContentReferences, readableImageReferences, readableJournalBodyReferences } from '../../src/content/references.js';
+import { inspectContent, JOURNAL_BODY_TYPE } from '../../src/content/body.js';
 import { prepareInlineImageMigration } from '../../src/content/migration.js';
 
 const fail = (code, status = 400) => { throw Object.assign(new Error(code), { code, status }); };
@@ -60,9 +60,21 @@ export function createContentStorage({ directory, getState, getProjection, authe
     if (!CONTENT_ID.test(id)) fail('content_not_found', 404);
     return path.join(root, `${id}.content`);
   };
-  const authorized = (session, id) => session.role === 'gm'
-    || readableImageReferences(getProjection(session)).has(`asset:${id}`);
   const read = id => readContentRecord(root, id);
+  const authorized = async (session, record) => {
+    if (session.role === 'gm') return true;
+    const projection = getProjection(session);
+    if (record.kind === 'body') {
+      return record.type === JOURNAL_BODY_TYPE
+        && readableJournalBodyReferences(projection).has(`body:${record.id}`);
+    }
+    if (readableImageReferences(projection).has(`asset:${record.id}`)) return true;
+    for (const reference of readableJournalBodyReferences(projection)) {
+      const body = await read(reference.slice(5));
+      if (body.type === JOURNAL_BODY_TYPE && body.dependencies?.includes(`asset:${record.id}`)) return true;
+    }
+    return false;
+  };
   return {
     async handle(req, res, sendJson) {
       const pathname = new URL(req.url, 'http://localhost').pathname;
@@ -123,10 +135,10 @@ export function createContentStorage({ directory, getState, getProjection, authe
           const paths = collectContentReferences(getState()?.preferences?.worldV2).get(`${record.kind}:${id}`) || [];
           sendJson(res, 200, { count: paths.length, paths });
         } else if (id && !references && ['GET', 'HEAD'].includes(req.method)) {
-          if (!authorized(session, id)) fail('content_not_found', 404);
           const record = await read(id);
-          if (record.kind === 'body' && !isGm) fail('content_not_found', 404);
-          if (!authenticate(req) || !authorized(session, id)) fail('content_not_found', 404);
+          if (!await authorized(session, record)) fail('content_not_found', 404);
+          const currentSession = authenticate(req);
+          if (!currentSession || !await authorized(currentSession, record)) fail('content_not_found', 404);
           res.writeHead(200, {
             'Content-Type': record.type, 'Content-Length': record.bytes.length,
             'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',

@@ -10,6 +10,7 @@ import {
   resolveLineOfSightEnabled,
   sphereGroundRadiusMeters,
 } from '../spatial/kernel.js';
+import { journalVisibleToAudience } from '../journal/model.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -364,6 +365,11 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   }
   delete world.templateLibrary;
   const parties = viewerParties(world, context);
+  world.journals = (world.journals || [])
+    .filter(entry => journalVisibleToAudience(entry, {
+      role: context.role, userId: context.userId, partyIds: [...parties],
+    }))
+    .map(entry => structuredClone(entry));
   const definitions = new Map((world.statusDefinitions || []).map(item => [String(item?.id ?? ''), item]));
   const vision = currentVision(world, context, actors);
   const metersPerUnit = Math.max(0.000001, Number(context.mapMetrics?.metersPerUnit) || 1);

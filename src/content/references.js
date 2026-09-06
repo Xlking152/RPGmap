@@ -33,6 +33,11 @@ export function readableImageReferences(state) {
   return collectContentReferences({ actors: world?.actors || [], tokens: (world?.scenes || []).flatMap(scene => scene.tokens || []) }, { imagesOnly: true });
 }
 
+export function readableJournalBodyReferences(state) {
+  const journals = state?.preferences?.worldV2?.journals || [];
+  return new Set(journals.map(entry => entry?.bodyRef).filter(reference => contentReference(reference)?.kind === 'body'));
+}
+
 export function contentImageAttributes(value, escape) {
   const reference = contentReference(value);
   return reference?.kind === 'asset' ? `data-content-ref="${value}"` : `src="${escape(value)}"`;

@@ -730,6 +730,7 @@ function visibleResultIds(state) {
     actors: new Set((worldValue?.actors || []).map(item => String(item?.id ?? ''))),
     tokens: new Set((worldValue?.scenes || []).flatMap(scene => (scene.tokens || []).map(item => String(item?.id ?? '')))),
     markers: new Set((worldValue?.scenes || []).flatMap(scene => (scene.markers || []).map(item => String(item?.id ?? '')))),
+    journals: new Set((worldValue?.journals || []).map(item => String(item?.id ?? ''))),
   };
 }
 function projectResultsForSession(results, projectedState, session) {
@@ -739,6 +740,7 @@ function projectResultsForSession(results, projectedState, session) {
     if (result?.tokenId && !visible.tokens.has(String(result.tokenId))) return false;
     if (result?.actorId && !visible.actors.has(String(result.actorId))) return false;
     if (result?.markerId && !visible.markers.has(String(result.markerId))) return false;
+    if (result?.journalId && !visible.journals.has(String(result.journalId))) return false;
     return true;
   }).map(result => structuredClone(result));
 }
@@ -1193,6 +1195,9 @@ function authorizeOperations(session, operations) {
       }
       value.payload = { text };
       return value;
+    }
+    if (value.type.startsWith('journal.')) {
+      operationDenied('journal_gm_only', 'Only the GM can edit Journal pages');
     }
     if (value.type.startsWith('status.') && !value.type.startsWith('status.definition.')) {
       if (value.type === 'status.batch') {

@@ -464,7 +464,10 @@ export function createEntityTokenController({
         ${structureAllowed ? `<button type="button" class="small-button danger" data-sheet-action="delete-token" data-token-id="${escapeHtml(token.id)}">删除 Token</button>` : ''}
       </div>`;
       const content = ({ basic, vision, permissions, advanced })[tab] || basic;
-      return `<div class="entity-card token-config" data-token-id="${escapeHtml(token.id)}"><div class="entity-card-top"><span class="entity-avatar">${escapeHtml(tokenName.trim()[0] || '?')}</span><div class="entity-card-copy"><strong>${escapeHtml(tokenName)}</strong><small>${token.actorLink === false ? '独立实例' : '共享角色'} · ${escapeHtml(positionLabel(token))}</small></div></div><nav class="token-config-tabs">${[['basic','基础'],['vision','视野'],['permissions','权限'],['advanced','高级']].map(([value,label]) => `<button type="button" class="${tab === value ? 'active' : ''}" data-sheet-action="token-config-tab" data-token-id="${escapeHtml(token.id)}" data-token-tab="${value}">${label}</button>`).join('')}</nav><div class="token-config-body">${content}</div></div>`;
+      const adjudication = token.movement?.adjudicationRequired
+        ? '<div class="token-movement-adjudication" role="status">当前移动能力已失效；位置保持不变，等待 GM 裁决或重新放置。</div>'
+        : '';
+      return `<div class="entity-card token-config" data-token-id="${escapeHtml(token.id)}"><div class="entity-card-top"><span class="entity-avatar">${escapeHtml(tokenName.trim()[0] || '?')}</span><div class="entity-card-copy"><strong>${escapeHtml(tokenName)}</strong><small>${token.actorLink === false ? '独立实例' : '共享角色'} · ${escapeHtml(positionLabel(token))}</small></div></div>${adjudication}<nav class="token-config-tabs">${[['basic','基础'],['vision','视野'],['permissions','权限'],['advanced','高级']].map(([value,label]) => `<button type="button" class="${tab === value ? 'active' : ''}" data-sheet-action="token-config-tab" data-token-id="${escapeHtml(token.id)}" data-token-tab="${value}">${label}</button>`).join('')}</nav><div class="token-config-body">${content}</div></div>`;
     }).join('');
     return `<section class="entity-section"><h3>Token 实例</h3>${cards || '<div class="entity-empty">当前角色尚未放置 Token。</div>'}<button type="button" class="small-button" data-sheet-action="place-token">放置 Token</button></section>`;
   }

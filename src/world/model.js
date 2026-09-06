@@ -10,6 +10,7 @@ import { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 import { STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { assertTemplateLibrary } from '../library/model.js';
 import { normalizeMovementBudget, normalizeMovementState } from '../movement/model.js';
+import { normalizeJournalCollection } from '../journal/model.js';
 
 export { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 
@@ -184,6 +185,7 @@ export function normalizeWorldV2(raw, { mapPackage = null, ruleset = null } = {}
     activeSceneId,
     actors,
     statusDefinitions: rulesetStatusDefinitions(source.statusDefinitions, ruleset),
+    journals: normalizeJournalCollection(source.journals),
     scenes,
     createdAt: text(source.createdAt, now),
     updatedAt: text(source.updatedAt, now),
@@ -224,6 +226,7 @@ export function createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worl
     activeSceneId: sceneId,
     actors,
     statusDefinitions: clone(array(entity.statusDefinitions)),
+    journals: [],
     scenes: [{
       id: sceneId,
       name: text(mapPackage?.title ?? mapPackage?.name, mapRef.id),

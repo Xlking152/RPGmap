@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { prepareRuleset } from '../src/ruleset/contract.js';
 import { createMovementAuthority } from '../src/movement/authority.js';
-import { applyWorldOperations } from '../src/world/operations.js';
+import { applyWorldOperations, markMovementAdjudicationRequired } from '../src/world/operations.js';
 
 function ruleset(capabilities = {}) {
   return prepareRuleset({
@@ -140,4 +140,17 @@ test('takeoff and landing require flight and landing returns to walk mode', () =
     waypoints: [{ x: 10, y: 50, elevationMeters: 6 }], verticalAction: 'takeoff',
   });
   assert.equal(denied.code, 'movement_flight_forbidden');
+});
+
+test('losing flight preserves position and marks the Token for GM adjudication', () => {
+  const value = fixture();
+  value.token.elevationMeters = 12;
+  value.token.movement = { mode: 'fly', spentMeters: 4, turnKey: 'turn', adjudicationRequired: false };
+  const before = { x: value.token.x, y: value.token.y, elevationMeters: value.token.elevationMeters };
+  assert.equal(markMovementAdjudicationRequired(value.state, ruleset({ fly: false })), true);
+  const token = value.state.preferences.worldV2.scenes[0].tokens[0];
+  assert.deepEqual({ x: token.x, y: token.y, elevationMeters: token.elevationMeters }, before);
+  assert.equal(token.movement.adjudicationRequired, true);
+  assert.equal(markMovementAdjudicationRequired(value.state, ruleset({ fly: true })), false);
+  assert.equal(token.movement.adjudicationRequired, true);
 });

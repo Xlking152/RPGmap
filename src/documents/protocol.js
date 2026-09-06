@@ -6,13 +6,15 @@ export const DOCUMENT_MOVE_POINT_LIMIT = 64;
 
 const ACTIONS = new Set(['create', 'update', 'delete', 'move', 'append']);
 const DOCUMENT_TYPES = new Set([
-  'World', 'Actor', 'Token', 'Scene', 'Marker', 'ChatMessage', 'Combat', 'Status', 'Fog',
+  'World', 'Actor', 'Token', 'Scene', 'Marker', 'Journal', 'ChatMessage', 'Combat', 'Status', 'Fog',
 ]);
 
 const INTENT_TO_OPERATION = new Map([
   ['world.rename', 'world.rename'],
   ['world.library.upsert', 'world.library.upsert'],
   ['world.library.delete', 'world.library.delete'],
+  ['journal.upsert', 'journal.upsert'],
+  ['journal.delete', 'journal.delete'],
   ['actor.copy', 'actor.copy'],
   ['actor.organization.update', 'actor.organization.update'],
   ['actor.upsert', 'actor.upsert'],
@@ -143,6 +145,7 @@ function withAddress(write) {
     payload.worldId = id;
   }
   if (type === 'Actor') payload.actorId ??= id;
+  if (type === 'Journal') payload.journalId ??= id;
   if (type === 'Token') {
     payload.tokenId ??= id;
     if (parent?.type === 'Scene') payload.sceneId ??= parent.id;
@@ -157,6 +160,7 @@ function withAddress(write) {
     : write.intent.startsWith('actor.') ? 'Actor'
       : write.intent.startsWith('token.') ? 'Token'
         : write.intent.startsWith('marker.') ? 'Marker'
+          : write.intent.startsWith('journal.') ? 'Journal'
           : write.intent.startsWith('scene.') ? 'Scene'
             : write.intent.startsWith('fog.') ? 'Fog'
               : write.intent.startsWith('status.') ? 'Status'
@@ -166,7 +170,8 @@ function withAddress(write) {
   const targetId = type === 'Actor' ? payload.actor?.id ?? payload.actorId
     : type === 'Token' ? payload.token?.id ?? payload.tokenId
       : type === 'Scene' ? payload.scene?.id ?? payload.sceneId
-        : type === 'Marker' ? payload.marker?.id ?? payload.markerId : null;
+        : type === 'Marker' ? payload.marker?.id ?? payload.markerId
+          : type === 'Journal' ? payload.journal?.id ?? payload.journalId : null;
   if (targetId != null && String(targetId) !== id) fail('Document id does not match payload', 'document_target_mismatch');
   if (parent && (!['Token', 'Marker', 'Status', 'Fog'].includes(type) || parent.type !== 'Scene'
     || (payload.sceneId != null && String(payload.sceneId) !== parent.id))) {
@@ -222,6 +227,7 @@ export function worldOperationsToDocumentWrites(operations, { worldId, sceneId, 
     if (type === 'actor.runtime.perform' && data.tokenId) {
       documentType = 'Token'; id = data.tokenId;
     } else if (type.startsWith('actor.')) { documentType = 'Actor'; id = data.actor?.id ?? data.actorId; }
+    else if (type.startsWith('journal.')) { documentType = 'Journal'; id = data.journal?.id ?? data.journalId; }
     else if (type.startsWith('token.')) { documentType = 'Token'; id = data.token?.id ?? data.tokenId; }
     else if (type.startsWith('marker.')) { documentType = 'Marker'; id = data.marker?.id ?? data.markerId; }
     else if (type.startsWith('scene.fog.')) { documentType = 'Fog'; id = data.sceneId ?? sceneId; }

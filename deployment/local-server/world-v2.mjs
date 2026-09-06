@@ -178,6 +178,19 @@ export function assertWorldV2(value) {
   cleanId(ruleset.id, 'worldV2.ruleset.id');
   if (typeof ruleset.version !== 'string' || !ruleset.version.trim()) fail('worldV2.ruleset.version is required');
   const actorIds = unique(world.actors, 'worldV2.actors');
+  const journals = Array.isArray(world.journals) ? world.journals : [];
+  unique(journals, 'worldV2.journals');
+  journals.forEach((entry, index) => {
+    const label = `worldV2.journals[${index}]`;
+    const journal = object(entry, label);
+    if (typeof journal.title !== 'string' || !journal.title.trim() || journal.title.length > 240) fail(`${label}.title is invalid`);
+    if (!/^body:[a-f0-9]{64}$/.test(String(journal.bodyRef || ''))) fail(`${label}.bodyRef is invalid`);
+    const visibility = object(journal.visibility, `${label}.visibility`);
+    if (!VISIBILITY_MODES.has(String(visibility.mode))) fail(`${label}.visibility.mode is invalid`);
+    stringIds(visibility.userIds, `${label}.visibility.userIds`);
+    if (journal.partyId !== null && typeof journal.partyId !== 'string') fail(`${label}.partyId must be a string or null`);
+    if (visibility.mode === 'party' && !journal.partyId) fail(`${label}.partyId is required`);
+  });
   const actorById = new Map(world.actors.map(actor => [String(actor?.id ?? ''), actor]));
   world.actors.forEach((actor, index) => {
     if (!ACTOR_TYPES.has(String(actor.type))) fail(`worldV2.actors[${index}].type is invalid`);

@@ -37,6 +37,7 @@ export function installEntityStyles(documentNode) {
     .entity-card-actions input[type="number"] { width:72px; }
     .token-config { padding:0; overflow:hidden; }
     .token-config > .entity-card-top { padding:10px 10px 2px; }
+    .token-movement-adjudication { margin:6px 10px 0; padding:7px 9px; border-left:3px solid #a66b16; background:#fff4d8; color:#71470c; font-size:12px; overflow-wrap:anywhere; }
     .token-config-tabs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border-bottom:1px solid #dce3e0; }
     .token-config-tabs button { min-width:0; border:0; border-top:1px solid #dce3e0; padding:9px 4px; background:#eef3ef; color:#526366; cursor:pointer; font-weight:750; }
     .token-config-tabs button.active { color:#176d76; background:#fff; box-shadow:inset 0 -3px #176d76; }

@@ -1,6 +1,6 @@
 const SCENE_COLLECTIONS = Object.freeze({ Token: 'tokens', Marker: 'markers', AttackArea: 'attackAreas', SceneEvent: 'sceneEvents' });
-const WORLD_COLLECTIONS = Object.freeze({ Actor: 'actors', StatusDefinition: 'statusDefinitions' });
-const OMIT_WORLD = new Set(['actors', 'scenes', 'statusDefinitions', 'updatedAt']);
+const WORLD_COLLECTIONS = Object.freeze({ Actor: 'actors', StatusDefinition: 'statusDefinitions', Journal: 'journals' });
+const OMIT_WORLD = new Set(['actors', 'scenes', 'statusDefinitions', 'journals', 'updatedAt']);
 const OMIT_SCENE = new Set([...Object.values(SCENE_COLLECTIONS), 'featureStates', 'fog']);
 const FORBIDDEN = new Set(['__proto__', 'prototype', 'constructor']);
 const plain = value => Boolean(value && typeof value === 'object' && !Array.isArray(value));
