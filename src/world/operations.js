@@ -320,7 +320,7 @@ function pruneCombatReferences(state) {
 function mergeRuntimeToken(canonical, runtime) {
   if (!runtime || String(runtime.id ?? '') !== String(canonical.id ?? '')) return clone(canonical);
   const next = clone(canonical);
-  for (const key of ['actorLink', 'actorDelta', 'diameterMeters', 'rotation', 'elevationMeters', 'movement', 'controllerUserIds', 'visibility', 'vision', 'locked', 'showName', 'effects']) {
+  for (const key of ['actorLink', 'actorDelta', 'diameterMeters', 'rotation', 'elevationMeters', 'movement', 'light', 'controllerUserIds', 'visibility', 'vision', 'locked', 'showName', 'effects']) {
     if (runtime[key] !== undefined) next[key] = clone(runtime[key]);
   }
   return next;

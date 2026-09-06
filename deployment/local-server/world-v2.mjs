@@ -143,6 +143,16 @@ function assertTokenAccess(token, actor, label) {
   }
   if (Object.hasOwn(vision, 'rangeOverrideMeters')) fail(`${label}.vision.rangeOverrideMeters is legacy-only`);
   stringIds(vision.overrideUserIds, `${label}.vision.overrideUserIds`);
+  if (token.light !== undefined) {
+    const light = object(token.light, `${label}.light`);
+    if (typeof light.enabled !== 'boolean') fail(`${label}.light.enabled must be boolean`);
+    for (const field of ['rangeMeters', 'intensity', 'elevationOffsetMeters']) {
+      if (!Number.isFinite(Number(light[field])) || Number(light[field]) < 0) fail(`${label}.light.${field} is invalid`);
+    }
+    if (Number(light.intensity) > 4) fail(`${label}.light.intensity is invalid`);
+    if (!/^#[0-9a-f]{6}$/i.test(String(light.color || ''))) fail(`${label}.light.color is invalid`);
+    if (!['scene', 'none'].includes(String(light.occlusion))) fail(`${label}.light.occlusion is invalid`);
+  }
   if (Object.hasOwn(token, 'hidden')) fail(`${label}.hidden is legacy-only`, 'legacy_token_hidden_forbidden');
   if (Object.hasOwn(token, 'elevationFt')) fail(`${label}.elevationFt is legacy-only`, 'legacy_height_forbidden');
   if (!Number.isFinite(Number(token.elevationMeters)) || Number(token.elevationMeters) < 0) fail(`${label}.elevationMeters is invalid`);

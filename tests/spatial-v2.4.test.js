@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import lanzhou from '../reference/maps/lanzhou/runtime.json' with { type: 'json' };
 import {
   deriveVisionOccluders,
+  deriveSceneLightSources,
   distance3dMeters,
   inspectLineOfSight,
   lightContributionAtPoint,
+  perceptionLevelAtPoint,
   sphereGroundRadiusMeters,
 } from '../src/spatial/kernel.js';
 import { projectStateForAudience } from '../src/vision/audience.js';
@@ -49,6 +51,40 @@ test('light contribution respects 3D range and configured occlusion', () => {
   const light = { x: 0, y: 0, elevationMeters: 0, rangeMeters: 20, intensity: 1, occlusion: 'sight' };
   assert.equal(lightContributionAtPoint(point, [light], { occluders: [wall] }), 0);
   assert.equal(lightContributionAtPoint(point, [{ ...light, occlusion: 'none' }]), 0.5);
+});
+
+test('target lighting and senses use the same precise or vague perception result', () => {
+  const vision = {
+    x: 0, y: 0, elevationMeters: 0,
+    preciseRangeMeters: 20, vagueRangeMeters: 20, senses: {},
+  };
+  const target = { x: 10, y: 0, elevationMeters: 0 };
+  assert.equal(perceptionLevelAtPoint({ vision, target, ambient: 'dark' }), 'vague');
+  assert.equal(perceptionLevelAtPoint({
+    vision, target, ambient: 'dark',
+    lights: [{ x: 10, y: 0, elevationMeters: 2, rangeMeters: 20, intensity: 1, occlusion: 'none' }],
+  }), 'precise');
+  assert.equal(perceptionLevelAtPoint({
+    vision: { ...vision, senses: { darkvision: true } }, target, ambient: 'dark',
+  }), 'precise');
+  assert.equal(perceptionLevelAtPoint({
+    vision, target, ambient: 'normal', lineOfSightEnabled: true, occluders: [wall],
+  }), 'none');
+});
+
+test('Scene light sources combine static MapPackage and Token lights without exposing disabled values', () => {
+  const values = deriveSceneLightSources({ lights: [{
+    id: 'static', x: 1, y: 2, elevationMeters: 3, rangeMeters: 10, intensity: 1,
+  }] }, { tokens: [{
+    id: 'token', placement: 'map', x: 4, y: 5, elevationMeters: 6,
+    light: { enabled: true, rangeMeters: 8, intensity: 2, elevationOffsetMeters: 1 },
+  }, {
+    id: 'dark', placement: 'map', x: 0, y: 0,
+    light: { enabled: false, rangeMeters: 100 },
+  }] });
+  assert.deepEqual(values.map(value => [value.id, value.elevationMeters, value.rangeMeters]), [
+    ['static', 3, 10], ['token-light:token', 7, 8],
+  ]);
 });
 
 test('LOS-constrained exploration stores only visible five-metre cells', () => {
@@ -101,6 +137,15 @@ test('Audience projection applies sphere range and LOS to airborne hostile Token
   assert.deepEqual(blocked.preferences.worldV2.scenes[0].tokens.map(token => token.id), ['source']);
   const visible = projectStateForAudience(audienceState(14), audienceContext);
   assert.deepEqual(visible.preferences.worldV2.scenes[0].tokens.map(token => token.id), ['source', 'target']);
+});
+
+test('GM-managed audience LOS override takes precedence over the Scene default', () => {
+  const bypassed = projectStateForAudience(audienceState(0), { ...audienceContext, lineOfSightOverride: false });
+  assert.deepEqual(bypassed.preferences.worldV2.scenes[0].tokens.map(token => token.id), ['source', 'target']);
+  const state = audienceState(0);
+  state.preferences.worldV2.scenes[0].settings.lineOfSightEnabled = false;
+  const forced = projectStateForAudience(state, { ...audienceContext, lineOfSightOverride: true });
+  assert.deepEqual(forced.preferences.worldV2.scenes[0].tokens.map(token => token.id), ['source']);
 });
 
 test('Lanzhou declares bounded LOS only for walls and openable gates', () => {

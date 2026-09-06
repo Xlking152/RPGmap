@@ -162,6 +162,28 @@ function normalizeVisionCapability(feature, declared, navigation) {
   });
 }
 
+function normalizeLightDescriptor(value, index) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`Invalid MapPackage: lights[${index}] must be an object`);
+  }
+  const x = Number(value.x);
+  const y = Number(value.y);
+  const elevationMeters = asOptionalNonNegativeNumber(value.elevationMeters, `lights[${index}].elevationMeters`) ?? 0;
+  const rangeMeters = asOptionalNonNegativeNumber(value.rangeMeters, `lights[${index}].rangeMeters`) ?? 0;
+  const intensity = Number(value.intensity ?? 1);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(intensity) || intensity < 0 || intensity > 4) {
+    throw new TypeError(`Invalid MapPackage: lights[${index}] has invalid coordinates or intensity`);
+  }
+  const color = /^#[0-9a-f]{6}$/i.test(String(value.color || '')) ? String(value.color) : '#fff3c4';
+  return Object.freeze({
+    ...value,
+    id: asNonEmptyString(value.id, `lights[${index}].id`),
+    x, y, elevationMeters, rangeMeters, intensity, color,
+    enabled: value.enabled !== false && rangeMeters > 0,
+    occlusion: value.occlusion === 'none' ? 'none' : 'scene',
+  });
+}
+
 function normalizeStatusIdList(value, label) {
   if (value == null) return Object.freeze([]);
   if (!Array.isArray(value) || value.length > 64) {
@@ -323,6 +345,7 @@ export function prepareMapPackage(rawPackage, { source = 'unknown' } = {}) {
     logicalLayers: Object.freeze(layerPlan.map((entry) => entry.id)),
     featureTaxonomy,
     features,
+    lights: Object.freeze((Array.isArray(rawPackage.lights) ? rawPackage.lights : []).map(normalizeLightDescriptor)),
     featureCount: features.length,
     svg,
     createSvg: render,

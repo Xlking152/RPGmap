@@ -8,6 +8,7 @@ import {
   normalizeAccessState,
   publicUser,
   resetUserPlayerKey,
+  updateUserRecord,
   validatePlayerWorldPush,
   verifyPlayerKey,
   verifyUserCredential,
@@ -114,6 +115,15 @@ test('access normalization never exposes raw credentials and keeps default Actor
   assert.equal(normalized.users[0].defaultActorId, null);
   assert.equal(normalized.users[0].ownership['actor-a'], 'observer');
   assert.equal(normalized.schemaVersion, ACCESS_SCHEMA_VERSION);
+});
+
+test('GM-managed LOS override is normalized and exposed without granting a Player write path', () => {
+  const { user } = createBoundUser({ name: 'LOS', lineOfSightOverride: true });
+  assert.equal(publicUser(user).lineOfSightOverride, true);
+  updateUserRecord(user, { lineOfSightOverride: false });
+  assert.equal(normalizeAccessState({ schemaVersion: 4, users: [user] }).users[0].lineOfSightOverride, false);
+  updateUserRecord(user, { lineOfSightOverride: 'forged' });
+  assert.equal(user.lineOfSightOverride, null);
 });
 
 test('Access Schema 4 preserves LIMITED and enforces the shared action matrix', () => {

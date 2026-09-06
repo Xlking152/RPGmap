@@ -179,17 +179,81 @@ export function lightContributionAtPoint(point, lights = [], {
   return Math.min(1, brightest);
 }
 
+export function normalizeLightSource(value) {
+  const point = normalizeSpatialPoint(value);
+  const rangeMeters = Math.max(0, number(value?.rangeMeters));
+  if (!point || rangeMeters <= 0 || value?.enabled === false) return null;
+  return Object.freeze({
+    ...point,
+    id: String(value?.id ?? ''),
+    rangeMeters,
+    intensity: Math.max(0, Math.min(4, number(value?.intensity, 1))),
+    color: /^#[0-9a-f]{6}$/i.test(String(value?.color || '')) ? String(value.color) : '#fff3c4',
+    occlusion: value?.occlusion === 'none' ? 'none' : 'scene',
+  });
+}
+
+export function deriveSceneLightSources(mapPackage, scene = null) {
+  const declared = Array.isArray(mapPackage?.lights) ? mapPackage.lights : [];
+  const tokenLights = (Array.isArray(scene?.tokens) ? scene.tokens : []).flatMap(token => {
+    if (token?.placement !== 'map' || token?.light?.enabled !== true) return [];
+    return [{
+      ...token.light,
+      id: `token-light:${String(token.id || '')}`,
+      x: Number(token.x),
+      y: Number(token.y),
+      elevationMeters: (Number(token.elevationMeters) || 0) + (Number(token.light.elevationOffsetMeters) || 0),
+    }];
+  });
+  return [...declared, ...tokenLights].flatMap(value => normalizeLightSource(value) || []);
+}
+
+export function resolveLightingAtPoint(point, ambient = 'normal', lights = [], options = {}) {
+  const base = ['normal', 'dim', 'dark'].includes(String(ambient)) ? String(ambient) : 'normal';
+  if (base === 'normal') return Object.freeze({ level: 'normal', contribution: 1, source: 'ambient' });
+  const contribution = lightContributionAtPoint(point, lights, options);
+  if (contribution >= 0.5) return Object.freeze({ level: 'normal', contribution, source: 'light' });
+  if (base === 'dim' || contribution > 0) return Object.freeze({ level: 'dim', contribution, source: contribution > 0 ? 'light' : 'ambient' });
+  return Object.freeze({ level: 'dark', contribution: 0, source: 'ambient' });
+}
+
+export function perceptionLevelAtPoint({
+  vision,
+  target,
+  ambient = 'normal',
+  lights = [],
+  occluders = [],
+  metersPerUnit = 1,
+  lineOfSightEnabled = false,
+} = {}) {
+  const source = normalizeSpatialPoint(vision, vision?.elevationMeters);
+  const destination = normalizeSpatialPoint(target, target?.elevationMeters);
+  if (!source || !destination) return 'none';
+  const distance = distance3dMeters(source, destination, metersPerUnit);
+  let level = distance <= Math.max(0, number(vision?.preciseRangeMeters ?? vision?.rangeMeters)) ? 'precise'
+    : distance <= Math.max(0, number(vision?.vagueRangeMeters)) ? 'vague' : 'none';
+  if (level === 'none') return level;
+  if (lineOfSightEnabled && !inspectLineOfSight({ from: source, to: destination, occluders, metersPerUnit }).clear) return 'none';
+  if (level === 'precise') {
+    const lighting = resolveLightingAtPoint(destination, ambient, lights, { occluders, metersPerUnit });
+    const senses = vision?.senses || {};
+    if ((lighting.level === 'dim' && senses.lowLightVision !== true)
+      || (lighting.level === 'dark' && senses.darkvision !== true)) level = 'vague';
+  }
+  return level;
+}
+
 export function isPathPreciselyVisible(points, vision, options = {}) {
   if (!vision || !Array.isArray(points) || !points.length) return false;
   const source = normalizeSpatialPoint(vision, vision.elevationMeters);
   if (!source) return false;
-  const range = Math.max(0, number(vision.preciseRangeMeters ?? vision.rangeMeters));
-  return points.every(point => {
-    const target = normalizeSpatialPoint(point);
-    if (!target || distance3dMeters(source, target, options.metersPerUnit) > range) return false;
-    return options.lineOfSightEnabled !== true || inspectLineOfSight({
-      from: source, to: target, occluders: options.occluders,
-      metersPerUnit: options.metersPerUnit,
-    }).clear;
-  });
+  return points.every(point => perceptionLevelAtPoint({
+    vision: source === vision ? vision : { ...vision, ...source },
+    target: point,
+    ambient: options.ambient || vision.lighting || 'normal',
+    lights: options.lights || [],
+    occluders: options.occluders || [],
+    metersPerUnit: options.metersPerUnit,
+    lineOfSightEnabled: options.lineOfSightEnabled === true,
+  }) === 'precise');
 }

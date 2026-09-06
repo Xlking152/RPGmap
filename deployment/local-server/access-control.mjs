@@ -213,6 +213,7 @@ export function normalizeAccessState(raw) {
         ...normalizePlacementGrants(item.placementGrants) },
       tokenHash: typeof item.tokenHash === 'string' && item.tokenHash.length === 64 ? item.tokenHash : null,
       playerKeyHash: keyHash, claimHash: keyHash, disabled: item.disabled === true,
+      lineOfSightOverride: typeof item.lineOfSightOverride === 'boolean' ? item.lineOfSightOverride : null,
       createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
       updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString(),
     });
@@ -224,12 +225,12 @@ export function normalizeAccessState(raw) {
     users,
   };
 }
-function baseUser({ name, defaultActorId = null, ownership = {}, placementGrants = {} } = {}) {
+function baseUser({ name, defaultActorId = null, ownership = {}, placementGrants = {}, lineOfSightOverride = null } = {}) {
   const normalizedOwnership = normalizeOwnership(ownership);
   const actorId = cleanActorId(defaultActorId);
   if (actorId) normalizedOwnership[actorId] = OWNERSHIP.OWNER;
   const now = new Date().toISOString();
-  return { id: randomUUID(), name: cleanName(name), role: 'player', defaultActorId: actorId, ownership: normalizedOwnership, placementGrants: normalizePlacementGrants(placementGrants), tokenHash: null, playerKeyHash: null, claimHash: null, disabled: false, createdAt: now, updatedAt: now };
+  return { id: randomUUID(), name: cleanName(name), role: 'player', defaultActorId: actorId, ownership: normalizedOwnership, placementGrants: normalizePlacementGrants(placementGrants), lineOfSightOverride: typeof lineOfSightOverride === 'boolean' ? lineOfSightOverride : null, tokenHash: null, playerKeyHash: null, claimHash: null, disabled: false, createdAt: now, updatedAt: now };
 }
 export function createBoundUser(options = {}) {
   const playerKey = newPlayerKey();
@@ -274,12 +275,15 @@ export function updateUserRecord(user, patch = {}) {
   }
   if (user.defaultActorId && user.ownership[user.defaultActorId] !== OWNERSHIP.OWNER) user.defaultActorId = null;
   if (patch.disabled !== undefined) user.disabled = patch.disabled === true;
+  if (patch.lineOfSightOverride !== undefined) {
+    user.lineOfSightOverride = typeof patch.lineOfSightOverride === 'boolean' ? patch.lineOfSightOverride : null;
+  }
   user.updatedAt = new Date().toISOString();
   return user;
 }
 export function publicUser(user) {
   if (!user) return null;
-  return { id: user.id, name: user.name, role: 'player', defaultActorId: user.defaultActorId || null, ownership: { ...user.ownership }, placementGrants: normalizePlacementGrants(user.placementGrants), disabled: user.disabled === true, claimed: Boolean(user.tokenHash), hasPlayerKey: Boolean(user.playerKeyHash), createdAt: user.createdAt, updatedAt: user.updatedAt };
+  return { id: user.id, name: user.name, role: 'player', defaultActorId: user.defaultActorId || null, ownership: { ...user.ownership }, placementGrants: normalizePlacementGrants(user.placementGrants), lineOfSightOverride: typeof user.lineOfSightOverride === 'boolean' ? user.lineOfSightOverride : null, disabled: user.disabled === true, claimed: Boolean(user.tokenHash), hasPlayerKey: Boolean(user.playerKeyHash), createdAt: user.createdAt, updatedAt: user.updatedAt };
 }
 export function ownershipLevel(user, actorId) { return !user || !actorId ? OWNERSHIP.NONE : user.ownership?.[String(actorId)] || OWNERSHIP.NONE; }
 export function actorCatalogFromWorld(state) { return (entityState(state).actors || []).map(actor => ({ id: String(actor.id), name: cleanName(actor.name, 'Actor') })); }

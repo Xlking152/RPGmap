@@ -317,6 +317,7 @@ export function createMultiplayerController() {
             <div class="multiplayer-grid-2">
               <label class="multiplayer-field">User 名称<input name="userName" maxlength="40" value="${escapeHtml(user.name)}"></label>
               <label class="multiplayer-field">默认角色<select name="defaultActorId">${defaultActorOptions(user.defaultActorId)}</select></label>
+              <label class="multiplayer-field">视线遮挡覆盖<select name="lineOfSightOverride"><option value="inherit" ${user.lineOfSightOverride == null ? 'selected' : ''}>继承 Scene</option><option value="on" ${user.lineOfSightOverride === true ? 'selected' : ''}>强制启用</option><option value="off" ${user.lineOfSightOverride === false ? 'selected' : ''}>强制关闭</option></select></label>
             </div>
             ${ownershipRows(user)}
             ${placementGrantRows(user)}
@@ -1412,6 +1413,7 @@ export function createMultiplayerController() {
         }
 
         if (target.matches('[data-mp-user-form]')) {
+          const lineOfSightValue = String(form.get('lineOfSightOverride') || 'inherit');
           send({
             type: 'access.user.update',
             userId: target.dataset.userId,
@@ -1419,6 +1421,7 @@ export function createMultiplayerController() {
             defaultActorId: String(form.get('defaultActorId') || ''),
             ownership: collectOwnership(target),
             placementGrants: collectPlacementGrants(target),
+            lineOfSightOverride: lineOfSightValue === 'on' ? true : lineOfSightValue === 'off' ? false : null,
           });
           return;
         }

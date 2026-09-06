@@ -416,6 +416,7 @@ export function createEntityTokenController({
       const movementMode = api.movement?.getPreferredMode?.(token.id) || token.movement?.mode || 'walk';
       const movementCapabilities = token.movement?.capabilities || {};
       const movementBudget = scene.settings?.movementBudgetMetersPerTurn;
+      const tokenLight = token.light || {};
       const basic = `<div class="token-config-grid">
         <label>实例名称 <input data-token-name data-token-id="${escapeHtml(token.id)}" maxlength="80" value="${escapeHtml(tokenName)}" ${structureAllowed ? '' : 'disabled'}></label>
         <label>数据模式 <select data-token-link data-token-id="${escapeHtml(token.id)}" ${structureAllowed && actor.type === 'pc' ? '' : 'disabled'}><option value="linked" ${token.actorLink !== false ? 'selected' : ''}>Linked</option><option value="unlinked" ${token.actorLink === false ? 'selected' : ''}>Unlinked</option></select></label>
@@ -445,9 +446,17 @@ export function createEntityTokenController({
         <fieldset class="token-config-grid"><legend>移动能力</legend>
           ${[['walk','步行'],['swim','游泳'],['waterWalk','水上行走'],['fly','飞行']].map(([capability,label]) => `<label class="token-config-check"><input type="checkbox" data-token-movement-capability="${capability}" data-token-id="${escapeHtml(token.id)}" ${movementCapabilities[capability] === true || (movementCapabilities[capability] == null && ['walk','swim'].includes(capability)) ? 'checked' : ''} ${structureAllowed ? '' : 'disabled'}> ${label}</label>`).join('')}
         </fieldset>
+        ${structureAllowed ? `<fieldset class="token-config-grid"><legend>Token 光源</legend>
+          <label class="token-config-check"><input type="checkbox" data-token-light-field="enabled" data-token-id="${escapeHtml(token.id)}" ${tokenLight.enabled === true ? 'checked' : ''}> 启用光源</label>
+          <label>范围（m）<input type="number" min="0" step="1" data-token-light-field="rangeMeters" data-token-id="${escapeHtml(token.id)}" value="${Math.max(0, Number(tokenLight.rangeMeters) || 0)}"></label>
+          <label>强度 <input type="number" min="0" max="4" step="0.1" data-token-light-field="intensity" data-token-id="${escapeHtml(token.id)}" value="${Math.max(0, Number(tokenLight.intensity) || 1)}"></label>
+          <label>离地高度（m）<input type="number" min="0" step="0.1" data-token-light-field="elevationOffsetMeters" data-token-id="${escapeHtml(token.id)}" value="${Math.max(0, Number(tokenLight.elevationOffsetMeters) || 0)}"></label>
+          <label>颜色 <input type="color" data-token-light-field="color" data-token-id="${escapeHtml(token.id)}" value="${escapeHtml(tokenLight.color || '#fff3c4')}"></label>
+        </fieldset>` : ''}
         ${structureAllowed ? `<fieldset class="token-config-grid"><legend>Scene 空间规则</legend>
           <label>每回合移动预算（m）<input type="number" min="0" step="1" data-scene-movement-budget value="${movementBudget ?? ''}" placeholder="留空表示不限"></label>
           <label class="token-config-check"><input type="checkbox" data-scene-los-enabled ${scene.settings?.lineOfSightEnabled === true ? 'checked' : ''}> 启用视线遮挡</label>
+          <label>开门距离（m）<input type="number" min="0.1" step="0.1" data-scene-door-range value="${Number(scene.settings?.defaultDoorInteractionRangeMeters) || 2}"></label>
         </fieldset>` : ''}
         ${structureAllowed ? `<button type="button" class="small-button" data-sheet-action="reposition-token" data-token-id="${escapeHtml(token.id)}">重新放置</button>` : ''}
         <details><summary>实例覆盖</summary><pre>${escapeHtml(JSON.stringify(token.actorDelta || {}, null, 2))}</pre></details>
@@ -487,6 +496,29 @@ export function createEntityTokenController({
     }
     if (target?.matches?.('[data-scene-los-enabled]')) {
       await changeSceneSettings({ lineOfSightEnabled: target.checked });
+      return true;
+    }
+    if (target?.matches?.('[data-scene-door-range]')) {
+      await changeSceneSettings({ defaultDoorInteractionRangeMeters: Number(target.value) });
+      return true;
+    }
+    if (target?.matches?.('[data-token-light-field]')) {
+      const token = api.tokens.get(target.dataset.tokenId);
+      if (!token || !canManageStructure()) return true;
+      const field = String(target.dataset.tokenLightField || '');
+      const value = field === 'enabled' ? target.checked
+        : field === 'color' ? target.value : Number(target.value);
+      const light = { ...(token.light || {}), [field]: value };
+      if (field === 'enabled' && value === true && !(Number(light.rangeMeters) > 0)) light.rangeMeters = 10;
+      try {
+        await api.tokens.update(token.id, { light });
+        setStatus('Token 光源已保存');
+        renderPanel();
+        renderSheet();
+      } catch (error) {
+        setStatus(`Token 光源保存失败：${error?.message || error}`);
+        renderSheet();
+      }
       return true;
     }
     if (target?.matches?.('[data-token-movement-mode]')) {

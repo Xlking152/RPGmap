@@ -2,6 +2,7 @@ import { canonicalAttackAreas } from './attack-anchors.js';
 import { normalizeActorDocument } from '../actor/index.js';
 import { createInitialActorDelta, normalizeActorDelta } from '../token/actor.js';
 import { normalizeTokenAccess } from '../token/access.js';
+import { normalizeTokenLight } from '../token/model.js';
 import { normalizeFogState } from '../vision/fog.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { normalizeFeatureStateRecords } from './feature-states.js';
@@ -96,6 +97,7 @@ function normalizeWorldToken(raw, actorIds, { rawActorsById = new Map(), actorsB
     rotation: finite(token.rotation, 0),
     elevationMeters: finite(token.elevationMeters, 0),
     movement: normalizeMovementState(token.movement),
+    light: normalizeTokenLight(token.light),
     controllerUserIds: access.controllerUserIds,
     visibility: access.visibility,
     vision: access.vision,
@@ -262,6 +264,7 @@ function runtimeTokenFromWorld(token) {
     rotation: token.rotation,
     elevationMeters: token.elevationMeters,
     movement: clone(token.movement),
+    light: clone(token.light),
     controllerUserIds: clone(token.controllerUserIds || []),
     visibility: clone(token.visibility || {}),
     vision: clone(token.vision || {}),

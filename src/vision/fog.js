@@ -237,12 +237,13 @@ export function exploreFogVisibleCircle(rawFog, partyId, circle, map = {}, {
 export function visibleFogRowsForCircle(circle, map = {}, {
   sourceElevationMeters = 0,
   occluders = [],
+  predicate = null,
 } = {}) {
   const rows = {};
   const source = { x: finite(circle?.x), y: finite(circle?.y), elevationMeters: finite(sourceElevationMeters) };
   rasterCircle(rows, circle, 'add', map, target => inspectLineOfSight({
     from: source, to: target, occluders, metersPerUnit: mapScale(map),
-  }).clear);
+  }).clear && (typeof predicate !== 'function' || predicate(target)));
   return rows;
 }
 

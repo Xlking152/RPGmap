@@ -3,6 +3,7 @@ import { mergeActorDelta } from '../token/actor.js';
 import { deriveSceneState } from '../engine/state.js';
 import {
   deriveVisionOccluders,
+  deriveSceneLightSources,
   isPathPreciselyVisible,
   sphereGroundRadiusMeters,
 } from '../spatial/kernel.js';
@@ -25,6 +26,8 @@ export function motionPathPreciselyVisible({ motion, vision, mapPackage, scene }
     metersPerUnit: mapPackage?.metersPerUnit || 1,
     lineOfSightEnabled,
     occluders,
+    lights: deriveSceneLightSources(mapPackage, scene),
+    ambient: scene?.settings?.lighting || 'normal',
   });
 }
 
@@ -36,7 +39,7 @@ export function describeVisionForToken(state, tokenId) {
   if (!token || !actor || token.placement !== 'map' || token.vision?.enabled === false) return null;
   const resolved = token.actorLink === false ? mergeActorDelta(actor, token.actorDelta) : actor;
   const described = serverRuleset.vision.describe(resolved, {
-    token, scene, lighting: scene?.settings?.lighting || 'normal',
+    token, scene, lighting: 'normal',
   });
   const legacyOverride = token.vision?.rangeOverrideMeters;
   const preciseOverride = token.vision?.preciseRangeOverrideMeters ?? legacyOverride;
@@ -55,6 +58,6 @@ export function describeVisionForToken(state, tokenId) {
     preciseRangeMeters: rangeMeters, vagueRangeMeters,
     preciseGroundRangeMeters: sphereGroundRadiusMeters(rangeMeters, token.elevationMeters) ?? 0,
     vagueGroundRangeMeters: sphereGroundRadiusMeters(vagueRangeMeters, token.elevationMeters) ?? 0,
-    senses: structuredClone(described.senses || {}), lighting: described.lighting || 'normal',
+    senses: structuredClone(described.senses || {}), lighting: scene?.settings?.lighting || 'normal',
   };
 }

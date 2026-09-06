@@ -706,6 +706,7 @@ function audienceStateFor(session, state = world.state) {
     ruleset: serverRuleset,
     mapMetrics: { metersPerUnit: 1 },
     mapPackage: mapForScene(activeScene),
+    lineOfSightOverride: session.userId ? findUser(session.userId)?.lineOfSightOverride : null,
     opaqueIdFor,
   });
   assertWorldState(projected);
@@ -1691,6 +1692,7 @@ server.on('upgrade', (req, socket) => {
           defaultActorId: cleaned.defaultActorId,
           placementGrants: message.placementGrants ?? user.placementGrants,
           disabled: message.disabled ?? user.disabled,
+          lineOfSightOverride: message.lineOfSightOverride,
         });
         await persistAccess();
         refreshOnlineUser(user.id);

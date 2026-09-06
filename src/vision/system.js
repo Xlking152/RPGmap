@@ -1,7 +1,12 @@
 import { worldToLatLng } from '../engine/geometry.js';
 import { FOG_CELL_SIZE_METERS, normalizeFogState, visibleFogRowsForCircle } from './fog.js';
 import { deriveSceneState } from '../engine/state.js';
-import { deriveVisionOccluders, sphereGroundRadiusMeters } from '../spatial/kernel.js';
+import {
+  deriveSceneLightSources,
+  deriveVisionOccluders,
+  perceptionLevelAtPoint,
+  sphereGroundRadiusMeters,
+} from '../spatial/kernel.js';
 
 const FOG_PANE = 'fogVisionPane';
 
@@ -112,7 +117,7 @@ export function createVisionFogSystem() {
         if (!token || !actor || token.placement !== 'map') return null;
         const resolved = api.tokens?.resolveActor?.(token.id)?.actor || actor;
         const description = api.ruleset?.vision?.describe?.(resolved, {
-          token, scene, lighting: scene?.settings?.lighting || 'normal',
+          token, scene, lighting: 'normal',
         }) || {};
         const legacyOverride = token.vision?.rangeOverrideMeters;
         const preciseOverride = token.vision?.preciseRangeOverrideMeters ?? legacyOverride;
@@ -137,7 +142,7 @@ export function createVisionFogSystem() {
           preciseRangeMeters, vagueRangeMeters,
           preciseGroundRangeMeters: sphereGroundRadiusMeters(preciseRangeMeters, token.elevationMeters) ?? 0,
           vagueGroundRangeMeters: sphereGroundRadiusMeters(vagueRangeMeters, token.elevationMeters) ?? 0,
-          senses: structuredClone(description.senses || {}), lighting: description.lighting || 'normal',
+          senses: structuredClone(description.senses || {}), lighting: scene?.settings?.lighting || 'normal',
           lineOfSightEnabled: scene.settings?.lineOfSightEnabled === true,
           partyId: actor.partyId ? String(actor.partyId) : null,
         };
@@ -325,7 +330,10 @@ export function createVisionFogSystem() {
         const drawCurrent = (context, rawRange, kind) => {
           const rangeMeters = Number(rawRange) || 0;
           if (!source || rangeMeters <= 0) return;
-          if (source.lineOfSightEnabled !== true) {
+          const lights = deriveSceneLightSources(api.mapPackage, scene);
+          const needsLightingGrid = kind === 'precise'
+            && (String(source.lighting || 'normal') !== 'normal' || lights.length > 0);
+          if (source.lineOfSightEnabled !== true && !needsLightingGrid) {
             drawCurrentCircle(context, rangeMeters);
             return;
           }
@@ -336,19 +344,30 @@ export function createVisionFogSystem() {
             vague: source.vagueGroundRangeMeters,
             featureStates: scene.featureStates || {},
             sceneEvents: scene.sceneEvents || [],
+            lighting: source.lighting || 'normal',
+            lights,
           });
           if (!visibilityRowsCache || visibilityRowsCache.signature !== signature) {
             const occluders = deriveVisionOccluders(api.mapPackage, scene, deriveSceneState(scene.sceneEvents || []));
-            const values = range => Object.entries(visibleFogRowsForCircle({
+            const values = (range, targetKind) => Object.entries(visibleFogRowsForCircle({
               x: Number(source.x), y: Number(source.y), radiusMeters: Number(range) || 0,
             }, api.mapPackage, {
               sourceElevationMeters: Number(source.elevationMeters) || 0,
-              occluders,
+              occluders: source.lineOfSightEnabled === true ? occluders : [],
+              predicate: targetKind === 'precise' ? target => perceptionLevelAtPoint({
+                vision: source,
+                target,
+                ambient: source.lighting || 'normal',
+                lights,
+                occluders,
+                metersPerUnit,
+                lineOfSightEnabled: source.lineOfSightEnabled === true,
+              }) === 'precise' : null,
             }));
             visibilityRowsCache = {
               signature,
-              precise: values(source.preciseGroundRangeMeters ?? source.preciseRangeMeters ?? source.rangeMeters),
-              vague: values(source.vagueGroundRangeMeters ?? source.vagueRangeMeters ?? source.rangeMeters),
+              precise: values(source.preciseGroundRangeMeters ?? source.preciseRangeMeters ?? source.rangeMeters, 'precise'),
+              vague: values(source.vagueGroundRangeMeters ?? source.vagueRangeMeters ?? source.rangeMeters, 'vague'),
             };
           }
           drawRows(context, visibilityRowsCache[kind] || []);
