@@ -17,6 +17,19 @@ function entityStateFromApi(api) {
   return api.getState?.()?.preferences?.[ENTITY_PREFERENCE_KEY] || null;
 }
 
+function entityStateFromEvent(api, event) {
+  return event?.detail?.state?.preferences?.[ENTITY_PREFERENCE_KEY] || entityStateFromApi(api);
+}
+
+function statusStateAffected(changeSet = {}) {
+  if (changeSet.statusDefinitionsChanged || changeSet.scenes?.activeSceneChanged) return true;
+  if (changeSet.actors?.upsertIds?.length || changeSet.actors?.removeIds?.length) return true;
+  return (changeSet.tokens || []).some(entry => (entry.upsertIds || []).some(tokenId => {
+    const fields = entry.fields?.[tokenId];
+    return !fields?.length || fields.some(field => ['actorId', 'actorLink', 'actorDelta', 'effects'].includes(field));
+  }) || entry.removeIds?.length);
+}
+
 function connected(api) {
   const capabilities = api.multiplayer?.getCapabilities?.();
   if (capabilities?.connected === true) return true;
@@ -78,10 +91,11 @@ export function createStatusController() {
     register(api) {
       let suppressStateEvents = 0;
       let deferredStateChange = false;
-      let lastFingerprint = statusStateFingerprint(entityStateFromApi(api));
+      let cachedEntityState = normalizeEntityStatusState(entityStateFromApi(api));
+      let lastFingerprint = statusStateFingerprint(cachedEntityState, { assumeNormalized: true });
 
       function currentEntityState() {
-        return normalizeEntityStatusState(entityStateFromApi(api));
+        return cachedEntityState;
       }
 
       function definitions() {
@@ -136,6 +150,7 @@ export function createStatusController() {
         return resolveStatuses(currentEntityState(), {
           ...contextValue(context, tokenId),
           ruleset: api.ruleset,
+          assumeNormalized: true,
         });
       }
 
@@ -144,8 +159,9 @@ export function createStatusController() {
         api.emit?.('status:change', detail);
       }
 
-      function observeStateChange(source) {
-        const fingerprint = statusStateFingerprint(entityStateFromApi(api));
+      function observeStateChange(source, event = null) {
+        cachedEntityState = normalizeEntityStatusState(entityStateFromEvent(api, event));
+        const fingerprint = statusStateFingerprint(cachedEntityState, { assumeNormalized: true });
         if (fingerprint === lastFingerprint) return;
         if (suppressStateEvents > 0) {
           deferredStateChange = true;
@@ -321,9 +337,11 @@ export function createStatusController() {
         updateDefinition: upsertDefinition,
       };
 
-      api.on?.('state:import', () => observeStateChange('state:import'));
-      api.on?.('state:commit', () => observeStateChange('state:commit'));
-      api.on?.('state:patch', () => observeStateChange('state:patch'));
+      api.on?.('state:import', event => observeStateChange('state:import', event));
+      api.on?.('state:commit', event => observeStateChange('state:commit', event));
+      api.on?.('state:patch', event => {
+        if (statusStateAffected(event?.detail?.changeSet)) observeStateChange('state:patch', event);
+      });
     },
   };
 }

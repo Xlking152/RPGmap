@@ -158,14 +158,14 @@ export function createTokenRendererSystem() {
           const statusSnapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
           const multiplayer = api.multiplayer?.getStatus?.() || {};
           const gmViewer = !multiplayer.connected || multiplayer.session?.role === 'gm' || multiplayer.role === 'gm';
-          return createTokenViewModel({
+          return { model: createTokenViewModel({
             token,
             actor: resolved.actor,
             selected: selectedIds.has(String(token.id)),
             ruleset: api.ruleset,
             gmViewer,
             invisible: statusSnapshot.capabilities?.visibility === 'invisible',
-          });
+          }), statusSnapshot };
         } catch (error) {
           console.warn('[RPGmap Token Renderer] cannot resolve Token Actor', token?.id, error);
           return null;
@@ -187,12 +187,11 @@ export function createTokenRendererSystem() {
         statusViews.delete(id);
       }
 
-      function renderStatus(model, token) {
+      function renderStatus(model, token, snapshot) {
         if (!model || !token || model.audienceRestricted || animations.has(model.id)) {
           removeStatus(model?.id || token?.id);
           return;
         }
-        const snapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
         const badgeHtml = renderTokenStatusBadges(snapshot.statuses, { limit: 4 });
         if (!badgeHtml) {
           removeStatus(model.id);
@@ -337,7 +336,8 @@ export function createTokenRendererSystem() {
         if (destroyed) return;
         const id = String(tokenId || '');
         const token = api.tokens.get?.(id);
-        const model = token ? resolveModel(token) : null;
+        const resolved = token ? resolveModel(token) : null;
+        const model = resolved?.model || null;
         if (!model) {
           removeToken(id);
           if (updateSummary) renderSummary();
@@ -373,7 +373,7 @@ export function createTokenRendererSystem() {
         view.setIcon(tokenIcon(api, model));
         view.options.title = model.showName ? model.name : 'Token';
         setTooltip(api, documentNode, view, model);
-        renderStatus(model, token);
+        renderStatus(model, token, resolved.statusSnapshot);
         if (updateSummary) renderSummary();
       }
 
@@ -401,7 +401,7 @@ export function createTokenRendererSystem() {
         const detail = event?.detail || {};
         const address = detail.document || {};
         if (address.type && !['Actor', 'Token', 'StatusDefinition'].includes(address.type)) return;
-        if (address.type === 'Token' && address.parent?.id !== String(api.world?.get?.()?.activeSceneId || '')) return;
+        if (address.type === 'Token' && address.parent?.id !== api.tokens.getActiveSceneId?.()) return;
         const ids = new Set([
           detail.tokenId, detail.id, ...(detail.tokenIds || []),
           address.type === 'Token' ? address.id : null,

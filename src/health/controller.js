@@ -155,6 +155,14 @@ export function createHealthController() {
       }
 
       const healthApi = {
+        resolveTokens(tokenIds = []) {
+          const store = new EntityStore(api);
+          store.load({ migrateLegacy: false, dropMarkers: false });
+          return healthTargetsForTokens(store, api, tokenIds).map(target => ({
+            tokenId: target.tokenId,
+            health: resolveActorHealth(target.actor, store.actorContext(target.actor)),
+          }));
+        },
         resolveActor(actorId) {
           const store = new EntityStore(api);
           store.load({ migrateLegacy: false, dropMarkers: false });

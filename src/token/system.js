@@ -1,13 +1,12 @@
 import {
   createSceneToken,
   getActiveSceneToken,
-  listActiveSceneTokens,
   moveSceneToken,
   placeSceneTokenInFeature,
   removeSceneToken,
   updateSceneToken,
 } from './model.js';
-import { createInitialActorDelta, mergeActorDeltaPatch, resolveTokenActor } from './actor.js';
+import { createInitialActorDelta, mergeActorDeltaPatch, resolveTokenActorDocuments } from './actor.js';
 import { actorUsesIndependentInstances } from '../actor/classification.js';
 
 function clone(value) {
@@ -26,22 +25,75 @@ export function createTokenRuntimeSystem() {
         throw new Error('Token Runtime V2 requires World V2 with api.world.get() and api.world.commit()');
       }
 
+      let readWorld = null;
+      let readTokens = [];
+      let tokensById = new Map();
+      let actorsById = new Map();
+      const eventBackedReads = typeof api.on === 'function';
+
+      function refreshReadModel(state = null) {
+        readWorld = state?.preferences?.worldV2 || api.world.get();
+        const scenes = Array.isArray(readWorld?.scenes) ? readWorld.scenes : [];
+        const scene = scenes.find(item => String(item?.id ?? '') === String(readWorld?.activeSceneId ?? ''));
+        readTokens = Array.isArray(scene?.tokens) ? scene.tokens : [];
+        tokensById = new Map(readTokens.map(token => [String(token?.id ?? ''), token]));
+        actorsById = new Map((readWorld?.actors || []).map(actor => [String(actor?.id ?? ''), actor]));
+      }
+
+      refreshReadModel();
+
+      function ensureReadModel() {
+        if (!eventBackedReads) refreshReadModel();
+      }
+
+      function applyReadDocument(event) {
+        const address = event?.detail?.document;
+        if (!address || !['Actor', 'Token'].includes(address.type)) return;
+        const value = event.detail.action === 'delete' ? null : api.documents?.get?.(address);
+        if (address.type === 'Actor') {
+          if (value) actorsById.set(String(address.id), value);
+          else actorsById.delete(String(address.id));
+          return;
+        }
+        if (String(address.parent?.id || '') !== String(readWorld?.activeSceneId || '')) return;
+        const id = String(address.id);
+        const index = readTokens.findIndex(token => String(token?.id) === id);
+        if (!value) {
+          tokensById.delete(id);
+          if (index >= 0) readTokens = [...readTokens.slice(0, index), ...readTokens.slice(index + 1)];
+        } else {
+          tokensById.set(id, value);
+          readTokens = index < 0
+            ? [...readTokens, value]
+            : [...readTokens.slice(0, index), value, ...readTokens.slice(index + 1)];
+        }
+      }
+
       async function commit(result, { source, reason = source, render = true } = {}) {
         await api.world.commit(result.world, { source, reason, render });
+        refreshReadModel();
         return clone(result.token);
       }
 
       async function perform(operation, { source, render = true, kind = 'token' } = {}) {
         if (typeof api.world.performOperations !== 'function') return null;
         await api.world.performOperations([operation], { source, render, kind });
+        refreshReadModel();
         return true;
       }
 
       api.tokens = {
         schemaVersion: 2,
-        list() { return listActiveSceneTokens(api.world.get()); },
-        get(tokenId) { return getActiveSceneToken(api.world.get(), tokenId); },
-        resolveActor(tokenId) { return resolveTokenActor(api.world.get(), tokenId, { ruleset: api.ruleset }); },
+        getActiveSceneId() { return String(readWorld?.activeSceneId || ''); },
+        list() { ensureReadModel(); return clone(readTokens); },
+        get(tokenId) { ensureReadModel(); return clone(tokensById.get(String(tokenId)) || null); },
+        resolveActor(tokenId) {
+          ensureReadModel();
+          const token = tokensById.get(String(tokenId));
+          if (!token) throw new Error(`Unknown Token: ${tokenId}`);
+          const actor = actorsById.get(String(token.actorId));
+          return resolveTokenActorDocuments(actor, token, { ruleset: api.ruleset });
+        },
         async create(options = {}) {
           const world = api.world.get();
           const actor = world.actors?.find(item => String(item?.id) === String(options.actorId));
@@ -60,6 +112,7 @@ export function createTokenRuntimeSystem() {
             type: 'token.create',
             payload: { sceneId: world.activeSceneId, token: prepared.token },
           }], { source: 'token-v2:create', render: true, kind: 'token' });
+          refreshReadModel();
           return api.tokens.get(prepared.token.id);
         },
         async move(tokenId, point = {}) {
@@ -175,6 +228,13 @@ export function createTokenRuntimeSystem() {
           return removed;
         },
       };
+
+      for (const eventName of ['state:commit', 'state:import', 'scene:activate']) {
+        api.on?.(eventName, event => refreshReadModel(event?.detail?.state || null));
+      }
+      for (const eventName of ['document:create', 'document:update', 'document:delete', 'document:move']) {
+        api.on?.(eventName, applyReadDocument);
+      }
 
       api.emit?.('tokens:ready', {
         schemaVersion: 2,

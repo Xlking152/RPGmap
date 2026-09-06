@@ -87,17 +87,17 @@ export function createHealthTokenBars() {
         signatures.delete(id);
       }
 
-      function upsertToken(tokenId) {
+      function upsertToken(tokenId, resolvedToken = null, resolvedHealth = undefined) {
         if (destroyed) return;
         const id = String(tokenId || '');
         if (!id) return;
-        const token = api.tokens.get?.(id);
+        const token = resolvedToken || api.tokens.get?.(id);
         if (!token || token.hidden === true || token.placement !== 'map') { removeToken(id); return; }
         if (movingTokenIds.has(id) || api.renderer?.isTokenMoving?.(id)) { removeToken(id); return; }
         const x = Number(token.x);
         const y = Number(token.y);
         if (!Number.isFinite(x) || !Number.isFinite(y)) { removeToken(id); return; }
-        const health = api.health?.resolveToken?.(id);
+        const health = resolvedHealth === undefined ? api.health?.resolveToken?.(id) : resolvedHealth;
         const html = barHtml(health, api.ruleset);
         if (!html) { removeToken(id); return; }
         const tokenPixels = Math.max(18, Math.min(144, tokenDiameterMeters(token) * pixelsPerMeter()));
@@ -127,11 +127,14 @@ export function createHealthTokenBars() {
         fullRenderFrame = null;
         if (destroyed) return;
         const live = new Set();
-        for (const token of api.tokens.list()) {
+        const tokens = api.tokens.list();
+        const healthById = new Map((api.health?.resolveTokens?.(tokens.map(token => token.id)) || [])
+          .map(entry => [String(entry.tokenId), entry.health]));
+        for (const token of tokens) {
           const id = String(token?.id || '');
           if (!id) continue;
           live.add(id);
-          upsertToken(id);
+          upsertToken(id, token, healthById.get(id) || null);
         }
         for (const id of [...markers.keys()]) if (!live.has(id)) removeToken(id);
       }

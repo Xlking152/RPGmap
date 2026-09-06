@@ -299,7 +299,7 @@ export function createRpgMapRuntime({
         const fields = entry.fields?.[id];
         const positionOnly = fields?.length && fields.every(field => ['x', 'y', 'elevationMeters', 'elevationMeters'].includes(field));
         if (!positionOnly) changedTokenIds.push(id);
-        emit(positionOnly ? 'token:move' : 'token:property-change', { id, tokenId: id, fields, sceneId: entry.sceneId, source, canonical: true });
+        api.diagnostics?.measure('documents.token', () => emit(positionOnly ? 'token:move' : 'token:property-change', { id, tokenId: id, fields, sceneId: entry.sceneId, source, canonical: true }));
       }
     }
     if (actorIds.length) emit('actor:change', { actorIds, canonical: true });
@@ -332,7 +332,7 @@ export function createRpgMapRuntime({
     }
     const detail = { source, revision, changeSet: clone(changeSet) };
     if (!String(source || '').startsWith('document.')) detail.state = clone(state);
-    emit('state:patch', detail);
+    api.diagnostics?.measure('documents.patch', () => emit('state:patch', detail));
     return true;
   }
 
@@ -348,10 +348,12 @@ export function createRpgMapRuntime({
     source = 'document.batch', revision = null, updatedAt = null, operationId = null,
   } = {}) {
     assertWritable();
-    state = applyDocumentChanges(state, changes, { updatedAt });
+    state = api.diagnostics?.measure('documents.state', () => applyDocumentChanges(state, changes, { updatedAt }))
+      || applyDocumentChanges(state, changes, { updatedAt });
     const changeSet = documentChangeSet(changes);
-    api.documents?.applyCommitted?.(changes, { revision, operationId });
-    return emitAuthoritativeChanges({ source, changeSet, revision });
+    api.diagnostics?.measure('documents.events', () => api.documents?.applyCommitted?.(changes, { revision, operationId }));
+    return api.diagnostics?.measure('documents.emit', () => emitAuthoritativeChanges({ source, changeSet, revision }))
+      ?? emitAuthoritativeChanges({ source, changeSet, revision });
   }
 
   async function commitAuthoritativeState(nextState, { source = 'authoritative-world', reason = source, render = true } = {}) {

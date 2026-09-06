@@ -100,6 +100,35 @@ test('TokenSystem supports multiple Token instances for the same Actor without C
   assertNoCharacterProjection(fixture.current());
 });
 
+test('TokenSystem indexes a large Scene without cloning World per Token read', () => {
+  const tokens = Array.from({ length: 500 }, (_, index) => ({
+    id: `token-${index}`, actorId: 'actor-1', actorLink: true, x: index, y: 0,
+  }));
+  const world = {
+    schemaVersion: 4,
+    activeSceneId: 'scene-1',
+    actors: [actor()],
+    scenes: [{ id: 'scene-1', tokens }],
+  };
+  let worldReads = 0;
+  const listeners = new Map();
+  const api = {
+    ruleset: infiniteHorrorRuleset,
+    world: {
+      get() { worldReads += 1; return structuredClone(world); },
+      async commit() {},
+    },
+    on(type, listener) { listeners.set(type, listener); return () => listeners.delete(type); },
+    emit() {},
+  };
+
+  createTokenRuntimeSystem().register(api);
+  assert.equal(worldReads, 1);
+  assert.equal(api.tokens.list().length, 500);
+  for (const token of tokens) assert.equal(api.tokens.get(token.id).id, token.id);
+  assert.equal(worldReads, 1);
+});
+
 test('TokenSystem move and feature placement update canonical World placement', async () => {
   const fixture = apiFixture();
   await fixture.api.tokens.create({ actorId: 'actor-1', id: 'token-one', x: 1, y: 1 });

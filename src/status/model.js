@@ -324,7 +324,9 @@ export function resolveStatusCapabilities(statuses = []) {
 }
 
 export function resolveStatuses(rawEntityState, context = {}) {
-  const entityState = normalizeEntityStatusState(rawEntityState);
+  const entityState = context.assumeNormalized === true
+    ? rawEntityState
+    : normalizeEntityStatusState(rawEntityState);
   const definitions = getStatusDefinitions(entityState);
   const definitionsById = new Map(definitions.map(definition => [definition.id, definition]));
   const { actor, token } = targetContext(entityState, context);
@@ -606,8 +608,8 @@ export function reduceStatusOperation(rawEntityState, message, context = {}) {
   return { state, results };
 }
 
-export function statusStateFingerprint(rawEntityState) {
-  const state = normalizeEntityStatusState(rawEntityState);
+export function statusStateFingerprint(rawEntityState, { assumeNormalized = false } = {}) {
+  const state = assumeNormalized ? rawEntityState : normalizeEntityStatusState(rawEntityState);
   return stableHash({
     definitions: state.statusDefinitions,
     actors: state.actors.map(actor => ({ id: actor.id, effects: actor.effects, system: actor.system || null })),

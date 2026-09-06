@@ -43,7 +43,7 @@ function worldStorageId(api) {
 }
 
 function activeSceneId(api) {
-  return id(api.world?.get?.()?.activeSceneId);
+  return id(api.tokens?.getActiveSceneId?.() || api.world?.get?.()?.activeSceneId);
 }
 
 export function createEntityUiTool(options = {}) {
