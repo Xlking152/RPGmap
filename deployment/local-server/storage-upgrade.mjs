@@ -6,6 +6,7 @@ import path from 'node:path';
 const ROOT_FILES = ['world.json', 'users.json', 'world.operations.ndjson'];
 const PENDING = '.upgrade-pending.json';
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+const CONTENT_FILE = /^uploads\/content\/[a-f0-9]{64}\.content$/;
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const hashBytes = bytes => createHash('sha256').update(bytes).digest('hex');
 
@@ -91,7 +92,8 @@ const sameRecord = (left, right) => left.hash === right.hash && left.size === ri
 
 async function checkLive(layout, manifest, { allowAfter = false } = {}) {
   const uploads = await uploadFiles(layout.mapDir);
-  if (JSON.stringify(uploads) !== JSON.stringify(manifest.before.filter(record => record.path.startsWith('uploads/')).map(record => record.path).sort())) fail('upgrade_recovery_conflict');
+  const allowed = new Set(manifest.before.filter(record => record.path.startsWith('uploads/') && (allowAfter || record.hash !== null)).map(record => record.path));
+  if (uploads.some(file => !allowed.has(file))) fail('upgrade_recovery_conflict');
   const after = new Map(manifest.after.map(record => [record.path, record]));
   for (const record of manifest.before) {
     const current = await describe(layout.mapDir, record.path);
@@ -111,13 +113,15 @@ async function loadManifest(layout, id) {
   for (const [side, records] of [['before', manifest.before], ['after', manifest.after]]) {
     const seen = new Set();
     for (const record of records) {
-      if (seen.has(record.path) || (!ROOT_FILES.includes(record.path) && !(side === 'before' && record.path?.startsWith('uploads/')))
+      if (seen.has(record.path) || (!ROOT_FILES.includes(record.path) && !CONTENT_FILE.test(record.path) && !(side === 'before' && record.path?.startsWith('uploads/')))
         || !Number.isSafeInteger(record.size) || record.size < 0 || !(record.hash === null || /^[a-f0-9]{64}$/.test(record.hash))) fail('upgrade_manifest_invalid');
       seen.add(record.path);
       if (!sameRecord(await describe(path.join(directory, side), record.path), record)) fail('upgrade_backup_corrupt');
     }
     if (side === 'before' && ROOT_FILES.some(file => !seen.has(file))) fail('upgrade_manifest_invalid');
   }
+  const beforePaths = new Set(manifest.before.map(record => record.path));
+  if (manifest.after.some(record => !beforePaths.has(record.path) || record.hash === null)) fail('upgrade_manifest_invalid');
   return { directory, manifest };
 }
 
@@ -143,13 +147,13 @@ export async function recoverStorageUpgrade(layout) {
 
 export async function commitStorageUpgrade(layout, replacements, { onStep = () => {} } = {}) {
   await recoverStorageUpgrade(layout);
-  const entries = Object.entries(replacements);
-  if (!entries.length || entries.some(([name, bytes]) => !ROOT_FILES.includes(name) || !(bytes instanceof Uint8Array))) fail('upgrade_replacement_invalid');
+  const entries = Object.entries(replacements).sort(([a], [b]) => Number(ROOT_FILES.includes(a)) - Number(ROOT_FILES.includes(b)));
+  if (!entries.length || entries.some(([name, bytes]) => (!ROOT_FILES.includes(name) && !CONTENT_FILE.test(name)) || !(bytes instanceof Uint8Array))) fail('upgrade_replacement_invalid');
   const id = randomUUID(), directory = location(layout.backupsDir, `upgrade-${id}`);
   await checkParents(layout.backupsDir, `upgrade-${id}/manifest.json`);
   await mkdir(directory, { recursive: true });
   const manifest = { schemaVersion: 1, id, createdAt: new Date().toISOString(), before: [], after: [] };
-  for (const relative of [...ROOT_FILES, ...await uploadFiles(layout.mapDir)]) {
+  for (const relative of new Set([...ROOT_FILES, ...await uploadFiles(layout.mapDir), ...entries.map(([file]) => file)])) {
     const record = await describe(layout.mapDir, relative);
     if (record.hash !== null) {
       const target = location(path.join(directory, 'before'), relative);
@@ -161,6 +165,8 @@ export async function commitStorageUpgrade(layout, replacements, { onStep = () =
     manifest.before.push(record);
   }
   for (const [relative, bytes] of entries) {
+    const previous = manifest.before.find(record => record.path === relative);
+    if (CONTENT_FILE.test(relative) && previous.hash !== null && previous.hash !== hashBytes(bytes)) fail('upgrade_content_conflict');
     await replaceFile(location(path.join(directory, 'after'), relative), bytes);
     manifest.after.push({ path: relative, size: bytes.length, hash: hashBytes(bytes) });
   }

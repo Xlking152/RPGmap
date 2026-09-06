@@ -52,12 +52,14 @@ export async function startMapRuntime({
 } = {}) {
   const mapPackage = await mapPackageRegistry.load(mapReference);
   const storageAdapter = serverRuntime ? createMemoryStorage() : bootstrapStorage;
-  const initialLoad = prepareStoredWorldState({
+  const prepareStoredWorldWithContent = serverRuntime ? null : (await import('../app/world-upgrade.js')).prepareStoredWorldWithContent;
+  const initialLoad = await (serverRuntime ? prepareStoredWorldState : prepareStoredWorldWithContent)({
     worldId,
     worldName,
     mapPackage,
     ruleset,
     storageAdapter,
+    indexedDB: appContainer.ownerDocument.defaultView.indexedDB,
     raw: serverRuntime ? null : raw,
   });
 

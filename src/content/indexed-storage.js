@@ -1,31 +1,16 @@
 import { inspectContent } from './body.js';
 import { CONTENT_ID } from './references.js';
+import { createContentDatabase } from './database.js';
 
 export function createIndexedContentStorage(indexedDB = globalThis.indexedDB, { worldId = 'default' } = {}) {
-  let connection;
-  const open = () => connection ||= new Promise((resolve, reject) => {
-    if (!indexedDB) { reject(new Error('content_storage_unavailable')); return; }
-    const request = indexedDB.open(`rpgmap-content-v1:${encodeURIComponent(worldId)}`, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('records', { keyPath: 'id' });
-    request.onerror = () => { connection = null; reject(request.error); };
-    request.onblocked = () => { connection = null; reject(new Error('content_storage_blocked')); };
-    request.onsuccess = () => {
-      const db = request.result;
-      db.onversionchange = () => { db.close(); connection = null; };
-      resolve(db);
+  const database = createContentDatabase(indexedDB, worldId);
+  const transaction = (mode, action) => database(['records', 'upgrades'], mode, ({ records, upgrades }, done, fail) => {
+    if (mode === 'readonly') { action(records, done, fail, upgrades); return; }
+    upgrades.get('pending').onsuccess = event => {
+      if (event.target.result) { fail(new Error('content_upgrade_pending')); return; }
+      try { action(records, done, fail, upgrades); } catch (error) { fail(error); }
     };
   });
-  const transaction = async (mode, action) => {
-    const db = await open();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction('records', mode);
-      let result, failure;
-      tx.oncomplete = () => resolve(result);
-      tx.onabort = tx.onerror = () => reject(failure || tx.error || new Error('content_storage_failed'));
-      try { action(tx.objectStore('records'), value => { result = value; }, error => { failure = error; tx.abort(); }); }
-      catch (error) { tx.abort(); reject(error); }
-    });
-  };
   return {
     async put(blob) {
       const bytes = new Uint8Array(await blob.arrayBuffer()), metadata = inspectContent(bytes, blob.type);
@@ -64,13 +49,18 @@ export function createIndexedContentStorage(indexedDB = globalThis.indexedDB, { 
     list: () => transaction('readonly', (store, done) => {
       store.getAll().onsuccess = event => done(event.target.result.map(({ blob, ...record }) => ({ ...record, reference: `${record.kind || 'asset'}:${record.id}` })));
     }),
-    remove: id => transaction('readwrite', (store, _done, fail) => {
+    remove: id => transaction('readwrite', (store, _done, fail, upgrades) => {
       if (!CONTENT_ID.test(id)) throw new Error('content_not_found');
-      store.getAll().onsuccess = event => {
+      upgrades.getAll().onsuccess = event => {
+        if (event.target.result.some(backup => backup.before?.some(record => record.id === id) || backup.addedIds?.includes(id))) {
+          fail(new Error('content_in_use')); return;
+        }
+        store.getAll().onsuccess = event => {
         try {
           if (event.target.result.some(record => record.dependencies?.includes(`asset:${id}`))) { fail(new Error('content_in_use')); return; }
           store.delete(id);
         } catch (error) { fail(error); }
+        };
       };
     }),
   };

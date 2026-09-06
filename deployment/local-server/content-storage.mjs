@@ -3,9 +3,50 @@ import { mkdir, open, readFile, link, rm, readdir, lstat } from 'node:fs/promise
 import path from 'node:path';
 import { CONTENT_ID, collectContentReferences, readableImageReferences } from '../../src/content/references.js';
 import { inspectContent } from '../../src/content/body.js';
+import { prepareInlineImageMigration } from '../../src/content/migration.js';
 
 const fail = (code, status = 400) => { throw Object.assign(new Error(code), { code, status }); };
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+
+async function readContentRecord(directory, id) {
+  if (!CONTENT_ID.test(id)) fail('content_not_found', 404);
+  try {
+    const target = path.join(directory, `${id}.content`), info = await lstat(target);
+    if (!info.isFile() || info.isSymbolicLink() || info.size > 15 * 1024 * 1024) fail('content_corrupt', 500);
+    const record = JSON.parse(await readFile(target, 'utf8'));
+    const bytes = Buffer.from(record.data, 'base64');
+    if (hash(bytes) !== id || record.id !== id) fail('content_corrupt', 500);
+    return { ...inspectContent(bytes, record.type), id, bytes };
+  } catch (error) {
+    if (error.code === 'ENOENT') fail('content_not_found', 404);
+    throw error;
+  }
+}
+
+export async function prepareContentUpgrade(state, directory) {
+  const prepared = await prepareInlineImageMigration(state);
+  const replacements = {};
+  for (const { bytes, ...record } of prepared.records) {
+    let existing;
+    try {
+      existing = await readContentRecord(directory, record.id);
+    } catch (error) { if (error.code !== 'content_not_found') throw error; }
+    if (existing) {
+      if (existing.type !== record.type) fail('content_corrupt');
+    } else replacements[`uploads/content/${record.id}.content`] = Buffer.from(JSON.stringify({ ...record, data: Buffer.from(bytes).toString('base64') }));
+  }
+  const staged = new Set(prepared.records.map(record => `asset:${record.id}`));
+  for (const reference of collectContentReferences(prepared.state).keys()) {
+    if (staged.has(reference)) continue;
+    const [kind, id] = reference.split(':');
+    const record = await readContentRecord(directory, id);
+    if (record.kind !== kind) fail('content_type_unsupported');
+    for (const dependency of record.dependencies || []) if (!staged.has(dependency)) {
+      if ((await readContentRecord(directory, dependency.slice(6))).kind !== 'asset') fail('content_type_unsupported');
+    }
+  }
+  return { ...prepared, replacements };
+}
 
 async function syncDirectory(directory) {
   if (process.platform === 'win32') return;
@@ -21,20 +62,7 @@ export function createContentStorage({ directory, getState, getProjection, authe
   };
   const authorized = (session, id) => session.role === 'gm'
     || readableImageReferences(getProjection(session)).has(`asset:${id}`);
-  const read = async id => {
-    try {
-      const target = file(id), info = await lstat(target);
-      if (!info.isFile() || info.isSymbolicLink() || info.size > 15 * 1024 * 1024) fail('content_corrupt', 500);
-      const record = JSON.parse(await readFile(target, 'utf8'));
-      const bytes = Buffer.from(record.data, 'base64');
-      if (hash(bytes) !== id || record.id !== id) fail('content_corrupt', 500);
-      const metadata = inspectContent(bytes, record.type);
-      return { ...metadata, id, bytes };
-    } catch (error) {
-      if (error.code === 'ENOENT') fail('content_not_found', 404);
-      throw error;
-    }
-  };
+  const read = id => readContentRecord(root, id);
   return {
     async handle(req, res, sendJson) {
       const pathname = new URL(req.url, 'http://localhost').pathname;
@@ -128,11 +156,12 @@ export function createContentStorage({ directory, getState, getProjection, authe
       }
       return true;
     },
-    async validateReferences(payload, session) {
+    async validateReferences(payload, session, { staged = new Set() } = {}) {
       const references = collectContentReferences(payload);
       if (!references.size) return;
       const granted = session.role === 'gm' ? null : readableImageReferences(getProjection(session));
       for (const ref of references.keys()) {
+        if (session.role === 'gm' && staged.has(ref) && ref.startsWith('asset:')) continue;
         if (session.role !== 'gm' && !granted.has(ref)) fail('content_reference_forbidden', 403);
         const [kind, id] = ref.split(':');
         const record = await read(id);

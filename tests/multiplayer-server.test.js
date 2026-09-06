@@ -319,6 +319,55 @@ test('content HTTP credentials are bound to a live authenticated WebSocket sessi
   } finally { sockets.forEach(socket => socket.close()); await stopServer(runtime); }
 });
 
+test('LAN migrates inline images before startup, retains original bytes and does not repeat the upgrade', async () => {
+  const mapDir = await mkdtemp(path.join(tmpdir(), 'rpgmap-inline-upgrade-'));
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOc8AAAAASUVORK5CYII=', 'base64');
+  const state = initialWorldV2();
+  state.preferences.worldV2.actors[0].img = `data:image/png;base64,${png.toString('base64')}`;
+  state.preferences.worldV2.actors[0].notes = 'retain original notes';
+  const original = JSON.stringify({ schemaVersion: 1, worldId: 'default', revision: 1, state });
+  await writeFile(path.join(mapDir, 'world.json'), original);
+  let runtime = await startServer({}, mapDir);
+  try {
+    const gm = await openAndHello(runtime.url, { requestedRole: 'gm', name: 'GM' });
+    const snapshot = await requestWorldSnapshot(gm.ws);
+    const actor = snapshot.state.preferences.worldV2.actors[0];
+    assert.match(actor.img, /^asset:[a-f0-9]{64}$/);
+    assert.equal(actor.notes, 'retain original notes');
+    const request = await fetch(`${runtime.httpUrl}/api/content/${actor.img.slice(6)}`, { headers: { Authorization: `Bearer ${gm.welcome.contentToken}` } });
+    assert.equal(request.status, 200);
+    assert.deepEqual(Buffer.from(await request.arrayBuffer()), png);
+    const backups = await readdir(path.join(mapDir, 'backups'));
+    const checkpoint = backups.find(name => name.startsWith('upgrade-'));
+    assert.equal(await readFile(path.join(mapDir, 'backups', checkpoint, 'before/world.json'), 'utf8'), original);
+    const once = await readFile(path.join(mapDir, 'world.json'), 'utf8');
+    gm.ws.close();
+    await stopServer(runtime, { removeMap: false });
+    runtime = await startServer({}, mapDir);
+    assert.equal(await readFile(path.join(mapDir, 'world.json'), 'utf8'), once);
+    assert.deepEqual(await readdir(path.join(mapDir, 'backups')), backups);
+  } finally { await stopServer(runtime); }
+});
+
+test('LAN rejects damaged inline import without advancing revision or publishing partial content', async () => {
+  const runtime = await startServer();
+  const gm = await openAndHello(runtime.url, { requestedRole: 'gm', name: 'GM' });
+  try {
+    const state = initialWorldV2();
+    state.preferences.worldV2.actors[0].img = 'data:image/png;base64,broken';
+    const denied = waitForMessage(gm.ws, value => value.operationId === 'broken-image');
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, operationId: 'broken-image', state, reason: 'file-import:image' }));
+    assert.equal((await denied).code, 'invalid_image_data_url');
+    assert.equal((await (await fetch(`${runtime.httpUrl}/api/health`)).json()).world.initialized, false);
+    assert.deepEqual(await readdir(path.join(runtime.mapDir, 'uploads')), []);
+    assert.deepEqual(await readdir(path.join(runtime.mapDir, 'backups')), []);
+    delete state.preferences.worldV2.actors[0].img;
+    const accepted = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, operationId: 'valid-image', state, reason: 'file-import:image' }));
+    await accepted;
+  } finally { gm.ws.close(); await stopServer(runtime); }
+});
+
 test('health exposes only World bootstrap metadata for empty and initialized LAN state', async () => {
   const runtime = await startServer();
   try {

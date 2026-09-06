@@ -65,7 +65,7 @@ import {
 } from './websocket-runtime.mjs';
 import { createWorldWal } from './world-wal.mjs';
 import { validateAuthoritativeTokenMovePath } from './movement-authority.mjs';
-import { createContentStorage } from './content-storage.mjs';
+import { createContentStorage, prepareContentUpgrade } from './content-storage.mjs';
 import { hasRetainedContentReference } from './content-history.mjs';
 import { commitStorageUpgrade, recoverStorageUpgrade } from './storage-upgrade.mjs';
 
@@ -385,10 +385,14 @@ if (loadedAccess !== undefined) {
   access = normalizeAccessState(loadedAccess);
 }
 let upgradeRequired = loadedAccess !== undefined && JSON.stringify(access) !== JSON.stringify(loadedAccess);
+let upgradeContents = {};
 if (world.state) {
   const oldCanonical = world.state.preferences?.worldV2;
   const oldStatusSchema = world.state.preferences?.entitySystem?.schemaVersion;
-  const featureMigration = migrateLegacySceneFeatureStates(world.state);
+  const contentMigration = await prepareContentUpgrade(world.state, path.join(STORAGE.uploadsDir, 'content'));
+  upgradeContents = contentMigration.replacements;
+  upgradeRequired ||= contentMigration.migrated;
+  const featureMigration = migrateLegacySceneFeatureStates(contentMigration.state);
   const schemaMigration = migrateWorldSchema3State(featureMigration.state, {
     statusDefinitions: serverRuleset.statuses?.definitions,
   });
@@ -400,6 +404,7 @@ if (world.state) {
 }
 if (upgradeRequired) {
   await commitStorageUpgrade(STORAGE, {
+    ...upgradeContents,
     'world.json': Buffer.from(JSON.stringify(world)),
     'world.operations.ndjson': Buffer.alloc(0),
     ...(loadedAccess === undefined ? {} : { 'users.json': Buffer.from(JSON.stringify(access)) }),
@@ -442,7 +447,7 @@ function statusOperationIdForReply(value) {
 let persistChain = Promise.resolve();
 let lastWorldBackupRevision = Number(world.revision) || 0;
 let lastWorldBackupAt = Date.now();
-function persistWorld(snapshot, { forceBackup = false } = {}) {
+function durableWorld(snapshot) {
   const state = snapshot.state ? {
     ...snapshot.state,
     preferences: { ...(snapshot.state.preferences || {}) },
@@ -451,10 +456,14 @@ function persistWorld(snapshot, { forceBackup = false } = {}) {
     delete state.preferences.featureStates;
     delete state.preferences.featureInteractions;
   }
-  const durable = {
+  return {
     ...snapshot,
     state,
   };
+}
+
+function persistWorld(snapshot, { forceBackup = false } = {}) {
+  const durable = durableWorld(snapshot);
   const serialized = JSON.stringify(durable);
   if (Buffer.byteLength(serialized) > MAX_WS_PAYLOAD) {
     const error = new Error('World state is too large');
@@ -1346,7 +1355,10 @@ const contentStorage = createContentStorage({
     return null;
   },
   serialize(task) {
-    const pending = messageChain.then(task);
+    const pending = messageChain.then(() => {
+      if (storageBlocked) throw new Error('storage_recovery_required');
+      return task();
+    });
     messageChain = pending.catch(() => {});
     return pending;
   },
@@ -1354,6 +1366,7 @@ const contentStorage = createContentStorage({
 
 const server = http.createServer(async (req, res) => {
   try {
+    if (storageBlocked) return sendJson(res, 503, { error: 'storage_recovery_required' });
     if (await contentStorage.handle(req, res, sendJson)) return;
     if (!['GET', 'HEAD'].includes(req.method || 'GET')) return sendJson(res, 405, { error: 'method_not_allowed' });
     if (req.url === '/api/health') return sendJson(res, 200, {
@@ -1383,7 +1396,9 @@ const server = http.createServer(async (req, res) => {
 // Serialize messages across sockets, not only per connection. This guarantees
 // every World mutation clones the latest durable revision before it writes.
 let messageChain = Promise.resolve();
+let storageBlocked = false;
 server.on('upgrade', (req, socket) => {
+  if (storageBlocked) return socket.destroy();
   let pathname = '/';
   try { pathname = new URL(req.url || '/', 'http://localhost').pathname; } catch {}
   if (pathname !== '/ws') return socket.destroy();
@@ -1414,6 +1429,7 @@ server.on('upgrade', (req, socket) => {
 
   attachWebSocketReader(socket, text => {
     messageChain = messageChain.then(async () => {
+    if (storageBlocked || socket.destroyed) return;
     let message;
     try { message = JSON.parse(text); }
     catch { return sendSocket(socket, { type: 'error', code: 'invalid_json', message: 'Invalid JSON' }); }
@@ -1901,13 +1917,14 @@ server.on('upgrade', (req, socket) => {
       if (!message.state || typeof message.state !== 'object' || Array.isArray(message.state)) {
         return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'invalid_state', message: 'World state must be an object' });
       }
-      let incomingState;
+      let incomingState, contentUpgrade;
       try {
-        incomingState = migrateWorldSchema3State(migrateLegacySceneFeatureStates(message.state).state, {
+        contentUpgrade = await prepareContentUpgrade(message.state, path.join(STORAGE.uploadsDir, 'content'));
+        incomingState = migrateWorldSchema3State(migrateLegacySceneFeatureStates(contentUpgrade.state).state, {
           statusDefinitions: serverRuleset.statuses?.definitions,
         }).state;
         assertWorldState(incomingState);
-        await contentStorage.validateReferences(incomingState, session);
+        await contentStorage.validateReferences(incomingState, session, { staged: new Set(contentUpgrade.records.map(record => `asset:${record.id}`)) });
       } catch (error) {
         return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: error?.code || 'invalid_state', message: error?.message || 'World state 无效' });
       }
@@ -1951,9 +1968,23 @@ server.on('upgrade', (req, socket) => {
         state: incomingState,
         recentStatusOperations: world.recentStatusOperations || [],
       };
-      try { await persistWorld(nextWorld, { forceBackup: true }); }
-      catch (error) { return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'persist_failed', message: `World 未保存：${error.message}` }); }
-      await worldWal.reset();
+      try {
+        await commitStorageUpgrade(STORAGE, { ...contentUpgrade.replacements,
+          'world.json': Buffer.from(JSON.stringify(durableWorld(nextWorld))), 'users.json': Buffer.from(JSON.stringify(access)),
+          'world.operations.ndjson': Buffer.alloc(0),
+        });
+      } catch (error) {
+        try { await recoverStorageUpgrade(STORAGE); }
+        catch (recoveryError) {
+          // No session may continue writing against a partially restored set.
+          storageBlocked = true;
+          console.error('[RPGmap] import recovery requires intervention', recoveryError);
+          server.close(); for (const connection of sessions.keys()) connection.destroy();
+          return;
+        }
+        return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'persist_failed', message: `World 未保存：${error.message}` });
+      }
+      worldWal.adoptCheckpoint();
       world = nextWorld;
       resetResumeHistory();
       const snapshot = {

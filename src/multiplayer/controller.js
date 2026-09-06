@@ -1440,7 +1440,7 @@ export function createMultiplayerController() {
         queueCommittedOperations(api.exportState(), 'state:saved');
       });
       api.on('state:import', detail => {
-        if (!connected || session?.role !== 'gm') return;
+        if (!connected || session?.role !== 'gm' || detail?.persist === false) return;
         performWorldOperation(detail?.state || api.exportState(), {
           reason: `file-import:${String(detail?.source || 'import').slice(0, 40)}`,
         }).catch(error => setMapStatus(`Import sync failed: ${error.message}`));

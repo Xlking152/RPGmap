@@ -33,6 +33,7 @@ export default defineConfig({
           if (moduleId.includes('/node_modules/leaflet/')) return 'vendor-leaflet';
           if (moduleId.includes('/node_modules/lucide/')) return 'vendor-icons';
           if (moduleId.includes('/node_modules/polygon-clipping/')) return 'vendor-geometry';
+          if (/\/src\/content\/(?:database|data-url|image|body|migration|indexed-storage|indexed-upgrade)\.js$/.test(moduleId)) return 'content-storage';
           return undefined;
         }
       }

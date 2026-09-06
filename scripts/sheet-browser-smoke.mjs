@@ -531,12 +531,18 @@ try {
   }
   await evaluate(`document.querySelector('[data-library-dialog] [aria-label="关闭"]').click()`);
   await new Promise(resolve => setTimeout(resolve, 400));
+  const { checkOfflineContentUpgrade } = await import('./content-browser-checkpoint.mjs');
+  const offlineUpgrade = await checkOfflineContentUpgrade({ socket, send, evaluate, retry: retryWithSnapshot, targetUrl });
+  if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
+    const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    await writeFile(path.join(path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR), 'packaged-offline-upgrade.png'), Buffer.from(capture.data, 'base64'));
+  }
   if (failures.length) throw new Error(`Actor sheet browser requests failed: ${failures.join('; ')}`);
   if (exceptions.length) throw new Error(`Actor sheet browser runtime errors: ${exceptions.join('; ')}`);
 
   console.log(JSON.stringify({ ready, fixtureRevision: setup.revision, liveSheets: opened, drag: dragAudit, tabs: tabAudit,
     health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit, drafts: draftAudit, publicProfile: publicProfileAudit,
-    portrait: { reference: portraitAudit.reference, runtimePreserved: true }, library: libraryAudit, mobile: mobileAudit }));
+    portrait: { reference: portraitAudit.reference, runtimePreserved: true }, library: libraryAudit, mobile: mobileAudit, offlineUpgrade }));
   await send('Browser.close');
   browserClosed = true;
 } catch (error) {

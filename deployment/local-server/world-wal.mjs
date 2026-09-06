@@ -103,6 +103,10 @@ export function createWorldWal({ filePath, applyPatch, maxBytes = DEFAULT_MAX_BY
       const handle = await open(filePath, 'a');
       await handle.close();
     });
+    adoptCheckpoint();
+  }
+
+  function adoptCheckpoint() {
     bytes = 0;
     lastCompactedAt = Date.now();
   }
@@ -112,7 +116,7 @@ export function createWorldWal({ filePath, applyPatch, maxBytes = DEFAULT_MAX_BY
     catch (error) { if (error?.code === 'ENOENT') return 0; throw error; }
   }
 
-  return Object.freeze({ append, replay, reset, shouldCompact, size });
+  return Object.freeze({ append, replay, reset, adoptCheckpoint, shouldCompact, size });
 }
 
 export { checksum as worldWalChecksum };
