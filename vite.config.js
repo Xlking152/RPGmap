@@ -18,23 +18,51 @@ export default defineConfig({
   plugins: [stripUnusedLeafletRasterCss()],
   build: {
     manifest: true,
-    target: 'es2020',
+    target: 'esnext',
+    modulePreload: { polyfill: false },
     outDir: 'dist',
     emptyOutDir: true,
     cssCodeSplit: true,
     assetsInlineLimit: 4096,
     rollupOptions: {
+      treeshake: {
+        moduleSideEffects(id) {
+          const moduleId = id.replaceAll('\\', '/');
+          return moduleId.endsWith('.css') || moduleId.includes('/node_modules/leaflet/');
+        },
+      },
       output: {
         assetFileNames: 'assets/[name]-[hash][extname]',
         chunkFileNames: 'assets/[name]-[hash].js',
         entryFileNames: 'assets/[name]-[hash].js',
-        manualChunks(id) {
-          const moduleId = id.replaceAll('\\', '/');
-          if (moduleId.includes('/node_modules/leaflet/')) return 'vendor-leaflet';
-          if (moduleId.includes('/node_modules/lucide/')) return 'vendor-icons';
-          if (moduleId.includes('/node_modules/polygon-clipping/')) return 'vendor-geometry';
-          if (/\/src\/content\/(?:database|data-url|image|body|migration|indexed-storage|indexed-upgrade)\.js$/.test(moduleId)) return 'content-storage';
-          return undefined;
+        codeSplitting: {
+          groups: [
+            {
+              name: 'lazy-runtime-tools',
+              test: /[\\/]src[\\/](?:ui[\\/]lazy-runtime-tools|library[\\/]ui|journal[\\/](?:ui|markdown)|content[\\/]archive|entities[\\/](?:xlsx-importer|avatar|actor-operations|canonical-delete|token-controller|sheet-manager|sheet-renderer|sheet-policy|ui-live)|entities[\\/]sheet[\\/].+|token[\\/](?:placement|naming)|status[\\/](?:definition-editor|quick-hud))\.js$/,
+              includeDependenciesRecursively: false,
+            },
+            {
+              name: 'world-bootstrap',
+              test: /[\\/]src[\\/]world[\\/](?:bootstrap|constants|package-upgrades)\.js$/,
+              includeDependenciesRecursively: false,
+            },
+            {
+              name: 'map-runtime-core',
+              test(id) {
+                const moduleId = id.replaceAll('\\', '/');
+                if (/\/node_modules\/(?:leaflet|lucide|polygon-clipping)\//.test(moduleId)) return true;
+                if (!moduleId.includes('/src/')) return false;
+                if (/\/src\/(?:ui\/lazy-runtime-tools|library\/ui|journal\/(?:ui|markdown)|app\/world-upgrade|map-package\/default-map|multiplayer\/server-bootstrap|world\/(?:bootstrap|constants|package-upgrades))\.js$/.test(moduleId)) return false;
+                if (/\/src\/entities\/(?:xlsx-importer|avatar|actor-operations|canonical-delete|token-controller|sheet-manager|sheet-renderer|sheet-policy|ui-live)\.js$/.test(moduleId)
+                  || /\/src\/entities\/sheet\//.test(moduleId)
+                  || /\/src\/token\/(?:placement|naming)\.js$/.test(moduleId)
+                  || /\/src\/status\/(?:definition-editor|quick-hud)\.js$/.test(moduleId)) return false;
+                return !/\/src\/(?:main|app\/storage-adapter|ruleset\/metadata|world\/(?:manager|setup)|map-package\/(?:constants|contract|registry|builtins))\.js$/.test(moduleId);
+              },
+              includeDependenciesRecursively: false,
+            },
+          ],
         }
       }
     }

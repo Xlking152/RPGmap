@@ -1,12 +1,7 @@
 import { createBrowserStorage, createMemoryStorage } from './app/storage-adapter.js';
-import {
-  listBuiltInRulesets,
-  loadBuiltInRulesetReference,
-  resolveBuiltInRulesetReference,
-} from './ruleset/builtins.js';
+import { listBuiltInRulesets } from './ruleset/metadata.js';
 import { createWorldCatalogManager } from './world/manager.js';
 import { chooseWorldBeforeMap } from './world/setup.js';
-import { readServerWorldBootstrap, readWorldBootstrap } from './world/bootstrap.js';
 import { DEFAULT_REFERENCE_MAP_ID } from './map-package/constants.js';
 import { mapPackageRegistry } from './map-package/registry.js';
 import { registerBuiltInMapPackages } from './map-package/builtins.js';
@@ -64,6 +59,7 @@ export async function startRpgMap() {
   setBootStatus('正在检查 Windows RPGmap Server 与 World…');
   const { readRpgMapServerBootstrap } = await import('./multiplayer/server-bootstrap.js');
   const serverBootstrap = await readRpgMapServerBootstrap();
+  const { readServerWorldBootstrap, readWorldBootstrap } = await import('./world/bootstrap.js');
   const { serverRuntime } = serverBootstrap;
 
   let worldManager = null;
@@ -93,14 +89,13 @@ export async function startRpgMap() {
     worldName = worldBootstrap.worldName || worldDescriptor.name;
   }
 
-  let ruleset = resolveBuiltInRulesetReference(serverRuntime && worldBootstrap.kind === 'empty'
-    ? worldDescriptor.ruleset : worldBootstrap.ruleset);
+  const rulesetReference = serverRuntime && worldBootstrap.kind === 'empty'
+    ? worldDescriptor.ruleset : worldBootstrap.ruleset;
   const mapReference = worldBootstrap.mapPackage
     || worldDescriptor?.mapPackage
     || defaultMapReference();
-  setBootStatus(`World：${worldName} · ${ruleset.title} · 正在加载地图 Runtime…`);
+  setBootStatus(`World：${worldName} · ${rulesetReference.id} · 正在加载地图 Runtime…`);
   await yieldForFirstPaint();
-  ruleset = await loadBuiltInRulesetReference(ruleset);
   const { startMapRuntime } = await import('./runtime/map-runtime.js');
   return startMapRuntime({
     appContainer,
@@ -108,7 +103,7 @@ export async function startRpgMap() {
     mapPackageRegistry,
     mapReference,
     raw,
-    ruleset,
+    rulesetReference,
     serverRuntime,
     worldId,
     worldManager,

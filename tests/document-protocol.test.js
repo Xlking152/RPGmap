@@ -7,6 +7,7 @@ import {
   documentWritesToWorldOperations,
   worldOperationsToDocumentWrites,
 } from '../src/documents/protocol.js';
+import { documentChangeSet } from '../src/documents/changes.js';
 import {
   WORLD_OPERATION_SCHEMA_VERSION,
   applyWorldOperationPatch,
@@ -123,7 +124,10 @@ test('Token Document move becomes one atomic path operation with preconditions',
     { x: 12, y: 22, elevationMeters: 0 },
     { x: 15, y: 25, elevationMeters: 0 },
   ]);
-  assert.deepEqual(applied.changeSet.tokens, [{ sceneId: 'scene-a', upsertIds: ['token-a'], removeIds: [] }]);
+  const changes = createDocumentChanges(state(), applied.state, null, { motion: applied.results[0].motion });
+  assert.deepEqual(documentChangeSet(changes).tokens.map(({ fields, ...entry }) => entry), [{
+    sceneId: 'scene-a', upsertIds: ['token-a'], removeIds: [],
+  }]);
 });
 
 test('Token path precondition conflict rejects without mutating the source state', () => {

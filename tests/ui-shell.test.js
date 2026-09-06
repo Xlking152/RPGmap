@@ -43,17 +43,18 @@ test('application chrome keeps the restrained neutral, river and brick palette',
 
 test('production registry splits the built-in map and large vendors without suppressing chunk warnings', () => {
   assert.match(mainSource, /registerBuiltInMapPackages/);
-  assert.match(mainSource, /loadBuiltInRulesetReference/);
+  assert.match(mainSource, /listBuiltInRulesets/);
   assert.match(mainSource, /await import\('\.\/runtime\/map-runtime\.js'\)/);
   assert.match(mapRuntimeSource, /mapPackageRegistry\.load/);
+  assert.match(mapRuntimeSource, /resolveRulesetReference/);
   assert.doesNotMatch(mainSource, /leaflet|styles\.css|createRpgMapRuntime/);
   assert.doesNotMatch(mainSource, /ruleset\/index\.js|rulesets\/infinite-horror/);
   assert.match(rulesetBuiltinsSource, /await import\('\.\/index\.js'\)/);
   assert.match(builtinsSource, /await import\('\.\/default-map\.js'\)/);
-  assert.match(viteSource, /manualChunks/);
-  assert.match(viteSource, /vendor-leaflet/);
-  assert.match(viteSource, /vendor-icons/);
-  assert.match(viteSource, /vendor-geometry/);
+  assert.match(viteSource, /codeSplitting/);
+  assert.match(viteSource, /world-bootstrap/);
+  assert.match(viteSource, /map-runtime-core/);
+  assert.match(viteSource, /lazy-runtime-tools/);
   assert.doesNotMatch(viteSource, /chunkSizeWarningLimit/);
   assert.match(viteSource, /manifest: true/);
 });

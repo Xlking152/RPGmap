@@ -1,20 +1,11 @@
-import { createElement, X, Copy, Archive, ArchiveRestore, Download, Upload, Star, Trash2, Pencil, Save, FileInput } from 'lucide';
+import { createElement, X, Copy, Archive, Download, Upload, Star, Trash2, Pencil, Save } from 'lucide';
 
 export function createLibraryView(api, { gm }) {
   const doc = api.map.getContainer().ownerDocument;
   const dialog = doc.createElement('dialog');
   dialog.dataset.libraryDialog = 'true';
   dialog.style.cssText = 'width:760px;max-width:calc(100vw - 24px);max-height:85vh;box-sizing:border-box;padding:16px;border:1px solid #aab8b6;border-radius:6px;color:#253b39;background:#fff';
-  dialog.innerHTML = `<style>
-    [data-library-dialog]{font-size:14px;letter-spacing:0}
-    [data-library-dialog] [role=tab]{flex:1;height:32px;border:1px solid #cbd6d0;border-radius:4px;background:#f4f7f5}
-    [data-library-dialog] [aria-selected=true]{background:#e0eee8;border-color:#558477;color:#214d40;font-weight:600}
-    [data-library-dialog] input:not([type=checkbox]),[data-library-dialog] select{min-height:32px;border:1px solid #bdccc4;border-radius:4px;padding:4px 6px}
-    [data-library-dialog] button{cursor:pointer}
-    [data-library-dialog] button:disabled{cursor:wait;opacity:.55}
-    [data-library-dialog] button:focus-visible{outline:2px solid #397783;outline-offset:2px}
-    [data-library-dialog] [data-library-conflict] button{margin:8px 8px 0 0;padding:5px 8px}
-  </style><header style="display:flex;align-items:center;justify-content:space-between"><h2 style="font-size:18px;margin:0">模板与图片资料库</h2><span data-close></span></header>
+  dialog.innerHTML = `<header style="display:flex;align-items:center;justify-content:space-between"><h2 style="font-size:18px;margin:0">模板与图片资料库</h2><span data-close></span></header>
     <div role="tablist" style="display:flex;gap:4px;margin:12px 0"><button type="button" role="tab" data-tab="actors">模板</button><button type="button" role="tab" data-tab="library">资料库</button><button type="button" role="tab" data-tab="assets">图片</button></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="search" data-search aria-label="搜索名称或标签" placeholder="名称或标签" style="flex:1;min-width:120px;width:120px"><select data-type aria-label="类型"><option value="">全部类型</option><option value="pc">PC</option><option value="monster">怪物</option><option value="npc">NPC</option><option value="summon">召唤物</option><option value="other">其他</option></select><select data-sort aria-label="排序"><option value="name">名称</option><option value="type">类型</option><option value="favorite">收藏优先</option></select></div>
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:10px 0"><label><input type="checkbox" data-archived> 显示归档</label><label><input type="checkbox" data-favorites> 仅收藏</label><span data-upload></span><span data-package-control></span></div>
@@ -176,7 +167,7 @@ export function createLibraryView(api, { gm }) {
       if (!current) throw new Error('library_entry_not_found');
       record = current; organization = recordTab === 'actors' ? current.organization || {} : current;
       archiveButton.title = organization.archived ? '取消归档' : '归档'; archiveButton.setAttribute('aria-label', archiveButton.title);
-      archiveButton.replaceChildren(createElement(organization.archived ? ArchiveRestore : Archive, { width: 18, height: 18, 'aria-hidden': true }));
+      archiveButton.replaceChildren(createElement(Archive, { width: 18, height: 18, 'aria-hidden': true }));
     };
     const saveOrganization = async patch => {
       lastPatch = patch;
@@ -185,7 +176,7 @@ export function createLibraryView(api, { gm }) {
       if (epoch !== requestEpoch) return;
       useCurrent(); markDraft(); conflict.hidden = true;
     };
-    const archiveButton = button(organization.archived ? ArchiveRestore : Archive, organization.archived ? '取消归档' : '归档', () => run(() => saveOrganization({ archived: !organization.archived })));
+    const archiveButton = button(Archive, organization.archived ? '取消归档' : '归档', () => run(() => saveOrganization({ archived: !organization.archived })));
     commands.append(tags, button(Save, '保存标签', () => run(() => saveOrganization({ tags: parsedTags() }))), archiveButton);
     for (const [label, action] of [
       ['采用服务器值', () => { useCurrent(); tags.value = tagsOf(organization).join(', '); markDraft(); conflict.hidden = true; }],
@@ -200,7 +191,7 @@ export function createLibraryView(api, { gm }) {
         button(Save, '存入资料库', () => run(() => api.library.save(record.id))));
     } else {
       const preview = doc.createElement('p'); preview.textContent = '正在读取正文'; preview.style.overflowWrap = 'anywhere'; detail.append(preview);
-      const importButton = button(FileInput, '导入为新模板', () => run(async () => { await api.library.import(record.id, record.bodyRef); clearDetail(); }));
+      const importButton = button(Upload, '导入为新模板', () => run(async () => { await api.library.import(record.id, record.bodyRef); clearDetail(); }));
       importButton.disabled = true; commands.append(importButton,
         button(Download, '导出模板包', () => run(async () => {
           const blob = await api.library.export(record.id), url = URL.createObjectURL(blob);

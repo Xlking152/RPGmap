@@ -3,6 +3,9 @@ import { normalizeTokenAccess } from '../token/access.js';
 import { normalizeFogState } from '../vision/fog.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { normalizeEntityStatusState, STATUS_SCHEMA_VERSION } from '../status/model.js';
+import { upgradeBuiltInMapReference, upgradeBuiltInRulesetReference } from './package-upgrades.js';
+
+export { upgradeBuiltInMapReference, upgradeBuiltInRulesetReference } from './package-upgrades.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -22,23 +25,6 @@ export function feetToMeters(value) {
     throw error;
   }
   return number * FEET_TO_METERS;
-}
-
-export function upgradeBuiltInRulesetReference(reference, schemaVersion = null) {
-  const source = plainObject(reference) ? reference : {};
-  if (Number(schemaVersion) < 4 && source.id === 'infinite-horror' && source.version === '1.0.0') {
-    return Object.freeze({ ...clone(source), version: '1.1.0' });
-  }
-  return Object.freeze(clone(source));
-}
-
-export function upgradeBuiltInMapReference(reference, schemaVersion = null) {
-  const source = plainObject(reference) ? reference : {};
-  if (Number(schemaVersion) < 4 && source.id === 'northern-song-lanzhou-1104'
-    && ['1.0.5', '1.0.6'].includes(String(source.version))) {
-    return Object.freeze({ ...clone(source), version: '1.1.0' });
-  }
-  return Object.freeze(clone(source));
 }
 
 function migrateFeetField(target, feetKey, metersKey) {

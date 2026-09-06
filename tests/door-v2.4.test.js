@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { applyWorldOperations } from '../src/world/operations.js';
 import { validateDoorInteraction } from '../src/interaction/door-authority.js';
 import { worldOperationsToDocumentWrites, documentWritesToWorldOperations } from '../src/documents/protocol.js';
+import { createDocumentChanges, documentChangeSet } from '../src/documents/changes.js';
 
 const door = {
   id: 'door', center: [2, 0], entrance: [2, 0],
@@ -61,7 +62,9 @@ test('door intent validates distance and excludes the target door from LOS', () 
   }], { source: { role: 'player' }, mapPackage: value.mapPackage, mapMetrics: value.mapPackage });
   assert.equal(result.state.preferences.worldV2.scenes[0].featureStates.door.open, true);
   assert.equal(result.results[0].distanceMeters, 2);
-  assert.deepEqual(result.changeSet.featureStates, [{ sceneId: 'scene', featureIds: ['door'] }]);
+  assert.deepEqual(documentChangeSet(createDocumentChanges(value.state, result.state)).featureStates, [{
+    sceneId: 'scene', featureIds: ['door'],
+  }]);
 });
 
 test('door intent rejects locked, distant, hidden and separately occluded targets', () => {

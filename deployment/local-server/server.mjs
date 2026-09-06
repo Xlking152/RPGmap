@@ -541,7 +541,7 @@ function resetResumeHistory() {
 }
 function rememberResumeCommit({
   beforeState, afterState, operationId, baseRevision, revision, updatedAt,
-  results, originSessionId, changeSet, documentBatch,
+  results, originSessionId, documentBatch, fog,
 }) {
   const now = Date.now();
   if (!resumeHistory.length) {
@@ -557,8 +557,8 @@ function rememberResumeCommit({
     updatedAt: String(updatedAt),
     results: structuredClone(results || []),
     originSessionId: originSessionId || null,
-    changeSet: structuredClone(changeSet || {}),
     documentBatch: documentBatch === true,
+    fog: structuredClone(fog || []),
   });
   while (resumeHistory.length > RESUME_HISTORY_LIMIT
     || (resumeHistory[0] && now - resumeHistory[0].at > RESUME_HISTORY_MAX_AGE_MS)) {
@@ -594,7 +594,7 @@ function resumableCommits(session, revision, fingerprint) {
       baseRevision: entry.baseRevision,
       revision: entry.revision,
       updatedAt: entry.updatedAt,
-      changes: createDocumentChanges(beforeProjection, afterProjection, null, { motion }),
+      changes: createDocumentChanges(beforeProjection, afterProjection, null, { motion, fog: entry.fog }),
       ...(motion.length ? { motion } : {}),
       originSessionId: entry.originSessionId,
       audienceRevision: session.audienceRevision,
@@ -916,7 +916,8 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
 }
 
 
-function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, changeSet, operations = [], documentBatch = false }) {
+function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, operations = [], documentBatch = false }) {
+  const fog = results.filter(result => Object.hasOwn(result, 'dirtyBounds'));
   for (const [socket, session] of sessions) {
     if (session.role !== 'gm' && session.identityStatus !== 'active') continue;
     const beforeProjection = session.audienceProjection || audienceStateFor(session, beforeState);
@@ -930,7 +931,7 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
       : [];
     const response = {
       type: documentBatch ? 'document.batch.committed' : 'world.operation.committed', operationId, baseRevision, revision, updatedAt,
-      changes: createDocumentChanges(beforeProjection, afterProjection, null, { motion }),
+      changes: createDocumentChanges(beforeProjection, afterProjection, null, { motion, fog }),
       ...(motion.length ? { motion } : {}),
       originSessionId,
       audienceRevision: session.audienceRevision,
@@ -939,7 +940,7 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
   }
   rememberResumeCommit({
     beforeState, afterState, operationId, baseRevision, revision, updatedAt,
-    results, originSessionId, changeSet, documentBatch,
+    results, originSessionId, documentBatch, fog,
   });
 }
 function sendAudienceSnapshot(socket, session, reason = 'audience.changed') {
@@ -1929,7 +1930,6 @@ server.on('upgrade', (req, socket) => {
         updatedAt: world.updatedAt,
         results: applied.results,
         originSessionId: session.id,
-        changeSet: applied.changeSet,
         operations: committedOperations,
         documentBatch: message._documentBatch === true,
       });

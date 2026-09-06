@@ -979,24 +979,30 @@ function applyCanonicalOperation(state, operation, context = {}) {
     const map = plainObject(context.mapPackage)
       ? context.mapPackage
       : plainObject(context.mapMetrics) ? context.mapMetrics : {};
+    const radiusMeters = type === 'scene.fog.reset' ? 0 : Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
+    const radiusUnits = radiusMeters / Math.max(0.000001, Number(map.metersPerUnit) || 1);
+    const dirtyBounds = type === 'scene.fog.reset' ? null : (payload.from && payload.to ? [payload.from, payload.to] : [payload])
+      .reduce((bounds, point) => ({
+        minX: Math.min(bounds.minX, finite(point.x, 'x') - radiusUnits),
+        minY: Math.min(bounds.minY, finite(point.y, 'y') - radiusUnits),
+        maxX: Math.max(bounds.maxX, finite(point.x, 'x') + radiusUnits),
+        maxY: Math.max(bounds.maxY, finite(point.y, 'y') + radiusUnits),
+      }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
     const lineOfSightEnabled = scene.settings?.lineOfSightEnabled === true;
     const occluders = lineOfSightEnabled
       ? deriveVisionOccluders(map, scene, deriveSceneState(scene.sceneEvents || []))
       : [];
     if (type === 'scene.fog.reset') scene.fog = resetFogParty(scene.fog, partyId);
     else if (type === 'scene.fog.hide') {
-      const radiusMeters = Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
       scene.fog = hideFogCircle(scene.fog, partyId, {
         x: finite(payload.x, 'x'), y: finite(payload.y, 'y'),
         radiusMeters,
       }, map);
     } else if (payload.from && payload.to) {
-      const radiusMeters = Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
       scene.fog = lineOfSightEnabled
         ? exploreFogVisibleSweep(scene.fog, partyId, payload.from, payload.to, radiusMeters, map, { occluders })
         : exploreFogSweep(scene.fog, partyId, payload.from, payload.to, radiusMeters, map);
     } else {
-      const radiusMeters = Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
       const circle = {
         x: finite(payload.x, 'x'), y: finite(payload.y, 'y'),
         elevationMeters: Math.max(0, finite(payload.elevationMeters ?? 0, 'elevationMeters')),
@@ -1008,7 +1014,7 @@ function applyCanonicalOperation(state, operation, context = {}) {
           })
         : exploreFogCircle(scene.fog, partyId, circle, map);
     }
-    return { action: type, sceneId: String(scene.id), partyId };
+    return { action: type, sceneId: String(scene.id), partyId, dirtyBounds };
   }
 
   if (type === 'combat.replace') {
@@ -1142,119 +1148,11 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
   world.updatedAt = String(context.now || new Date().toISOString());
   if (movementAdjudicationChanged) projectWorldOperationState(state);
   else projectGranularOperationState(state, operations);
-  const changeSet = (movementAdjudicationChanged ? null : createOperationChangeSet(operations, results, rawState, state))
-    || createWorldOperationChangeSet(rawState, state);
-  applyFogOperationDirtyBounds(changeSet, operations, context.mapMetrics);
   return {
     state,
     operations: clone(operations),
     results,
-    changeSet,
   };
-}
-
-function createOperationChangeSet(operations, results, beforeState, afterState) {
-  if (operations.some(operation => !GRANULAR_OPERATION_TYPES.has(operation.type))) return null;
-  const beforeWorld = worldFromState(beforeState);
-  const afterWorld = worldFromState(afterState);
-  const actorIds = new Set();
-  const tokenIdsByScene = new Map();
-  const featureIdsByScene = new Map();
-  const fogSceneIds = new Set();
-  const changedSceneIds = new Set();
-  const appendedIds = new Set();
-  let chatCleared = false;
-  let statusDefinitionsChanged = false;
-  let activeSceneChanged = false;
-  const activeSceneId = String(afterWorld.activeSceneId || beforeWorld.activeSceneId || '');
-  const addToken = (sceneId, tokenId) => {
-    const scene = String(sceneId || activeSceneId);
-    if (!scene || !tokenId) return;
-    if (!tokenIdsByScene.has(scene)) tokenIdsByScene.set(scene, new Set());
-    tokenIdsByScene.get(scene).add(String(tokenId));
-  };
-  const collectStatusTarget = payload => {
-    if (payload?.type === 'status.batch') {
-      for (const item of payload.operations || []) collectStatusTarget(item);
-      return;
-    }
-    const scope = String(payload?.scope || payload?.target?.scope || '');
-    const targetId = String(payload?.targetId || payload?.target?.targetId || '');
-    if (scope === 'actor' && targetId) actorIds.add(targetId);
-    else if ((scope === 'token' || scope === 'syntheticActor') && targetId) addToken(activeSceneId, targetId);
-  };
-  for (const operation of operations) {
-    const payload = operation.payload || {};
-    if (operation.type === 'token.move' || operation.type === 'token.reposition') addToken(payload.sceneId, payload.tokenId);
-    else if (operation.type === 'token.movePath') {
-      for (const tokenId of payload.tokenIds || []) addToken(payload.sceneId, tokenId);
-    }
-    else if (operation.type === 'scene.settings.patch') changedSceneIds.add(String(payload.sceneId || activeSceneId));
-    else if (operation.type === 'scene.door.use' || operation.type === 'scene.featureState.patch') {
-      const sceneId = String(payload.sceneId || activeSceneId);
-      if (!featureIdsByScene.has(sceneId)) featureIdsByScene.set(sceneId, new Set());
-      featureIdsByScene.get(sceneId).add(String(payload.featureId));
-    }
-    else if (operation.type === 'scene.activate') activeSceneChanged = true;
-    else if (operation.type.startsWith('scene.fog.')) fogSceneIds.add(String(payload.sceneId || activeSceneId));
-    else if (operation.type.startsWith('status.definition.')) statusDefinitionsChanged = true;
-    else if (operation.type.startsWith('status.')) collectStatusTarget({ type: operation.type, ...payload });
-    else if (operation.type === 'chat.clear') chatCleared = true;
-  }
-  for (const result of results || []) if (result?.chatId) appendedIds.add(String(result.chatId));
-  return {
-    actors: { upsertIds: [...actorIds], removeIds: [] },
-    tokens: [...tokenIdsByScene].map(([sceneId, ids]) => ({ sceneId, upsertIds: [...ids], removeIds: [] })),
-    scenes: { upsertIds: [...changedSceneIds], removeIds: [], activeSceneChanged },
-    featureStates: [...featureIdsByScene].map(([sceneId, ids]) => ({ sceneId, featureIds: [...ids] })),
-    fog: [...fogSceneIds].map(sceneId => ({ sceneId, dirtyBounds: null })),
-    combatChanged: false,
-    chat: { appendedIds: [...appendedIds], cleared: chatCleared },
-    statusDefinitionsChanged,
-  };
-}
-
-function mergeBounds(left, right) {
-  if (!left || !right) return left || right || null;
-  return {
-    minX: Math.min(left.minX, right.minX),
-    minY: Math.min(left.minY, right.minY),
-    maxX: Math.max(left.maxX, right.maxX),
-    maxY: Math.max(left.maxY, right.maxY),
-  };
-}
-
-function fogOperationBounds(operation, mapMetrics = {}) {
-  if (!String(operation?.type || '').startsWith('scene.fog.')) return undefined;
-  if (operation.type === 'scene.fog.reset') return null;
-  const payload = plainObject(operation.payload) ? operation.payload : {};
-  const metersPerUnit = Math.max(0.000001, Number(mapMetrics?.metersPerUnit) || 1);
-  const radius = Math.max(0, Number(payload.radiusMeters) || 0) / metersPerUnit;
-  const points = payload.from && payload.to ? [payload.from, payload.to] : [payload];
-  const values = points.map(point => ({ x: Number(point?.x), y: Number(point?.y) }))
-    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
-  if (!values.length) return null;
-  return {
-    minX: Math.min(...values.map(point => point.x)) - radius,
-    minY: Math.min(...values.map(point => point.y)) - radius,
-    maxX: Math.max(...values.map(point => point.x)) + radius,
-    maxY: Math.max(...values.map(point => point.y)) + radius,
-  };
-}
-
-function applyFogOperationDirtyBounds(changeSet, operations, mapMetrics) {
-  const byScene = new Map();
-  for (const operation of operations) {
-    const bounds = fogOperationBounds(operation, mapMetrics);
-    if (bounds === undefined) continue;
-    const sceneId = String(operation.payload?.sceneId || '');
-    if (!sceneId) continue;
-    if (bounds === null || byScene.get(sceneId) === null) byScene.set(sceneId, null);
-    else byScene.set(sceneId, mergeBounds(byScene.get(sceneId), bounds));
-  }
-  for (const entry of changeSet.fog || []) {
-    if (byScene.has(String(entry.sceneId))) entry.dirtyBounds = clone(byScene.get(String(entry.sceneId)));
-  }
 }
 
 function diffById(beforeItems = [], afterItems = []) {
@@ -1286,71 +1184,6 @@ function sceneContent(scene) {
     attackAreas: clone(scene?.attackAreas || []),
     sceneEvents: clone(scene?.sceneEvents || []),
     settings: clone(scene?.settings || {}),
-  };
-}
-
-function changedIds(beforeItems = [], afterItems = []) {
-  const diff = diffById(beforeItems, afterItems);
-  return {
-    upsertIds: diff.upsert.map(item => String(item.id)),
-    removeIds: diff.remove.map(String),
-  };
-}
-
-function chatMessages(state) {
-  const messages = state?.preferences?.chatSystem?.messages;
-  return Array.isArray(messages) ? messages : [];
-}
-
-export function createWorldOperationChangeSet(beforeState, afterState) {
-  const beforeWorld = worldFromState(beforeState);
-  const afterWorld = worldFromState(afterState);
-  const beforeScenes = mapById(beforeWorld.scenes);
-  const afterScenes = mapById(afterWorld.scenes);
-  const tokens = [];
-  const featureStates = [];
-  const fog = [];
-  for (const [sceneId, scene] of afterScenes) {
-    const previous = beforeScenes.get(sceneId);
-    const tokenChanges = changedIds(previous?.tokens || [], scene.tokens || []);
-    if (tokenChanges.upsertIds.length || tokenChanges.removeIds.length) tokens.push({ sceneId, ...tokenChanges });
-    const featureChanges = changedIds(
-      Object.entries(previous?.featureStates || {}).map(([id, state]) => ({ id, state })),
-      Object.entries(scene.featureStates || {}).map(([id, state]) => ({ id, state })),
-    );
-    const featureIds = [...new Set([...featureChanges.upsertIds, ...featureChanges.removeIds])];
-    if (featureIds.length) featureStates.push({ sceneId, featureIds });
-    if (!same(previous?.fog, scene.fog)) fog.push({ sceneId, dirtyBounds: null });
-  }
-  for (const [sceneId, scene] of beforeScenes) {
-    if (afterScenes.has(sceneId)) continue;
-    const removeIds = (scene.tokens || []).map(token => String(token.id));
-    if (removeIds.length) tokens.push({ sceneId, upsertIds: [], removeIds });
-  }
-  const beforeChat = chatMessages(beforeState);
-  const afterChat = chatMessages(afterState);
-  const beforeChatIds = new Set(beforeChat.map(message => String(message?.id || '')));
-  const appendedIds = afterChat
-    .filter(message => !beforeChatIds.has(String(message?.id || '')))
-    .map(message => String(message.id));
-  const cleared = beforeChat.length > 0 && afterChat.length === 0;
-  const sceneChanges = changedIds(
-    (beforeWorld.scenes || []).map(sceneMetadata),
-    (afterWorld.scenes || []).map(sceneMetadata),
-  );
-  return {
-    actors: changedIds(beforeWorld.actors || [], afterWorld.actors || []),
-    journals: changedIds(beforeWorld.journals || [], afterWorld.journals || []),
-    tokens,
-    scenes: {
-      ...sceneChanges,
-      activeSceneChanged: String(beforeWorld.activeSceneId || '') !== String(afterWorld.activeSceneId || ''),
-    },
-    featureStates,
-    fog,
-    combatChanged: !same(beforeState?.preferences?.combatSystem, afterState?.preferences?.combatSystem),
-    chat: { appendedIds, cleared },
-    statusDefinitionsChanged: !same(beforeWorld.statusDefinitions, afterWorld.statusDefinitions),
   };
 }
 

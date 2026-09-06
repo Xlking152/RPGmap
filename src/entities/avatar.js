@@ -27,7 +27,6 @@ function canvasBlob(canvas, quality) {
 export async function imageToAvatarBlob(source, { maxBytes = 96 * 1024, maxSize = 256 } = {}) {
   if (!source) return null;
   const blob = source instanceof Blob ? source : new Blob([source.data || source], { type: source.mime || 'image/png' });
-  const { inspectImage } = await import('../content/image.js');
   inspectImage(new Uint8Array(await blob.arrayBuffer()), blob.type);
   const image = await bitmapFromBlob(blob);
   try {
@@ -56,3 +55,4 @@ export async function imageToAvatarDataUrl(source, options) {
   const blob = await imageToAvatarBlob(source, options);
   return blob ? blobToDataUrl(blob) : null;
 }
+import { inspectImage } from '../content/image.js';

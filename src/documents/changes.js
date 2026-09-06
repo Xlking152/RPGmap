@@ -96,23 +96,39 @@ function collectionEntries(state) {
 
 // Changes are generated only from the recipient's before/after projections.
 // Arrays are atomic field values; object deletions have explicit path segments.
-export function createDocumentChanges(beforeState, afterState, _patch = null, { motion = [] } = {}) {
+export function createDocumentChanges(beforeState, afterState, _patch = null, { motion = [], fog = [] } = {}) {
   const previous = new Map(documentEntries(beforeState).map(([address, value]) => [documentKey(address), { address, value }]));
   const moved = new Set(motion.map(item => documentKey({ type: 'Token', id: String(item.tokenId), parent: { type: 'Scene', id: String(item.sceneId) } })));
+  const fogBounds = new Map();
+  for (const item of fog) {
+    const sceneId = String(item.sceneId), previousBounds = fogBounds.get(sceneId), next = item.dirtyBounds;
+    if (previousBounds === null || next === null) fogBounds.set(sceneId, null);
+    else fogBounds.set(sceneId, previousBounds ? {
+      minX: Math.min(previousBounds.minX, next.minX), minY: Math.min(previousBounds.minY, next.minY),
+      maxX: Math.max(previousBounds.maxX, next.maxX), maxY: Math.max(previousBounds.maxY, next.maxY),
+    } : next);
+  }
   const changes = [];
   for (const [document, value] of documentEntries(afterState)) {
     const key = documentKey(document);
     const before = previous.get(key);
     previous.delete(key);
     if (!before) {
-      changes.push({ action: document.type === 'ChatMessage' ? 'append' : 'create', document, changed: clone(value) });
+      changes.push({
+        action: document.type === 'ChatMessage' ? 'append' : 'create', document, changed: clone(value),
+        ...(document.type === 'Fog' ? { dirtyBounds: fogBounds.get(document.parent.id) ?? null } : {}),
+      });
       continue;
     }
     if (equal(before.value, value)) continue;
     const removed = [];
     const changed = plain(before.value) && plain(value) ? diffFields(before.value, value, [], removed) : clone(value);
     const moving = moved.has(key) || (document.type === 'Token' && motion.some(item => !item.sceneId && String(item.tokenId) === document.id));
-    changes.push({ action: moving ? 'move' : 'update', document, changed, ...(removed.length ? { removed } : {}) });
+    changes.push({
+      action: moving ? 'move' : 'update', document, changed,
+      ...(removed.length ? { removed } : {}),
+      ...(document.type === 'Fog' ? { dirtyBounds: fogBounds.get(document.parent.id) ?? null } : {}),
+    });
   }
   for (const { address } of previous.values()) changes.push({ action: 'delete', document: address, changed: null });
   const beforeOrders = new Map(collectionEntries(beforeState).map(([address, ids]) => [documentKey(address), ids]));
@@ -216,6 +232,10 @@ function assertDocumentAddress(change) {
   if (!['create', 'update', 'delete', 'move', 'append'].includes(change.action)) fail('Unsupported Document change action');
   if (change.action === 'move' && type !== 'Token') fail('Only Token changes can contain motion');
   if (change.action === 'append' && type !== 'ChatMessage') fail('Only ChatMessage changes can append');
+  if (change.dirtyBounds !== undefined) {
+    if (type !== 'Fog') fail('Only Fog changes can contain dirty bounds');
+    safeValue(change.dirtyBounds);
+  }
   safeValue(change.changed);
   if (change.removed !== undefined) {
     if (!Array.isArray(change.removed)) fail('Removed fields must be paths');
@@ -320,7 +340,7 @@ export function documentChangeSet(changes) {
     if (!entry) { entry = { sceneId, ...defaults }; values.push(entry); }
     return entry;
   };
-  for (const { document: { type, id, parent }, action, changed, removed = [] } of changes) {
+  for (const { document: { type, id, parent }, action, changed, removed = [], dirtyBounds } of changes) {
     const deleted = action === 'delete';
     if (type === 'World' && changed?.activeSceneId !== undefined) result.scenes.activeSceneChanged = true;
     if (type === 'Actor') result.actors[deleted ? 'removeIds' : 'upsertIds'].push(id);
@@ -333,7 +353,7 @@ export function documentChangeSet(changes) {
       entry.fields[id] = [...new Set([...Object.keys(changed || {}), ...removed.map(path => path[0])])];
     }
     if (type === 'FeatureState') group(result.featureStates, parent.id, { featureIds: [] }).featureIds.push(id);
-    if (type === 'Fog') group(result.fog, parent.id, { dirtyBounds: null });
+    if (type === 'Fog') group(result.fog, parent.id, { dirtyBounds: dirtyBounds ?? null });
     if (type === 'Combat') result.combatChanged = true;
     if (type === 'StatusDefinition') result.statusDefinitionsChanged = true;
     if (type === 'ChatMessage') result.chat[deleted ? 'removedIds' : 'appendedIds'].push(id);

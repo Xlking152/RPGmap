@@ -6,11 +6,11 @@ import { mkdtemp, readdir, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { zipSync, unzipSync, strToU8 } from 'fflate';
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 import { inspectImage, MAX_IMAGE_BYTES } from '../src/content/image.js';
 import { collectContentReferences, contentImageAttributes, readableImageReferences, hasStoredContentReference } from '../src/content/references.js';
 import { exportContentArchive, readContentArchive, persistArchiveContent, exportTemplateArchive, readTemplateArchive } from '../src/content/archive.js';
+import { readStoredZip, writeStoredZip } from '../src/content/zip-store.js';
 import { createIndexedContentStorage } from '../src/content/indexed-storage.js';
 import { createContentStorage } from '../deployment/local-server/content-storage.mjs';
 import { sendJson } from '../deployment/local-server/http-runtime.mjs';
@@ -52,11 +52,18 @@ test('standalone template ZIP preserves dependency bytes across separate World s
   assert.deepEqual(Buffer.from(await (await target.get(digest(png))).arrayBuffer()), png);
 });
 
+test('stored ZIP rejects a local header that disagrees with its central directory', () => {
+  const archive = writeStoredZip({ 'manifest.json': new TextEncoder().encode('{}') });
+  const damaged = archive.slice();
+  damaged[8] = 8;
+  assert.throws(() => readStoredZip(damaged), /invalid_archive_entry/);
+});
+
 test('template package hash validation precedes preview and every write including unrelated valid records', async () => {
   const blob = await exportTemplateArchive(body(), { get: async () => new Blob([png], { type: 'image/png' }) });
-  const files = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+  const files = readStoredZip(new Uint8Array(await blob.arrayBuffer()));
   files[`content/${digest(png)}`][29] ^= 1;
-  await assert.rejects(readTemplateArchive(zipSync(files)), /archive_content_hash_mismatch/);
+  await assert.rejects(readTemplateArchive(writeStoredZip(files)), /archive_content_hash_mismatch/);
   let writes = 0;
   const valid = { reference, blob: new Blob([png], { type: 'image/png' }) };
   await assert.rejects(persistArchiveContent([valid, { ...valid, reference: `asset:${'0'.repeat(64)}` }], {
@@ -64,9 +71,9 @@ test('template package hash validation precedes preview and every write includin
   }), /archive_content_hash_mismatch/);
   assert.equal(writes, 0);
   const safe = await exportTemplateArchive(body(), { get: async () => valid.blob });
-  const missing = unzipSync(new Uint8Array(await safe.arrayBuffer()));
+  const missing = readStoredZip(new Uint8Array(await safe.arrayBuffer()));
   delete missing[`content/${digest(png)}`];
-  await assert.rejects(readTemplateArchive(zipSync(missing)), /invalid_archive_reference/);
+  await assert.rejects(readTemplateArchive(writeStoredZip(missing)), /invalid_archive_reference/);
 });
 
 test('offline body transactions require durable image dependencies and prevent deleting them', async () => {
@@ -234,10 +241,11 @@ test('content archives contain every dependency and persist content before repla
 
 test('archive import rejects missing dependencies, unsafe entries and unbounded expansion', () => {
   const manifest = { format: 'rpgmap-world', version: 1, world: 'world.json', content: [] };
-  const files = { 'manifest.json': strToU8(JSON.stringify(manifest)), 'world.json': strToU8(JSON.stringify(makeState(reference))) };
-  assert.throws(() => readContentArchive(zipSync(files)), /content_missing/);
-  assert.throws(() => readContentArchive(zipSync({ ...files, '../world.json': strToU8('{}') })), /invalid_archive_entry/);
-  assert.throws(() => readContentArchive(zipSync({ ...files, 'manifest.json': new Uint8Array(1024 * 1024 + 1) })), /archive_size_exceeded/);
+  const encode = value => new TextEncoder().encode(value);
+  const files = { 'manifest.json': encode(JSON.stringify(manifest)), 'world.json': encode(JSON.stringify(makeState(reference))) };
+  assert.throws(() => readContentArchive(writeStoredZip(files)), /content_missing/);
+  assert.throws(() => readContentArchive(writeStoredZip({ ...files, '../world.json': encode('{}') })), /invalid_archive_entry/);
+  assert.throws(() => readContentArchive(writeStoredZip({ ...files, 'manifest.json': new Uint8Array(1024 * 1024 + 1) })), /archive_size_exceeded/);
 });
 
 test('offline content storage reports unavailable IndexedDB instead of claiming persistence', async () => {

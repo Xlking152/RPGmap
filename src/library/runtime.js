@@ -1,4 +1,5 @@
 import { previewTemplateImport, prepareTemplateImport } from './model.js';
+import { persistInlineImages } from '../content/data-url.js';
 
 export function createTemplateLibrarySystem({ serverRuntime = false } = {}) {
   return { register(api) {
@@ -36,7 +37,6 @@ export function createTemplateLibrarySystem({ serverRuntime = false } = {}) {
         const sourceWorldId = world().id;
         const source = world().actors.find(actor => actor.id === actorId);
         if (!source || source.audienceRestricted) throw new Error('actor_not_found');
-        const { persistInlineImages } = await import('../content/data-url.js');
         requireWorld(sourceWorldId);
         const actor = await persistInlineImages(structuredClone(source), api.content);
         requireWorld(sourceWorldId);

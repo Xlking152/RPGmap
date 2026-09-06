@@ -1,6 +1,46 @@
 import { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
-import { assertPersistedWorldV2, worldRulesetReference } from './validation.js';
-import { upgradeBuiltInMapReference, upgradeBuiltInRulesetReference } from './migration.js';
+import { upgradeBuiltInMapReference, upgradeBuiltInRulesetReference } from './package-upgrades.js';
+
+function invalid(message, code = 'invalid_world') {
+  throw Object.assign(new Error(message), { code });
+}
+
+function id(value, label) {
+  const result = typeof value === 'string' ? value.trim() : '';
+  if (!result) invalid(`${label} requires an id`);
+  return result;
+}
+
+function unique(values, label) {
+  if (!Array.isArray(values)) invalid(`${label} must be an array`);
+  const ids = new Set();
+  for (const value of values) {
+    const valueId = id(value?.id, label);
+    if (ids.has(valueId)) invalid(`${label} contains duplicate id: ${valueId}`, 'duplicate_id');
+    ids.add(valueId);
+  }
+  return ids;
+}
+
+function assertWorldBoundary(world) {
+  if (!world || typeof world !== 'object' || Array.isArray(world)) invalid('worldV2 must be an object');
+  if (![2, 3, WORLD_SCHEMA_VERSION].includes(Number(world.schemaVersion))) invalid('World schema is incompatible', 'world_schema_incompatible');
+  id(world.id, 'worldV2');
+  const actors = unique(world.actors, 'worldV2.actors');
+  const scenes = unique(world.scenes, 'worldV2.scenes');
+  if (!scenes.has(id(world.activeSceneId, 'worldV2.activeSceneId'))) invalid('Active Scene is missing', 'invalid_reference');
+  for (const scene of world.scenes) {
+    id(scene?.mapPackage?.id, 'Scene MapPackage');
+    id(scene?.mapPackage?.version, 'Scene MapPackage version');
+    unique(scene.tokens, 'Scene Tokens');
+    for (const token of scene.tokens) if (!actors.has(id(token?.actorId, 'Token actorId'))) invalid('Token Actor is missing', 'invalid_reference');
+  }
+  return world;
+}
+
+function worldRulesetReference(world) {
+  return { id: id(world?.ruleset?.id, 'World ruleset'), version: id(world?.ruleset?.version, 'World ruleset version') };
+}
 
 function parseState(raw) {
   if (raw === null || raw === undefined || raw === '') return null;
@@ -61,7 +101,7 @@ export function readWorldBootstrap(raw, { defaultRuleset } = {}) {
       worldId: null, worldName: null, activeSceneId: null, mapPackage: null,
     });
   }
-  assertPersistedWorldV2(world, { acceptedSchemaVersions: [2, 3, WORLD_SCHEMA_VERSION] });
+  assertWorldBoundary(world);
   return Object.freeze({
     kind: 'world-v2',
     raw: state,

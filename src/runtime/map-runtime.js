@@ -37,6 +37,7 @@ import { createPerformanceDiagnosticsSystem } from '../diagnostics/runtime.js';
 import { createContentSystem } from '../content/runtime.js';
 import { createTemplateLibrarySystem } from '../library/runtime.js';
 import { createJournalSystem } from '../journal/runtime.js';
+import { resolveRulesetReference, setActiveRuleset } from '../ruleset/index.js';
 
 export async function startMapRuntime({
   appContainer,
@@ -44,13 +45,15 @@ export async function startMapRuntime({
   mapPackageRegistry,
   mapReference,
   raw,
-  ruleset,
+  rulesetReference,
   serverRuntime,
   worldId,
   worldManager,
   worldName,
   setBootStatus = () => {},
 } = {}) {
+  const ruleset = resolveRulesetReference(rulesetReference);
+  setActiveRuleset(ruleset.id);
   const mapPackage = await mapPackageRegistry.load(mapReference);
   const storageAdapter = serverRuntime ? createMemoryStorage() : bootstrapStorage;
   const prepareStoredWorldWithContent = serverRuntime ? null : (await import('../app/world-upgrade.js')).prepareStoredWorldWithContent;

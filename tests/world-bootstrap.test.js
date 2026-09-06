@@ -155,6 +155,19 @@ test('prepared modern World preserves Actor system, Synthetic Delta, Effects, de
   assert.deepEqual(activeWorldScene(prepared).mapPackage, { id: 'test-map', version: '1.0.0' });
 });
 
+test('a structurally addressable but invalid canonical World is backed up and blocks startup', () => {
+  const storage = createMemoryStorage();
+  const initial = prepareStoredWorldState({ mapPackage, ruleset, storageAdapter: storage, raw: null }).state;
+  activeWorldScene(initial.preferences[WORLD_STATE_KEY]).fog.cellSizeMeters = 10;
+  const raw = JSON.stringify(initial);
+  assert.equal(readWorldBootstrap(raw, { defaultRuleset: ruleset }).kind, 'world-v2');
+  assert.throws(
+    () => prepareStoredWorldState({ mapPackage, ruleset, storageAdapter: storage, raw }),
+    error => error.code === 'fog_schema_incompatible' && error.recoveryRequired === true,
+  );
+  assert.equal(storage.get(`${worldStateStorageKey(mapPackage)}:backup:invalid`), raw);
+});
+
 test('server bootstrap metadata resolves before the authenticated World snapshot', async () => {
   const metadata = {
     initialized: true,

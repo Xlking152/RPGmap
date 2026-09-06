@@ -11,6 +11,10 @@ import { reduceStatusOperation } from '../src/status/model.js';
 import { createDefaultActor } from '../src/actor/model.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { prepareRuleset } from '../src/ruleset/contract.js';
+import {
+  createDocumentChanges,
+  documentChangeSet,
+} from '../src/documents/changes.js';
 
 function actor(id, current = 10) {
   return { id, name: id, system: { resources: { hp: { current, max: 10 } } }, effects: [], notes: '' };
@@ -85,7 +89,7 @@ test('Scene settings use a bounded granular operation', () => {
   assert.equal(scene.settings.movementBudgetMetersPerTurn, 24);
   assert.equal(scene.settings.lineOfSightEnabled, true);
   assert.equal(scene.settings.defaultDoorInteractionRangeMeters, 2.5);
-  assert.deepEqual(committed.changeSet.scenes.upsertIds, ['scene-a']);
+  assert.deepEqual(documentChangeSet(createDocumentChanges(initial, committed.state)).scenes.upsertIds, ['scene-a']);
   assert.equal(initial.preferences.worldV2.scenes[0].settings.movementBudgetMetersPerTurn, undefined);
   assert.throws(() => applyWorldOperations(initial, [{
     type: 'scene.settings.patch',
@@ -338,25 +342,34 @@ test('World Operation V2 carries Status V4 definition imports through the shared
     },
   });
   assert.equal(applied.state.preferences.worldV2.statusDefinitions.some(item => item.id === 'status-imported'), true);
-  assert.equal(applied.changeSet.statusDefinitionsChanged, true);
+  assert.equal(documentChangeSet(createDocumentChanges(initial, applied.state)).statusDefinitionsChanged, true);
 });
 
-test('Fog changeSet carries bounded circle and sweep invalidation rectangles', () => {
+test('Fog Document changes carry bounded circle and sweep invalidation rectangles', () => {
   const initial = state();
-  const applied = applyWorldOperations(initial, [
+  const operations = [
     { type: 'scene.fog.explore', payload: {
       sceneId: 'scene-a', partyId: 'party-a', x: 20, y: 30, radiusMeters: 10,
     } },
     { type: 'scene.fog.explore', payload: {
       sceneId: 'scene-a', partyId: 'party-a', from: { x: 40, y: 50 }, to: { x: 60, y: 70 }, radiusMeters: 20,
     } },
-  ], { mapMetrics: { metersPerUnit: 2 } });
-  assert.deepEqual(applied.changeSet.fog, [{
+  ];
+  const metrics = { metersPerUnit: 2 };
+  const applied = applyWorldOperations(initial, operations, { mapMetrics: metrics });
+  const changes = createDocumentChanges(initial, applied.state, null, {
+    fog: applied.results,
+  });
+  assert.deepEqual(documentChangeSet(changes).fog, [{
     sceneId: 'scene-a', dirtyBounds: { minX: 15, minY: 25, maxX: 70, maxY: 80 },
   }]);
 
-  const reset = applyWorldOperations(applied.state, [{
+  const resetOperations = [{
     type: 'scene.fog.reset', payload: { sceneId: 'scene-a', partyId: 'party-a' },
-  }], { mapMetrics: { metersPerUnit: 2 } });
-  assert.deepEqual(reset.changeSet.fog, [{ sceneId: 'scene-a', dirtyBounds: null }]);
+  }];
+  const reset = applyWorldOperations(applied.state, resetOperations, { mapMetrics: metrics });
+  const resetChanges = createDocumentChanges(applied.state, reset.state, null, {
+    fog: reset.results,
+  });
+  assert.deepEqual(documentChangeSet(resetChanges).fog, [{ sceneId: 'scene-a', dirtyBounds: null }]);
 });

@@ -172,6 +172,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         const applied = reduceOperations(before, operations, { source });
         const changes = createDocumentChanges(before, applied.state, null, {
           motion: applied.results.flatMap(result => result.motion || []),
+          fog: applied.results.filter(result => Object.hasOwn(result, 'dirtyBounds')),
         });
         if (typeof api.applyAuthoritativeDocumentChanges === 'function') {
           api.applyAuthoritativeDocumentChanges(changes, {

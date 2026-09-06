@@ -1,4 +1,7 @@
 import { collectContentReferences, contentReference, readableImageReferences, hasStoredContentReference } from './references.js';
+import { inspectImage } from './image.js';
+import { inspectContent, journalBodyBlob, templateBodyBlob } from './body.js';
+import { createIndexedContentStorage } from './indexed-storage.js';
 
 export function createContentSystem({ serverRuntime = false, worldId = 'default' } = {}) {
   return {
@@ -8,28 +11,24 @@ export function createContentSystem({ serverRuntime = false, worldId = 'default'
       const pending = new WeakMap();
       let local, epoch = 0;
       const network = () => serverRuntime || api.multiplayer?.getStatus?.().connected;
-      const storage = () => local ||= import('./indexed-storage.js').then(module => module.createIndexedContentStorage(documentNode.defaultView.indexedDB, { worldId }));
+      const storage = () => local ||= Promise.resolve(createIndexedContentStorage(documentNode.defaultView.indexedDB, { worldId }));
       const request = (path, options) => {
         if (!api.multiplayer?.fetchContent) throw new Error('identity_required');
         return api.multiplayer.fetchContent(path, options);
       };
       const content = {
         async putImage(blob) {
-          const { inspectImage } = await import('./image.js');
           inspectImage(new Uint8Array(await blob.arrayBuffer()), blob.type);
           return network() ? (await request('', { method: 'POST', body: blob, headers: { 'Content-Type': blob.type } })).json()
             : (await storage()).put(blob);
         },
         async putTemplate(value) {
-          const { templateBodyBlob } = await import('./body.js');
           return content.putBody(templateBodyBlob(value));
         },
         async putJournal(value) {
-          const { journalBodyBlob } = await import('./body.js');
           return content.putBody(journalBodyBlob(value));
         },
         async putBody(blob) {
-          const { inspectContent } = await import('./body.js');
           if (inspectContent(new Uint8Array(await blob.arrayBuffer()), blob.type).kind !== 'body') throw new Error('content_type_unsupported');
           return network() ? (await request('', { method: 'POST', body: blob, headers: { 'Content-Type': blob.type } })).json()
             : (await storage()).put(blob);
@@ -38,7 +37,6 @@ export function createContentSystem({ serverRuntime = false, worldId = 'default'
           const value = contentReference(reference);
           if (!value) throw new Error('content_not_found');
           const blob = network() ? await (await request(`/${value.id}`)).blob() : await (await storage()).get(value.id);
-          const { inspectContent } = await import('./body.js');
           if (inspectContent(new Uint8Array(await blob.arrayBuffer()), blob.type).kind !== value.kind) throw new Error('content_type_unsupported');
           return blob;
         },
