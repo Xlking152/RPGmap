@@ -303,7 +303,7 @@ test('Lanzhou yamen walls seal the compound while the existing gate controls its
   assert.ok(walls.every((wall) => wall.capabilities.navigation.blocks));
   assert.ok(walls.every((wall) => wall.capabilities.navigation.passableWhenDestroyed));
   assert.ok(walls.every((wall) => wall.capabilities.navigation.damageCreatesPassage));
-  assert.ok(walls.every((wall) => wall.capabilities.navigation.blockingHeightFt === 12));
+  assert.ok(walls.every((wall) => wall.capabilities.navigation.blockingHeightMeters === 3.6576));
 
   const state = createInitialState(mapPackage);
   const gate = mapPackage.features.find((feature) => feature.id === 'yamen-gate');

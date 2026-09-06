@@ -5,7 +5,7 @@ import {
   inspectDirectNavigationPath,
 } from '../engine/navigation.js';
 import { deriveSceneState } from '../engine/state.js';
-import { tokenDiameterMeters, tokenElevationFt } from '../elevation/model.js';
+import { tokenDiameterMeters, tokenElevationMeters } from '../elevation/model.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -29,7 +29,7 @@ function moverContext(api, token) {
   const status = movementStatusContext(api, token);
   return Object.freeze({
     tokenId: String(token.id),
-    elevationFt: tokenElevationFt(token),
+    elevationMeters: tokenElevationMeters(token),
     diameterMeters: tokenDiameterMeters(token),
     statusVersion: status?.statusVersion || 'none',
     collisionBypassGroups: Object.freeze([...(status?.capabilities?.collisionBypassGroups || [])]),

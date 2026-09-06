@@ -62,12 +62,12 @@ test('a bridge provides a water crossing without clearing structures, craters or
 });
 
 test('height and capability exemptions leave other sources and water blocked', () => {
-  const lowWall = obstacle('low', rectangle(40, 40, 30, 30), { blockingHeightFt: 10, collisionGroup: 'structure' });
-  const highWall = obstacle('high', rectangle(50, 50, 10, 10), { blockingHeightFt: 20, collisionGroup: 'boundary' });
-  const navigation = field([lowWall, highWall], { mover: { elevationFt: 11, collisionBypassGroups: ['structure'] } });
+  const lowWall = obstacle('low', rectangle(40, 40, 30, 30), { blockingHeightMeters: 10, collisionGroup: 'structure' });
+  const highWall = obstacle('high', rectangle(50, 50, 10, 10), { blockingHeightMeters: 20, collisionGroup: 'boundary' });
+  const navigation = field([lowWall, highWall], { mover: { elevationMeters: 11, collisionBypassGroups: ['structure'] } });
   assert.ok(at(navigation) & FLAGS.blocked);
   assert.equal(at(navigation, 45, 45) & FLAGS.blocked, 0);
-  assert.ok(at(field([lowWall], { mover: { elevationFt: 10 } })) & FLAGS.blocked, 'exact obstacle top still blocks');
+  assert.ok(at(field([lowWall], { mover: { elevationMeters: 10 } })) & FLAGS.blocked, 'exact obstacle top still blocks');
 });
 
 test('one-meter cells, chunk boundaries and Token footprints are invariant under map coordinate scale', () => {

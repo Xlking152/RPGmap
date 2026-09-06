@@ -208,8 +208,8 @@ export function createAppShellUiV2() {
         const meta = documentNode.createElement('div');
         meta.className = 'ui-token-meta';
         const metaRows = player
-          ? [locationLabel(token), `高度 ${Number(token.elevationFt || 0)} ft`]
-          : [`棋子 ID ${token.id}`, `角色 ID ${token.actorId}`, locationLabel(token), `高度 ${Number(token.elevationFt || 0)} ft`];
+          ? [locationLabel(token), `高度 ${Number(token.elevationMeters || 0)} m`]
+          : [`棋子 ID ${token.id}`, `角色 ID ${token.actorId}`, locationLabel(token), `高度 ${Number(token.elevationMeters || 0)} m`];
         for (const text of metaRows) {
           const item = documentNode.createElement('div'); item.textContent = text; meta.append(item);
         }

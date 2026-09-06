@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { readServerWorldBootstrap, readWorldBootstrap } from '../src/world/bootstrap.js';
 
-const defaultRuleset = { id: 'infinite-horror', version: '1.0.0' };
+const defaultRuleset = { id: 'infinite-horror', version: '1.1.0' };
 
 function modernState() {
   return {

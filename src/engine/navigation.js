@@ -1,7 +1,7 @@
 import { deriveFloodRegions } from './state.js';
 import { runtimeFeatureInteractionEffects } from '../interaction/effects.js';
 import { getFeatureState } from '../interaction/feature-state.js';
-import { featureBlocksMover } from '../elevation/model.js';
+import { featureBlockingHeightMeters, featureBlocksMover } from '../elevation/model.js';
 import {
   elevationNavigationAppState,
   getActiveMoverContext,
@@ -90,7 +90,7 @@ function featureRuntimeState(feature, appState) {
 
 function resolvedMoverContext(explicit) {
   const source = explicit ?? getActiveMoverContext();
-  const elevationFt = Number(source?.elevationFt);
+  const elevationMeters = Number(source?.elevationMeters);
   const requestedDiameter = Number(source?.diameterMeters);
   const collisionBypassGroups = [...new Set(
     (Array.isArray(source?.collisionBypassGroups) ? source.collisionBypassGroups : [])
@@ -99,10 +99,13 @@ function resolvedMoverContext(explicit) {
   )].sort();
   return Object.freeze({
     tokenId: source?.tokenId == null ? null : String(source.tokenId),
-    elevationFt: Number.isFinite(elevationFt) && elevationFt >= 0 ? elevationFt : 0,
+    elevationMeters: Number.isFinite(elevationMeters) && elevationMeters >= 0 ? elevationMeters : 0,
     diameterMeters: [1, 5, 10, 20].includes(requestedDiameter) ? requestedDiameter : 1,
     collisionBypassGroups: Object.freeze(collisionBypassGroups),
     statusVersion: String(source?.statusVersion || ''),
+    movementMode: ['walk', 'swim', 'waterWalk', 'fly'].includes(source?.movementMode) ? source.movementMode : null,
+    elevationAtPoint: typeof source?.elevationAtPoint === 'function' ? source.elevationAtPoint : null,
+    heightProfileKey: String(source?.heightProfileKey || ''),
   });
 }
 
@@ -182,7 +185,10 @@ function makeChunk(base, scene, appState, moverContext, chunkColumn, chunkRow, f
     paintPolygon(chunk, descriptor.polygon, index => { flags[index] |= CELL_ROAD; });
   }
   for (const descriptor of descriptors) if (descriptor.kind === 'water') {
-    paintPolygon(chunk, descriptor.polygon, index => { flags[index] |= CELL_BLOCKED | CELL_WATER; });
+    paintPolygon(chunk, descriptor.polygon, index => {
+      flags[index] |= CELL_WATER;
+      if (!['swim', 'waterWalk', 'fly'].includes(moverContext?.movementMode)) flags[index] |= CELL_BLOCKED;
+    });
   }
   if (moverContext?.baseOnly) return flags.some(Boolean) ? flags : EMPTY_CHUNK;
 
@@ -206,16 +212,30 @@ function makeChunk(base, scene, appState, moverContext, chunkColumn, chunkRow, f
       || (navigation.collisionGroup && moverContext?.collisionBypassGroups?.includes(navigation.collisionGroup))
       || (navigation.passableWhenDestroyed && destroyed)
       || (navigation.passableWhenOpen && state?.open)
-      || !featureBlocksMover(feature, state, moverContext)) continue;
+      || (!moverContext?.elevationAtPoint && !featureBlocksMover(feature, state, moverContext))) continue;
     const blockFlags = CELL_BLOCKED
       | ((navigation.passableWhenDestroyed || navigation.damageCreatesPassage) ? CELL_DESTRUCTIBLE : 0);
     const damages = navigation.damageCreatesPassage ? clipDamageForFeature(scene, feature.id) : [];
-    paintPolygon(chunk, navigation.blockingPolygon || descriptor.polygon, index => { flags[index] |= blockFlags; },
-      damages.length ? point => !(pointInPolygon(point, descriptor.polygon) && damages.some(polygon => pointInPolygon(point, polygon))) : null);
+    const blockingHeight = featureBlockingHeightMeters(feature, state);
+    paintPolygon(chunk, navigation.blockingPolygon || descriptor.polygon, index => { flags[index] |= blockFlags; }, point => {
+      if (damages.length && pointInPolygon(point, descriptor.polygon)
+        && damages.some(polygon => pointInPolygon(point, polygon))) return false;
+      if (blockingHeight !== null && moverContext?.elevationAtPoint) {
+        const elevation = Number(moverContext.elevationAtPoint({ x: point[0], y: point[1] }));
+        if (Number.isFinite(elevation) && elevation > blockingHeight) return false;
+      }
+      return true;
+    });
   }
-  for (const crater of scene?.craterRegions || []) paintPolygon(chunk, crater.polygon, index => { flags[index] |= CELL_BLOCKED | CELL_CRATER; });
+  for (const crater of scene?.craterRegions || []) paintPolygon(chunk, crater.polygon, index => {
+    flags[index] |= CELL_CRATER;
+    if (!moverContext?.movementMode) flags[index] |= CELL_BLOCKED;
+  });
   for (const region of floodRegions || deriveFloodRegions(scene || {}, base.mapPackage.liquidBodies || [], base.mapPackage.features || [], base.mapPackage.floodRules || {}, base.metersPerUnit)) {
-    paintPolygon(chunk, region.polygon, index => { flags[index] |= CELL_BLOCKED | CELL_WATER; });
+    paintPolygon(chunk, region.polygon, index => {
+      flags[index] |= CELL_WATER;
+      if (!['swim', 'waterWalk', 'fly'].includes(moverContext?.movementMode)) flags[index] |= CELL_BLOCKED;
+    });
   }
   return flags.some(Boolean) ? flags : EMPTY_CHUNK;
 }
@@ -247,7 +267,7 @@ function makeGridFacade(navigation) {
 
 function runtimeGridRevision(appState, moverContext, scene) {
   const featureStates = appState?.preferences?.featureStates || {};
-  return `${moverContext.tokenId ?? ''}|${moverContext.elevationFt}|${moverContext.diameterMeters}|${moverContext.statusVersion || ''}|${(moverContext.collisionBypassGroups || []).join(',')}|${JSON.stringify(featureStates)}|${JSON.stringify(scene || {})}`;
+  return `${moverContext.tokenId ?? ''}|${moverContext.elevationMeters}|${moverContext.diameterMeters}|${moverContext.statusVersion || ''}|${moverContext.movementMode || ''}|${moverContext.heightProfileKey || ''}|${(moverContext.collisionBypassGroups || []).join(',')}|${JSON.stringify(featureStates)}|${JSON.stringify(scene || {})}`;
 }
 
 export function createNavigationBase(mapPackage) {
@@ -286,7 +306,7 @@ export function createNavigationBase(mapPackage) {
       const key = chunkKey(chunkColumn, chunkRow);
       let chunk = baseChunks.get(key);
       if (!chunk) {
-        chunk = makeChunk(base, {}, null, { elevationFt: 0, diameterMeters: 1, baseOnly: true }, chunkColumn, chunkRow, []);
+        chunk = makeChunk(base, {}, null, { elevationMeters: 0, diameterMeters: 1, baseOnly: true }, chunkColumn, chunkRow, []);
         baseChunks.set(key, chunk);
       }
       return chunk[(row % NAVIGATION_CHUNK_SIZE_METERS) * NAVIGATION_CHUNK_SIZE_METERS + (column % NAVIGATION_CHUNK_SIZE_METERS)];
@@ -506,14 +526,21 @@ export function inspectDirectNavigationPath(navigation, startPoint, destinationP
     : null;
   let failure = null;
   let visitedCellCount = 0;
+  let encounteredFlags = 0;
+  const terrainCellCounts = { normal: 0, difficult: 0, water: 0, difficultWater: 0 };
   const traversal = traverseSupercover(startCell, endCell, cell => {
     visitedCellCount += 1;
+    const flags = navigationCellFlags(navigation, cell, readCellFlags);
+    encounteredFlags |= flags;
+    const difficult = Boolean(flags & CELL_CRATER);
+    const water = Boolean(flags & CELL_WATER);
+    terrainCellCounts[difficult && water ? 'difficultWater' : difficult ? 'difficult' : water ? 'water' : 'normal'] += 1;
     failure = inspectOccupation(navigation, cell, diameterMeters, readCellFlags, inspectCachedOccupation);
     return !failure;
   });
-  if (failure) return { valid: false, reason: 'blocked', visitedCellCount, ...failure };
+  if (failure) return { valid: false, reason: 'blocked', visitedCellCount, encounteredFlags, terrainCellCounts, ...failure };
   if (!traversal.completed) return { valid: false, reason: 'iteration-limit', visitedCellCount, blockedCell: null, blockingCell: null, blockingFlags: CELL_BOUNDARY };
-  return { valid: true, visitedCellCount, blockedCell: null, blockingCell: null, blockingFlags: 0 };
+  return { valid: true, visitedCellCount, encounteredFlags, terrainCellCounts, blockedCell: null, blockingCell: null, blockingFlags: 0 };
 }
 
 export function isNavigationSegmentWalkable(navigation, startPoint, endPoint, options = {}) {

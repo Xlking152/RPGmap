@@ -15,14 +15,14 @@ import {
 
 test('World Manager resolves lightweight Ruleset metadata before loading implementation', async () => {
   assert.deepEqual(listBuiltInRulesets(), [{
-    id: 'infinite-horror', title: '无限跑团', version: '1.0.0',
+    id: 'infinite-horror', title: '无限跑团', version: '1.1.0',
   }]);
-  assert.equal(resolveBuiltInRulesetReference({ id: 'infinite-horror', version: '1.0.0' }).title, '无限跑团');
+  assert.equal(resolveBuiltInRulesetReference({ id: 'infinite-horror', version: '1.1.0' }).title, '无限跑团');
   assert.throws(() => resolveBuiltInRulesetReference({ id: 'missing', version: '1.0.0' }),
     error => error?.code === 'unknown_ruleset');
   assert.throws(() => resolveBuiltInRulesetReference({ id: 'infinite-horror', version: '9.0.0' }),
     error => error?.code === 'ruleset_version_incompatible');
-  assert.equal((await loadBuiltInRulesetReference({ id: 'infinite-horror', version: '1.0.0' })).id, 'infinite-horror');
+  assert.equal((await loadBuiltInRulesetReference({ id: 'infinite-horror', version: '1.1.0' })).id, 'infinite-horror');
 });
 
 test('infinite horror is registered as the default built-in ruleset', () => {

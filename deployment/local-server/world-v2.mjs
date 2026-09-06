@@ -4,7 +4,7 @@ import { assertFeatureStatePatch, assertTemplateLibrary, isPlainObject } from '.
 const ACTOR_TYPES = new Set(['pc', 'monster', 'npc', 'summon', 'other']);
 const VISIBILITY_MODES = new Set(['public', 'party', 'gm', 'users']);
 
-export const WORLD_V2_SCHEMA_VERSION = 3;
+export const WORLD_V2_SCHEMA_VERSION = 4;
 export const WORLD_V2_STATE_KEY = 'worldV2';
 
 function fail(message, code = 'invalid_world_v2') {
@@ -144,6 +144,8 @@ function assertTokenAccess(token, actor, label) {
   if (Object.hasOwn(vision, 'rangeOverrideMeters')) fail(`${label}.vision.rangeOverrideMeters is legacy-only`);
   stringIds(vision.overrideUserIds, `${label}.vision.overrideUserIds`);
   if (Object.hasOwn(token, 'hidden')) fail(`${label}.hidden is legacy-only`, 'legacy_token_hidden_forbidden');
+  if (Object.hasOwn(token, 'elevationFt')) fail(`${label}.elevationFt is legacy-only`, 'legacy_height_forbidden');
+  if (!Number.isFinite(Number(token.elevationMeters)) || Number(token.elevationMeters) < 0) fail(`${label}.elevationMeters is invalid`);
 }
 
 function assertMarker(marker, label) {
@@ -160,7 +162,7 @@ function assertMarker(marker, label) {
 export function assertWorldV2(value) {
   assertTemplateLibrary(value?.templateLibrary);
   const world = object(value, 'worldV2');
-  if (Number(world.schemaVersion) !== WORLD_V2_SCHEMA_VERSION) fail('worldV2.schemaVersion must be 3');
+  if (Number(world.schemaVersion) !== WORLD_V2_SCHEMA_VERSION) fail('worldV2.schemaVersion must be 4');
   cleanId(world.id, 'worldV2.id');
   const ruleset = object(world.ruleset, 'worldV2.ruleset');
   cleanId(ruleset.id, 'worldV2.ruleset.id');

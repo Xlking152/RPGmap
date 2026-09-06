@@ -18,7 +18,7 @@ function fixture({ independent = false, effects = false } = {}) {
   const actor = createDefaultActor({ id: 'actor-a', ruleset });
   const token = { id: 'token-a', actorId: actor.id, actorLink: !independent,
     actorDelta: independent ? createInitialActorDelta(actor, { ruleset }) : null,
-    placement: 'map', x: 500, y: 500, diameterMeters: 1, elevationFt: 0, effects: [] };
+    placement: 'map', x: 500, y: 500, diameterMeters: 1, elevationMeters: 0, effects: [] };
   const scene = { id: 'scene-a', mapPackage: { id: map.id, version: map.version },
     tokens: [token, { ...structuredClone(token), id: 'token-b' }], featureStates: { 'demo-door': { open: true } },
     sceneEvents: [], markers: [], attackAreas: [{ id: 'area', anchor: { type: 'token', tokenId: token.id }, origin: { x: 500, y: 500 } }] };

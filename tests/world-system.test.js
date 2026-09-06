@@ -9,7 +9,7 @@ function actor() { return { id: 'actor-1', name: '角色', currentFormId: 'form-
 function state() {
   return {
     saveVersion: 2, mapId: 'test-map', mapVersion: '1.0.0', markers: [], attackAreas: [], sceneEvents: [],
-    preferences: { gridVisible: true, entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [{ id: 'token-1', actorId: 'actor-1', placement: 'map', x: 1.5, y: 2.5, diameterMeters: 1, rotation: 0, elevationFt: 0, hidden: false, locked: false, showName: true, effects: [] }] } },
+    preferences: { gridVisible: true, entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [{ id: 'token-1', actorId: 'actor-1', placement: 'map', x: 1.5, y: 2.5, diameterMeters: 1, rotation: 0, elevationMeters: 0, hidden: false, locked: false, showName: true, effects: [] }] } },
   };
 }
 function apiFixture() {

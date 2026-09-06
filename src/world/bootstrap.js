@@ -1,5 +1,6 @@
 import { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 import { assertPersistedWorldV2, worldRulesetReference } from './validation.js';
+import { upgradeBuiltInMapReference, upgradeBuiltInRulesetReference } from './migration.js';
 
 function parseState(raw) {
   if (raw === null || raw === undefined || raw === '') return null;
@@ -36,7 +37,7 @@ function worldBootstrapMetadata(world) {
     worldId: typeof world?.id === 'string' ? world.id : null,
     worldName: typeof world?.name === 'string' ? world.name : null,
     activeSceneId: active?.id ? String(active.id) : null,
-    mapPackage: mapReference(active?.mapPackage),
+    mapPackage: mapReference(upgradeBuiltInMapReference(active?.mapPackage, world?.schemaVersion)),
   };
 }
 
@@ -60,11 +61,11 @@ export function readWorldBootstrap(raw, { defaultRuleset } = {}) {
       worldId: null, worldName: null, activeSceneId: null, mapPackage: null,
     });
   }
-  assertPersistedWorldV2(world, { acceptedSchemaVersions: [2, WORLD_SCHEMA_VERSION] });
+  assertPersistedWorldV2(world, { acceptedSchemaVersions: [2, 3, WORLD_SCHEMA_VERSION] });
   return Object.freeze({
     kind: 'world-v2',
     raw: state,
-    ruleset: worldRulesetReference(world),
+    ruleset: upgradeBuiltInRulesetReference(worldRulesetReference(world), world.schemaVersion),
     ...worldBootstrapMetadata(world),
   });
 }
@@ -86,7 +87,7 @@ export function readServerWorldBootstrap(metadata, { defaultRuleset } = {}) {
       mapPackage: null,
     });
   }
-  if (![2, WORLD_SCHEMA_VERSION].includes(Number(source.schemaVersion))) {
+  if (![2, 3, WORLD_SCHEMA_VERSION].includes(Number(source.schemaVersion))) {
     const error = new Error('Server World schema is incompatible');
     error.code = 'world_schema_incompatible';
     throw error;
@@ -95,10 +96,10 @@ export function readServerWorldBootstrap(metadata, { defaultRuleset } = {}) {
     kind,
     raw: null,
     remote: true,
-    ruleset: defaultReference(source.ruleset),
+    ruleset: defaultReference(upgradeBuiltInRulesetReference(source.ruleset, source.schemaVersion)),
     worldId: typeof source.worldId === 'string' ? source.worldId : null,
     worldName: typeof source.name === 'string' ? source.name : null,
     activeSceneId: typeof source.activeSceneId === 'string' ? source.activeSceneId : null,
-    mapPackage: mapReference(source.mapPackage),
+    mapPackage: mapReference(upgradeBuiltInMapReference(source.mapPackage, source.schemaVersion)),
   });
 }

@@ -8,7 +8,7 @@ const healthBarSource = await readFile(new URL('../src/health/token-bars.js', im
 
 test('Elevation V2 owns Token elevation editing but not a second HP bar or Character DOM', () => {
   assert.match(elevationSource, /openTokenElevationEditor/);
-  assert.match(elevationSource, /api\.tokens\.update/);
+  assert.match(elevationSource, /setTokenElevationMeters/);
   assert.match(elevationSource, /tokenId/);
   assert.doesNotMatch(elevationSource, /token-hp-fill/);
   assert.doesNotMatch(elevationSource, /rpg-character/);

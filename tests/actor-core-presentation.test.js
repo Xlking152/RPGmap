@@ -56,7 +56,7 @@ test('Token appearance precedence is explicit Token override then Form then Core
   actor.prototypeToken.color = '#113355';
   const baseToken = {
     id: 'token-a', actorId: 'actor-a', placement: 'map', x: 1, y: 2,
-    diameterMeters: 1, rotation: 0, elevationFt: 0, showName: true, hidden: false,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0, showName: true, hidden: false,
   };
   const formModel = createTokenViewModel({ token: baseToken, actor, ruleset: infiniteHorrorRuleset });
   assert.equal(formModel.avatarDataUrl, 'data:image/png;base64,FORM');

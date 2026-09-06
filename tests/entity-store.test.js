@@ -13,7 +13,7 @@ test('EntityStore persists Actor reducer state without synchronizing Character d
   };
   const store = new EntityStore(api);
   store.state.actors = [{ id: 'actor-1', name: 'Actor', currentFormId: null, forms: [], runtime: {}, effects: [] }];
-  store.state.tokens = [{ id: 'token-1', actorId: 'actor-1', diameterMeters: 1, elevationFt: 0, effects: [] }];
+  store.state.tokens = [{ id: 'token-1', actorId: 'actor-1', diameterMeters: 1, elevationMeters: 0, effects: [] }];
 
   store.persist();
 
@@ -26,7 +26,7 @@ test('EntityStore persists Actor reducer state without synchronizing Character d
 });
 
 test('canonical EntityStore Token read view delegates to Token Runtime and never creates Character aliases', () => {
-  const canonicalTokens = [{ id: 'token-live', actorId: 'actor-1', diameterMeters: 5, elevationFt: 20, effects: [] }];
+  const canonicalTokens = [{ id: 'token-live', actorId: 'actor-1', diameterMeters: 5, elevationMeters: 20, effects: [] }];
   const api = {
     getState: () => ({ preferences: { entitySystem: { schemaVersion: 3, actors: [{ id: 'actor-1', forms: [], runtime: {}, effects: [] }], tokens: [] } }, characters: [] }),
     tokens: {

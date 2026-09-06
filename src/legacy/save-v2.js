@@ -6,6 +6,7 @@ import { createActorFromImport, createTokenForActor, normalizeEntityState } from
 import { canonicalAttackAreas } from '../world/attack-anchors.js';
 import { normalizeWorldV2, projectWorldV2ToRuntimeState, WORLD_STATE_KEY } from '../world/model.js';
 import { migrateLegacySceneFeatureStates } from '../world/feature-states.js';
+import { feetToMeters } from '../world/migration.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -80,7 +81,9 @@ function legacyTokenToWorldToken(token, characterById) {
     featureId: placement === 'feature' ? String(token?.featureId ?? location?.featureId ?? '') : null,
     diameterMeters: Number(token?.diameterMeters ?? token?.size ?? 1),
     rotation: Number(token?.rotation ?? 0),
-    elevationFt: Number(token?.elevationFt ?? 0),
+    elevationMeters: token?.elevationMeters == null
+      ? feetToMeters(token?.elevationFt ?? 0)
+      : Number(token.elevationMeters),
     hidden: token?.hidden === true || character?.visible === false,
     locked: token?.locked === true,
     showName: token?.showName !== false,

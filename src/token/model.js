@@ -1,5 +1,6 @@
 import { createInitialActorDelta, normalizeActorDelta } from './actor.js';
 import { normalizeTokenAccess } from './access.js';
+import { normalizeMovementState } from '../movement/model.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -101,7 +102,8 @@ export function normalizeSceneToken(raw, { actorId, tokenId, actor = null, rules
     color: text(source.color) || null,
     diameterMeters: Math.max(0.1, finite(source.diameterMeters ?? source.size, 1)),
     rotation: finite(source.rotation, 0),
-    elevationFt: finite(source.elevationFt, 0),
+    elevationMeters: finite(source.elevationMeters, 0),
+    movement: normalizeMovementState(source.movement),
     controllerUserIds: access.controllerUserIds,
     visibility: access.visibility,
     vision: access.vision,
@@ -153,7 +155,8 @@ export function createSceneToken(world, {
   color = null,
   diameterMeters = 1,
   rotation = 0,
-  elevationFt = 0,
+  elevationMeters = 0,
+  movement = null,
   hidden = false,
   controllerUserIds = [],
   visibility = null,
@@ -185,7 +188,8 @@ export function createSceneToken(world, {
       color,
       diameterMeters,
       rotation,
-      elevationFt,
+      elevationMeters,
+      movement,
       hidden,
       controllerUserIds,
       visibility,

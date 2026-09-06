@@ -7,10 +7,10 @@ export const LANZHOU_OPENABLE_FEATURE_IDS = Object.freeze([
   'jincheng-gatehouse',
 ]);
 
-export const LANZHOU_DEFAULT_BLOCKING_HEIGHT_FT = Object.freeze({
-  building: 20,
-  wall: 30,
-  openable: 30,
+export const LANZHOU_DEFAULT_BLOCKING_HEIGHT_METERS = Object.freeze({
+  building: 6.096,
+  wall: 9.144,
+  openable: 9.144,
 });
 
 const OPENABLE_FEATURE_IDS = new Set(LANZHOU_OPENABLE_FEATURE_IDS);
@@ -98,7 +98,7 @@ export function applyLanzhouCapabilities(features = [], navigation = {}) {
     const declaredNavigation = declared.navigation && typeof declared.navigation === 'object'
       ? declared.navigation
       : {};
-    const declaredHeight = finiteHeight(declaredNavigation.blockingHeightFt);
+    const declaredHeight = finiteHeight(declaredNavigation.blockingHeightMeters);
     const openable = OPENABLE_FEATURE_IDS.has(feature?.id);
     const gateway = gatewayByFeatureId.get(String(feature?.id));
 
@@ -108,7 +108,7 @@ export function applyLanzhouCapabilities(features = [], navigation = {}) {
         ...declaredNavigation,
         blocks: true,
         collisionGroup: 'structure',
-        blockingHeightFt: declaredHeight ?? LANZHOU_DEFAULT_BLOCKING_HEIGHT_FT.building,
+        blockingHeightMeters: declaredHeight ?? LANZHOU_DEFAULT_BLOCKING_HEIGHT_METERS.building,
       });
     } else if (feature.category === 'wall') {
       navigationCapability = Object.freeze({
@@ -117,7 +117,7 @@ export function applyLanzhouCapabilities(features = [], navigation = {}) {
         collisionGroup: 'structure',
         passableWhenDestroyed: true,
         damageCreatesPassage: true,
-        blockingHeightFt: declaredHeight ?? LANZHOU_DEFAULT_BLOCKING_HEIGHT_FT.wall,
+        blockingHeightMeters: declaredHeight ?? LANZHOU_DEFAULT_BLOCKING_HEIGHT_METERS.wall,
       });
     }
 
@@ -128,7 +128,7 @@ export function applyLanzhouCapabilities(features = [], navigation = {}) {
         collisionGroup: 'structure',
         passableWhenOpen: true,
         passableWhenDestroyed: true,
-        blockingHeightFt: declaredHeight ?? LANZHOU_DEFAULT_BLOCKING_HEIGHT_FT.openable,
+        blockingHeightMeters: declaredHeight ?? LANZHOU_DEFAULT_BLOCKING_HEIGHT_METERS.openable,
         blockingPolygon: declaredNavigation.blockingPolygon || gateBlockingPolygon(feature),
         passageTile: 'road',
         passagePolygon: gateway?.polygon || feature.geometry?.points || null,

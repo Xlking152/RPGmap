@@ -245,7 +245,7 @@ function restrictedToken(token, {
     color: vague ? '#7b8587' : token.color == null ? null : String(token.color),
     diameterMeters: Number(token.diameterMeters) || 1,
     rotation: Number(token.rotation) || 0,
-    elevationFt: Number(token.elevationFt) || 0,
+    elevationMeters: Number(token.elevationMeters) || 0,
     locked: token.locked === true,
     showName: vague ? false : token.showName !== false,
     effects: [],

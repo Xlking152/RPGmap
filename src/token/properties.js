@@ -1,5 +1,5 @@
 import {
-  normalizeElevationFt,
+  normalizeElevationMeters,
   normalizeTokenDiameterMeters,
 } from '../elevation/model.js';
 
@@ -39,7 +39,7 @@ export function tokenPropertySnapshot(api, value) {
     visibility: structuredClone(token.visibility || { mode: 'public', userIds: [] }),
     diameterMeters: normalizeTokenDiameterMeters(token.diameterMeters, 1),
     rotation: normalizeTokenRotation(token.rotation, 0),
-    elevationFt: normalizeElevationFt(token.elevationFt, 0),
+    elevationMeters: normalizeElevationMeters(token.elevationMeters, 0),
     locked: token.locked === true,
     showName: token.showName !== false,
   });
@@ -72,9 +72,26 @@ export async function setTokenRotation(api, value, rotation, options = {}) {
   }, options);
 }
 
-export async function setTokenElevationFt(api, value, elevationFt, options = {}) {
-  const { token } = requireToken(api, value);
-  return update(api, value, {
-    elevationFt: normalizeElevationFt(elevationFt, token.elevationFt),
-  }, options);
+export async function setTokenElevationMeters(api, value, elevationMeters, options = {}) {
+  const { id, token } = requireToken(api, value);
+  const nextElevation = normalizeElevationMeters(elevationMeters, token.elevationMeters);
+  const currentElevation = normalizeElevationMeters(token.elevationMeters, 0);
+  if (token.placement === 'map' && api.movement?.moveTokenTo
+    && Math.abs(nextElevation - currentElevation) > 1e-9) {
+    const verticalAction = currentElevation === 0 && nextElevation > 0 ? 'takeoff'
+      : nextElevation === 0 && currentElevation > 0 ? 'landing'
+        : null;
+    const result = await api.movement.moveTokenTo(id, {
+      x: Number(token.x), y: Number(token.y), elevationMeters: nextElevation,
+    }, null, { movementMode: 'fly', verticalAction });
+    if (!result?.committed) {
+      const error = new Error(result?.reason || 'Token elevation movement was rejected');
+      error.code = result?.code || 'movement_failed';
+      throw error;
+    }
+    return api.tokens.get(id);
+  }
+  return update(api, id, { elevationMeters: nextElevation }, options);
 }
+
+export const setTokenElevationFt = setTokenElevationMeters;

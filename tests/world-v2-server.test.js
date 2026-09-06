@@ -16,14 +16,14 @@ function state() {
         actors: [{ id: 'actor-1', name: '角色', forms: [], runtime: {}, effects: [] }],
         tokens: [{
           id: 'token-1', actorId: 'actor-1', actorLink: true,
-          diameterMeters: 1, rotation: 0, elevationFt: 0, hidden: false, locked: false, showName: true, effects: [],
+          diameterMeters: 1, rotation: 0, elevationMeters: 0, hidden: false, locked: false, showName: true, effects: [],
         }],
       },
       worldV2: {
         schemaVersion: 2,
         id: 'world-default',
         name: 'World',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         activeSceneId: 'scene-test',
         actors: [{ id: 'actor-1', name: '角色', forms: [], runtime: {}, effects: [] }],
         statusDefinitions: [],
@@ -32,7 +32,7 @@ function state() {
           tokens: [{
             id: 'token-1', actorId: 'actor-1', actorLink: true, actorDelta: null,
             placement: 'map', x: 12.5, y: 18.5, featureId: null,
-            diameterMeters: 1, rotation: 0, elevationFt: 0,
+            diameterMeters: 1, rotation: 0, elevationMeters: 0,
             hidden: false, locked: false, showName: true, effects: [],
           }],
           markers: [], attackAreas: [], sceneEvents: [], settings: { gridVisible: true },
@@ -44,15 +44,15 @@ function state() {
 
 test('server projection regenerates reducer mirrors from authoritative World V2', () => {
   const value = state();
-  value.preferences.entitySystem.tokens[0].elevationFt = 15;
+  value.preferences.entitySystem.tokens[0].elevationMeters = 15;
   assert.equal(assertWorldState(value), value);
   synchronizeWorldV2Mirror(value);
   assert.equal(value.preferences.worldV2.actors[0].id, 'actor-1');
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].actorId, 'actor-1');
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].x, 12.5);
   assert.equal(value.preferences.worldV2.scenes[0].tokens[0].y, 18.5);
-  assert.equal(value.preferences.worldV2.scenes[0].tokens[0].elevationFt, 0);
-  assert.equal(value.preferences.entitySystem.tokens[0].elevationFt, 0);
+  assert.equal(value.preferences.worldV2.scenes[0].tokens[0].elevationMeters, 0);
+  assert.equal(value.preferences.entitySystem.tokens[0].elevationMeters, 0);
   assert.equal(Object.hasOwn(value, 'characters'), false);
 });
 

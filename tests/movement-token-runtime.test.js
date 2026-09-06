@@ -16,7 +16,7 @@ function token(overrides = {}) {
   return {
     id: 'token-a', actorId: 'actor-a', actorLink: true, actorDelta: null,
     placement: 'map', x: 1.5, y: 1.5, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     hidden: false, locked: false, showName: true, effects: [],
     ...overrides,
   };
@@ -26,7 +26,7 @@ function world(tokenValue = token()) {
   return {
     schemaVersion: 2,
     id: 'world-test', name: 'World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     actors: [actor()],
     statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
     activeSceneId: 'scene-a',
@@ -129,7 +129,9 @@ test('production movement and feature transitions submit intents without a full 
   }] });
   assert.equal((await api.movement.moveTokenTo('token-a', { x: 5.5, y: 6.5 })).committed, true);
   assert.equal(operations[0].type, 'token.movePath');
-  assert.deepEqual(operations[0].payload.expectedOrigins, { 'token-a': { x: 1.5, y: 1.5 } });
+  assert.deepEqual(operations[0].payload.expectedOrigins, {
+    'token-a': { x: 1.5, y: 1.5, elevationMeters: 0 },
+  });
   assert.equal((await api.movement.moveTokenTo('token-a', { x: 9.5, y: 10.5 }, { type: 'feature', featureId: 'room' })).committed, true);
   assert.equal(api.tokens.get('token-a').placement, 'feature');
   assert.equal(await api.movement.exitFeature('token-a'), true);

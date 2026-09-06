@@ -125,7 +125,7 @@ test('TokenSystem preserves actorLink/actorDelta and deletes canonical state onl
     actorDelta: { system: { runtime: { health: { current: 5 } } } },
   });
   await fixture.api.tokens.update('npc-one', {
-    visibility: { mode: 'gm', userIds: [] }, elevationFt: 15,
+    visibility: { mode: 'gm', userIds: [] }, elevationMeters: 15,
   });
   const token = fixture.api.tokens.get('npc-one');
   assert.equal(token.actorLink, false);
@@ -133,7 +133,7 @@ test('TokenSystem preserves actorLink/actorDelta and deletes canonical state onl
   assert.equal(token.actorDelta.system.runtime.resources?.hp, undefined);
   assert.equal(Object.hasOwn(token.actorDelta, 'runtime'), false);
   assert.equal(token.visibility.mode, 'gm');
-  assert.equal(token.elevationFt, 15);
+  assert.equal(token.elevationMeters, 15);
 
   await fixture.api.tokens.remove('npc-one');
   assert.equal(fixture.api.tokens.get('npc-one'), null);

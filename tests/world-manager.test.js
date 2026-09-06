@@ -20,7 +20,7 @@ function stateFor({ worldId = 'world-a', activeSceneId = 'scene-a', mapId = 'map
         schemaVersion: 2,
         id: worldId,
         name: '测试 World',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         activeSceneId,
         actors: [], statusDefinitions: [],
         scenes: [
@@ -39,7 +39,7 @@ test('World Manager creates/selects/removes descriptors with World-id storage ke
   const manager = createWorldCatalogManager(storage, { idFactory: () => 'world-fixed' });
   const created = manager.create({
     name: '无限恐怖战役',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     mapPackage: { id: 'map-a', version: '1' },
   });
   assert.equal(created.id, 'world-fixed');
@@ -57,7 +57,7 @@ test('legacy map-key save is copied once into World-id storage and old key remai
   const manager = createWorldCatalogManager(storage, { idFactory: () => 'fallback-world' });
   const adopted = manager.adoptLegacyMapWorld({
     mapPackage: { id: 'map-a' },
-    fallbackRuleset: { id: 'infinite-horror', version: '1.0.0' },
+    fallbackRuleset: { id: 'infinite-horror', version: '1.1.0' },
   });
   assert.equal(adopted.id, 'world-a');
   assert.equal(storage.get(adopted.storageKey), raw);
@@ -69,7 +69,7 @@ test('offline cross-Map Scene activation updates the stored canonical World befo
   const manager = createWorldCatalogManager(storage, { idFactory: () => 'world-a' });
   const descriptor = manager.create({
     id: 'world-a', name: '测试 World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     mapPackage: { id: 'map-a', version: '1' },
   });
   storage.set(descriptor.storageKey, JSON.stringify(stateFor()));

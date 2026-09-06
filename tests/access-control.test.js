@@ -20,7 +20,7 @@ import { migrateTestStateToWorldV3 } from './helpers/world-v3.js';
 function canonicalToken(id, actorId, x, y) {
   return {
     id, actorId, actorLink: true, actorDelta: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     hidden: false, locked: false, showName: true, effects: [], x, y,
   };
 }
@@ -29,7 +29,7 @@ function sceneToken(id, actorId, x, y) {
   return {
     id, actorId, actorLink: true, actorDelta: null,
     placement: 'map', x, y, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     hidden: false, locked: false, showName: true, effects: [],
   };
 }
@@ -61,7 +61,7 @@ function world({ activeActorId = null } = {}) {
         schemaVersion: 2,
         id: 'world-test',
         name: 'Test World',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         activeSceneId: 'scene-test',
         actors: structuredClone(actors),
         statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),

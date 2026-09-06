@@ -19,13 +19,13 @@ function state() {
   const token = {
     id: 'token-a', actorId: actor.id, actorLink: true, actorDelta: null,
     placement: 'map', x: 10, y: 20, featureId: null, texture: null, color: '#ffffff',
-    diameterMeters: 1, rotation: 0, elevationFt: 0, locked: false, showName: true,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0, locked: false, showName: true,
     effects: [], controllerUserIds: [], visibility: { mode: 'party', userIds: [] },
     vision: { enabled: true, rangeOverrideMeters: null, overrideUserIds: [] },
   };
   const world = {
     schemaVersion: 3, id: 'world-a', name: 'World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' }, activeSceneId: 'scene-a',
+    ruleset: { id: 'infinite-horror', version: '1.1.0' }, activeSceneId: 'scene-a',
     actors: [actor], statusDefinitions: [],
     scenes: [{
       id: 'scene-a', name: 'Scene', mapPackage: { id: 'unknown-test-map', version: '1.0.0' },
@@ -119,7 +119,10 @@ test('Token Document move becomes one atomic path operation with preconditions',
   });
   const token = applied.state.preferences.worldV2.scenes[0].tokens[0];
   assert.deepEqual({ x: token.x, y: token.y }, { x: 15, y: 25 });
-  assert.deepEqual(applied.results[0].motion[0].waypoints, [{ x: 12, y: 22 }, { x: 15, y: 25 }]);
+  assert.deepEqual(applied.results[0].motion[0].waypoints, [
+    { x: 12, y: 22, elevationMeters: 0 },
+    { x: 15, y: 25, elevationMeters: 0 },
+  ]);
   assert.deepEqual(applied.changeSet.tokens, [{ sceneId: 'scene-a', upsertIds: ['token-a'], removeIds: [] }]);
 });
 

@@ -28,7 +28,7 @@ test('turn origin is captured at combat start and every explicit turn advance', 
 
 test('Combat schema 2 persists only minimal generic turn-origin geometry', () => {
   assert.match(combatModel, /schemaVersion: 2/);
-  assert.match(combatModel, /combat\.turnOrigin = \{ x, y, elevationFt:/);
+  assert.match(combatModel, /combat\.turnOrigin = \{ x, y, elevationMeters:/);
   assert.doesNotMatch(combatModel, /characterId|state\.characters|Character/);
 });
 

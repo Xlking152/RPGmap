@@ -196,7 +196,7 @@ function initialWorldV2() {
     actorDelta: null,
     diameterMeters: 1,
     rotation: 0,
-    elevationFt: 0,
+    elevationMeters: 0,
     hidden: false,
     locked: false,
     showName: true,
@@ -210,7 +210,7 @@ function initialWorldV2() {
     schemaVersion: 2,
     id: 'world-test',
     name: 'Test World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     activeSceneId: 'scene-test',
     actors: structuredClone(actors),
     statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
@@ -255,7 +255,7 @@ function accessToken({ id, actor, x, y, visibility = 'public' }) {
     id, actorId: actor.id, actorLink: actor.type === 'pc',
     actorDelta: actor.type === 'pc' ? null : infiniteHorrorRuleset.actor.instances.createDelta(actor),
     placement: 'map', x, y, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     controllerUserIds: [], visibility: { mode: visibility, userIds: [] },
     vision: { enabled: true, rangeOverrideMeters: null, overrideUserIds: [] },
     locked: false, showName: true, effects: [],
@@ -391,12 +391,12 @@ test('health exposes only World bootstrap metadata for empty and initialized LAN
     assert.deepEqual(health.world, {
       initialized: true,
       kind: 'world-v2',
-      schemaVersion: 3,
+      schemaVersion: 4,
       worldId: 'world-test',
       name: 'Test World',
       activeSceneId: 'scene-test',
       mapPackage: { id: 'test', version: '1' },
-      ruleset: { id: 'infinite-horror', version: '1.0.0' },
+      ruleset: { id: 'infinite-horror', version: '1.1.0' },
     });
     assert.equal(Object.hasOwn(health.world, 'state'), false);
     gm.ws.close();
@@ -485,7 +485,7 @@ test('LAN replays old WAL semantics before migration and checkpoints all origina
   try {
     const durable = JSON.parse(await readFile(path.join(mapDir, 'world.json'), 'utf8'));
     assert.equal(durable.revision, 2);
-    assert.equal(durable.state.preferences.worldV2.schemaVersion, 3);
+    assert.equal(durable.state.preferences.worldV2.schemaVersion, 4);
     const token = durable.state.preferences.worldV2.scenes[0].tokens[0];
     assert.equal(token.x, 44);
     assert.equal(token.visibility.mode, 'gm');

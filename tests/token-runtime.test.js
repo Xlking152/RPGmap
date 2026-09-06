@@ -15,7 +15,7 @@ function world() {
     schemaVersion: 2,
     id: 'world-test',
     name: 'World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     actors: [
       { id: 'actor-a', name: 'A' },
       { id: 'actor-b', name: 'B' },
@@ -32,7 +32,7 @@ function world() {
         tokens: [{
           id: 'token-other-scene', actorId: 'actor-b', actorLink: true, actorDelta: null,
           placement: 'map', x: 90, y: 91, featureId: null, diameterMeters: 1,
-          rotation: 0, elevationFt: 0, hidden: false, locked: false, showName: true, effects: [],
+          rotation: 0, elevationMeters: 0, hidden: false, locked: false, showName: true, effects: [],
         }],
         markers: [], attackAreas: [], sceneEvents: [], settings: {},
       },

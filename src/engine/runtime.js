@@ -297,7 +297,7 @@ export function createRpgMapRuntime({
       for (const tokenId of entry?.upsertIds || []) {
         const id = String(tokenId);
         const fields = entry.fields?.[id];
-        const positionOnly = fields?.length && fields.every(field => ['x', 'y', 'elevationFt', 'elevationMeters'].includes(field));
+        const positionOnly = fields?.length && fields.every(field => ['x', 'y', 'elevationMeters', 'elevationMeters'].includes(field));
         if (!positionOnly) changedTokenIds.push(id);
         emit(positionOnly ? 'token:move' : 'token:property-change', { id, tokenId: id, fields, sceneId: entry.sceneId, source, canonical: true });
       }

@@ -1,6 +1,6 @@
 import L from 'leaflet';
 import { worldToLatLng } from '../engine/geometry.js';
-import { formatFt } from '../elevation/model.js';
+import { formatMeters } from '../elevation/model.js';
 import { resolveStatusUiSnapshot, renderTokenStatusBadges } from '../status/ui.js';
 import { interpolateTokenPoint, normalizeTokenPoint, sameTokenPoint, tokenMoveDuration } from './token-motion.js';
 import { createTokenViewModel } from './token-view-model.js';
@@ -96,7 +96,7 @@ function setTooltip(api, documentNode, view, model) {
   row.className = 'token-v2-label-row';
   const elevation = documentNode.createElement('span');
   elevation.className = 'token-v2-elevation-label';
-  elevation.textContent = `${formatFt(model.elevationFt)} ft`;
+  elevation.textContent = `${formatMeters(model.elevationMeters)} m`;
   const name = documentNode.createElement('span');
   name.className = 'token-v2-name-label';
   name.textContent = model.name;

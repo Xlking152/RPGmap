@@ -154,6 +154,19 @@ function prepareVision(raw = {}) {
   });
 }
 
+function prepareMovement(raw = {}) {
+  return Object.freeze({
+    describe: actorFunction(raw.describe, () => ({
+      walk: true,
+      swim: true,
+      waterWalk: false,
+      fly: false,
+      swimCostMultiplier: 2,
+    })),
+    calculateCost: actorFunction(raw.calculateCost, context => context.defaultCostMeters),
+  });
+}
+
 function presentationOptions(value) {
   return Object.freeze((Array.isArray(value) ? value : []).map(option => Object.freeze({ ...option })));
 }
@@ -184,6 +197,7 @@ export function prepareRuleset(raw = {}) {
   const statuses = raw.statuses && typeof raw.statuses === 'object' ? raw.statuses : {};
   const importers = raw.importers && typeof raw.importers === 'object' ? raw.importers : {};
   const vision = raw.vision && typeof raw.vision === 'object' ? raw.vision : {};
+  const movement = raw.movement && typeof raw.movement === 'object' ? raw.movement : {};
 
   return Object.freeze({
     apiVersion,
@@ -246,6 +260,7 @@ export function prepareRuleset(raw = {}) {
       canonicalizeChangeTarget: optionalFunction(statuses.canonicalizeChangeTarget),
     }),
     vision: prepareVision(vision),
+    movement: prepareMovement(movement),
     importers: Object.freeze({ ...importers }),
     metadata: Object.freeze({ ...(raw.metadata || {}) }),
   });

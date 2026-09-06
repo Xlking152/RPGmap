@@ -11,7 +11,7 @@ function context(overrides = {}) {
   const token = {
     id: 'token-a', actorId: 'actor-a', actorLink: true, actorDelta: null,
     placement: 'map', x: 700, y: 430, diameterMeters: 1,
-    elevationFt: 0, locked: false,
+    elevationMeters: 0, locked: false,
     ...overrides,
   };
   const scene = {

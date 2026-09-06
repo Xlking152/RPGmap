@@ -20,7 +20,7 @@ function token(id, actorId, overrides = {}) {
   return {
     id, actorId, actorLink: true, actorDelta: null,
     placement: 'map', x: 10, y: 20, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     hidden: false, locked: false, showName: true, effects: [],
     ...overrides,
   };
@@ -32,7 +32,7 @@ function state() {
   const world = {
     schemaVersion: 2,
     id: 'world-a', name: 'World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     activeSceneId: 'scene-a', actors: structuredClone(actors), statusDefinitions: [],
     scenes: [{
       id: 'scene-a', name: 'Scene', mapPackage: { id: 'map-a', version: '1.0.0' },
@@ -69,6 +69,28 @@ test('World operation envelope rejects unknown operations and invalid revisions'
     }),
     error => error.code === 'invalid_revision',
   );
+});
+
+test('Scene settings use a bounded granular operation', () => {
+  const initial = state();
+  const committed = applyWorldOperations(initial, [{
+    type: 'scene.settings.patch',
+    payload: { sceneId: 'scene-a', patch: {
+      movementBudgetMetersPerTurn: 24,
+      lineOfSightEnabled: true,
+      defaultDoorInteractionRangeMeters: 2.5,
+    } },
+  }]);
+  const scene = committed.state.preferences.worldV2.scenes[0];
+  assert.equal(scene.settings.movementBudgetMetersPerTurn, 24);
+  assert.equal(scene.settings.lineOfSightEnabled, true);
+  assert.equal(scene.settings.defaultDoorInteractionRangeMeters, 2.5);
+  assert.deepEqual(committed.changeSet.scenes.upsertIds, ['scene-a']);
+  assert.equal(initial.preferences.worldV2.scenes[0].settings.movementBudgetMetersPerTurn, undefined);
+  assert.throws(() => applyWorldOperations(initial, [{
+    type: 'scene.settings.patch',
+    payload: { sceneId: 'scene-a', patch: { unsafeExtension: true } },
+  }]), { code: 'scene_setting_forbidden' });
 });
 
 test('Actor metadata writes preserve newer runtime fields and reject stale field preconditions', () => {

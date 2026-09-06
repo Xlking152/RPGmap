@@ -8,6 +8,7 @@ import { normalizeFeatureStateRecords } from './feature-states.js';
 import { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 import { STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { assertTemplateLibrary } from '../library/model.js';
+import { normalizeMovementBudget, normalizeMovementState } from '../movement/model.js';
 
 export { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 
@@ -93,7 +94,8 @@ function normalizeWorldToken(raw, actorIds, { rawActorsById = new Map(), actorsB
     featureId: placement === 'feature' ? id(token.featureId) : null,
     diameterMeters: Math.max(0.1, finite(token.diameterMeters ?? token.size, 1)),
     rotation: finite(token.rotation, 0),
-    elevationFt: finite(token.elevationFt, 0),
+    elevationMeters: finite(token.elevationMeters, 0),
+    movement: normalizeMovementState(token.movement),
     controllerUserIds: access.controllerUserIds,
     visibility: access.visibility,
     vision: access.vision,
@@ -134,7 +136,13 @@ function normalizeScene(raw, {
     sceneEvents: clone(array(source.sceneEvents)),
     featureStates: normalizeFeatureStateRecords(source.featureStates),
     fog: normalizeFogState(source.fog),
-    settings: { ...clone(object(source.settings)), gridVisible: source.settings?.gridVisible !== false },
+    settings: {
+      ...clone(object(source.settings)),
+      gridVisible: source.settings?.gridVisible !== false,
+      lineOfSightEnabled: source.settings?.lineOfSightEnabled === true,
+      movementBudgetMetersPerTurn: normalizeMovementBudget(source.settings?.movementBudgetMetersPerTurn),
+      defaultDoorInteractionRangeMeters: Math.max(0, finite(source.settings?.defaultDoorInteractionRangeMeters, 2)),
+    },
   };
 }
 
@@ -252,7 +260,8 @@ function runtimeTokenFromWorld(token) {
     featureId: token.placement === 'feature' ? token.featureId : null,
     diameterMeters: token.diameterMeters,
     rotation: token.rotation,
-    elevationFt: token.elevationFt,
+    elevationMeters: token.elevationMeters,
+    movement: clone(token.movement),
     controllerUserIds: clone(token.controllerUserIds || []),
     visibility: clone(token.visibility || {}),
     vision: clone(token.vision || {}),

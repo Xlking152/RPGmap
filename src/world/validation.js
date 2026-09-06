@@ -67,12 +67,12 @@ function assertFog(value, label) {
   }
 }
 
-function assertSchema3Actor(actor, label) {
+function assertCurrentActor(actor, label) {
   if (!ACTOR_TYPES.has(String(actor.type))) fail(`${label}.type is invalid`);
   if (actor.partyId !== null && typeof actor.partyId !== 'string') fail(`${label}.partyId must be a string or null`);
 }
 
-function assertSchema3Token(token, actor, label) {
+function assertCurrentToken(token, actor, label) {
   if (typeof token.actorLink !== 'boolean') fail(`${label}.actorLink must be boolean`);
   if (['monster', 'npc', 'summon'].includes(String(actor.type)) && token.actorLink !== false) fail(`${label} cannot link an independent Actor`, 'instance_link_forbidden');
   stringIds(token.controllerUserIds, `${label}.controllerUserIds`);
@@ -96,6 +96,8 @@ function assertSchema3Token(token, actor, label) {
   }
   stringIds(vision.overrideUserIds, `${label}.vision.overrideUserIds`);
   if (Object.hasOwn(token, 'hidden')) fail(`${label}.hidden is legacy-only`, 'legacy_token_hidden_forbidden');
+  if (Object.hasOwn(token, 'elevationFt')) fail(`${label}.elevationFt is legacy-only`, 'legacy_height_forbidden');
+  if (!Number.isFinite(Number(token.elevationMeters)) || Number(token.elevationMeters) < 0) fail(`${label}.elevationMeters is invalid`);
 }
 
 function assertMarker(marker, label) {
@@ -134,7 +136,7 @@ export function assertWorldRuleset(rawWorld, ruleset) {
   return reference;
 }
 
-export function assertPersistedWorldV2(rawWorld, { acceptedSchemaVersions = [2, WORLD_SCHEMA_VERSION] } = {}) {
+export function assertPersistedWorldV2(rawWorld, { acceptedSchemaVersions = [2, 3, WORLD_SCHEMA_VERSION] } = {}) {
   const world = object(rawWorld, 'worldV2');
   const accepted = new Set(acceptedSchemaVersions.map(Number));
   if (!accepted.has(Number(world.schemaVersion))) {
@@ -145,7 +147,7 @@ export function assertPersistedWorldV2(rawWorld, { acceptedSchemaVersions = [2, 
   const actorIds = uniqueIds(world.actors, 'worldV2.actors');
   const actorsById = new Map(world.actors.map(actor => [String(actor.id), actor]));
   if (Number(world.schemaVersion) === WORLD_SCHEMA_VERSION) {
-    world.actors.forEach((actor, index) => assertSchema3Actor(actor, `worldV2.actors[${index}]`));
+    world.actors.forEach((actor, index) => assertCurrentActor(actor, `worldV2.actors[${index}]`));
   }
   const sceneIds = uniqueIds(world.scenes, 'worldV2.scenes');
   const activeSceneId = identifier(world.activeSceneId, 'worldV2.activeSceneId');
@@ -176,7 +178,7 @@ export function assertPersistedWorldV2(rawWorld, { acceptedSchemaVersions = [2, 
         fail(`World V2 Token references missing Actor: ${actorId}`, 'invalid_reference');
       }
       if (Number(world.schemaVersion) === WORLD_SCHEMA_VERSION) {
-        assertSchema3Token(token, actorsById.get(actorId), `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}]`);
+        assertCurrentToken(token, actorsById.get(actorId), `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}]`);
       }
     }
     if (Number(world.schemaVersion) === WORLD_SCHEMA_VERSION) assertFog(scene.fog, `worldV2.scenes[${sceneIndex}].fog`);

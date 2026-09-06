@@ -8,7 +8,7 @@ function tokenRuntime({ x = 1, y = 2 } = {}) {
   return {
     id: 'token-a', actorId: 'actor-a', actorLink: true, actorDelta: null,
     x, y, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     hidden: false, locked: false, showName: true, effects: [],
   };
 }
@@ -17,7 +17,7 @@ function tokenWorld({ x = 1, y = 2 } = {}) {
   return {
     id: 'token-a', actorId: 'actor-a', actorLink: true, actorDelta: null,
     placement: 'map', x, y, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     hidden: false, locked: false, showName: true, effects: [],
   };
 }
@@ -38,7 +38,7 @@ function state({ x = 1, y = 2 } = {}) {
       worldV2: {
         schemaVersion: 2,
         id: 'world-test', name: 'World',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         activeSceneId: 'scene-test',
         actors: [{ id: 'actor-a', name: 'A', effects: [] }],
         statusDefinitions: [],

@@ -117,13 +117,13 @@ function fixture(definitions) {
   const tokens = Array.from({ length: TOKEN_COUNT }, (_, index) => ({
     id: `token-${index}`, actorId: `actor-${index % ACTOR_COUNT}`, actorLink: true, actorDelta: null,
     placement: 'map', x: index % 100, y: Math.floor(index / 100), featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0, locked: false, showName: true,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0, locked: false, showName: true,
     effects: [], controllerUserIds: [], visibility: { mode: 'party', userIds: [] },
     vision: { enabled: true, rangeOverrideMeters: null, overrideUserIds: [] },
   }));
   const world = {
     schemaVersion: 3, id: 'benchmark-world', name: 'LAN Benchmark World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' }, activeSceneId: 'scene-benchmark',
+    ruleset: { id: 'infinite-horror', version: '1.1.0' }, activeSceneId: 'scene-benchmark',
     actors, statusDefinitions: definitions,
     scenes: [{
       id: 'scene-benchmark', name: 'Benchmark Scene',

@@ -24,7 +24,7 @@ function normalizeTurnOrigin(raw, combat) {
   if (combat?.state !== 'active' || !combat.combatants.length || !raw || typeof raw !== 'object') return null;
   const x = finite(raw.x);
   const y = finite(raw.y);
-  return x === null || y === null ? null : { x, y, elevationFt: elevation(raw.elevationFt) };
+  return x === null || y === null ? null : { x, y, elevationMeters: elevation(raw.elevationMeters) };
 }
 
 export function normalizeCombatState(raw) {
@@ -80,7 +80,7 @@ export function setCombatTurnOrigin(combat, point) {
   const x = finite(point?.x);
   const y = finite(point?.y);
   if (x === null || y === null) return combat.turnOrigin = null;
-  return combat.turnOrigin = { x, y, elevationFt: elevation(point?.elevationFt) };
+  return combat.turnOrigin = { x, y, elevationMeters: elevation(point?.elevationMeters) };
 }
 
 function preserveCurrent(combat, mutate) {

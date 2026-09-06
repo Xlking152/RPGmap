@@ -120,7 +120,7 @@ export function validateRuntimeState(raw, { mapPackage, ruleset } = {}) {
   const hasCanonicalWorld = Boolean(source.preferences?.[WORLD_STATE_KEY]);
   if (hasCanonicalWorld) {
     assertPersistedWorldV2(source.preferences[WORLD_STATE_KEY], {
-      acceptedSchemaVersions: [2, WORLD_SCHEMA_VERSION],
+      acceptedSchemaVersions: [2, 3, WORLD_SCHEMA_VERSION],
     });
     source = migrateWorldSchema3State(migrateLegacySceneFeatureStates(source).state, {
       statusDefinitions: ruleset?.statuses?.definitions,
@@ -169,7 +169,7 @@ export function prepareRuntimeState(raw, { mapPackage, ruleset } = {}) {
     && (Object.prototype.hasOwnProperty.call(parsed.preferences, FEATURE_STATE_KEY)
       || Object.prototype.hasOwnProperty.call(parsed.preferences, LEGACY_FEATURE_INTERACTION_STATE_KEY)));
   const migratedCharacters = Object.prototype.hasOwnProperty.call(parsed, 'characters');
-  const migratedWorldSchema = Number(parsed?.preferences?.[WORLD_STATE_KEY]?.schemaVersion) === 2;
+  const migratedWorldSchema = [2, 3].includes(Number(parsed?.preferences?.[WORLD_STATE_KEY]?.schemaVersion));
   const state = validateRuntimeState(parsed, { mapPackage, ruleset });
   return Object.freeze({
     state,

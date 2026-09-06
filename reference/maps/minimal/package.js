@@ -20,7 +20,7 @@ const features = Object.freeze([
     destructible: Object.freeze({ enabled: true, maxHp: 100, material: 'timber-earth' }),
     capabilities: Object.freeze({
       navigation: Object.freeze({
-        blocks: true, collisionGroup: 'structure', blockingHeightFt: 15,
+        blocks: true, collisionGroup: 'structure', blockingHeightMeters: 4.572,
         // The doorway belongs to the door, not the surrounding house blocker.
         blockingPolygon: Object.freeze([[350, 270], [650, 270], [650, 470], [530, 470], [530, 452], [470, 452], [470, 470], [350, 470]]),
       }),
@@ -50,7 +50,7 @@ const features = Object.freeze([
       navigation: Object.freeze({
         blocks: true,
         collisionGroup: 'structure',
-        blockingHeightFt: 8,
+        blockingHeightMeters: 2.4384,
         passableWhenOpen: true,
         passageTile: 'open',
       }),
@@ -75,7 +75,7 @@ const features = Object.freeze([
       navigation: Object.freeze({
         blocks: true,
         collisionGroup: 'structure',
-        blockingHeightFt: 12,
+        blockingHeightMeters: 3.6576,
         passableWhenDestroyed: true,
         damageCreatesPassage: true,
       }),

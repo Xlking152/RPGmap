@@ -9,10 +9,10 @@ import { assertPersistedWorldV2 } from '../src/world/validation.js';
 
 function worldWithVisionOverride(rangeOverrideMeters = 3100) {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: 'world-large-vision',
     name: 'Large vision regression',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     actors: [{ id: 'actor-scout', name: 'Scout', type: 'pc', partyId: 'default', system: {}, effects: [] }],
     statusDefinitions: [],
     activeSceneId: 'scene-a',
@@ -31,7 +31,7 @@ function worldWithVisionOverride(rangeOverrideMeters = 3100) {
         featureId: null,
         diameterMeters: 1,
         rotation: 0,
-        elevationFt: 0,
+        elevationMeters: 0,
         controllerUserIds: [],
         visibility: { mode: 'party', userIds: [] },
         vision: {

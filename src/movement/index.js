@@ -15,6 +15,20 @@ export { createMovementController } from './controller.js';
 export { createMovementFastPathSystem } from './fast-path.js';
 export { createMovementGhostRenderer } from './ghost-renderer.js';
 export { createMovementRouteInspector } from './route-inspector.js';
+export { createMovementAuthority, resolveMovementStatus } from './authority.js';
+export {
+  MOVEMENT_MODES,
+  MOVEMENT_VERTICAL_ACTIONS,
+  movementCapabilityFailure,
+  movementCostMeters,
+  movementTerrainCostMeters,
+  movementTurnKey,
+  nextMovementState,
+  normalizeMovementBudget,
+  normalizeMovementMode,
+  normalizeMovementState,
+  spatialDistanceMeters,
+} from './model.js';
 
 export function createMovementSystem(options = {}) {
   const settings = new MovementSettings(options);

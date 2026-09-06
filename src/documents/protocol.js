@@ -37,6 +37,7 @@ const INTENT_TO_OPERATION = new Map([
   ['scene.activate', 'scene.activate'],
   ['scene.delete', 'scene.delete'],
   ['scene.content.replace', 'scene.content.replace'],
+  ['scene.settings.patch', 'scene.settings.patch'],
   ['scene.featureState.patch', 'scene.featureState.patch'],
   ['fog.explore', 'scene.fog.explore'],
   ['fog.hide', 'scene.fog.hide'],
@@ -75,7 +76,10 @@ function finitePoint(value, label) {
   const x = Number(value?.x);
   const y = Number(value?.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) fail(`${label} must contain finite x/y`);
-  return { x, y };
+  if (value?.elevationMeters === undefined) return { x, y };
+  const elevationMeters = Number(value.elevationMeters);
+  if (!Number.isFinite(elevationMeters) || elevationMeters < 0) fail(`${label}.elevationMeters must be finite and non-negative`);
+  return { x, y, elevationMeters };
 }
 
 export function normalizeDocumentWrite(raw, label = 'write') {

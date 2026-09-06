@@ -136,7 +136,7 @@ function normalizeNavigationCapability(feature, declared) {
     passableWhenOpen: source.passableWhenOpen === true,
     passableWhenDestroyed: source.passableWhenDestroyed === true,
     damageCreatesPassage: source.damageCreatesPassage === true,
-    blockingHeightFt: asOptionalNonNegativeNumber(source.blockingHeightFt, 'feature navigation blockingHeightFt'),
+    blockingHeightMeters: asOptionalNonNegativeNumber(source.blockingHeightMeters, 'feature navigation blockingHeightMeters'),
     blockingPolygon: normalizeNavigationPolygon(source.blockingPolygon, 'feature navigation blockingPolygon'),
     passageTile,
     passagePolygon: normalizeNavigationPolygon(source.passagePolygon, 'feature navigation passagePolygon'),
@@ -317,6 +317,6 @@ export function mapPackageCapabilities(mapPackage) {
     enterableCount: features.filter((feature) => feature.capabilities?.enterable).length,
     openableCount: features.filter((feature) => feature.capabilities?.openable).length,
     navigationObstacleCount: features.filter((feature) => feature.capabilities?.navigation?.blocks).length,
-    heightAwareObstacleCount: features.filter((feature) => Number.isFinite(feature.capabilities?.navigation?.blockingHeightFt)).length,
+    heightAwareObstacleCount: features.filter((feature) => Number.isFinite(feature.capabilities?.navigation?.blockingHeightMeters)).length,
   });
 }

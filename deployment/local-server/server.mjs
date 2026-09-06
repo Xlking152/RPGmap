@@ -1984,6 +1984,14 @@ server.on('upgrade', (req, socket) => {
         }
         return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'persist_failed', message: `World 未保存：${error.message}` });
       }
+      if (session.role !== 'gm' && envelope.operations.some(operation => operation.type === 'scene.settings.patch')) {
+        return sendWorldOperationDenied(
+          socket,
+          message,
+          'scene_settings_gm_only',
+          'Only the GM can modify Scene settings',
+        );
+      }
       worldWal.adoptCheckpoint();
       world = nextWorld;
       resetResumeHistory();

@@ -28,6 +28,7 @@ import { migrateWorldSchema3State } from './migration.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { advanceStatusDurations, STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { DOCUMENT_OPERATION_SCHEMA_VERSION } from '../documents/protocol.js';
+import { normalizeMovementBudget } from '../movement/model.js';
 
 export {
   DOCUMENT_BATCH_LIMIT,
@@ -81,6 +82,7 @@ const OPERATION_TYPES = new Set([
   'scene.activate',
   'scene.delete',
   'scene.content.replace',
+  'scene.settings.patch',
   'scene.featureState.patch',
   'scene.fog.explore',
   'scene.fog.reset',
@@ -100,7 +102,7 @@ const OPERATION_TYPES = new Set([
 
 const STATUS_TYPES = new Set([...OPERATION_TYPES].filter(type => type.startsWith('status.')));
 const GRANULAR_OPERATION_TYPES = new Set([
-  'token.move', 'token.reposition', 'token.movePath', 'scene.featureState.patch', 'scene.activate',
+  'token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch', 'scene.featureState.patch', 'scene.activate',
   'scene.fog.explore', 'scene.fog.hide', 'scene.fog.reset',
   'status.apply', 'status.remove', 'status.setStacks', 'status.batch',
   'status.definition.upsert', 'status.definition.delete', 'status.definition.import',
@@ -156,14 +158,14 @@ function mapById(items = []) {
 
 function worldFromState(state) {
   const world = state?.preferences?.worldV2;
-  if (!plainObject(world) || ![2, 3].includes(Number(world.schemaVersion))) {
+  if (!plainObject(world) || ![2, 3, 4].includes(Number(world.schemaVersion))) {
     fail('World operation requires initialized World V2', 'world_v2_required');
   }
   return world;
 }
 
 function cloneOperationInput(rawState, operations) {
-  const copyOnWriteTypes = new Set(['token.move', 'token.reposition', 'token.movePath', 'scene.featureState.patch', 'scene.activate']);
+  const copyOnWriteTypes = new Set(['token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch', 'scene.featureState.patch', 'scene.activate']);
   if (operations.some(operation => !copyOnWriteTypes.has(operation.type) && !STATUS_TYPES.has(operation.type))) return clone(rawState);
   const source = object(rawState, 'state');
   const preferences = { ...object(source.preferences, 'state.preferences') };
@@ -178,9 +180,10 @@ function cloneOperationInput(rawState, operations) {
   for (const operation of operations) {
     if (operation.type === 'scene.activate') continue;
     const sceneId = String(operation.payload?.sceneId || world.activeSceneId || '');
-    const entry = sceneChanges.get(sceneId) || { tokens: false, featureStates: false };
+    const entry = sceneChanges.get(sceneId) || { tokens: false, featureStates: false, settings: false };
     if (['token.move', 'token.reposition', 'token.movePath'].includes(operation.type)) entry.tokens = true;
     if (operation.type === 'scene.featureState.patch') entry.featureStates = true;
+    if (operation.type === 'scene.settings.patch') entry.settings = true;
     sceneChanges.set(sceneId, entry);
   }
   for (const [sceneId, changes] of sceneChanges) {
@@ -189,6 +192,7 @@ function cloneOperationInput(rawState, operations) {
     const scene = { ...world.scenes[index] };
     if (changes.tokens) scene.tokens = [...(scene.tokens || [])];
     if (changes.featureStates) scene.featureStates = { ...(scene.featureStates || {}) };
+    if (changes.settings) scene.settings = { ...(scene.settings || {}) };
     world.scenes[index] = scene;
   }
   if (operations.some(operation => STATUS_TYPES.has(operation.type))) {
@@ -310,7 +314,7 @@ function pruneCombatReferences(state) {
 function mergeRuntimeToken(canonical, runtime) {
   if (!runtime || String(runtime.id ?? '') !== String(canonical.id ?? '')) return clone(canonical);
   const next = clone(canonical);
-  for (const key of ['actorLink', 'actorDelta', 'diameterMeters', 'rotation', 'elevationFt', 'controllerUserIds', 'visibility', 'vision', 'locked', 'showName', 'effects']) {
+  for (const key of ['actorLink', 'actorDelta', 'diameterMeters', 'rotation', 'elevationMeters', 'movement', 'controllerUserIds', 'visibility', 'vision', 'locked', 'showName', 'effects']) {
     if (runtime[key] !== undefined) next[key] = clone(runtime[key]);
   }
   return next;
@@ -406,6 +410,10 @@ function projectGranularOperationState(state, operations) {
       if (Object.hasOwn(scene.featureStates || {}, featureId)) {
         state.preferences.featureStates[featureId] = clone(scene.featureStates[featureId]);
       } else delete state.preferences.featureStates[featureId];
+    }
+    if (operation.type === 'scene.settings.patch'
+      && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
+      state.preferences.gridVisible = scene.settings?.gridVisible !== false;
     }
   }
   delete state.preferences.featureInteractions;
@@ -664,30 +672,37 @@ function applyCanonicalOperation(state, operation, context = {}) {
       const waypoints = array(payload.waypoints, 'waypoints').map((point, index) => ({
         x: finite(point?.x, `waypoints[${index}].x`),
         y: finite(point?.y, `waypoints[${index}].y`),
+        ...(point?.elevationMeters === undefined ? {} : { elevationMeters: finite(point.elevationMeters, `waypoints[${index}].elevationMeters`) }),
       }));
       if (!waypoints.length || waypoints.length > 64) fail('token.movePath requires 1-64 waypoints', 'world_operation_limit');
       const expectedOrigins = plainObject(payload.expectedOrigins) ? payload.expectedOrigins : {};
       const leaderRecord = tokenById(scene, leaderId);
       if (leaderRecord.token.placement !== 'map') fail('Movement leader is not on the map', 'token_not_on_map');
-      const leaderOrigin = { x: Number(leaderRecord.token.x), y: Number(leaderRecord.token.y) };
+      const leaderOrigin = { x: Number(leaderRecord.token.x), y: Number(leaderRecord.token.y), elevationMeters: Number(leaderRecord.token.elevationMeters) || 0 };
       const motion = [];
       const records = tokenIds.map(tokenId => {
         const record = tokenById(scene, tokenId);
         const token = record.token;
         if (token.placement !== 'map') fail(`Token ${tokenId} is not on the map`, 'token_not_on_map');
-        const origin = { x: Number(token.x), y: Number(token.y) };
+        const origin = { x: Number(token.x), y: Number(token.y), elevationMeters: Number(token.elevationMeters) || 0 };
         const expected = expectedOrigins[tokenId];
         if (!plainObject(expected)
           || !Number.isFinite(expected.x) || !Number.isFinite(expected.y)
           || Math.abs(Number(expected.x) - origin.x) > 0.000001
-          || Math.abs(Number(expected.y) - origin.y) > 0.000001) {
+          || Math.abs(Number(expected.y) - origin.y) > 0.000001
+          || (expected.elevationMeters !== undefined
+            && Math.abs(Number(expected.elevationMeters) - origin.elevationMeters) > 0.000001)) {
           const error = new Error(`Token ${tokenId} moved since this route was planned`);
           error.code = 'entity_conflict';
           error.conflictIds = [tokenId];
           throw error;
         }
-        const offset = { x: origin.x - leaderOrigin.x, y: origin.y - leaderOrigin.y };
-        const route = waypoints.map(point => ({ x: point.x + offset.x, y: point.y + offset.y }));
+        const offset = { x: origin.x - leaderOrigin.x, y: origin.y - leaderOrigin.y, elevationMeters: origin.elevationMeters - leaderOrigin.elevationMeters };
+        const route = waypoints.map(point => ({
+          x: point.x + offset.x,
+          y: point.y + offset.y,
+          elevationMeters: (point.elevationMeters ?? leaderOrigin.elevationMeters) + offset.elevationMeters,
+        }));
         for (const [index, point] of route.entries()) {
           const width = Number(context.mapMetrics?.width);
           const height = Number(context.mapMetrics?.height);
@@ -698,17 +713,23 @@ function applyCanonicalOperation(state, operation, context = {}) {
         }
         const validation = context.validateTokenMovePath?.({
           state, world, scene, token, origin: clone(origin), waypoints: clone(route), method: payload.method,
+          movementMode: payload.movementMode, verticalAction: payload.verticalAction,
         });
         if (validation === false || validation?.valid === false) {
           fail(validation?.reason || `Token ${tokenId} route is not allowed`, validation?.code || 'path_blocked');
         }
-        return { ...record, tokenId, origin, route };
+        return { ...record, tokenId, origin, route, validation };
       });
       for (const record of records) {
         const destination = record.route.at(-1);
         scene.tokens[record.index] = {
           ...record.token,
-          placement: 'map', x: destination.x, y: destination.y, featureId: null,
+          placement: 'map', x: destination.x, y: destination.y,
+          elevationMeters: destination.elevationMeters,
+          ...(record.validation?.movementState || record.token.movement
+            ? { movement: clone(record.validation?.movementState || record.token.movement) }
+            : {}),
+          featureId: null,
         };
         updateTokenAnchors(scene, record.tokenId, destination);
         motion.push({
@@ -717,6 +738,8 @@ function applyCanonicalOperation(state, operation, context = {}) {
           waypoints: clone(record.route),
           to: clone(destination),
           method: payload.method === 'keyboard' ? 'keyboard' : 'drag',
+          movementMode: record.validation?.movementMode || payload.movementMode || 'walk',
+          costMeters: Number(record.validation?.costMeters) || 0,
         });
       }
       return { action: type, sceneId: String(scene.id), tokenId: leaderId, tokenIds, motion };
@@ -737,6 +760,7 @@ function applyCanonicalOperation(state, operation, context = {}) {
         next.placement = 'map';
         next.x = finite(payload.x, 'x');
         next.y = finite(payload.y, 'y');
+        if (payload.elevationMeters !== undefined) next.elevationMeters = finite(payload.elevationMeters, 'elevationMeters');
         next.featureId = null;
         if ((Number.isFinite(context.mapMetrics?.width) && (next.x < 0 || next.x > context.mapMetrics.width))
           || (Number.isFinite(context.mapMetrics?.height) && (next.y < 0 || next.y > context.mapMetrics.height))) {
@@ -744,11 +768,13 @@ function applyCanonicalOperation(state, operation, context = {}) {
         }
       }
       const validation = context.validateTokenMovePath?.({ state, world, scene, token,
-        origin: { x: token.x, y: token.y }, destination: next, operationType: type });
+        origin: { x: token.x, y: token.y, elevationMeters: token.elevationMeters }, destination: next, operationType: type,
+        movementMode: payload.movementMode, verticalAction: payload.verticalAction });
       if (validation === false || validation?.valid === false) {
         fail(validation?.reason || 'Movement is not allowed', validation?.code || 'path_blocked');
       }
       for (const operation of validation?.statusOperations || []) context.enqueueStatusOperation(operation);
+      if (validation?.movementState) next.movement = clone(validation.movementState);
       scene.tokens[index] = next;
       updateTokenAnchors(scene, String(token.id), validation?.anchorPoint || (next.placement === 'map' ? next : null));
       return { action: type, sceneId: String(scene.id), tokenId: String(token.id) };
@@ -831,6 +857,32 @@ function applyCanonicalOperation(state, operation, context = {}) {
     }
     if (payload.settings !== undefined) scene.settings = clone(object(payload.settings, 'settings'));
     return { action: type, sceneId: String(scene.id) };
+  }
+
+  if (type === 'scene.settings.patch') {
+    const scene = sceneById(world, payload.sceneId);
+    const patch = object(payload.patch, 'scene.settings.patch.patch');
+    const allowed = new Set([
+      'gridVisible', 'lineOfSightEnabled', 'movementBudgetMetersPerTurn',
+      'defaultDoorInteractionRangeMeters',
+    ]);
+    for (const key of Object.keys(patch)) {
+      if (!allowed.has(key)) fail(`Unsupported Scene setting: ${key}`, 'scene_setting_forbidden');
+    }
+    const next = { ...(plainObject(scene.settings) ? scene.settings : {}) };
+    if (Object.hasOwn(patch, 'gridVisible')) next.gridVisible = patch.gridVisible !== false;
+    if (Object.hasOwn(patch, 'lineOfSightEnabled')) next.lineOfSightEnabled = patch.lineOfSightEnabled === true;
+    if (Object.hasOwn(patch, 'movementBudgetMetersPerTurn')) {
+      try { next.movementBudgetMetersPerTurn = normalizeMovementBudget(patch.movementBudgetMetersPerTurn); }
+      catch (error) { fail(error.message, error.code); }
+    }
+    if (Object.hasOwn(patch, 'defaultDoorInteractionRangeMeters')) {
+      const range = finite(patch.defaultDoorInteractionRangeMeters, 'defaultDoorInteractionRangeMeters');
+      if (range < 0) fail('defaultDoorInteractionRangeMeters must be non-negative', 'scene_setting_invalid');
+      next.defaultDoorInteractionRangeMeters = range;
+    }
+    scene.settings = next;
+    return { action: type, sceneId: String(scene.id), settings: clone(next) };
   }
 
   if (type === 'scene.featureState.patch') {
@@ -1013,6 +1065,7 @@ function createOperationChangeSet(operations, results, beforeState, afterState) 
   const tokenIdsByScene = new Map();
   const featureIdsByScene = new Map();
   const fogSceneIds = new Set();
+  const changedSceneIds = new Set();
   const appendedIds = new Set();
   let chatCleared = false;
   let statusDefinitionsChanged = false;
@@ -1040,6 +1093,7 @@ function createOperationChangeSet(operations, results, beforeState, afterState) 
     else if (operation.type === 'token.movePath') {
       for (const tokenId of payload.tokenIds || []) addToken(payload.sceneId, tokenId);
     }
+    else if (operation.type === 'scene.settings.patch') changedSceneIds.add(String(payload.sceneId || activeSceneId));
     else if (operation.type === 'scene.featureState.patch') {
       const sceneId = String(payload.sceneId || activeSceneId);
       if (!featureIdsByScene.has(sceneId)) featureIdsByScene.set(sceneId, new Set());
@@ -1054,7 +1108,7 @@ function createOperationChangeSet(operations, results, beforeState, afterState) 
   return {
     actors: { upsertIds: [...actorIds], removeIds: [] },
     tokens: [...tokenIdsByScene].map(([sceneId, ids]) => ({ sceneId, upsertIds: [...ids], removeIds: [] })),
-    scenes: { upsertIds: [], removeIds: [], activeSceneChanged },
+    scenes: { upsertIds: [...changedSceneIds], removeIds: [], activeSceneChanged },
     featureStates: [...featureIdsByScene].map(([sceneId, ids]) => ({ sceneId, featureIds: [...ids] })),
     fog: [...fogSceneIds].map(sceneId => ({ sceneId, dirtyBounds: null })),
     combatChanged: false,

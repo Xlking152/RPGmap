@@ -32,7 +32,7 @@ function token(id, effects) {
     id, actorId: 'npc-a', actorLink: false,
     actorDelta: { system: { secretHp: id === 'npc-1' ? 7 : 3 }, effects },
     placement: 'map', x: 10, y: 10, featureId: null, texture: { src: null }, color: '#334455',
-    diameterMeters: 1, rotation: 0, elevationFt: 0, locked: false, showName: true, effects: [],
+    diameterMeters: 1, rotation: 0, elevationMeters: 0, locked: false, showName: true, effects: [],
     controllerUserIds: [], visibility: { mode: 'users', userIds: ['viewer'] },
     vision: { enabled: false, preciseRangeOverrideMeters: null, vagueRangeOverrideMeters: null, overrideUserIds: [] },
   };
@@ -51,7 +51,7 @@ function state() {
     preferences: {
       worldV2: {
         schemaVersion: 3, id: 'world-a', name: 'World', activeSceneId: 'scene-a',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         actors, statusDefinitions: [publicDefinition, privateDefinition],
         scenes: [{
           id: 'scene-a', name: 'Scene', mapPackage: { id: 'minimal-reference', version: '1.0.0' },

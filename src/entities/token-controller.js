@@ -5,7 +5,7 @@ import { nextTokenInstanceName } from '../token/naming.js';
 import {
   normalizeTokenRotation,
   setTokenDiameterMeters,
-  setTokenElevationFt,
+  setTokenElevationMeters,
   setTokenHidden,
   setTokenRotation,
 } from '../token/properties.js';
@@ -304,6 +304,24 @@ export function createEntityTokenController({
     }
   }
 
+  async function changeSceneSettings(patch) {
+    const sceneId = api.world.get().activeSceneId;
+    if (!canManageStructure()) return null;
+    try {
+      await api.world.performOperations([{ type: 'scene.settings.patch', payload: { sceneId, patch } }], {
+        source: 'entities:scene.settings', kind: 'scene',
+      });
+      setStatus('Scene 设置已保存');
+      renderPanel();
+      renderSheet();
+      return api.world.getActiveScene?.() || null;
+    } catch (error) {
+      setStatus(`Scene 设置保存失败：${error?.message || error}`);
+      renderSheet();
+      return null;
+    }
+  }
+
   async function editElevation(tokenId) {
     const target = id(tokenId);
     const token = api.tokens.get(target);
@@ -312,20 +330,20 @@ export function createEntityTokenController({
       setStatus('当前无法修改该 Token 高度：需要该 Actor 的 OWNER 权限，并遵守战斗回合限制');
       return true;
     }
-    const value = promptWith(documentNode, 'Token 高度（ft）：', String(Number(token.elevationFt) || 0));
+    const value = promptWith(documentNode, 'Token 高度（m）：', String(Number(token.elevationMeters) || 0));
     if (value === null) return true;
     try {
-      const updated = await setTokenElevationFt(api, target, value);
+      const updated = await setTokenElevationMeters(api, target, value);
       api.emit?.('elevation:token-change', {
-        tokenId: updated.id, elevationFt: updated.elevationFt,
+        tokenId: updated.id, elevationMeters: updated.elevationMeters,
       });
       api.emit?.('token:property-change', {
         id: updated.id, tokenId: updated.id, actorId: updated.actorId,
-        property: 'elevationFt', token: updated, source: 'entity-editor',
+        property: 'elevationMeters', token: updated, source: 'entity-editor',
       });
       renderPanel();
       renderSheet();
-      setStatus(`${resolvedActorName(api, target)} 高度已设为 ${updated.elevationFt} ft`);
+      setStatus(`${resolvedActorName(api, target)} 高度已设为 ${updated.elevationMeters} m`);
     } catch (error) {
       console.error('[RPGmap Entity Token Controller] elevation failed', error);
       setStatus(`Token 高度更新失败：${error?.message || error}`);
@@ -395,14 +413,19 @@ export function createEntityTokenController({
       const rotation = normalizeTokenRotation(token.rotation);
       const scene = api.world.getActiveScene?.() || {};
       const tokenName = String(token.name || resolvedActorName(api, token.id));
+      const movementMode = api.movement?.getPreferredMode?.(token.id) || token.movement?.mode || 'walk';
+      const movementCapabilities = token.movement?.capabilities || {};
+      const movementBudget = scene.settings?.movementBudgetMetersPerTurn;
       const basic = `<div class="token-config-grid">
         <label>实例名称 <input data-token-name data-token-id="${escapeHtml(token.id)}" maxlength="80" value="${escapeHtml(tokenName)}" ${structureAllowed ? '' : 'disabled'}></label>
         <label>数据模式 <select data-token-link data-token-id="${escapeHtml(token.id)}" ${structureAllowed && actor.type === 'pc' ? '' : 'disabled'}><option value="linked" ${token.actorLink !== false ? 'selected' : ''}>Linked</option><option value="unlinked" ${token.actorLink === false ? 'selected' : ''}>Unlinked</option></select></label>
         <label>Scene <input value="${escapeHtml(scene.name || scene.id || '')}" disabled></label>
         <label>坐标 <input value="${escapeHtml(positionLabel(token))}" disabled></label>
-        <label>高度 <button type="button" class="small-button" data-sheet-action="edit-token-elevation" data-token-id="${escapeHtml(token.id)}" ${elevationAllowed ? '' : 'disabled'}>${Number(token.elevationFt) || 0} ft</button></label>
+        <label>高度 <button type="button" class="small-button" data-sheet-action="edit-token-elevation" data-token-id="${escapeHtml(token.id)}" ${elevationAllowed ? '' : 'disabled'}>${Number(token.elevationMeters) || 0} m</button></label>
         <label>直径 <select data-token-diameter data-token-id="${escapeHtml(token.id)}" ${structureAllowed ? '' : 'disabled'}>${TOKEN_DIAMETERS_METERS.map(value => `<option value="${value}" ${Number(value) === diameter ? 'selected' : ''}>${value} m</option>`).join('')}</select></label>
         <label>旋转 <input type="number" min="0" max="359" step="15" value="${rotation}" data-token-rotation data-token-id="${escapeHtml(token.id)}" ${structureAllowed ? '' : 'disabled'}></label>
+        <label>移动方式 <select data-token-movement-mode data-token-id="${escapeHtml(token.id)}"><option value="walk" ${movementMode === 'walk' ? 'selected' : ''}>步行</option><option value="swim" ${movementMode === 'swim' ? 'selected' : ''}>游泳</option><option value="waterWalk" ${movementMode === 'waterWalk' ? 'selected' : ''}>水上行走</option><option value="fly" ${movementMode === 'fly' ? 'selected' : ''}>飞行</option></select></label>
+        <label>回合移动预算 <input value="${movementBudget == null ? '不限' : `${movementBudget} m`}" disabled></label>
       </div>`;
       const vision = visionAllowed ? `<div class="token-config-grid">
         <label class="token-config-check"><input type="checkbox" data-token-vision-enabled data-token-id="${escapeHtml(token.id)}" ${token.vision?.enabled === false ? '' : 'checked'} ${structureAllowed ? '' : 'disabled'}> 启用视野</label>
@@ -419,6 +442,13 @@ export function createEntityTokenController({
         ${fieldFeedback(token.id, 'permissions')}
       </div>`;
       const advanced = `<div class="token-config-advanced">
+        <fieldset class="token-config-grid"><legend>移动能力</legend>
+          ${[['walk','步行'],['swim','游泳'],['waterWalk','水上行走'],['fly','飞行']].map(([capability,label]) => `<label class="token-config-check"><input type="checkbox" data-token-movement-capability="${capability}" data-token-id="${escapeHtml(token.id)}" ${movementCapabilities[capability] === true || (movementCapabilities[capability] == null && ['walk','swim'].includes(capability)) ? 'checked' : ''} ${structureAllowed ? '' : 'disabled'}> ${label}</label>`).join('')}
+        </fieldset>
+        ${structureAllowed ? `<fieldset class="token-config-grid"><legend>Scene 空间规则</legend>
+          <label>每回合移动预算（m）<input type="number" min="0" step="1" data-scene-movement-budget value="${movementBudget ?? ''}" placeholder="留空表示不限"></label>
+          <label class="token-config-check"><input type="checkbox" data-scene-los-enabled ${scene.settings?.lineOfSightEnabled === true ? 'checked' : ''}> 启用视线遮挡</label>
+        </fieldset>` : ''}
         ${structureAllowed ? `<button type="button" class="small-button" data-sheet-action="reposition-token" data-token-id="${escapeHtml(token.id)}">重新放置</button>` : ''}
         <details><summary>实例覆盖</summary><pre>${escapeHtml(JSON.stringify(token.actorDelta || {}, null, 2))}</pre></details>
         <details><summary>调试信息</summary><code>${escapeHtml(token.id)}</code></details>
@@ -451,6 +481,39 @@ export function createEntityTokenController({
   }
 
   async function handleChange(target) {
+    if (target?.matches?.('[data-scene-movement-budget]')) {
+      await changeSceneSettings({ movementBudgetMetersPerTurn: target.value === '' ? null : Number(target.value) });
+      return true;
+    }
+    if (target?.matches?.('[data-scene-los-enabled]')) {
+      await changeSceneSettings({ lineOfSightEnabled: target.checked });
+      return true;
+    }
+    if (target?.matches?.('[data-token-movement-mode]')) {
+      api.movement?.setPreferredMode?.(target.dataset.tokenId, target.value);
+      setStatus(`移动方式已切换为 ${target.selectedOptions?.[0]?.textContent || target.value}`);
+      return true;
+    }
+    if (target?.matches?.('[data-token-movement-capability]')) {
+      const token = api.tokens.get(target.dataset.tokenId);
+      if (!token || !canManageStructure()) return true;
+      const capability = String(target.dataset.tokenMovementCapability || '');
+      try {
+        await api.tokens.update(token.id, {
+          movement: {
+            ...(token.movement || {}),
+            capabilities: { ...(token.movement?.capabilities || {}), [capability]: target.checked },
+          },
+        });
+        setStatus('移动能力已保存');
+        renderPanel();
+        renderSheet();
+      } catch (error) {
+        setStatus(`移动能力保存失败：${error?.message || error}`);
+        renderSheet();
+      }
+      return true;
+    }
     if (target?.matches?.('[data-token-name]')) {
       const tokenId = target.dataset.tokenId;
       const name = String(target.value || '').trim().slice(0, 80) || null;

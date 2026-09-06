@@ -55,7 +55,7 @@ function token({ id, actorId, actorLink = true, x = 10, y = 10, controllerUserId
     featureId: null,
     diameterMeters: 1,
     rotation: 0,
-    elevationFt: 0,
+    elevationMeters: 0,
     controllerUserIds,
     ...(visibility ? { visibility } : {}),
     vision: { enabled: true, rangeOverrideMeters: null, overrideUserIds: [] },
@@ -70,7 +70,7 @@ function state({ actors, tokens, markers = [] } = {}) {
     schemaVersion: 3,
     id: 'world-test',
     name: 'Test World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     activeSceneId: 'scene-a',
     actors,
     statusDefinitions: [],
@@ -126,7 +126,7 @@ test('World schema 2 migration is idempotent and preserves linkage and extension
       worldV2: {
         schemaVersion: 2,
         id: 'legacy-world',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         activeSceneId: 'scene-a',
         actors: [{ id: 'actor-a', name: 'Legacy', system: {}, customActorField: { retained: true } }],
         statusDefinitions: [],
@@ -142,7 +142,7 @@ test('World schema 2 migration is idempotent and preserves linkage and extension
   const first = migrateWorldSchema3State(original);
   const world = first.state.preferences.worldV2;
   assert.equal(first.migrated, true);
-  assert.equal(world.schemaVersion, 3);
+  assert.equal(world.schemaVersion, 4);
   assert.equal(world.actors[0].type, 'pc');
   assert.equal(world.actors[0].partyId, 'party-default');
   assert.deepEqual(world.actors[0].customActorField, { retained: true });
