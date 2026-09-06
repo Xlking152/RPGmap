@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.4.0
+
+- 将持久化升级到 World schema `4`、operation schema `4`、Access schema `4`，Infinite Horror Ruleset 升至 `1.1.0`，Lanzhou MapPackage 升至 `1.1.0`；旧 WAL 先按原语义重放，再以包含 World、Access、WAL 和内容依赖的事务备份执行升级，已知英尺字段严格乘 `0.3048`。
+- 普通离线与 LAN 写入统一为 Audience-safe Document changes；客户端按地址增量更新 Collection，Fog 携带局部失效边界，字段草稿与并发冲突不再被整页重绘或服务器值静默覆盖。
+- 增加不可变图片/正文存储、GM 模板资料库、带依赖 ZIP 与安全 Markdown Journal。浏览器离线使用 IndexedDB，LAN 使用重新鉴权的 HTTP 内容读取；图片二进制和私有正文不进入 WebSocket 投影。
+- 增加步行、游泳、水上行走、飞行、起飞/降落、困难地形成本与可选回合移动预算。服务端对能力、三维路径、高度边界、重叠障碍和整组移动进行一次原子验证，失败不会移动或重复扣除预算。
+- 增加球形精确/模糊感知、有限高度 LOS、静态/Token 光源及 GM/Scene LOS 覆盖。兰州只为可靠的墙、门和院墙声明遮挡，不把普通碰撞体推断为无限高墙。
+- 增加 Ruleset 结算解释、授权门交互和 Journal Audience 裁剪。门操作校验控制权、目标可见性、锁、默认 2 米三维距离及排除门自身后的 LOS。
+- 构建保持 World Manager 首屏轻量，地图 Runtime、Leaflet、角色卡、状态编辑器、资料库和 Journal 按需加载；正式候选继续受全量测试、bundle、包清单、Windows smoke 与真实 Radmin 验收约束。
+
 ## v2.3.4
 
 - 怪物与 NPC 模板库改为稳定的单列布局：长名称最多显示两行，操作按钮移到名称下方并允许换行，避免窄侧栏中名称被挤成竖排。

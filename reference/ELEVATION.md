@@ -1,160 +1,113 @@
-# RPGmap Elevation / Height Blocking
+# RPGmap 米制高度与空间移动
 
-V1.5 的高度系统采用轻量 **2.5D Movement** 模型：地图仍然是二维平面，但 Navigation 在判断 Feature 障碍时会读取当前移动 Token 的离地高度。
+v2.4.0 使用轻量三维空间模型。地图水平坐标仍由 MapPackage 定义，并通过 `metersPerUnit` 换算；Token、障碍、感知、光源和路径点的垂直坐标统一使用米。
 
 ## 数据语义
 
-Token 保存：
+Token 保存离地高度：
 
 ```js
 token: {
-  elevationFt: 30
+  elevationMeters: 3.6576
 }
 ```
 
-`elevationFt` 表示 Token 当前离地高度，不表示角色身体身高。
+`elevationMeters` 表示 Token 当前离地高度，不表示角色身体高度。旧存档中的 `elevationFt` 仅在 World 3 → 4 迁移入口按 `feet * 0.3048` 转换，迁移后拒绝旧字段，重复加载不会再次换算。
 
-Feature 的 MapPackage Capability 保存默认阻挡顶部高度：
+Feature 的 MapPackage capability 可以声明阻挡顶部高度：
 
 ```js
 capabilities: {
   navigation: {
     blocks: true,
-    blockingHeightFt: 20
+    blockingHeightMeters: 6.096
+  },
+  vision: {
+    occluder: true,
+    blockingHeightMeters: 6.096
   }
 }
 ```
 
-GM 在运行中的修改不回写 MapPackage，而进入 Feature State：
+GM 的运行时覆盖属于当前 Scene 的 Feature State：
 
 ```js
-preferences.featureStates[featureId].custom.blockingHeightFt
+scene.featureStates[featureId].custom.blockingHeightMeters
 ```
 
-读取优先级：
+读取顺序为 Scene Feature State 覆盖、MapPackage 默认值、未声明高度的兼容无限阻挡。Feature State 不回写 MapPackage，也不进入全局 preferences。
+
+## 高度边界
+
+阻挡采用严格边界：
 
 ```text
-World Feature State override
-        ↓ 没有
-MapPackage blockingHeightFt
-        ↓ 没有
-legacy infinite-height blocking
+elevationMeters > blockingHeightMeters  → 可以越过该来源的阻挡
+elevationMeters <= blockingHeightMeters → 仍被该来源阻挡
 ```
 
-## 通行规则
+打开的门或声明 `passableWhenDestroyed` 且已经整毁的 Feature 会移除自身对应限制，但不会清除重叠建筑、边界、水域或其他 Feature 的阻挡。
 
-严格使用：
+路径段会在起点和终点之间插值高度并检查整个线段。飞行中的上升、下降和水平移动由同一个权威路径验证处理；最终点位仍必须满足对应移动方式的安全占位条件。
 
-```text
-elevationFt > blockingHeightFt  → 忽略该 Feature 的阻挡
+## 移动方式与成本
 
-elevationFt <= blockingHeightFt → 该 Feature 正常阻挡
-```
+支持四种移动方式：
 
-因此 20 ft 的 Token 面对 20 ft 障碍仍然被挡；21 ft 才能越过。
+- `walk`：普通地面 1 倍，困难地形 2 倍。
+- `swim`：天然水域和积水可以通行；没有专用游泳速度时成本 2 倍。
+- `waterWalk`：在水面通行，不获得穿越其他障碍的能力。
+- `fly`：允许三维路径并忽略地面及水域倍率，但仍受飞行能力、边界和合法降落点限制。
 
-Open / Destroyed 的既有规则优先保留：已经打开的可通行门、已经摧毁且声明 `passableWhenDestroyed` 的 Feature 不需要再通过高度判断。
+适用倍率相乘。移动预算未配置时不限；配置后以每回合米数计算。服务端验证能力来源、控制权、Combat 回合、移动预算和整组路径，并把位置与消耗作为一个原子 operation 提交。重试不会重复扣除预算。
 
-## 阻挡与通道几何
+移动 capability 必须来自 Ruleset 或 GM 授权。普通状态编辑、Synthetic Delta 和客户端 payload 不能自行授予游泳、水上行走或飞行。移动途中失去必要能力时保留当前位置并标记为待 GM 裁决，不进行未经规则支持的自动坠落或伤害结算。
 
-Navigation 允许 MapPackage 分离视觉几何与通行几何：
+## 水域、桥梁与弹坑
 
-```text
-blockingPolygon  → Feature 关闭/阻挡状态下真正栅格化的障碍区域
-passagePolygon   → Feature 打开/摧毁后恢复的通行区域
-```
+天然水域和积水使用同一水面规则。充水弹坑按水域处理，残余干坑按地形/障碍数据处理。完整桥面只消除桥面自身对应的水域限制；破损桥和重叠障碍仍分别求值。
 
-未声明 `blockingPolygon` 时继续使用 Feature 自身 geometry，保证普通建筑、墙体和旧地图兼容。
+## Navigation 与 Runtime
 
-这一分离用于解决兰州城门的实际门洞问题：部分城墙预留门洞宽于城门楼视觉矩形，直接用视觉矩形阻挡会让旧的粗网格路线从两侧漏过。兰州 Reference Map 在自己的 Capability 转换中声明跨门洞的 `blockingPolygon`；Core 只读取通用 Navigation 字段，不包含城门或兰州专属判断。
-
-## Runtime Adapter
-
-V1.5 仍保留历史 `engine/app.js` 的 Navigation 调用方式。`src/elevation/runtime-context.js` 作为兼容适配层，向 Navigation 提供当前 mover context 与 App State；新代码/测试也可以直接向 `createNavigationGrid(..., options)` 传入：
+`createNavigationGrid(..., options)` 和权威移动入口接收明确的 mover context，例如：
 
 ```js
 {
   appState,
+  scene,
   moverContext: {
-    characterId,
-    elevationFt
+    tokenId,
+    elevationMeters,
+    movementMode,
+    capabilities,
+    remainingBudgetMeters
   }
 }
 ```
 
-旧 Movement/App 可以缓存 Navigation facade，但 facade 的 `grid` 会在 mover 高度或 Feature State 改变后重新解析，避免从一个 Token 切换到另一个 Token 时复用错误的障碍网格。
+导航使用 1 米稀疏分块场和有界 supercover 线段检查。玩家通过 Ctrl/Cmd 添加手动路径点；客户端预览和服务端提交复用同一空间语义，但服务端始终重新读取权威 Scene、Token、Ruleset capability 和 MapPackage 数据。
 
-V1.5 还保留一个很小的 Character Placement compatibility guard：旧 App 的“放置角色”按钮使用私有 `setTool()`，因此进入放置模式时主动把 mover context 重置到 `0 ft`，防止新地面 Token 继承上一个飞行 Token 的越障能力。
+未知 MapPackage 只保留明确的 bounds-only 兼容；这不等于其自定义碰撞、桥梁或水域语义已被安全支持。
 
-未来 App/Scene 拆分后应把 mover context 作为显式参数一路传递，并删除这些兼容型 Runtime Adapter。
+## 感知、LOS 与光源
 
-## Token UI
+观察者与目标使用三维距离。地面 Fog 的实时范围由感知球与地面的截面得到，空中目标单独按球形距离判断。
 
-- Token 顶部固定显示 `elevationFt`，单位 `ft`，包括 `0 ft`。
-- Token 下侧显示 HP bar；HP 读取 Actor 的通用 `hp` Resource。
-- 右键 Token 打开紧凑 Elevation HUD，可直接输入或使用 `-5 / +5`。
-- 本地模式可直接编辑；多人模式继续服从现有 Actor OWNER 与 Combat Turn Lock。
+Scene 默认 LOS 可以关闭；玩家覆盖优先于 Scene 默认。兰州 MapPackage 仅为有可靠数据的城墙、城门、州衙院墙和门洞声明有限高度遮挡，不把所有导航碰撞体自动视为视觉墙。
 
-Token 高度保存在 `preferences.entitySystem.tokens`，因此沿用现有 Entity Save / Multiplayer ownership 链路，不创建第二份 Token 状态。
+静态和 Token 光源使用米制位置、离地高度和三维范围，并按观察者的遮挡模式计算亮度。地面探索继续写入按 Scene 和队伍共享的 5 米网格，同时受当前 LOS 限制。
 
-## Feature Inspector
+完整运动轨迹只有在该 Audience 全程可证明精确可见时才会下发；否则只投影允许公开的最终变化，不能从动画路径反推出隐藏位置。
 
-所有声明 `navigation.blocks = true` 的 Feature 都可以在通用 Inspector 中看到“高度阻挡”。该 UI 不判断 `building / wall / gate` 类别。
+## UI 与权限
 
-- 显示 MapPackage 默认高度与当前有效高度。
-- `-5 / +5` 或输入数值修改 World override。
-- “恢复地图默认”删除 override。
-- 连接模式下当前仅 GM 可以编辑 World 级 Feature 高度。
+- Token 高度显示单位为 `m`，包括 `0 m`。
+- `Shift + 右键`打开快速高度 HUD；实例配置页也可编辑高度。
+- Feature Inspector 显示地图默认阻挡高度和当前 Scene 覆盖；恢复默认会删除覆盖字段。
+- 离线与 LAN 使用同一 Document intent。玩家编辑必须同时满足 Token 控制、Ruleset capability、Combat 和服务器权限校验。
 
-兰州 Reference Map 当前默认：
+## 当前边界
 
-```text
-普通建筑      20 ft
-城墙          30 ft
-可开关城门    30 ft
-```
+v2.4.0 不实现多楼层 Navigation Surface、地下层、桥上/桥下双层拓扑、Token 三维身体体积、门洞净高、攀爬、坠落伤害、水深或投射物完整弹道。这些能力必须扩展现有米制空间内核，不能另建平行坐标或导航系统。
 
-Minimal Reference Map 也提供不同高度的示例 Feature，用于证明 Core 不依赖兰州类别。
-
-## 路径规划验证
-
-V1.6.3 使用 1m 稀疏分块导航场和有界整数 supercover 直线检测，不会建立自动绕行路径：
-
-1. 通用全宽障碍关闭时，`findDirectNavigationPath()` 必须返回 `null`。
-2. 同一障碍传入 `calculateWaypointRoute()` 时必须返回 `valid: false`，并标出首个阻挡格。
-3. 打开同一 Feature 后直线必须恢复。
-4. 角色高度严格超过障碍高度后直线必须恢复。
-5. 兰州北/东/南/西四座真实城门分别验证：关闭时直线受阻，打开后恢复通行。
-6. 历史浮点 DDA 卡死坐标、长对角线和角点穿越均在 Worker 的硬时限内返回。
-
-因此“Feature State → 1m Navigation Field → bounded direct check → Movement waypoint planner”的阻挡链路有直接回归覆盖；受阻时由玩家用 Ctrl/Cmd 添加可通行的直线拐点。
-
-## 独立性边界
-
-Runtime 不读取 `reference/`；CI 会在打包后删除整个 `reference/` 再启动 Linux Runtime，并对 Windows 包执行同样的 no-reference BAT smoke。
-
-源码仓库中允许且只允许三个显式兰州适配入口：
-
-```text
-src/map-package/default-map.js          build-time 默认地图打包入口
-src/maps/lanzhou.js                     历史 import compatibility shim
-src/maps/presentation-cleanup.js        历史 presentation compatibility shim
-```
-
-自动测试扫描 `src/`，防止新增其他兰州 Reference import；同时扫描 `engine / movement / interaction / elevation`，禁止兰州地图 ID 和城门 ID 进入通用 Core。
-
-这表示 V1.5 达成的是 **Runtime 独立 + Core 规则独立**，而不是为了形式上的“零源码引用”删除仍需兼容旧调用的薄适配器。后续完成 AppCore/Scene 重构时再逐步删除 compatibility shim。
-
-## V1.5 边界
-
-本版高度只影响 **Feature Navigation obstacle**。水体、弹坑、洪水仍按原二维规则处理。以下内容统一保留到未来计划：
-
-- 地形/地面海拔与相对高度换算；
-- 多楼层 / 楼层切换；
-- 桥上 / 桥下双层通行；
-- 上升、下降与飞行移动消耗；
-- 坠落与坠落伤害；
-- Vision / LOS 观察高度；
-- 远程攻击、投射物越障高度；
-- Token 身体高度、体积与姿态；
-- 水体 / 弹坑 / 洪水的垂直语义。
+Runtime 不读取 `reference/`；发布包只包含编译后的 Map Runtime。源码参考文档用于说明 Contract 和维护边界，不是生产数据源。
