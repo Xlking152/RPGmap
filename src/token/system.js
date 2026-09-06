@@ -76,6 +76,20 @@ export function createTokenRuntimeSystem() {
           }
           return api.tokens.get(tokenId);
         },
+        async reposition(tokenId, point = {}) {
+          const status = api.multiplayer?.getStatus?.();
+          const role = status?.session?.role || status?.role || 'offline';
+          if (!['gm', 'offline'].includes(role)) {
+            const error = new Error('Only the GM can reposition Tokens');
+            error.code = 'token_reposition_gm_only';
+            throw error;
+          }
+          const world = api.world.get();
+          if (!await perform({ type: 'token.reposition', payload: {
+            sceneId: world.activeSceneId, tokenId: String(tokenId), placement: 'map', x: point.x, y: point.y,
+          } }, { source: 'token:reposition' })) throw new Error('Reposition requires World operations');
+          return api.tokens.get(tokenId);
+        },
         async placeInFeature(tokenId, featureId) {
           const world = api.world.get();
           const prepared = placeSceneTokenInFeature(world, tokenId, featureId, { ruleset: api.ruleset });

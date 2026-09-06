@@ -506,6 +506,10 @@ test('LAN validates closed gates and rolls back an entire group when one route h
     scene.tokens[0].x = 3364;
     scene.tokens[1].x = 3420;
     for (const token of scene.tokens) token.y = 1470;
+    const inactive = structuredClone(scene);
+    inactive.id = 'scene-inactive';
+    inactive.tokens[0].actorId = 'actor-b';
+    state.preferences.worldV2.scenes.push(inactive);
     state.mapId = BUILT_IN_LANZHOU_MAP.id;
     const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
     gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' }));
@@ -525,16 +529,27 @@ test('LAN validates closed gates and rolls back an entire group when one route h
         },
       }],
     });
-    const reject = async message => {
+    const reject = async (message, code = 'path_blocked') => {
       const pending = waitForMessage(player.ws, reply => reply.type === 'world.operation.denied' && reply.operationId === message.operationId);
       player.ws.send(JSON.stringify(message));
       const denied = await pending;
-      assert.equal(denied.code, 'path_blocked');
+      assert.equal(denied.code, code);
       assert.equal(denied.revision, message.baseRevision);
       assert.equal(denied.state, undefined);
       assert.equal(denied.world, undefined);
     };
     await reject(move('closed-gate-route', 1));
+    const direct = { type: 'token.move', payload: { sceneId: scene.id, tokenId: 'token-a', placement: 'map', x: 3364, y: 1630 } };
+    await reject({ type: 'world.operation', operationId: 'closed-gate-legacy', baseRevision: 1, operations: [direct] });
+    await reject({ type: 'world.operation', operationId: 'forged-reposition', baseRevision: 1,
+      operations: [{ ...direct, type: 'token.reposition' }] }, 'token_reposition_gm_only');
+    await reject({ type: 'world.operation', operationId: 'cross-scene-move', baseRevision: 1,
+      operations: [{ ...direct, payload: { ...direct.payload, sceneId: inactive.id } }] }, 'scene_not_active');
+    const inactivePath = move('cross-scene-path', 1);
+    inactivePath.operations[0].payload.sceneId = inactive.id;
+    await reject(inactivePath, 'scene_not_active');
+    await reject({ type: 'world.operation', operationId: 'forged-feature-entry', baseRevision: 1,
+      operations: [{ type: 'token.move', payload: { sceneId: scene.id, tokenId: 'token-a', placement: 'feature', featureId: 'gate-north' } }] }, 'feature_transition_forbidden');
     await sendWorldOperationsAndWait(gm.ws, {
       type: 'world.operation', operationId: 'open-navigation-gate', baseRevision: 1,
       operations: [{ type: 'scene.featureState.patch', payload: { sceneId: scene.id, featureId: 'gate-north', patch: { open: true } } }],
@@ -549,6 +564,16 @@ test('LAN validates closed gates and rolls back an entire group when one route h
     assert.deepEqual(final.state.preferences.worldV2.scenes[0].tokens.map(token => [token.x, token.y]), [[3364, 1630], [3420, 1470]]);
     const wal = await waitForWalRecord(path.join(runtime.mapDir, 'world.operations.ndjson'), record => record.revision === 3);
     assert.equal(wal.operationId, 'open-gate-route');
+    const rooted = { type: 'status.apply', payload: { scope: 'token', targetId: 'token-a', statusId: 'status-rooted' } };
+    await reject({ type: 'world.operation', operationId: 'root-and-move', baseRevision: 3,
+      operations: [rooted, { ...direct, payload: { ...direct.payload, y: 1650 } }] }, 'status_movement_forbidden');
+    assert.equal((await requestWorldSnapshot(gm.ws)).state.preferences.worldV2.scenes[0].tokens[0].effects.length, 0);
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'gm-relocate', baseRevision: 3,
+      operations: [{ ...direct, type: 'token.reposition', payload: { ...direct.payload, y: 1470 } }] });
+    const restored = await requestWorldSnapshot(gm.ws);
+    assert.equal(restored.revision, 4);
+    assert.equal(restored.state.preferences.worldV2.scenes[0].tokens[0].y, 1470);
+    assert.deepEqual(restored.state.preferences.worldV2.scenes[1].tokens, unchanged.state.preferences.worldV2.scenes[1].tokens);
   } finally {
     gm?.ws.close(); player?.ws.close();
     await stopServer(runtime);

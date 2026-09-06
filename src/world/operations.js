@@ -69,6 +69,7 @@ const OPERATION_TYPES = new Set([
   'token.create',
   'token.upsert',
   'token.move',
+  'token.reposition',
   'token.movePath',
   'token.actorDelta.replace',
   'token.delete',
@@ -99,7 +100,7 @@ const OPERATION_TYPES = new Set([
 
 const STATUS_TYPES = new Set([...OPERATION_TYPES].filter(type => type.startsWith('status.')));
 const GRANULAR_OPERATION_TYPES = new Set([
-  'token.move', 'token.movePath', 'scene.featureState.patch', 'scene.activate',
+  'token.move', 'token.reposition', 'token.movePath', 'scene.featureState.patch', 'scene.activate',
   'scene.fog.explore', 'scene.fog.hide', 'scene.fog.reset',
   'status.apply', 'status.remove', 'status.setStacks', 'status.batch',
   'status.definition.upsert', 'status.definition.delete', 'status.definition.import',
@@ -162,7 +163,7 @@ function worldFromState(state) {
 }
 
 function cloneOperationInput(rawState, operations) {
-  const copyOnWriteTypes = new Set(['token.move', 'token.movePath', 'scene.featureState.patch', 'scene.activate']);
+  const copyOnWriteTypes = new Set(['token.move', 'token.reposition', 'token.movePath', 'scene.featureState.patch', 'scene.activate']);
   if (operations.some(operation => !copyOnWriteTypes.has(operation.type) && !STATUS_TYPES.has(operation.type))) return clone(rawState);
   const source = object(rawState, 'state');
   const preferences = { ...object(source.preferences, 'state.preferences') };
@@ -178,7 +179,7 @@ function cloneOperationInput(rawState, operations) {
     if (operation.type === 'scene.activate') continue;
     const sceneId = String(operation.payload?.sceneId || world.activeSceneId || '');
     const entry = sceneChanges.get(sceneId) || { tokens: false, featureStates: false };
-    if (operation.type === 'token.move' || operation.type === 'token.movePath') entry.tokens = true;
+    if (['token.move', 'token.reposition', 'token.movePath'].includes(operation.type)) entry.tokens = true;
     if (operation.type === 'scene.featureState.patch') entry.featureStates = true;
     sceneChanges.set(sceneId, entry);
   }
@@ -270,6 +271,12 @@ function normalizeMarker(raw) {
   finite(source.x, 'marker.x');
   finite(source.y, 'marker.y');
   return normalizeLightweightMarker(source);
+}
+
+function updateTokenAnchors(scene, tokenId, point) {
+  if (!point || !scene.attackAreas?.some(area => area?.anchor?.type === 'token' && String(area.anchor.tokenId) === tokenId)) return;
+  scene.attackAreas = scene.attackAreas.map(area => area?.anchor?.type === 'token' && String(area.anchor.tokenId) === tokenId
+    ? { ...area, origin: { x: point.x, y: point.y }, anchor: { type: 'token', tokenId } } : area);
 }
 
 function detachTokenAnchors(scene, token) {
@@ -376,10 +383,11 @@ function projectGranularOperationState(state, operations) {
   }
   for (const operation of operations) {
     const payload = operation.payload || {};
-    if (operation.type === 'token.move' && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
+    if (['token.move', 'token.reposition'].includes(operation.type) && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
       const token = scene.tokens?.find(item => String(item?.id ?? '') === String(payload.tokenId ?? ''));
       const index = entity.tokens?.findIndex(item => String(item?.id ?? '') === String(payload.tokenId ?? '')) ?? -1;
       if (token && index >= 0) entity.tokens[index] = clone(token);
+      state.attackAreas = clone(scene.attackAreas || []);
     }
     if (operation.type === 'token.movePath' && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
       for (const tokenId of payload.tokenIds || []) {
@@ -670,6 +678,7 @@ function applyCanonicalOperation(state, operation, context = {}) {
         const origin = { x: Number(token.x), y: Number(token.y) };
         const expected = expectedOrigins[tokenId];
         if (!plainObject(expected)
+          || !Number.isFinite(expected.x) || !Number.isFinite(expected.y)
           || Math.abs(Number(expected.x) - origin.x) > 0.000001
           || Math.abs(Number(expected.y) - origin.y) > 0.000001) {
           const error = new Error(`Token ${tokenId} moved since this route was planned`);
@@ -701,12 +710,7 @@ function applyCanonicalOperation(state, operation, context = {}) {
           ...record.token,
           placement: 'map', x: destination.x, y: destination.y, featureId: null,
         };
-        for (const area of scene.attackAreas || []) {
-          if (area?.anchor?.type === 'token' && String(area.anchor.tokenId) === record.tokenId) {
-            area.origin = clone(destination);
-            area.anchor = { type: 'token', tokenId: record.tokenId };
-          }
-        }
+        updateTokenAnchors(scene, record.tokenId, destination);
         motion.push({
           tokenId: record.tokenId,
           from: clone(record.origin),
@@ -718,7 +722,11 @@ function applyCanonicalOperation(state, operation, context = {}) {
       return { action: type, sceneId: String(scene.id), tokenId: leaderId, tokenIds, motion };
     }
     const { index, token } = tokenById(scene, payload.tokenId);
-    if (type === 'token.move') {
+    if (type === 'token.move' || type === 'token.reposition') {
+      if (type === 'token.reposition' && !['gm', 'offline'].includes(context.source?.role)) {
+        fail('Only the GM can reposition Tokens', 'token_reposition_gm_only');
+      }
+      if (type === 'token.reposition' && payload.placement === 'feature') fail('Reposition requires a map destination', 'invalid_destination');
       const next = clone(token);
       if (payload.placement === 'feature') {
         next.placement = 'feature';
@@ -730,8 +738,19 @@ function applyCanonicalOperation(state, operation, context = {}) {
         next.x = finite(payload.x, 'x');
         next.y = finite(payload.y, 'y');
         next.featureId = null;
+        if ((Number.isFinite(context.mapMetrics?.width) && (next.x < 0 || next.x > context.mapMetrics.width))
+          || (Number.isFinite(context.mapMetrics?.height) && (next.y < 0 || next.y > context.mapMetrics.height))) {
+          fail('Movement destination is outside the Scene', 'movement_out_of_bounds');
+        }
       }
+      const validation = context.validateTokenMovePath?.({ state, world, scene, token,
+        origin: { x: token.x, y: token.y }, destination: next, operationType: type });
+      if (validation === false || validation?.valid === false) {
+        fail(validation?.reason || 'Movement is not allowed', validation?.code || 'path_blocked');
+      }
+      for (const operation of validation?.statusOperations || []) context.enqueueStatusOperation(operation);
       scene.tokens[index] = next;
+      updateTokenAnchors(scene, String(token.id), validation?.anchorPoint || (next.placement === 'map' ? next : null));
       return { action: type, sceneId: String(scene.id), tokenId: String(token.id) };
     }
     if (type === 'token.actorDelta.replace') {
@@ -941,7 +960,8 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
   const state = cloneOperationInput(rawState, operations);
   worldFromState(state);
   const results = [];
-  for (const operation of operations) {
+  for (let index = 0; index < operations.length; index += 1) {
+    const operation = operations[index];
     if (STATUS_TYPES.has(operation.type)) {
       if (typeof context.applyStatus !== 'function') fail('Status operation handler is unavailable', 'status_handler_unavailable');
       const applied = context.applyStatus(state, { type: operation.type, ...clone(operation.payload) }, context);
@@ -953,7 +973,22 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
       applyStatusProjectionToWorld(state);
       results.push(...(Array.isArray(applied.results) ? clone(applied.results) : []));
     } else {
-      results.push(applyCanonicalOperation(state, operation, context));
+      const generated = [];
+      results.push(applyCanonicalOperation(state, operation, { ...context, enqueueStatusOperation(value) {
+        const status = normalizeWorldOperation(value);
+        if (!STATUS_TYPES.has(status.type)) fail('Movement may only generate status operations', 'invalid_world_operation');
+        generated.push(status);
+      } }));
+      if (generated.length) {
+        if (operations.length + generated.length > WORLD_OPERATION_BATCH_LIMIT) fail('Generated operations exceed batch limit', 'world_operation_limit');
+        // Feature effects use the just-committed canonical placement, not an old Entity projection.
+        const canonical = worldFromState(state);
+        state.preferences.entitySystem = { ...state.preferences.entitySystem,
+          schemaVersion: STATUS_SCHEMA_VERSION, actors: clone(canonical.actors),
+          tokens: clone(activeScene(canonical).tokens), statusDefinitions: clone(canonical.statusDefinitions || []),
+        };
+        operations.splice(index + 1, 0, ...generated);
+      }
     }
   }
   const world = worldFromState(state);
@@ -1001,7 +1036,7 @@ function createOperationChangeSet(operations, results, beforeState, afterState) 
   };
   for (const operation of operations) {
     const payload = operation.payload || {};
-    if (operation.type === 'token.move') addToken(payload.sceneId, payload.tokenId);
+    if (operation.type === 'token.move' || operation.type === 'token.reposition') addToken(payload.sceneId, payload.tokenId);
     else if (operation.type === 'token.movePath') {
       for (const tokenId of payload.tokenIds || []) addToken(payload.sceneId, tokenId);
     }

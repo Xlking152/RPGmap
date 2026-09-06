@@ -44,7 +44,6 @@ import {
   projectWorldOperationState,
   WORLD_OPERATION_SCHEMA_VERSION,
 } from './world-operations.mjs';
-import { resolveStatusCapabilitiesForToken } from './status-capabilities-v2.mjs';
 import {
   canUserControlToken,
   describeVisionForToken,
@@ -1011,8 +1010,6 @@ function authorizeOperations(session, operations) {
   const authorizeMovedToken = tokenId => {
     if (!tokenId) operationDenied('token_target_required', 'Player Token movement requires tokenId');
     if (!sessionControlsToken(session, tokenId)) operationDenied('token_not_controlled', 'Token is not controlled by this Player');
-    const capability = resolveStatusCapabilitiesForToken(world.state, tokenId);
-    if (capability.canMove === false) operationDenied('status_movement_forbidden', capability.reasons?.[0] || 'Current status prevents movement');
     const combat = world.state?.preferences?.combatSystem?.combat;
     if (combat?.state === 'active' && Array.isArray(combat.combatants) && combat.combatants.length) {
       const current = combat.combatants[Math.max(0, Math.min(combat.combatants.length - 1, Number(combat.turnIndex) || 0))];
@@ -1022,6 +1019,11 @@ function authorizeOperations(session, operations) {
   return operations.map(operation => {
     const value = structuredClone(operation);
     const payload = value.payload || {};
+    if (value.type === 'token.reposition') operationDenied('token_reposition_gm_only', 'Only the GM can reposition Tokens');
+    if (['token.move', 'token.movePath'].includes(value.type)
+      && String(payload.sceneId || world.state?.preferences?.worldV2?.activeSceneId || '') !== String(world.state?.preferences?.worldV2?.activeSceneId || '')) {
+      operationDenied('scene_not_active', 'Players may move Tokens only in the active Scene');
+    }
     if (value.type === 'token.move') {
       const tokenId = String(payload.tokenId || '');
       authorizeMovedToken(tokenId);
@@ -1174,7 +1176,8 @@ function appendVisionExplorationOperations(operations) {
   const next = operations.map(operation => structuredClone(operation));
   const seen = new Set();
   for (const operation of operations) {
-    if (!['token.move', 'token.movePath'].includes(operation.type) || operation.payload?.placement === 'feature') continue;
+    if (!['token.move', 'token.movePath', 'token.reposition'].includes(operation.type) || operation.payload?.placement === 'feature') continue;
+    if (String(operation.payload?.sceneId || world.state?.preferences?.worldV2?.activeSceneId) !== String(world.state?.preferences?.worldV2?.activeSceneId)) continue;
     const movedIds = operation.type === 'token.movePath'
       ? (operation.payload.tokenIds || []).map(String)
       : [String(operation.payload?.tokenId || '')];
@@ -1199,7 +1202,7 @@ function appendVisionExplorationOperations(operations) {
           payload: {
             sceneId: vision.sceneId,
             partyId: vision.partyId,
-            from: { x: vision.x, y: vision.y },
+            from: operation.type === 'token.reposition' ? to : { x: vision.x, y: vision.y },
             to,
             radiusMeters: vision.vagueRangeMeters,
           },
@@ -1781,12 +1784,8 @@ server.on('upgrade', (req, socket) => {
           mapMetrics: { metersPerUnit: 1 },
           userId: session.userId,
           sessionId: session.id,
-          validateTokenMovePath({ state, scene, token, origin, waypoints }) {
-            const capabilities = resolveStatusCapabilitiesForToken(state, token.id);
-            return validateAuthoritativeTokenMovePath({
-              state, scene, token, origin, waypoints, capabilities,
-            });
-          },
+          source: { role: session.role, userId: session.userId },
+          validateTokenMovePath: args => validateAuthoritativeTokenMovePath({ ...args, ruleset: serverRuleset }),
           applyStatus(state, statusMessage) {
             return applyStatusMessage(state, statusMessage, {
               now, mutate: true, assumeNormalized: true,

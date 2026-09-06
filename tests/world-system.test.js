@@ -4,7 +4,7 @@ import { createWorldSystem } from '../src/world/system.js';
 import { WORLD_STATE_KEY, activeWorldScene } from '../src/world/model.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 
-const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图' };
+const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图', width: 100, height: 100, features: [], metersPerUnit: 1 };
 function actor() { return { id: 'actor-1', name: '角色', currentFormId: 'form-1', forms: [{ id: 'form-1', tokenAppearance: { color: '#3d9b63' }, avatarDataUrl: null }], runtime: {}, effects: [] }; }
 function state() {
   return {

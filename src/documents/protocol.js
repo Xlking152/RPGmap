@@ -29,6 +29,7 @@ const INTENT_TO_OPERATION = new Map([
   ['token.delete', 'token.delete'],
   ['token.movePath', 'token.movePath'],
   ['token.move', 'token.move'],
+  ['token.reposition', 'token.reposition'],
   ['marker.upsert', 'marker.upsert'],
   ['marker.move', 'marker.move'],
   ['marker.delete', 'marker.delete'],
@@ -227,7 +228,7 @@ export function worldOperationsToDocumentWrites(operations, { worldId, sceneId, 
     if (['Token', 'Marker', 'Fog'].includes(documentType)) parent = { type: 'Scene', id: String(data.sceneId ?? sceneId) };
     const action = type.endsWith('.delete') || type === 'chat.clear' ? 'delete'
       : type === 'chat.append' ? 'append'
-        : ['token.move', 'token.movePath', 'marker.move'].includes(type) ? 'move' : 'update';
+        : ['token.move', 'token.reposition', 'token.movePath', 'marker.move'].includes(type) ? 'move' : 'update';
     if (type === 'actor.delete') data.deleteReferencedTokens = true;
     return normalizeDocumentWrite({ action, document: { type: documentType, id: String(id ?? ''), parent }, intent, data });
   });

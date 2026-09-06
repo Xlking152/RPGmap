@@ -11,6 +11,7 @@ import { assertWorldRuleset } from './validation.js';
 import { reduceStatusOperation, STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { applyWorldOperations, deriveWorldOperations } from './operations.js';
 import { createDocumentChanges } from '../documents/changes.js';
+import { createMovementAuthority } from '../movement/authority.js';
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -36,6 +37,8 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       if (!api || api.world) return;
       const mapPackage = api.mapPackage;
       const runtimeRuleset = api.ruleset;
+      const movementAuthority = createMovementAuthority(scene => sameMap(scene, mapPackage)
+        && String(scene.mapPackage?.version || '') === String(mapPackage.version || mapPackage.mapVersion || '') ? mapPackage : null);
       const coreCommitState = api.commitState?.bind(api);
       const coreCommitAuthoritativeState = api.commitAuthoritativeState?.bind(api);
       if (typeof coreCommitState !== 'function') throw new Error('World V2 requires api.commitState()');
@@ -136,6 +139,8 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           now,
           ruleset: runtimeRuleset,
           source: { role: 'offline', source },
+          mapMetrics: mapPackage,
+          validateTokenMovePath: args => movementAuthority({ ...args, ruleset: runtimeRuleset }),
           applyStatus(statusState, message, context) {
             const next = clone(statusState);
             next.preferences ||= {};

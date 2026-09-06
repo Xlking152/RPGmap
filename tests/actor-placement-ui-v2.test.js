@@ -22,11 +22,12 @@ test('Entity Token controller owns Actor placement without legacy Character crea
   assert.doesNotMatch(source, /character:create|character:move|state\.characters|\.characters\.push|bindToken\s*\(/);
 });
 
-test('placement adapter writes through canonical Token create/move and never Character storage', async () => {
+test('placement adapter writes through canonical Token create/reposition and never Character storage', async () => {
   const path = fileURLToPath(new URL('../src/token/placement.js', import.meta.url));
   const source = withoutComments(await readFile(path, 'utf8'));
   assert.match(source, /api\.tokens\.create\(/);
-  assert.match(source, /api\.tokens\.move\(/);
+  assert.match(source, /api\.tokens\.reposition\(/);
+  assert.doesNotMatch(source, /api\.tokens\.move\(/);
   assert.doesNotMatch(source, /state\.characters|bindToken\s*\(/);
   assert.doesNotMatch(source, /placeCharacter\s*\(|repositionCharacter\s*\(/);
 });

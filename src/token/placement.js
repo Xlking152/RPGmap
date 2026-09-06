@@ -71,8 +71,8 @@ export async function createActorTokenAtPoint(api, actorId, point, options = {})
  * inspector so navigation can ignore the mover's own occupied cell.
  */
 export async function relocateActorTokenAtPoint(api, tokenId, point) {
-  if (!api?.tokens?.get || !api?.tokens?.move) {
-    throw new Error('Actor Token relocation requires api.tokens.get() + api.tokens.move()');
+  if (!api?.tokens?.get || !api?.tokens?.reposition) {
+    throw new Error('Actor Token relocation requires api.tokens.get() + api.tokens.reposition()');
   }
   const targetTokenId = String(tokenId || '').trim();
   if (!targetTokenId) throw new Error('Actor Token relocation requires tokenId');
@@ -81,6 +81,6 @@ export async function relocateActorTokenAtPoint(api, tokenId, point) {
   const placement = inspectActorTokenPlacement(api, point, { tokenId: targetTokenId });
   if (!placement.valid) return Object.freeze({ ok: false, token: null, ...placement });
 
-  const token = await api.tokens.move(targetTokenId, placement.point);
+  const token = await api.tokens.reposition(targetTokenId, placement.point);
   return Object.freeze({ ok: true, token, ...placement });
 }

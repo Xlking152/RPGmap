@@ -5,7 +5,8 @@ import { createTokenRuntimeSystem } from '../src/token/system.js';
 import { WORLD_STATE_KEY, activeWorldScene } from '../src/world/model.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 
-const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图' };
+const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图', width: 100, height: 100,
+  features: [{ id: 'building-a', enterable: true, entrance: [22.5, 21.5], center: [25, 25] }], metersPerUnit: 1 };
 
 function actor() {
   return {

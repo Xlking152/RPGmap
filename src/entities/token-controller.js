@@ -157,7 +157,7 @@ export function createEntityTokenController({
       setStatus('待重新放置的 Token 已不存在');
       return false;
     }
-    if (!canPlace(token.actorId)) {
+    if (!canManageStructure()) {
       setStatus('当前没有重新放置该 Token 的权限');
       return false;
     }
@@ -188,7 +188,7 @@ export function createEntityTokenController({
           clearPlacement({ message: '待重新放置的 Token 已不存在，已取消' });
           return true;
         }
-        if (!canPlace(current.actorId)) {
+        if (!canManageStructure()) {
           clearPlacement({ message: '当前没有重新放置该 Token 的权限' });
           return true;
         }

@@ -5,6 +5,8 @@ import {
   createMovementTokenRuntimeSystem,
 } from '../src/movement/token-runtime.js';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
+import { applyWorldOperations, projectWorldOperationState } from '../src/world/operations.js';
+import { createMovementAuthority } from '../src/movement/authority.js';
 
 function actor() {
   return { id: 'actor-a', name: 'Template', effects: [] };
@@ -40,7 +42,7 @@ function world(tokenValue = token()) {
 function fixture({
   tokenValue = token(), features = [],
   statusCapabilities = { canMove: true, canInteract: true, collisionBypassGroups: [] },
-  multiplayer = null, combat = null,
+  multiplayer = null, combat = null, authoritative = false,
 } = {}) {
   let currentWorld = world(tokenValue);
   const state = {
@@ -97,8 +99,22 @@ function fixture({
     },
   };
   if (multiplayer) api.multiplayer = multiplayer;
+  const operations = [];
+  if (authoritative) {
+    const authority = createMovementAuthority(() => api.mapPackage);
+    api.world.performOperations = async batch => {
+      operations.push(...structuredClone(batch));
+      const input = projectWorldOperationState({ ...state, preferences: { ...state.preferences, worldV2: currentWorld } });
+      const applied = applyWorldOperations(input, batch, {
+        source: { role: 'offline' }, validateTokenMovePath: args => authority({ ...args, capabilities: statusCapabilities }),
+      });
+      currentWorld = applied.state.preferences.worldV2;
+      return applied;
+    };
+    api.world.commit = () => { throw new Error('Movement must not commit a full World'); };
+  }
   createMovementTokenRuntimeSystem().register(api);
-  return { api, events, getWorld: () => structuredClone(currentWorld), state };
+  return { api, events, getWorld: () => structuredClone(currentWorld), state, operations };
 }
 
 function once(api, name) {
@@ -106,6 +122,20 @@ function once(api, name) {
     const off = api.on(name, event => { off(); resolve(event.detail); });
   });
 }
+
+test('production movement and feature transitions submit intents without a full World write', async () => {
+  const { api, operations } = fixture({ authoritative: true, features: [{
+    id: 'room', entrance: [9.5, 10.5], center: [10, 10], capabilities: { enterable: true },
+  }] });
+  assert.equal((await api.movement.moveTokenTo('token-a', { x: 5.5, y: 6.5 })).committed, true);
+  assert.equal(operations[0].type, 'token.movePath');
+  assert.deepEqual(operations[0].payload.expectedOrigins, { 'token-a': { x: 1.5, y: 1.5 } });
+  assert.equal((await api.movement.moveTokenTo('token-a', { x: 9.5, y: 10.5 }, { type: 'feature', featureId: 'room' })).committed, true);
+  assert.equal(api.tokens.get('token-a').placement, 'feature');
+  assert.equal(await api.movement.exitFeature('token-a'), true);
+  assert.equal(api.tokens.get('token-a').placement, 'map');
+  assert.deepEqual(operations.slice(1).map(operation => operation.type), ['token.move', 'token.move']);
+});
 
 test('Movement Runtime commits map movement to Scene.tokens without mutating Character location directly', async () => {
   const { api, getWorld, state } = fixture();
