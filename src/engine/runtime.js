@@ -7,6 +7,7 @@ import {
   undoLastSceneEvent,
 } from './state.js';
 import { createWorldStatePersistence } from '../app/world-storage.js';
+import { persistPreparedWorldContent, prepareWorldContentState } from '../app/world-upgrade.js';
 import {
   exportRuntimeState,
   prepareRuntimeState,
@@ -388,8 +389,8 @@ export function createRpgMapRuntime({
 
   async function importPreparedState(raw, options) {
     const { source = 'file-import', persist = true, records = [] } = options === false ? { persist: false, source: 'server' } : options;
-    const migration = persist && api.content ? await import('../app/world-upgrade.js') : null;
-    const prepared = migration ? await migration.prepareWorldContentState(raw, { mapPackage, ruleset }) : prepareRuntimeState(raw, { mapPackage, ruleset });
+    const migrateContent = persist && api.content;
+    const prepared = migrateContent ? await prepareWorldContentState(raw, { mapPackage, ruleset }) : prepareRuntimeState(raw, { mapPackage, ruleset });
     const normalized = normalizeState(prepared.state);
     if (persist && api.multiplayer?.getStatus?.().connected) {
       const { persistArchiveContent } = await import('../content/archive.js');
@@ -398,10 +399,10 @@ export function createRpgMapRuntime({
       await api.multiplayer.performWorldOperation(normalized, { reason: `file-import:${source}` });
       return true;
     }
-    if (persist && migration) {
+    if (migrateContent) {
       if (!persistence.persistNow()) throw new Error('world_persistence_blocked');
       const beforeRaw = storageAdapter.get(persistence.storageKey);
-      await migration.persistPreparedWorldContent({ state: normalized, records: [...records, ...(prepared.records || [])], inputRaw: raw, beforeRaw,
+      await persistPreparedWorldContent({ state: normalized, records: [...records, ...(prepared.records || [])], inputRaw: raw, beforeRaw,
         worldId, mapPackage, ruleset, storageAdapter, indexedDB: documentNode.defaultView.indexedDB });
     } else if (persist) persistence.replace(normalized);
     state = normalized;

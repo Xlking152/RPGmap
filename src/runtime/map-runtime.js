@@ -4,6 +4,7 @@ import '../styles.css';
 import { createRpgMapRuntime } from '../engine/runtime.js';
 import { createMemoryStorage } from '../app/storage.js';
 import { prepareStoredWorldState } from '../app/world-storage.js';
+import { prepareStoredWorldWithContent } from '../app/world-upgrade.js';
 import { createAppLifecycleSystem } from '../engine/lifecycle.js';
 import { createMovementSystem } from '../movement/index.js';
 import { createMeasurementSystem } from '../measurement/index.js';
@@ -56,7 +57,6 @@ export async function startMapRuntime({
   setActiveRuleset(ruleset.id);
   const mapPackage = await mapPackageRegistry.load(mapReference);
   const storageAdapter = serverRuntime ? createMemoryStorage() : bootstrapStorage;
-  const prepareStoredWorldWithContent = serverRuntime ? null : (await import('../app/world-upgrade.js')).prepareStoredWorldWithContent;
   const initialLoad = await (serverRuntime ? prepareStoredWorldState : prepareStoredWorldWithContent)({
     worldId,
     worldName,

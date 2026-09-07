@@ -5,6 +5,8 @@ import { chooseWorldBeforeMap } from './world/setup.js';
 import { DEFAULT_REFERENCE_MAP_ID } from './map-package/constants.js';
 import { mapPackageRegistry } from './map-package/registry.js';
 import { registerBuiltInMapPackages } from './map-package/builtins.js';
+import { readRpgMapServerBootstrap } from './multiplayer/server-bootstrap.js';
+import { readServerWorldBootstrap, readWorldBootstrap } from './world/bootstrap.js';
 
 function setBootStatus(message, { error = false } = {}) {
   const node = document.querySelector('[data-rpgmap-boot-status]');
@@ -57,9 +59,7 @@ export async function startRpgMap() {
   const bootstrapStorage = createBrowserStorage();
   const defaultRuleset = firstRegisteredRuleset();
   setBootStatus('正在检查 Windows RPGmap Server 与 World…');
-  const { readRpgMapServerBootstrap } = await import('./multiplayer/server-bootstrap.js');
   const serverBootstrap = await readRpgMapServerBootstrap();
-  const { readServerWorldBootstrap, readWorldBootstrap } = await import('./world/bootstrap.js');
   const { serverRuntime } = serverBootstrap;
 
   let worldManager = null;

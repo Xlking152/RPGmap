@@ -19,7 +19,7 @@ export default defineConfig({
   build: {
     manifest: true,
     target: 'esnext',
-    modulePreload: { polyfill: false },
+    modulePreload: false,
     outDir: 'dist',
     emptyOutDir: true,
     cssCodeSplit: true,
@@ -43,17 +43,12 @@ export default defineConfig({
               includeDependenciesRecursively: false,
             },
             {
-              name: 'world-bootstrap',
-              test: /[\\/]src[\\/]world[\\/](?:bootstrap|constants|package-upgrades)\.js$/,
-              includeDependenciesRecursively: false,
-            },
-            {
               name: 'map-runtime-core',
               test(id) {
                 const moduleId = id.replaceAll('\\', '/');
                 if (/\/node_modules\/(?:leaflet|lucide|polygon-clipping)\//.test(moduleId)) return true;
                 if (!moduleId.includes('/src/')) return false;
-                if (/\/src\/(?:ui\/lazy-runtime-tools|library\/ui|journal\/(?:ui|markdown)|app\/world-upgrade|map-package\/default-map|multiplayer\/server-bootstrap|world\/(?:bootstrap|constants|package-upgrades))\.js$/.test(moduleId)) return false;
+                if (/\/src\/(?:ui\/lazy-runtime-tools|library\/ui|journal\/(?:ui|markdown)|map-package\/default-map|multiplayer\/server-bootstrap|world\/(?:bootstrap|constants|package-upgrades))\.js$/.test(moduleId)) return false;
                 if (/\/src\/entities\/(?:xlsx-importer|avatar|actor-operations|canonical-delete|token-controller|sheet-manager|sheet-renderer|sheet-policy|ui-live)\.js$/.test(moduleId)
                   || /\/src\/entities\/sheet\//.test(moduleId)
                   || /\/src\/token\/(?:placement|naming)\.js$/.test(moduleId)
