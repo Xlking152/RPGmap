@@ -985,9 +985,12 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
 }
 
 
-function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, operations = [], documentBatch = false }) {
+function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, operations = [], documentBatch = false, onOriginProjection = null }) {
   const fog = results.filter(result => Object.hasOwn(result, 'dirtyBounds'));
-  for (const [socket, session] of sessions) {
+  const recipients = [...sessions];
+  const originIndex = recipients.findIndex(([, session]) => session.id === originSessionId);
+  if (originIndex > 0) recipients.unshift(...recipients.splice(originIndex, 1));
+  for (const [socket, session] of recipients) {
     if (session.role !== 'gm' && session.identityStatus !== 'active') continue;
     const beforeProjection = session.audienceProjection || audienceStateFor(session, beforeState);
     const incrementalProjection = tryIncrementalAudienceProjection(
@@ -1006,6 +1009,7 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
       audienceRevision: session.audienceRevision,
     };
     sendSocket(socket, response);
+    if (session.id === originSessionId) onOriginProjection?.(afterProjection);
   }
   rememberResumeCommit({
     beforeState, afterState, operationId, baseRevision, revision, updatedAt,
@@ -1990,6 +1994,18 @@ server.on('upgrade', (req, socket) => {
         catch (error) { console.error('[RPGmap] failed to prune Actor access references:', error); }
       }
       rememberStatusOperation(envelope.operationId, world.revision, applied.results);
+      let acknowledged = false;
+      const acknowledge = originProjection => {
+        if (acknowledged) return;
+        acknowledged = true;
+        sendSocket(socket, {
+          type: message._documentBatch === true ? 'document.batch.ack' : 'world.operation.ack',
+          operationId: envelope.operationId,
+          revision: world.revision,
+          results: projectResultsForSession(applied.results, originProjection, session),
+          duplicate: false,
+        });
+      };
       broadcastOperationCommit({
         beforeState,
         afterState: world.state,
@@ -2001,15 +2017,9 @@ server.on('upgrade', (req, socket) => {
         originSessionId: session.id,
         operations: committedOperations,
         documentBatch: message._documentBatch === true,
+        onOriginProjection: acknowledge,
       });
-      const originProjection = session.audienceProjection || audienceStateFor(session);
-      sendSocket(socket, {
-        type: message._documentBatch === true ? 'document.batch.ack' : 'world.operation.ack',
-        operationId: envelope.operationId,
-        revision: world.revision,
-        results: projectResultsForSession(applied.results, originProjection, session),
-        duplicate: false,
-      });
+      if (!acknowledged) acknowledge(session.audienceProjection || audienceStateFor(session));
       if (actorCatalogChanged) {
         broadcastAccessSnapshots();
       }

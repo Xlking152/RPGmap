@@ -7,6 +7,7 @@ import {
   distance3dMeters,
   inspectLineOfSight,
   lightContributionAtPoint,
+  normalizeVisionOccluder,
   perceptionLevelAtPoint,
   sphereGroundRadiusMeters,
 } from '../src/spatial/kernel.js';
@@ -37,6 +38,14 @@ test('finite-height LOS blocks the exact top, clears above it, and can exclude t
   assert.equal(inspectLineOfSight({ ...common, to: { x: 10, y: 0, elevationMeters: 14 } }).clear, true);
   assert.equal(inspectLineOfSight({ ...common, to: { x: 10, y: 0, elevationMeters: 0 },
     excludedFeatureIds: ['wall-a'] }).clear, true);
+});
+
+test('LOS reuses only trusted normalized occluders and revalidates mutable input', () => {
+  const input = structuredClone(wall);
+  const normalized = normalizeVisionOccluder(input);
+  assert.strictEqual(normalizeVisionOccluder(normalized), normalized);
+  input.blockingHeightMeters = 12;
+  assert.equal(normalizeVisionOccluder(input).blockingHeightMeters, 12);
 });
 
 test('open and destroyed features remove only their own vision blocker', () => {

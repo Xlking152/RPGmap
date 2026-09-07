@@ -1,4 +1,5 @@
 const EPSILON = 1e-9;
+const NORMALIZED_VISION_OCCLUDERS = new WeakSet();
 
 function number(value, fallback = 0) {
   const parsed = Number(value);
@@ -74,10 +75,11 @@ function occluderPolygon(value) {
 }
 
 export function normalizeVisionOccluder(value) {
+  if (NORMALIZED_VISION_OCCLUDERS.has(value)) return value;
   const polygon = occluderPolygon(value);
   const height = Number(value?.blockingHeightMeters ?? value?.heightMeters);
   if (!polygon || !Number.isFinite(height) || height < 0) return null;
-  return Object.freeze({
+  const normalized = Object.freeze({
     id: String(value?.id ?? value?.featureId ?? ''),
     featureId: value?.featureId == null ? null : String(value.featureId),
     polygon: Object.freeze(polygon.map(point => Object.freeze(point))),
@@ -85,6 +87,8 @@ export function normalizeVisionOccluder(value) {
     passableWhenOpen: value?.passableWhenOpen === true,
     passableWhenDestroyed: value?.passableWhenDestroyed !== false,
   });
+  NORMALIZED_VISION_OCCLUDERS.add(normalized);
+  return normalized;
 }
 
 export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = null) {
