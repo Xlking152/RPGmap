@@ -8,9 +8,7 @@ const MAX_KEYS = 256;
 const MAX_ARRAY_LENGTH = 1000;
 const MAX_STRING_LENGTH = 65536;
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function cloneFeatureValue(value) {
   if (Array.isArray(value)) return value.map(cloneFeatureValue);

@@ -19,7 +19,7 @@ const MAX_DEFINITIONS = 128;
 const MAX_EFFECTS_PER_TARGET = 64;
 const MAX_BATCH_OPERATIONS = 64;
 
-function clone(value) { return value === undefined ? undefined : structuredClone(value); }
+const clone = value => structuredClone(value);
 function plainObject(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
 function finite(value, fallback = 0) { const number = Number(value); return Number.isFinite(number) ? number : fallback; }
 function integer(value, fallback = 1, minimum = 1, maximum = MAX_STACKS) {

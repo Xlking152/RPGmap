@@ -13,9 +13,7 @@ import { applyWorldOperations, deriveWorldOperations } from './operations.js';
 import { createDocumentChanges } from '../documents/changes.js';
 import { createMovementAuthority } from '../movement/authority.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function currentWorldFromState(state) {
   return state?.preferences?.[WORLD_STATE_KEY] || null;

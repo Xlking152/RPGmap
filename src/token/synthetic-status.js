@@ -2,9 +2,7 @@ import { reduceStatusOperation } from '../status/model.js';
 import { resolveTokenActor } from './actor.js';
 import { updateSceneToken } from './model.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function required(value, label) {
   const result = String(value ?? '').trim();

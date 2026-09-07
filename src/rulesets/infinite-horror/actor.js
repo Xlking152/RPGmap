@@ -9,9 +9,7 @@ import {
 
 export const INFINITE_HORROR_ACTOR_SYSTEM_VERSION = 3;
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};

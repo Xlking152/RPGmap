@@ -3,9 +3,7 @@ import { actorUsesIndependentInstances } from '../actor/classification.js';
 export const TOKEN_VISIBILITY_MODES = Object.freeze(['public', 'party', 'gm', 'users']);
 const VISIBILITY_MODE_SET = new Set(TOKEN_VISIBILITY_MODES);
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};

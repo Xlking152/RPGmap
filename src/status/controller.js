@@ -9,9 +9,7 @@ import { validateStatusDefinitionForActors } from './target-validation.js';
 
 const ENTITY_PREFERENCE_KEY = 'entitySystem';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function entityStateFromApi(api) {
   return api.getState?.()?.preferences?.[ENTITY_PREFERENCE_KEY] || null;

@@ -9,9 +9,7 @@ import {
 import { createInitialActorDelta, mergeActorDeltaPatch, resolveTokenActorDocuments } from './actor.js';
 import { actorUsesIndependentInstances } from '../actor/classification.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};

@@ -2,9 +2,7 @@ import { getCompatibilityRuleset } from '../ruleset/active-compat.js';
 import { normalizeActorClassification } from './classification.js';
 import { normalizeActorPublicProfile } from './public-profile.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};

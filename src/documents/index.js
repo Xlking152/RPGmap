@@ -5,9 +5,7 @@ import {
 } from './protocol.js';
 import { applyDocumentValue, documentEntries, documentKey } from './changes.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function key(address) {
   return documentKey(address);

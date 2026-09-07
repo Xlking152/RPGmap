@@ -14,9 +14,7 @@ import { normalizeJournalCollection } from '../journal/model.js';
 
 export { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function text(value, fallback = '') {
   const result = typeof value === 'string' ? value.trim() : '';

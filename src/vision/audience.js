@@ -12,9 +12,7 @@ import {
 } from '../spatial/kernel.js';
 import { journalVisibleToAudience } from '../journal/model.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 // Audience projection is executed once per connected session for every
 // authoritative commit. Cloning the complete World here made a one-Token

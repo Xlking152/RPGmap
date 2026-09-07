@@ -7,9 +7,7 @@ import {
 import { deriveSceneState } from '../engine/state.js';
 import { tokenDiameterMeters, tokenElevationMeters } from '../elevation/model.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function finitePoint(value) {
   const x = Number(value?.x);

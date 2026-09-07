@@ -19,9 +19,7 @@ import { applyDocumentChanges, documentChangeSet } from '../documents/changes.js
 
 const MAX_SAVE_FILE_BYTES = 5 * 1024 * 1024;
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));

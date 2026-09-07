@@ -1,6 +1,4 @@
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));

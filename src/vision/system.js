@@ -103,10 +103,7 @@ export function createVisionFogSystem() {
       let explorationDirty = true;
       let visibilityRowsCache = null;
       const off = [];
-
-      function removeOverlay() {
-        canvases.forEach(canvas => canvas.remove());
-      }
+      const retain = dispose => { if (typeof dispose === 'function') off.push(dispose); };
 
       function localVisionSubject() {
         if (!localSourceTokenId) return null;
@@ -292,18 +289,18 @@ export function createVisionFogSystem() {
               Number(dirtyBounds.maxY) - Number(dirtyBounds.minY),
             )
           : null;
-        for (const context of [perception]) {
-          context.save();
-          if (clip) {
-            const x = Math.max(0, Math.floor(clip.x) - 2);
-            const y = Math.max(0, Math.floor(clip.y) - 2);
-            const width = Math.min(size.x - x, Math.ceil(clip.width) + 4);
-            const height = Math.min(size.y - y, Math.ceil(clip.height) + 4);
-            context.beginPath();
-            context.rect(x, y, Math.max(0, width), Math.max(0, height));
-            context.clip();
-            context.clearRect(x, y, Math.max(0, width), Math.max(0, height));
-          } else context.clearRect(0, 0, size.x, size.y);
+        perception.save();
+        if (clip) {
+          const x = Math.max(0, Math.floor(clip.x) - 2);
+          const y = Math.max(0, Math.floor(clip.y) - 2);
+          const width = Math.min(size.x - x, Math.ceil(clip.width) + 4);
+          const height = Math.min(size.y - y, Math.ceil(clip.height) + 4);
+          perception.beginPath();
+          perception.rect(x, y, Math.max(0, width), Math.max(0, height));
+          perception.clip();
+          perception.clearRect(x, y, Math.max(0, width), Math.max(0, height));
+        } else {
+          perception.clearRect(0, 0, size.x, size.y);
         }
         const drawRows = (context, rowEntries) => {
           for (const [row, spans] of rowEntries) {
@@ -455,7 +452,7 @@ export function createVisionFogSystem() {
         },
         render,
       };
-      const unsubscribeSelection = api.selection?.subscribe?.(snapshot => {
+      retain(api.selection?.subscribe?.(snapshot => {
         if (!['single', 'add', 'replace', 'external-replace'].includes(String(snapshot?.reason || ''))) return;
         const tokenId = snapshot?.primaryId;
         if (!tokenId) return;
@@ -464,44 +461,36 @@ export function createVisionFogSystem() {
           || api.multiplayer?.canControlToken?.(tokenId) === true;
         if (!canControl) return;
         api.vision.setSource(tokenId).catch(error => api.showToast?.(error.message, 'error'));
-      });
-      if (typeof unsubscribeSelection === 'function') off.push(unsubscribeSelection);
-      const disposeCommit = api.on?.('state:commit', detail => {
+      }));
+      retain(api.on?.('state:commit', detail => {
         const changed = synchronizeLocalVision();
         clearUnavailableConnectedSource();
         if (changed || /fog|vision|scene|import/i.test(String(detail?.source || ''))) scheduleRender();
-      });
-      if (typeof disposeCommit === 'function') off.push(disposeCommit);
+      }));
       for (const eventName of ['state:import', 'scene:activate']) {
-        const dispose = api.on?.(eventName, () => {
+        retain(api.on?.(eventName, () => {
           synchronizeLocalVision();
           clearUnavailableConnectedSource();
           explorationDirty = true;
           scheduleRender();
-        });
-        if (typeof dispose === 'function') off.push(dispose);
+        }));
       }
-      const disposeSource = api.on?.('vision:source-change', () => scheduleRender(null));
-      if (typeof disposeSource === 'function') off.push(disposeSource);
-      const disposeVisualPosition = api.on?.('token:visual-position', event => {
+      retain(api.on?.('vision:source-change', () => scheduleRender(null)));
+      retain(api.on?.('token:visual-position', event => {
         if (String(event?.detail?.tokenId || '') === String(confirmedSourceTokenId() || '')) scheduleRender(null);
-      });
-      if (typeof disposeVisualPosition === 'function') off.push(disposeVisualPosition);
-      const disposeStatus = api.on?.('status:change', () => {
+      }));
+      retain(api.on?.('status:change', () => {
         synchronizeLocalVision();
         if (visionSignature() !== lastVisionSignature) scheduleRender();
-      });
-      if (typeof disposeStatus === 'function') off.push(disposeStatus);
-      const disposeFog = api.on?.('fog:change', event => {
+      }));
+      retain(api.on?.('fog:change', event => {
         explorationDirty = true;
         scheduleRender(event?.detail?.dirtyBounds ?? null);
-      });
-      if (typeof disposeFog === 'function') off.push(disposeFog);
-      const disposeCapabilities = api.on?.('multiplayer:capabilities', () => {
+      }));
+      retain(api.on?.('multiplayer:capabilities', () => {
         clearUnavailableConnectedSource();
         scheduleRender();
-      });
-      if (typeof disposeCapabilities === 'function') off.push(disposeCapabilities);
+      }));
       const scheduleViewportRender = () => {
         explorationDirty = true;
         scheduleRender(null);
@@ -516,7 +505,7 @@ export function createVisionFogSystem() {
           cancelFrame(renderFrame);
           renderFrame = 0;
         }
-        removeOverlay();
+        canvases.forEach(canvas => canvas.remove());
       });
     },
   });

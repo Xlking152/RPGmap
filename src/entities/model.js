@@ -8,9 +8,7 @@ import {
   performActorOperation,
 } from '../actor/index.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function finite(value, fallback = 0) {
   const number = Number(value);

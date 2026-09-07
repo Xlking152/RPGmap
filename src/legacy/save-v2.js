@@ -8,9 +8,7 @@ import { normalizeWorldV2, projectWorldV2ToRuntimeState, WORLD_STATE_KEY } from 
 import { migrateLegacySceneFeatureStates } from '../world/feature-states.js';
 import { feetToMeters } from '../world/migration.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function text(value, fallback = '') {
   const result = typeof value === 'string' ? value.trim() : '';

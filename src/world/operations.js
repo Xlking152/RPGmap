@@ -124,9 +124,7 @@ const GRANULAR_OPERATION_TYPES = new Set([
   'chat.append', 'chat.clear',
 ]);
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function cloneProjection(value) {
   if (Array.isArray(value)) return value.map(cloneProjection);

@@ -10,9 +10,7 @@ import { normalizeMovementMode } from './model.js';
 
 const MAX_GRID_CACHE = 8;
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function finitePoint(value) {
   const x = Number(value?.x);

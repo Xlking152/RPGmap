@@ -1,6 +1,4 @@
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function requireActor(actor) {
   if (!actor || typeof actor !== 'object' || Array.isArray(actor)) {

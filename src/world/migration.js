@@ -7,9 +7,7 @@ import { upgradeBuiltInMapReference, upgradeBuiltInRulesetReference } from './pa
 
 export { upgradeBuiltInMapReference, upgradeBuiltInRulesetReference } from './package-upgrades.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function plainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));

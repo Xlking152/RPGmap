@@ -16,9 +16,7 @@ import {
 import { applySyntheticActorStatusOperation } from '../token/synthetic-status.js';
 import { createMovementAuthority } from './authority.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
