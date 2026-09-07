@@ -361,7 +361,6 @@ export function createVisionFogSystem() {
                 lights,
                 occluders,
                 metersPerUnit,
-                lineOfSightEnabled: source.lineOfSightEnabled === true,
               }) === 'precise' : null,
             }));
             visibilityRowsCache = {

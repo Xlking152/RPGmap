@@ -800,6 +800,36 @@ function canonicalWorldScene(state, sceneId) {
     .find(scene => String(scene?.id || '') === String(sceneId || '')) || null;
 }
 
+function movementProjectionTargets(state, operations) {
+  const activeSceneId = String(state?.preferences?.worldV2?.activeSceneId || '');
+  const targets = new Map();
+  let movement = false;
+  for (const operation of operations) {
+    if (operation.type === 'scene.fog.explore') continue;
+    if (!['token.move', 'token.movePath', 'token.reposition'].includes(operation.type)) return null;
+    movement = true;
+    const sceneId = String(operation.payload?.sceneId || activeSceneId);
+    const ids = operation.type === 'token.movePath'
+      ? operation.payload?.tokenIds || []
+      : [operation.payload?.tokenId];
+    if (!targets.has(sceneId)) targets.set(sceneId, new Set());
+    for (const tokenId of ids) targets.get(sceneId).add(String(tokenId || ''));
+  }
+  return movement ? targets : null;
+}
+
+function projectedFogAfterMovement(previous, canonical, partyIds = []) {
+  const visiblePartyIds = [...new Set([
+    ...Object.keys(previous?.exploredByParty || {}),
+    ...partyIds.map(String),
+  ])];
+  const exploredByParty = Object.fromEntries(visiblePartyIds.flatMap(partyId => {
+    const value = canonical?.exploredByParty?.[partyId];
+    return value ? [[partyId, structuredClone(value)]] : [];
+  }));
+  return { ...(previous || {}), exploredByParty };
+}
+
 function tryIncrementalAudienceProjection(session, beforeProjection, afterState, operations, results) {
   if (!beforeProjection || session.role === 'gm' || !Array.isArray(operations) || !operations.length) return null;
   const types = new Set(operations.map(operation => String(operation?.type || '')));
@@ -824,36 +854,75 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
     return next;
   }
 
-  if ([...types].every(type => type === 'token.movePath') && !session.visionSourceTokenId) {
-    const motion = (results || []).flatMap(result => result?.motion || []);
-    const motionById = new Map(motion.map(item => [String(item?.tokenId || ''), item]));
+  const movementTargets = movementProjectionTargets(afterState, operations);
+  if (movementTargets) {
+    const activeSceneId = String(projectedWorld.activeSceneId || '');
+    const sourceId = String(session.visionSourceTokenId || '');
+    const sourceMoved = movementTargets.get(activeSceneId)?.has(sourceId) === true;
+    if (sourceMoved) {
+      const projectedScene = canonicalWorldScene(beforeProjection, activeSceneId);
+      const canonicalScene = canonicalWorldScene(afterState, activeSceneId);
+      const projectedTokens = new Map((projectedScene?.tokens || []).map(token => [String(token?.id || ''), token]));
+      const allTokensPrivate = (canonicalScene?.tokens || []).every(token => {
+        const projected = projectedTokens.get(String(token?.id || ''));
+        return projected && projected.audienceRestricted !== true && projected.audienceVisibility !== 'vague';
+      });
+      if (!allTokensPrivate) return null;
+    }
+    const pending = new Set([...movementTargets].flatMap(([sceneId, ids]) =>
+      [...ids].map(tokenId => `${sceneId}:${tokenId}`)));
     for (const [sceneIndex, scene] of projectedWorld.scenes.entries()) {
       const canonical = canonicalWorldScene(afterState, scene.id);
       if (!canonical) return null;
+      const movedIds = movementTargets.get(String(scene.id)) || new Set();
       let changed = false;
       const tokens = (scene.tokens || []).map(token => {
-        if (!motionById.has(String(token?.id || ''))) return token;
+        const tokenId = String(token?.id || '');
+        if (!movedIds.has(tokenId)) return token;
+        if (token.audienceRestricted === true || token.audienceVisibility === 'vague') return token;
         const authoritative = (canonical.tokens || []).find(item => String(item?.id || '') === String(token.id));
         if (!authoritative) return token;
+        pending.delete(`${scene.id}:${tokenId}`);
         changed = true;
-        return {
-          ...token,
-          placement: authoritative.placement,
-          x: authoritative.x,
-          y: authoritative.y,
-          featureId: authoritative.featureId,
-        };
+        return structuredClone(authoritative);
       });
-      if (!changed) continue;
+      const fog = projectedFogAfterMovement(
+        scene.fog,
+        canonical.fog,
+        next.preferences.audienceVision?.partyIds || [],
+      );
+      if (!changed && JSON.stringify(fog) === JSON.stringify(scene.fog)) continue;
       const attackAreas = (scene.attackAreas || []).map(area => {
-        const item = motionById.get(String(area?.anchor?.tokenId || ''));
-        return item ? { ...area, origin: structuredClone(item.to) } : area;
+        if (!movedIds.has(String(area?.anchor?.tokenId || ''))) return area;
+        return structuredClone((canonical.attackAreas || []).find(item => String(item?.id || '') === String(area?.id || '')) || area);
       });
-      projectedWorld.scenes[sceneIndex] = { ...scene, tokens, attackAreas };
+      projectedWorld.scenes[sceneIndex] = { ...scene, tokens, attackAreas, fog };
       if (String(projectedWorld.activeSceneId || '') === String(scene.id)) {
         next.preferences.entitySystem = { ...next.preferences.entitySystem, tokens: [...tokens] };
         next.attackAreas = [...attackAreas];
       }
+    }
+    if (pending.size) return null;
+    if (sourceMoved) {
+      const source = describeVisionForToken(afterState, sourceId);
+      if (!source) return null;
+      next.preferences.audienceVision = {
+        ...next.preferences.audienceVision,
+        source: {
+          ...next.preferences.audienceVision?.source,
+          tokenId: source.tokenId,
+          x: source.x,
+          y: source.y,
+          elevationMeters: source.elevationMeters,
+          rangeMeters: source.preciseRangeMeters,
+          preciseRangeMeters: source.preciseRangeMeters,
+          vagueRangeMeters: source.vagueRangeMeters,
+          preciseGroundRangeMeters: source.preciseGroundRangeMeters,
+          vagueGroundRangeMeters: source.vagueGroundRangeMeters,
+          senses: structuredClone(source.senses || {}),
+          lighting: source.lighting,
+        },
+      };
     }
     return next;
   }

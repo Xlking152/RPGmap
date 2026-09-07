@@ -1947,6 +1947,61 @@ test('LAN shares explored fog by party while keeping realtime vision per session
   }
 });
 
+test('LAN movement and Fog fast path matches a fresh private Audience projection', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Projection GM', requestedRole: 'gm' });
+    const state = initialTokenVisionWorld();
+    const world = state.preferences.worldV2;
+    const actor = world.actors.find(item => item.id === 'actor-a');
+    const source = world.scenes[0].tokens.find(item => item.id === 'token-a');
+    const companion = { ...structuredClone(source), id: 'token-a2', x: 14 };
+    world.actors = [actor];
+    world.scenes[0].tokens = [source, companion];
+    state.preferences.entitySystem.actors = structuredClone(world.actors);
+    state.preferences.entitySystem.tokens = structuredClone(world.scenes[0].tokens);
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'projection-fast-path-init' }));
+    await initialized;
+
+    const claimPromise = waitForMessage(gm.ws, message => message.type === 'access.claim');
+    gm.ws.send(JSON.stringify({
+      type: 'access.user.create', name: 'Projection Player', defaultActorId: actor.id,
+      ownership: { [actor.id]: 'owner' },
+    }));
+    const claim = await claimPromise;
+    const player = await openAndClaim(runtime.url, {
+      name: 'Projection Player', claimCode: claim.claimCode, visionSourceTokenId: source.id,
+    });
+    const before = player.welcome.world.state;
+    const moved = await sendWorldOperationsAndWait(player.ws, {
+      type: 'world.operation', operationId: 'projection-fast-path-move', baseRevision: 1,
+      operations: [{ type: 'token.move', payload: {
+        sceneId: world.activeSceneId, tokenId: source.id, placement: 'map', x: 12, y: 10,
+      } }],
+    });
+    const projected = applyDocumentChanges(before, moved.committed.changes);
+    const fresh = await requestWorldSnapshot(player.ws);
+    assert.deepEqual(
+      projected.preferences.worldV2.scenes[0].tokens,
+      fresh.state.preferences.worldV2.scenes[0].tokens,
+    );
+    assert.deepEqual(
+      projected.preferences.worldV2.scenes[0].fog,
+      fresh.state.preferences.worldV2.scenes[0].fog,
+    );
+    assert.deepEqual(projected.preferences.audienceVision, fresh.state.preferences.audienceVision);
+    assert.equal(projected.preferences.audienceVision.source.x, 12);
+    assert.ok(Object.keys(projected.preferences.worldV2.scenes[0]
+      .fog.exploredByParty['party-a'].rows).length > 0);
+
+    player.ws.close();
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
 test('GM can pre-create a User and Player can bind it with a reusable Player Key', async () => {
   const runtime = await startServer();
   try {
