@@ -310,6 +310,43 @@ test('Status and Effect operations use the injected reducer in offline and serve
   assert.equal(applied.results[0].action, 'apply');
 });
 
+test('Status projection replaces only targeted Actor and Token documents', () => {
+  const initial = state();
+  const definition = {
+    id: 'status-focused', name: 'Focused', category: 'neutral', scopes: ['actor', 'token'],
+    maxStacks: 1, changes: [], capabilities: {},
+  };
+  initial.preferences.worldV2.statusDefinitions = [structuredClone(definition)];
+  initial.preferences.entitySystem.statusDefinitions = [structuredClone(definition)];
+  const beforeActors = initial.preferences.worldV2.actors;
+  const beforeTokens = initial.preferences.worldV2.scenes[0].tokens;
+  const applied = applyWorldOperations(initial, [{
+    type: 'status.batch', payload: { operations: [
+      { type: 'status.apply', scope: 'actor', targetId: 'actor-a', statusId: definition.id },
+      { type: 'status.apply', scope: 'token', targetId: 'token-a', statusId: definition.id },
+    ] },
+  }], {
+    now: '2026-09-07T00:00:00.000Z',
+    applyStatus(current, operation, context) {
+      const reduced = reduceStatusOperation(current.preferences.entitySystem, operation, {
+        ...context, assumeNormalized: true,
+      });
+      current.preferences.entitySystem = reduced.state;
+      return { state: current, results: reduced.results };
+    },
+  });
+  const actors = applied.state.preferences.worldV2.actors;
+  const tokens = applied.state.preferences.worldV2.scenes[0].tokens;
+  assert.notStrictEqual(actors[0], beforeActors[0]);
+  assert.strictEqual(actors[1], beforeActors[1]);
+  assert.notStrictEqual(tokens[0], beforeTokens[0]);
+  assert.strictEqual(tokens[1], beforeTokens[1]);
+  assert.equal(actors[0].effects[0].definitionId, definition.id);
+  assert.equal(tokens[0].effects[0].definitionId, definition.id);
+  assert.deepEqual(beforeActors[0].effects, []);
+  assert.deepEqual(beforeTokens[0].effects, []);
+});
+
 test('combat.advance updates turn, round, and Status V4 durations atomically', () => {
   const initial = state();
   const definition = {
