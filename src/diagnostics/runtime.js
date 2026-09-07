@@ -79,6 +79,11 @@ export function createRuntimeDiagnostics({ clock = performance, windowNode = glo
       pending.delete(id);
       if (started !== undefined) record(name, now() - started);
     },
+    measure(name, callback) {
+      if (!enabled) return callback();
+      const started = now();
+      try { return callback(); } finally { record(name, now() - started); }
+    },
     destroy() { setEnabled(false); metrics.clear(); },
   });
   try { if (storage?.getItem(STORAGE_KEY) === 'true') setEnabled(true); } catch { /* Disabled by default. */ }

@@ -55,7 +55,7 @@ test('production registry splits the built-in map and large vendors without supp
   assert.match(rulesetBuiltinsSource, /await import\('\.\/index\.js'\)/);
   assert.match(builtinsSource, /await import\('\.\/default-map\.js'\)/);
   assert.match(viteSource, /codeSplitting/);
-  assert.match(viteSource, /world-bootstrap/);
+  assert.match(viteSource, /modulePreload: false/);
   assert.match(viteSource, /map-runtime-core/);
   assert.match(viteSource, /lazy-runtime-tools/);
   assert.doesNotMatch(viteSource, /chunkSizeWarningLimit/);

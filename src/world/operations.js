@@ -381,14 +381,9 @@ function applyStatusProjectionToWorld(state, operation) {
   }
   if (actorIds.length) {
     const actors = mapById(entity.actors || []);
-    world.actors = [...(world.actors || [])];
-    for (const actorId of actorIds) {
-      const index = world.actors.findIndex(actor => String(actor?.id || '') === actorId);
-      const projected = actors.get(actorId);
-      if (index >= 0 && projected) world.actors[index] = {
-        ...world.actors[index], effects: clone(Array.isArray(projected.effects) ? projected.effects : []),
-      };
-    }
+    world.actors = (world.actors || []).map(actor => actorIds.includes(actor.id)
+      ? { ...actor, effects: clone(actors.get(actor.id).effects || []) }
+      : actor);
   }
   if (operation.type.includes('.definition.') && Array.isArray(entity.statusDefinitions)) {
     world.statusDefinitions = clone(entity.statusDefinitions);
@@ -396,11 +391,9 @@ function applyStatusProjectionToWorld(state, operation) {
   const scene = activeScene(world);
   if (tokenIds.length) {
     const tokens = mapById(entity.tokens || []);
-    scene.tokens = [...(scene.tokens || [])];
-    for (const tokenId of tokenIds) {
-      const index = scene.tokens.findIndex(token => String(token?.id || '') === tokenId);
-      if (index >= 0) scene.tokens[index] = mergeRuntimeToken(scene.tokens[index], tokens.get(tokenId));
-    }
+    scene.tokens = (scene.tokens || []).map(token => tokenIds.includes(token.id)
+      ? mergeRuntimeToken(token, tokens.get(token.id))
+      : token);
   }
 }
 
