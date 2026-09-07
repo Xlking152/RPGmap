@@ -61,12 +61,16 @@ export function createSceneAreaSystem() {
       let preview = null;
       let destroyed = false;
       const off = [];
+      let cachedAreas = clone(api.getState()?.attackAreas || []);
 
       const status = message => {
         const node = shell.querySelector?.('[data-role="map-status"]');
         if (node) node.textContent = message;
       };
-      const areas = () => api.getState()?.attackAreas || [];
+      const areas = () => cachedAreas;
+      const refreshAreas = event => {
+        cachedAreas = clone(event?.detail?.state?.attackAreas || api.getState()?.attackAreas || []);
+      };
       const selected = () => areas().find(area => String(area.id) === String(selectedAreaId)) || null;
 
       function tokenOrigin(tokenId) {
@@ -108,6 +112,7 @@ export function createSceneAreaSystem() {
         const next = api.getState();
         next.attackAreas = clone(nextAreas);
         await Promise.resolve(api.commitState(next, { source, render: true }));
+        cachedAreas = clone(nextAreas);
         return true;
       }
 
@@ -397,11 +402,14 @@ export function createSceneAreaSystem() {
       };
       documentNode.addEventListener('keydown', keydown);
 
-      for (const name of ['state:commit', 'state:import', 'token:move', 'token:delete', 'marker:move', 'marker:delete']) {
+      for (const name of ['state:commit', 'state:import']) {
+        off.push(api.on?.(name, event => { refreshAreas(event); render(); }));
+      }
+      for (const name of ['token:move', 'token:delete', 'marker:move', 'marker:delete']) {
         off.push(api.on?.(name, render));
       }
       off.push(api.on?.('scene:content-change', event => {
-        if (event.detail?.types?.some(type => ['AttackArea', 'Marker'].includes(type))) render();
+        if (event.detail?.types?.some(type => ['AttackArea', 'Marker'].includes(type))) { refreshAreas(); render(); }
       }));
       off.push(api.on?.('app:destroy', () => {
         destroyed = true;

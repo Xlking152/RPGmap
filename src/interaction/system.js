@@ -393,9 +393,12 @@ export function createFeatureInteractionSystem() {
       }));
       off.push(api.selection?.subscribe?.(() => renderInspection()));
       for (const eventName of [
-        'state:import', 'state:commit', 'scene:restore', 'token:create', 'token:delete',
-        'token:move', 'token:property-change', 'status:change', 'feature:state-change', 'multiplayer:capabilities',
+        'state:import', 'state:commit', 'scene:restore', 'feature:state-change',
       ]) off.push(api.on?.(eventName, () => { syncFeatureVisualState(); renderInspection(); }));
+      for (const eventName of [
+        'token:create', 'token:delete', 'token:move', 'token:property-change',
+        'status:change', 'multiplayer:capabilities',
+      ]) off.push(api.on?.(eventName, renderInspection));
       off.push(api.on?.('scene:damage', () => {
         void ejectDestroyedFeatureOccupants().finally(() => { syncFeatureVisualState(); renderInspection(); });
       }));
