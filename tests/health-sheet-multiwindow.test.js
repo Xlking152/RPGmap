@@ -16,6 +16,13 @@ test('Health enhancement walks every open Actor sheet', () => {
   assert.match(source, /for \(const sheet[\s\S]*enhanceSheet\(sheet\)/);
 });
 
+test('Health enhancement reads indexed Actors and ignores unrelated map DOM mutations', () => {
+  assert.match(source, /api\.tokens\?\.getActor\?\.\(actorId\)/);
+  assert.match(source, /mutationTouches\(records, '\.entity-sheet'\)/);
+  assert.match(source, /mutationTouches\(records, '\.ui-current-inspector'\)/);
+  assert.doesNotMatch(source, /normalizeEntityState|api\?\.getState/);
+});
+
 test('Monster and Summon combat-first cards keep Health visible on their combat tab', () => {
   assert.match(source, /activeTab === 'combat'/);
   assert.match(source, /\['monster', 'summon'\]/);

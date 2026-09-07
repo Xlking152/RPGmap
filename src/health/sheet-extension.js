@@ -1,5 +1,4 @@
 import { deriveActorDocument, describeActorSheet } from '../actor/index.js';
-import { normalizeEntityState } from '../entities/model.js';
 import { resolveActorEffects } from '../status/model.js';
 import { describeHealth, healthModeOptions } from './model.js';
 
@@ -9,16 +8,10 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 }
 
-function currentEntityState(api) {
-  const appState = typeof api?.getState === 'function' ? api.getState() : null;
-  return normalizeEntityState(appState?.preferences?.entitySystem, { ruleset: api?.ruleset });
-}
-
 function subjectFromSheet(api, sheet) {
   const actorId = sheet?.dataset.actorId;
   if (!actorId) return null;
-  const state = currentEntityState(api);
-  const baseActor = state.actors.find(actor => String(actor.id) === String(actorId)) || null;
+  const baseActor = api.tokens?.getActor?.(actorId) || null;
   if (!baseActor || baseActor.audienceRestricted === true) return null;
   const tokenId = String(sheet.dataset.tokenId || '').trim() || null;
   if (!tokenId) return { actor: baseActor, actorId: String(actorId), tokenId: null };
@@ -29,11 +22,19 @@ function subjectFromSheet(api, sheet) {
 }
 
 function actorContext(api, actor) {
-  const state = currentEntityState(api);
   return {
     ruleset: api?.ruleset,
-    effects: resolveActorEffects(actor, state.statusDefinitions),
+    effects: resolveActorEffects(actor, api.status?.getDefinitions?.() || []),
   };
+}
+
+function mutationTouches(records, selector) {
+  return records.some(record => {
+    const target = record.target?.nodeType === 1 ? record.target : null;
+    if (target?.closest?.(selector)) return true;
+    return [...(record.addedNodes || [])].some(node => node.nodeType === 1
+      && (node.matches?.(selector) || node.querySelector?.(selector)));
+  });
 }
 
 function resolveActorHealth(actor, api) {
@@ -269,7 +270,10 @@ export function createHealthSheetExtension() {
         }
       });
 
-      const observer = new MutationObserver(() => queueMicrotask(() => { enhanceSheets(); enhanceInspector(); }));
+      const observer = new MutationObserver(records => {
+        if (mutationTouches(records, '.entity-sheet')) queueMicrotask(enhanceSheets);
+        if (mutationTouches(records, '.ui-current-inspector')) queueMicrotask(enhanceInspector);
+      });
       observer.observe(documentNode.body, { childList: true, subtree: true });
       api.selection?.subscribe?.(() => queueMicrotask(enhanceInspector));
       api.on('state:import', () => queueMicrotask(() => { enhanceSheets(); enhanceInspector(); }));

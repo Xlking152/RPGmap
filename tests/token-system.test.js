@@ -126,6 +126,7 @@ test('TokenSystem indexes a large Scene without cloning World per Token read', (
   assert.equal(worldReads, 1);
   assert.equal(api.tokens.list().length, 500);
   for (const token of tokens) assert.equal(api.tokens.get(token.id).id, token.id);
+  assert.equal(api.tokens.getActor('actor-1').id, 'actor-1');
   assert.equal(worldReads, 1);
 });
 

@@ -141,6 +141,7 @@ export function createTokenRendererSystem() {
       const preparedRoutes = new Map();
       let eventRenderFrame = null;
       const pendingRenderIds = new Set();
+      const pendingPositionIds = new Set();
       let pendingFullRender = false;
       let selectedIds = new Set(api.selection?.getSelectedTokenIds?.() || []);
       let destroyed = false;
@@ -277,7 +278,7 @@ export function createTokenRendererSystem() {
           motion.frame = null;
           api.emit?.('token:visual-move-end', { id: motion.id, tokenId: motion.id, point: motion.target });
           const canonical = normalizeTokenPoint(api.tokens.get?.(motion.id));
-          if (!motion.prediction || sameTokenPoint(canonical, motion.target)) renderToken(motion.id);
+          if (motion.prediction && sameTokenPoint(canonical, motion.target)) renderToken(motion.id);
         };
         motion.frame = requestFrame(step);
       }
@@ -377,6 +378,20 @@ export function createTokenRendererSystem() {
         if (updateSummary) renderSummary();
       }
 
+      function renderTokenPosition(tokenId) {
+        const id = String(tokenId || '');
+        const token = api.tokens.get?.(id);
+        const view = views.get(id);
+        const model = models.get(id);
+        if (!token || token.placement !== 'map' || !view || !model) {
+          renderToken(id, { summary: false });
+          return;
+        }
+        const moved = { ...model, x: Number(token.x), y: Number(token.y) };
+        models.set(id, moved);
+        moveView(moved, view);
+      }
+
       function render() {
         if (destroyed) return;
         const tokens = api.tokens.list();
@@ -391,9 +406,11 @@ export function createTokenRendererSystem() {
         if (pendingFullRender) render();
         else {
           for (const id of pendingRenderIds) renderToken(id, { summary: false });
-          renderSummary();
+          for (const id of pendingPositionIds) if (!pendingRenderIds.has(id)) renderTokenPosition(id);
+          if (pendingRenderIds.size) renderSummary();
         }
         pendingRenderIds.clear();
+        pendingPositionIds.clear();
         pendingFullRender = false;
       }
 
@@ -414,8 +431,18 @@ export function createTokenRendererSystem() {
           for (const token of api.tokens.list()) if (actorIds.has(String(token.actorId))) ids.add(String(token.id));
         }
         if (!ids.size && actorIds.size) return;
+        const fields = Array.isArray(detail.fields) ? detail.fields : Object.keys(detail.changed || {});
+        const positionOnly = ids.size && !actorIds.size && fields.length
+          && fields.every(field => ['x', 'y'].includes(String(field)));
         if (!ids.size) pendingFullRender = true;
-        else for (const id of ids) pendingRenderIds.add(id);
+        else if (positionOnly) {
+          for (const id of ids) if (!pendingRenderIds.has(id)) pendingPositionIds.add(id);
+        } else {
+          for (const id of ids) {
+            pendingPositionIds.delete(id);
+            pendingRenderIds.add(id);
+          }
+        }
         if (eventRenderFrame === null) eventRenderFrame = requestFrame(flushEventRender);
       }
 

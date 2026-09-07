@@ -23,7 +23,7 @@ const TOKEN_COUNT = Math.max(1, Math.min(500, Number(process.env.RPGMAP_BROWSER_
 const SESSION_COUNT = Math.max(1, Math.min(7, Number(process.env.RPGMAP_BROWSER_BENCHMARK_SESSIONS) || 7));
 const WAIT_MS = 60_000;
 const SETUP_WAIT_MS = 20_000;
-const CDP_WAIT_MS = Math.max(10_000, Number(process.env.RPGMAP_BROWSER_BENCHMARK_CDP_TIMEOUT_MS) || 10_000);
+const CDP_WAIT_MS = Math.max(10_000, Number(process.env.RPGMAP_BROWSER_BENCHMARK_CDP_TIMEOUT_MS) || 60_000);
 
 function browserExecutable() {
   const override = process.env.RPGMAP_BENCHMARK_BROWSER_EXECUTABLE;
@@ -357,6 +357,7 @@ try {
     await gm.evaluate(`document.querySelector('#app').rpgMapApp.world.performOperations([{
       type:'scene.settings.patch', payload:{sceneId:'scene-northern-song-lanzhou-1104',patch:{lineOfSightEnabled:${lineOfSightEnabled}}}
     }],{source:'benchmark:${name}'})`);
+    await new Promise(resolve => setTimeout(resolve, 1000));
     await Promise.all(sessions.map(session => session.resetDiagnostics()));
     const started = performance.now();
     let step = 0;

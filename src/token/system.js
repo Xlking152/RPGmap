@@ -85,6 +85,7 @@ export function createTokenRuntimeSystem() {
       api.tokens = {
         schemaVersion: 2,
         getActiveSceneId() { return String(readWorld?.activeSceneId || ''); },
+        getActor(actorId) { ensureReadModel(); return clone(actorsById.get(String(actorId)) || null); },
         list() { ensureReadModel(); return clone(readTokens); },
         get(tokenId) { ensureReadModel(); return clone(tokensById.get(String(tokenId)) || null); },
         resolveActor(tokenId) {

@@ -6,6 +6,7 @@ const model = readFileSync(new URL('../src/health/model.js', import.meta.url), '
 const tokenBars = readFileSync(new URL('../src/health/token-bars.js', import.meta.url), 'utf8');
 const instanceUi = readFileSync(new URL('../src/health/instance-ui.js', import.meta.url), 'utf8');
 const sheetExtension = readFileSync(new URL('../src/health/sheet-extension.js', import.meta.url), 'utf8');
+const healthController = readFileSync(new URL('../src/health/controller.js', import.meta.url), 'utf8');
 
 test('compact health text is generic presentation derived from current/max, not a BLA special case', () => {
   assert.match(model, /segments\.length > 1/);
@@ -27,4 +28,11 @@ test('marker and other Token instances expose a per-instance Ruleset health mode
 test('Actor sheet and current inspector prefer the compact HP fraction when available', () => {
   assert.match(sheetExtension, /entity-health-compact/);
   assert.match(sheetExtension, /view\.compactSummary \|\| view\.summary/);
+});
+
+test('Health read APIs use indexed Token Runtime documents instead of reloading EntityStore', () => {
+  assert.match(healthController, /api\.tokens\?\.getActor\?\.\(actorId\)/);
+  assert.match(healthController, /api\.tokens\?\.resolveActor\?\.\(tokenId\)/);
+  const reads = healthController.slice(healthController.indexOf('const healthApi = {'), healthController.indexOf('async setMode'));
+  assert.doesNotMatch(reads, /new EntityStore|store\.load/);
 });

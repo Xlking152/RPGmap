@@ -170,8 +170,22 @@ export function createHealthTokenBars() {
         return [...ids];
       }
 
+      function moveTokenBar(event) {
+        const id = tokenIdFromEvent(event);
+        const marker = markers.get(id);
+        if (!marker) return;
+        const token = api.tokens.get?.(id);
+        const x = Number(token?.x);
+        const y = Number(token?.y);
+        if (!token || token.placement !== 'map' || !Number.isFinite(x) || !Number.isFinite(y)) {
+          removeToken(id);
+          return;
+        }
+        marker.setLatLng(worldToLatLng({ x, y }, api.mapPackage.height));
+      }
+
       off.push(api.on('token:create', event => scheduleTokenRender(tokenIdFromEvent(event))));
-      off.push(api.on('token:move', event => scheduleTokenRender(tokenIdFromEvent(event))));
+      off.push(api.on('token:move', moveTokenBar));
       off.push(api.on('token:delete', event => removeToken(tokenIdFromEvent(event))));
       off.push(api.on('token:size-change', event => scheduleTokenRender(tokenIdFromEvent(event))));
       for (const eventName of ['health:change', 'status:change', 'actor:change']) {

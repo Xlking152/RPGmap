@@ -395,10 +395,11 @@ export function createFeatureInteractionSystem() {
       for (const eventName of [
         'state:import', 'state:commit', 'scene:restore', 'feature:state-change',
       ]) off.push(api.on?.(eventName, () => { syncFeatureVisualState(); renderInspection(); }));
+      const renderInspectionIfSelected = () => { if (selectedFeatureId) renderInspection(); };
       for (const eventName of [
         'token:create', 'token:delete', 'token:move', 'token:property-change',
         'status:change', 'multiplayer:capabilities',
-      ]) off.push(api.on?.(eventName, renderInspection));
+      ]) off.push(api.on?.(eventName, renderInspectionIfSelected));
       off.push(api.on?.('scene:damage', () => {
         void ejectDestroyedFeatureOccupants().finally(() => { syncFeatureVisualState(); renderInspection(); });
       }));

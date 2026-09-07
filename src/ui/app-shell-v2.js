@@ -253,6 +253,7 @@ export function createAppShellUiV2() {
         const tokenIds = [detail.tokenId, detail.id, ...(detail.tokenIds || [])].filter(Boolean).map(String);
         const actorIds = [detail.actorId, ...(detail.actorIds || [])].filter(Boolean).map(String);
         const primaryId = api.selection.getPrimaryTokenId?.();
+        if (!primaryId && (tokenIds.length || actorIds.length)) return;
         if (primaryId && (tokenIds.length || actorIds.length)) {
           const token = api.tokens.get(primaryId);
           if (!tokenIds.includes(String(primaryId)) && !actorIds.includes(String(token?.actorId))) return;

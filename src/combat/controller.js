@@ -379,7 +379,10 @@ export function createCombatController({ selection } = {}) {
       });
 
       selection?.subscribe?.(() => render());
-      api.on('token:move', renderTurn);
+      api.on('token:move', event => {
+        const current = store.state.combat?.state === 'active' ? currentCombatant(store.state.combat) : null;
+        if (current && String(current.tokenId) === String(event.detail?.tokenId || event.detail?.id || '')) renderTurn();
+      });
       api.on('token:delete', event => {
         const combat = store.state.combat;
         const tokenId = event.detail?.tokenId || event.detail?.id;

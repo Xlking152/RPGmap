@@ -686,6 +686,8 @@ export function createEntityUiTool(options = {}) {
         const tokens = new Set(tokenIds.map(String));
         for (const record of [...sheetManager.list()]) {
           if (actors.has(String(record.actorId)) || (record.tokenId && tokens.has(String(record.tokenId)))) {
+            const affected = changes && sheetInstances.get(record.key)?.affectedParts(changes);
+            if (affected && !['header', 'classification', 'tabs', 'body'].some(name => affected.has(name))) continue;
             if (!pendingSheetRenders.has(record.key)) api.diagnostics?.begin('sheet.queue', record.key);
             const pending = pendingSheetRenders.get(record.key);
             pendingSheetRenders.set(record.key, pending === null || changes === null ? null : [...(pending || []), ...changes]);
