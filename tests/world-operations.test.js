@@ -415,6 +415,10 @@ test('Fog Document changes carry bounded circle and sweep invalidation rectangle
   ];
   const metrics = { metersPerUnit: 2 };
   const applied = applyWorldOperations(initial, operations, { mapMetrics: metrics });
+  assert.strictEqual(applied.state.preferences.worldV2.actors, initial.preferences.worldV2.actors);
+  assert.strictEqual(applied.state.preferences.worldV2.scenes[0].tokens, initial.preferences.worldV2.scenes[0].tokens);
+  assert.notStrictEqual(applied.state.preferences.worldV2.scenes[0], initial.preferences.worldV2.scenes[0]);
+  assert.equal(initial.preferences.worldV2.scenes[0].fog, undefined);
   const changes = createDocumentChanges(initial, applied.state, null, {
     fog: applied.results,
   });

@@ -7,7 +7,7 @@ import {
 import { deriveSceneState } from '../engine/state.js';
 import { tokenDiameterMeters, tokenElevationMeters } from '../elevation/model.js';
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function finitePoint(value) {
   const x = Number(value?.x);

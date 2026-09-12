@@ -1,4 +1,4 @@
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function array(value) {
   return Array.isArray(value) ? value : [];

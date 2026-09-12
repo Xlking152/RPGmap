@@ -128,10 +128,18 @@ export function inspectLineOfSight({
   if (!start || !end) return Object.freeze({ clear: false, code: 'spatial_point_invalid' });
   const excluded = new Set(excludedFeatureIds.map(String));
   const scale = Number.isFinite(Number(metersPerUnit)) && Number(metersPerUnit) > 0 ? Number(metersPerUnit) : 1;
+  const rayBounds = [
+    Math.min(start.x, end.x), Math.min(start.y, end.y),
+    Math.max(start.x, end.x), Math.max(start.y, end.y),
+  ];
   for (const raw of occluders) {
     const occluder = normalizeVisionOccluder(raw);
     if (!occluder || excluded.has(String(occluder.featureId || occluder.id))) continue;
     const polygon = occluder.polygon;
+    if (polygon.every(point => point[0] < rayBounds[0])
+      || polygon.every(point => point[0] > rayBounds[2])
+      || polygon.every(point => point[1] < rayBounds[1])
+      || polygon.every(point => point[1] > rayBounds[3])) continue;
     const intersections = [];
     for (let index = 0; index < polygon.length; index += 1) {
       const t = segmentIntersectionT(start, end, polygon[index], polygon[(index + 1) % polygon.length]);

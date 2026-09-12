@@ -1,6 +1,6 @@
 import { normalizeActorDocument } from '../actor/index.js';
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};

@@ -19,7 +19,7 @@ import {
 
 export const RUNTIME_SAVE_VERSION = 2;
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function object(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

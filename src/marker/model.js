@@ -1,7 +1,7 @@
 const MARKER_KINDS = new Set(['trap', 'target', 'area', 'note']);
 const VISIBILITY_MODES = new Set(['public', 'party', 'gm', 'users']);
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};

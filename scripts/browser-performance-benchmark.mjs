@@ -142,7 +142,7 @@ async function launchServer({ port, mapDir }) {
       RPGMAP_GM_SECRET: GM_SECRET, RPGMAP_JOIN_CODE: JOIN_CODE,
       RPGMAP_MAP_DIR: mapDir, RPGMAP_PUBLIC_DIR: path.join(packageRoot, 'app'), PORT: String(port),
     },
-    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true,
   });
   let output = '';
   child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
@@ -159,7 +159,8 @@ async function launchServer({ port, mapDir }) {
 async function stopServer(server) {
   if (!server || server.child.exitCode !== null) return;
   const exited = new Promise(resolve => server.child.once('exit', resolve));
-  server.child.kill('SIGTERM');
+  if (server.child.connected) server.child.send('rpgmap.shutdown', () => {});
+  else server.child.kill('SIGTERM');
   await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 3000))]);
   if (server.child.exitCode === null) server.child.kill('SIGKILL');
 }
@@ -350,6 +351,8 @@ try {
     console.error(`[browser-benchmark] ${session.name} ready`);
   }
   console.error(`[browser-benchmark] ${SESSION_COUNT} browser session${SESSION_COUNT === 1 ? '' : 's'} connected`);
+  await new Promise(resolve => setTimeout(resolve, 5000));
+  console.error('[browser-benchmark] foreground sessions warmed up');
 
   async function runPhase(name, lineOfSightEnabled) {
     console.error(`[browser-benchmark] ${name} phase started (${phaseSeconds}s)`);

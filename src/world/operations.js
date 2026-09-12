@@ -114,6 +114,7 @@ const STATUS_TYPES = new Set([...OPERATION_TYPES].filter(type => type.startsWith
 const COPY_ON_WRITE_TYPES = new Set([
   'token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch',
   'scene.door.use', 'scene.featureState.patch', 'scene.activate',
+  'scene.fog.explore', 'scene.fog.hide', 'scene.fog.reset',
 ]);
 const TOKEN_POSITION_TYPES = new Set(['token.move', 'token.reposition']);
 const GRANULAR_OPERATION_TYPES = new Set([
@@ -124,7 +125,7 @@ const GRANULAR_OPERATION_TYPES = new Set([
   'chat.append', 'chat.clear',
 ]);
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function cloneProjection(value) {
   if (Array.isArray(value)) return value.map(cloneProjection);

@@ -9,7 +9,7 @@ const MAX_ROW_SPANS = 4096;
 // Ruleset-facing sight-radius ceiling.
 const MAX_UNBOUNDED_FOG_RADIUS_METERS = 50000;
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};

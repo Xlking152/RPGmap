@@ -210,7 +210,7 @@ export function createMultiplayerController() {
 
       function scheduleReconnect() {
         if (intentionalClose || !lastConnectionOptions || reconnectTimer !== null) return;
-        const delays = [1, 2, 4, 8, 10];
+        const delays = [0.25, 0.5, 1, 2, 4];
         const base = delays[Math.min(reconnectAttempt, delays.length - 1)];
         reconnectAttempt += 1;
         const delayMs = Math.round(base * 1000 * (0.85 + Math.random() * 0.3));

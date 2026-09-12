@@ -1,7 +1,7 @@
 export const WORLD_CATALOG_SCHEMA_VERSION = 1;
 export const WORLD_CATALOG_STORAGE_KEY = 'rpgmap:world-catalog:v1';
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function text(value, fallback = '') {
   const result = typeof value === 'string' ? value.trim() : '';

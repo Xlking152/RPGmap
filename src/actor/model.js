@@ -2,7 +2,7 @@ import { getCompatibilityRuleset } from '../ruleset/active-compat.js';
 import { normalizeActorClassification } from './classification.js';
 import { normalizeActorPublicProfile } from './public-profile.js';
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};

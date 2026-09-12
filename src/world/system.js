@@ -13,7 +13,7 @@ import { applyWorldOperations, deriveWorldOperations } from './operations.js';
 import { createDocumentChanges } from '../documents/changes.js';
 import { createMovementAuthority } from '../movement/authority.js';
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function currentWorldFromState(state) {
   return state?.preferences?.[WORLD_STATE_KEY] || null;

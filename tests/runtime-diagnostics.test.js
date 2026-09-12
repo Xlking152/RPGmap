@@ -2,19 +2,33 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRuntimeDiagnostics } from '../src/diagnostics/runtime.js';
 
-function fixture() {
+function fixture(windowOverrides = {}) {
   let time = 0;
   let nextId = 0;
   const frames = new Map();
   const listeners = new Map();
   const documentNode = { visibilityState: 'visible', addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) };
-  const windowNode = { requestAnimationFrame: fn => { frames.set(++nextId, fn); return nextId; }, cancelAnimationFrame: id => frames.delete(id) };
+  const windowNode = { requestAnimationFrame: fn => { frames.set(++nextId, fn); return nextId; }, cancelAnimationFrame: id => frames.delete(id), ...windowOverrides };
   const diagnostic = createRuntimeDiagnostics({ documentNode, windowNode, clock: { now: () => time }, limit: 3 });
   return { diagnostic, frames, documentNode, listeners, advance(ms) {
     time += ms;
     const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(fn => fn(time));
   }, elapse(ms) { time += ms; } };
 }
+
+test('Diagnostics reset drains long tasks queued before the measurement boundary', () => {
+  let drained = 0;
+  class Observer {
+    static supportedEntryTypes = ['longtask'];
+    observe() {}
+    disconnect() {}
+    takeRecords() { drained += 1; return []; }
+  }
+  const { diagnostic } = fixture({ PerformanceObserver: Observer });
+  diagnostic.setEnabled(true);
+  diagnostic.reset();
+  assert.equal(drained, 1);
+});
 
 test('Local diagnostics are disabled by default and do not schedule frames or input listeners', () => {
   const { diagnostic, frames, listeners } = fixture();

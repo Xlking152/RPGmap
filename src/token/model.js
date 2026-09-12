@@ -2,7 +2,7 @@ import { createInitialActorDelta, normalizeActorDelta } from './actor.js';
 import { normalizeTokenAccess } from './access.js';
 import { normalizeMovementState } from '../movement/model.js';
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function text(value, fallback = '') {
   const result = typeof value === 'string' ? value.trim() : '';

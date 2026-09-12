@@ -676,6 +676,7 @@ function broadcastWorld(message, exceptSocket = null) {
       state: audienceStateFor(session, message.state),
       audienceRevision: session.audienceRevision,
     };
+    if (message.state !== undefined) session.audienceProjection = projected.state;
     sendSocket(socket, projected);
   }
 }
@@ -1338,6 +1339,8 @@ function appendVisionExplorationOperations(operations) {
 }
 function accessSnapshotFor(session) {
   const gm = session.role === 'gm';
+  const projection = session.audienceProjection || audienceStateFor(session);
+  session.audienceProjection ||= projection;
   const users = access.users.map(user => {
     const base = publicUser(user);
     base.online = onlineForUser(user.id);
@@ -1351,7 +1354,7 @@ function accessSnapshotFor(session) {
     selfUserId: session.userId || null,
     users,
     pending: gm ? [...sessions.values()].filter(item => item.role === 'player' && item.identityStatus === 'pending').map(publicSession) : [],
-    actors: actorCatalogFromWorld(audienceStateFor(session)),
+    actors: actorCatalogFromWorld(projection),
   };
 }
 function sendAccessSnapshot(socket) {
@@ -1413,7 +1416,7 @@ function sendWelcome(socket, session, { includeWorld = true, pendingApproval = f
     : null;
   const resumeAccepted = Array.isArray(resumed);
   const projectedState = includeWorld && !resumeAccepted ? audienceStateFor(session) : null;
-  session.audienceProjection = projectedState ? structuredClone(projectedState) : null;
+  session.audienceProjection = projectedState || null;
   sendSocket(socket, {
     type: 'welcome',
     contentToken: session.identityStatus === 'active' ? session.contentToken : null,
@@ -1429,7 +1432,6 @@ function sendWelcome(socket, session, { includeWorld = true, pendingApproval = f
     permissions: sessionPermissions(session),
     server: multiplayerInfo(),
   });
-  sendAccessSnapshot(socket);
   if (resumeAccepted) {
     for (const response of resumed) sendSocket(socket, response);
     sendSocket(socket, {
@@ -2181,3 +2183,19 @@ server.listen(PORT, HOST, () => {
   console.log(' Press Ctrl+C to stop the server.');
   console.log('');
 });
+
+let shuttingDown = false;
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const connections = [...sessions.keys()];
+  for (const socket of connections) closeSocket(socket, 1012, 'server restart');
+  server.close();
+  setTimeout(() => {
+    for (const socket of connections) socket.destroy();
+    if (process.connected) process.disconnect();
+  }, 250);
+}
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);
+process.on('message', message => { if (message === 'rpgmap.shutdown') shutdown(); });

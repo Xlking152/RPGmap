@@ -1,4 +1,4 @@
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function targetError(message, code = 'unknown_actor_attribute_path') {
   const error = new Error(message);

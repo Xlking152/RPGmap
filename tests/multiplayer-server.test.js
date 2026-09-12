@@ -117,7 +117,7 @@ async function startServer(extraEnv = {}, existingMapDir = null) {
   const serverPath = fileURLToPath(new URL('../deployment/local-server/server.mjs', import.meta.url));
   const child = spawn(process.execPath, [serverPath], {
     env: { ...process.env, NODE_ENV: 'test', RPGMAP_TEST_ALLOW_MISSING_ORIGIN: '1', RPGMAP_GM_SECRET: 'TEST-GM-SECRET', PORT: '0', RPGMAP_MAP_DIR: mapDir, RPGMAP_PUBLIC_DIR: mapDir, ...extraEnv },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   let stderr = '';
   child.stderr.setEncoding('utf8');
@@ -142,7 +142,11 @@ async function startServer(extraEnv = {}, existingMapDir = null) {
 async function stopServer(runtime, { removeMap = true } = {}) {
   if (runtime.child.exitCode === null && runtime.child.signalCode === null) {
     const exited = new Promise(resolve => runtime.child.once('exit', resolve));
-    runtime.child.kill('SIGTERM');
+    if (runtime.shutdownRequested !== true) {
+      runtime.shutdownRequested = true;
+      if (runtime.child.connected) runtime.child.send('rpgmap.shutdown', () => {});
+      else runtime.child.kill('SIGTERM');
+    }
     const stopped = await Promise.race([
       exited.then(() => true),
       new Promise(resolve => setTimeout(() => resolve(false), 5_000)),
@@ -157,6 +161,56 @@ async function stopServer(runtime, { removeMap = true } = {}) {
   }
   if (removeMap) await rm(runtime.mapDir, { recursive: true, force: true });
 }
+
+test('Local server graceful shutdown closes active sessions for immediate reconnect', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Shutdown GM', requestedRole: 'gm' });
+    const closed = new Promise(resolve => gm.ws.addEventListener('close', resolve, { once: true }));
+    const exited = new Promise(resolve => runtime.child.once('exit', resolve));
+    runtime.shutdownRequested = true;
+    runtime.child.send('rpgmap.shutdown', () => {});
+    const event = await Promise.race([
+      closed,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('graceful shutdown timeout')), 2000)),
+    ]);
+    assert.equal(event.code, 1012);
+    await Promise.race([
+      exited,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('server exit timeout')), 2000)),
+    ]);
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('Full World replacement refreshes the cached Access Actor catalog', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Replacement GM', requestedRole: 'gm' });
+    const initial = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    await initial;
+
+    const replacement = initialWorldV2();
+    replacement.preferences.worldV2.actors[0].name = 'Replacement Actor';
+    replacement.preferences.entitySystem.actors[0].name = 'Replacement Actor';
+    const replaced = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 2);
+    gm.ws.send(JSON.stringify({
+      type: 'world.push', operationId: 'replacement-catalog', baseRevision: 1,
+      state: replacement, reason: 'file-import:replacement-catalog',
+    }));
+    await replaced;
+
+    const catalogPromise = waitForMessage(gm.ws, message => message.type === 'access.snapshot');
+    gm.ws.send(JSON.stringify({ type: 'access.request' }));
+    const catalog = await catalogPromise;
+    assert.equal(catalog.actors.find(actor => actor.id === 'actor-a').name, 'Replacement Actor');
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
 
 function initialWorld() {
   return {

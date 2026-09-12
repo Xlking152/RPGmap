@@ -5,7 +5,7 @@ import { applyAreaHandleDrag, areaHandlePoints } from './area-handle-geometry.js
 const STYLE_ID = 'rpgmap-scene-area-handle-style';
 const MAX_AREA_SCALE = 4;
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function installStyles(documentNode) {
   if (!documentNode?.head || documentNode.getElementById(STYLE_ID)) return;

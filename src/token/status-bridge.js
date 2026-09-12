@@ -2,7 +2,7 @@ import { resolveStatuses } from '../status/model.js';
 import { validateStatusDefinitionForActors } from '../status/target-validation.js';
 import { applySyntheticActorStatusBatch, applySyntheticActorStatusOperation } from './synthetic-status.js';
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function contextValue(context, tokenId) {
   if (context && typeof context === 'object' && !Array.isArray(context)) {

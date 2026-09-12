@@ -1,4 +1,4 @@
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function plainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));

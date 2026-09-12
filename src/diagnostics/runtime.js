@@ -71,7 +71,7 @@ export function createRuntimeDiagnostics({ clock = performance, windowNode = glo
   }
   const api = Object.freeze({
     get enabled() { return enabled; }, setEnabled, record, snapshot,
-    reset() { metrics.clear(); pending.clear(); previousFrame = null; },
+    reset() { observer?.takeRecords(); metrics.clear(); pending.clear(); previousFrame = null; },
     begin(name, key) { if (enabled && METRICS.has(name)) pending.set(`${name}:${key}`, now()); },
     end(name, key) {
       const id = `${name}:${key}`;

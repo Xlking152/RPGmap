@@ -4,7 +4,7 @@ const OMIT_WORLD = new Set(['actors', 'scenes', 'statusDefinitions', 'journals',
 const OMIT_SCENE = new Set([...Object.values(SCENE_COLLECTIONS), 'featureStates', 'fog']);
 const FORBIDDEN = new Set(['__proto__', 'prototype', 'constructor']);
 const plain = value => Boolean(value && typeof value === 'object' && !Array.isArray(value));
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function fail(message, code = 'invalid_document_change') {
   throw Object.assign(new Error(message), { code });

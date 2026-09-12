@@ -1,6 +1,6 @@
 import { normalizeCombatState, removeCombatant } from '../combat/model.js';
 
-const clone = value => structuredClone(value);
+const clone = structuredClone;
 
 function array(value) {
   return Array.isArray(value) ? value : [];
