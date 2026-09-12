@@ -9,6 +9,7 @@
 - 增加球形精确/模糊感知、有限高度 LOS、静态/Token 光源及 GM/Scene LOS 覆盖。兰州只为可靠的墙、门和院墙声明遮挡，不把普通碰撞体推断为无限高墙。
 - 增加 Ruleset 结算解释、授权门交互和 Journal Audience 裁剪。门操作校验控制权、目标可见性、锁、默认 2 米三维距离及排除门自身后的 LOS。
 - 构建保持 World Manager 首屏轻量，地图 Runtime、Leaflet、角色卡、状态编辑器、资料库和 Journal 按需加载；正式候选继续受全量测试、bundle、包清单、Windows smoke 与真实 Radmin 验收约束。
+- 500 Token、GM + 6 Player 的本地候选验收通过正常视野与 LOS/光源各 60 秒的前台浏览器门槛，并于 3 秒故障后在 13 秒上限内恢复全部会话；真实 Radmin Direct/Relay 多机验收仍是合并和发布前的外部门槛。
 
 ## v2.3.4
 
