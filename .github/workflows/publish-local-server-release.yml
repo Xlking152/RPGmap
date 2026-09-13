@@ -80,6 +80,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22.12.0'
+      # LAN smoke imports source-side geometry helpers; the installed ZIP itself
+      # remains standalone and is still verified and launched below.
+      - run: npm ci --no-audit --no-fund
       - uses: actions/download-artifact@v8
         with:
           name: release-candidate-v${{ needs.candidate.outputs.version }}
