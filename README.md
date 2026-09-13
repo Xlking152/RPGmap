@@ -1,6 +1,6 @@
 # RPGmap
 
-RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.4.1**，提供 World/Scene 管理、Actor 模板与 Token 实例、米制空间移动、生命/伤势、Status V4、战斗、折叠聊天、四级权限投影、三维感知与光源、战争迷雾、模板资料库和 Journal，以及 Windows 本机/局域网多人运行包。
+RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.4.2**，提供 World/Scene 管理、Actor 模板与 Token 实例、米制空间移动、生命/伤势、Status V4、战斗、折叠聊天、四级权限投影、三维感知与光源、战争迷雾、模板资料库和 Journal，以及 Windows 本机/局域网多人运行包。
 
 内置的“北宋兰州城”是复杂 Reference MapPackage，用于验证建筑、城墙、城门、桥梁、水体、破坏、洪水、导航、有限高度 LOS 和 29 张 WebP 美术资源能够通过通用 Core 运行。v2.4.0 将旧英尺字段迁移到米制空间，并保持稳定 Feature、Actor、Token 与 Scene 引用。
 
@@ -9,7 +9,7 @@ RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前�
 正式 Windows Release：
 
 1. 安装 Node.js `20.19+` 或 `22.12+`。
-2. 下载并解压 `RPGmap-v2.4.1.zip`。
+2. 下载并解压 `RPGmap-v2.4.2.zip`。
 3. 双击 `start-rpgmap.bat`。
 4. GM 使用启动窗口中的 Local URL 与 GM Secret；同一局域网的 Player 使用 LAN URL 与 Join Code。
 

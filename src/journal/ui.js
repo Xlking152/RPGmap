@@ -12,12 +12,15 @@ export function createJournalView(api) {
     return value;
   };
   const dialog = node('dialog', { class: 'journal-dialog', 'aria-label': 'World 资料页' });
-  dialog.innerHTML = '<div class="journal-shell"><aside class="journal-index"><header><h2>资料页</h2><button type="button" data-add>新建</button></header><div class="journal-list"></div></aside><main class="journal-main"></main></div>';
+  dialog.innerHTML = '<header class="journal-toolbar"><h2>资料页</h2><button type="button" data-journal-close aria-label="关闭资料页">× 关闭</button></header><div class="journal-shell"><aside class="journal-index"><header><h2>页面列表</h2><button type="button" data-add>新建</button></header><div class="journal-list"></div></aside><main class="journal-main"></main></div>';
   doc.body.append(dialog);
   const add = dialog.querySelector('[data-add]');
   const list = dialog.querySelector('.journal-list');
   const main = dialog.querySelector('.journal-main');
   let selectedId = null, generation = 0;
+  const close = () => { generation++; dialog.close(); };
+  dialog.querySelector('[data-journal-close]').onclick = close;
+  dialog.addEventListener('close', () => { generation++; });
   const entries = () => api.journals.list().sort((left, right) => left.title.localeCompare(right.title, 'zh-CN'));
   const welcome = () => {
     generation++;
@@ -41,7 +44,7 @@ export function createJournalView(api) {
     main.replaceChildren(node('p', {}, '正在读取正文...'));
     try {
       const loaded = await api.journals.read(entry);
-      if (current !== generation) return;
+      if (current !== generation || !dialog.open) return;
       const header = node('header', { class: 'journal-head' });
       header.append(node('h2', {}, loaded.entry.title));
       const command = (label, action) => {
@@ -49,13 +52,12 @@ export function createJournalView(api) {
         button.onclick = action; header.append(button);
       };
       if (api.journals.canEdit()) command('编辑', () => edit(loaded.entry, loaded.body));
-      command('关闭', () => dialog.close());
       const bodyNode = node('article', { class: 'journal-article' });
       bodyNode.innerHTML = renderJournalMarkdown(loaded.body.markdown);
       for (const reference of loaded.body.images || []) bodyNode.append(node('img', { 'data-content-ref': reference, alt: '' }));
       main.replaceChildren(header, bodyNode);
     } catch (error) {
-      if (current === generation) main.replaceChildren(node('p', { class: 'journal-message' }, error.message));
+      if (current === generation && dialog.open) main.replaceChildren(node('p', { class: 'journal-message' }, error.message));
     }
   }
 
