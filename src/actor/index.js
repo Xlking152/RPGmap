@@ -5,6 +5,7 @@ export {
   deriveActorDocument,
   describeActor,
   describeActorSheet,
+  explainActorCalculation,
   listActorAttributePaths,
   normalizeActorDocument,
   performActorOperation,

@@ -10,10 +10,10 @@ import { pruneProjectedWorldReferences } from './references.js';
 import { assertWorldRuleset } from './validation.js';
 import { reduceStatusOperation, STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { applyWorldOperations, deriveWorldOperations } from './operations.js';
+import { createDocumentChanges } from '../documents/changes.js';
+import { createMovementAuthority } from '../movement/authority.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 function currentWorldFromState(state) {
   return state?.preferences?.[WORLD_STATE_KEY] || null;
@@ -35,6 +35,8 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       if (!api || api.world) return;
       const mapPackage = api.mapPackage;
       const runtimeRuleset = api.ruleset;
+      const movementAuthority = createMovementAuthority(scene => sameMap(scene, mapPackage)
+        && String(scene.mapPackage?.version || '') === String(mapPackage.version || mapPackage.mapVersion || '') ? mapPackage : null);
       const coreCommitState = api.commitState?.bind(api);
       const coreCommitAuthoritativeState = api.commitAuthoritativeState?.bind(api);
       if (typeof coreCommitState !== 'function') throw new Error('World V2 requires api.commitState()');
@@ -103,12 +105,12 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         const state = api.getState?.() || {};
         const raw = currentWorldFromState(state);
         const ruleset = raw ? requireRuntimeRuleset(raw, runtimeRuleset) : runtimeRuleset;
-        return normalizeWorldV2(raw || createWorldV2FromRuntimeState(state, {
+        return clone(raw || createWorldV2FromRuntimeState(state, {
           mapPackage,
           ruleset,
           worldId,
           worldName,
-        }), { mapPackage, ruleset });
+        }));
       }
 
       async function commitWorld(world, { source = 'world-v2', reason = source, render = true } = {}) {
@@ -135,6 +137,8 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           now,
           ruleset: runtimeRuleset,
           source: { role: 'offline', source },
+          mapMetrics: mapPackage,
+          validateTokenMovePath: args => movementAuthority({ ...args, ruleset: runtimeRuleset }),
           applyStatus(statusState, message, context) {
             const next = clone(statusState);
             next.preferences ||= {};
@@ -162,10 +166,23 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           }
           return api.multiplayer.performOperations(operations, { kind, requestedOperationId });
         }
-        const applied = reduceOperations(api.getState?.() || {}, operations, { source });
-        coreCommitState(hydrateCanonical(applied.state), { source, render });
+        const before = api.getState?.() || {};
+        const applied = reduceOperations(before, operations, { source });
+        const changes = createDocumentChanges(before, applied.state, null, {
+          motion: applied.results.flatMap(result => result.motion || []),
+          fog: applied.results.filter(result => Object.hasOwn(result, 'dirtyBounds')),
+        });
+        if (typeof api.applyAuthoritativeDocumentChanges === 'function') {
+          api.applyAuthoritativeDocumentChanges(changes, {
+            source: `document.${source}`, operationId: requestedOperationId,
+            updatedAt: applied.state.preferences.worldV2.updatedAt,
+          });
+        } else {
+          coreCommitState(hydrateCanonical(applied.state), { source, render });
+          api.documents?.applyCommitted?.(changes, { operationId: requestedOperationId });
+        }
         api.persistNow?.();
-        return { offline: true, operations: clone(applied.operations), results: clone(applied.results) };
+        return { offline: true, operations: clone(applied.operations), results: clone(applied.results), changes };
       }
 
       api.world = {

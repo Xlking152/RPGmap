@@ -1,11 +1,11 @@
 let appStateProvider = null;
-let activeMoverContext = Object.freeze({ tokenId: null, elevationFt: 0 });
+let activeMoverContext = Object.freeze({ tokenId: null, elevationMeters: 0 });
 
 function normalizedContext(context = null) {
-  const elevation = Number(context?.elevationFt);
+  const elevation = Number(context?.elevationMeters);
   return Object.freeze({
     tokenId: context?.tokenId == null ? null : String(context.tokenId),
-    elevationFt: Number.isFinite(elevation) && elevation >= 0 ? elevation : 0,
+    elevationMeters: Number.isFinite(elevation) && elevation >= 0 ? elevation : 0,
   });
 }
 
@@ -38,5 +38,5 @@ export async function withActiveMoverContext(context, task) {
 
 export function resetElevationNavigationRuntime() {
   appStateProvider = null;
-  activeMoverContext = Object.freeze({ tokenId: null, elevationFt: 0 });
+  activeMoverContext = Object.freeze({ tokenId: null, elevationMeters: 0 });
 }

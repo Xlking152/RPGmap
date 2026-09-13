@@ -1,6 +1,6 @@
 import L from 'leaflet';
 import { worldToLatLng } from '../engine/geometry.js';
-import { formatFt } from '../elevation/model.js';
+import { formatMeters } from '../elevation/model.js';
 import { resolveStatusUiSnapshot, renderTokenStatusBadges } from '../status/ui.js';
 import { interpolateTokenPoint, normalizeTokenPoint, sameTokenPoint, tokenMoveDuration } from './token-motion.js';
 import { createTokenViewModel } from './token-view-model.js';
@@ -72,7 +72,7 @@ function renderSize(api, model) {
 export function tokenIcon(api, model) {
   const size = renderSize(api, model);
   const portrait = model.avatarDataUrl
-    ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="" draggable="false">`
+    ? `<img ${contentImageAttributes(model.avatarDataUrl, escapeHtml)} alt="" draggable="false">`
     : `<span>${escapeHtml((Array.from(model.name)[0] || '?').toUpperCase())}</span>`;
   const flags = model.gmViewer ? [
     ...(model.gmOnly ? ['<span class="rpg-token-v2-flag gm-only">GM 专属</span>'] : []),
@@ -96,7 +96,7 @@ function setTooltip(api, documentNode, view, model) {
   row.className = 'token-v2-label-row';
   const elevation = documentNode.createElement('span');
   elevation.className = 'token-v2-elevation-label';
-  elevation.textContent = `${formatFt(model.elevationFt)} ft`;
+  elevation.textContent = `${formatMeters(model.elevationMeters)} m`;
   const name = documentNode.createElement('span');
   name.className = 'token-v2-name-label';
   name.textContent = model.name;
@@ -141,6 +141,7 @@ export function createTokenRendererSystem() {
       const preparedRoutes = new Map();
       let eventRenderFrame = null;
       const pendingRenderIds = new Set();
+      const pendingPositionIds = new Set();
       let pendingFullRender = false;
       let selectedIds = new Set(api.selection?.getSelectedTokenIds?.() || []);
       let destroyed = false;
@@ -158,14 +159,14 @@ export function createTokenRendererSystem() {
           const statusSnapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
           const multiplayer = api.multiplayer?.getStatus?.() || {};
           const gmViewer = !multiplayer.connected || multiplayer.session?.role === 'gm' || multiplayer.role === 'gm';
-          return createTokenViewModel({
+          return { model: createTokenViewModel({
             token,
             actor: resolved.actor,
             selected: selectedIds.has(String(token.id)),
             ruleset: api.ruleset,
             gmViewer,
             invisible: statusSnapshot.capabilities?.visibility === 'invisible',
-          });
+          }), statusSnapshot };
         } catch (error) {
           console.warn('[RPGmap Token Renderer] cannot resolve Token Actor', token?.id, error);
           return null;
@@ -187,12 +188,11 @@ export function createTokenRendererSystem() {
         statusViews.delete(id);
       }
 
-      function renderStatus(model, token) {
+      function renderStatus(model, token, snapshot) {
         if (!model || !token || model.audienceRestricted || animations.has(model.id)) {
           removeStatus(model?.id || token?.id);
           return;
         }
-        const snapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
         const badgeHtml = renderTokenStatusBadges(snapshot.statuses, { limit: 4 });
         if (!badgeHtml) {
           removeStatus(model.id);
@@ -235,7 +235,7 @@ export function createTokenRendererSystem() {
           return;
         }
         const portrait = model.avatarDataUrl
-          ? `<img src="${escapeHtml(model.avatarDataUrl)}" alt="" draggable="false">`
+          ? `<img ${contentImageAttributes(model.avatarDataUrl, escapeHtml)} alt="" draggable="false">`
           : escapeHtml((Array.from(model.name)[0] || '?').toUpperCase());
         let healthText = '';
         if (!model.audienceRestricted) {
@@ -278,7 +278,7 @@ export function createTokenRendererSystem() {
           motion.frame = null;
           api.emit?.('token:visual-move-end', { id: motion.id, tokenId: motion.id, point: motion.target });
           const canonical = normalizeTokenPoint(api.tokens.get?.(motion.id));
-          if (!motion.prediction || sameTokenPoint(canonical, motion.target)) renderToken(motion.id);
+          if (motion.prediction && sameTokenPoint(canonical, motion.target)) renderToken(motion.id);
         };
         motion.frame = requestFrame(step);
       }
@@ -337,7 +337,8 @@ export function createTokenRendererSystem() {
         if (destroyed) return;
         const id = String(tokenId || '');
         const token = api.tokens.get?.(id);
-        const model = token ? resolveModel(token) : null;
+        const resolved = token ? resolveModel(token) : null;
+        const model = resolved?.model || null;
         if (!model) {
           removeToken(id);
           if (updateSummary) renderSummary();
@@ -373,8 +374,22 @@ export function createTokenRendererSystem() {
         view.setIcon(tokenIcon(api, model));
         view.options.title = model.showName ? model.name : 'Token';
         setTooltip(api, documentNode, view, model);
-        renderStatus(model, token);
+        renderStatus(model, token, resolved.statusSnapshot);
         if (updateSummary) renderSummary();
+      }
+
+      function renderTokenPosition(tokenId) {
+        const id = String(tokenId || '');
+        const token = api.tokens.get?.(id);
+        const view = views.get(id);
+        const model = models.get(id);
+        if (!token || token.placement !== 'map' || !view || !model) {
+          renderToken(id, { summary: false });
+          return;
+        }
+        const moved = { ...model, x: Number(token.x), y: Number(token.y) };
+        models.set(id, moved);
+        moveView(moved, view);
       }
 
       function render() {
@@ -391,15 +406,19 @@ export function createTokenRendererSystem() {
         if (pendingFullRender) render();
         else {
           for (const id of pendingRenderIds) renderToken(id, { summary: false });
-          renderSummary();
+          for (const id of pendingPositionIds) if (!pendingRenderIds.has(id)) renderTokenPosition(id);
+          if (pendingRenderIds.size) renderSummary();
         }
         pendingRenderIds.clear();
+        pendingPositionIds.clear();
         pendingFullRender = false;
       }
 
       function renderEventTokens(event) {
         const detail = event?.detail || {};
         const address = detail.document || {};
+        if (address.type && !['Actor', 'Token', 'StatusDefinition'].includes(address.type)) return;
+        if (address.type === 'Token' && address.parent?.id !== api.tokens.getActiveSceneId?.()) return;
         const ids = new Set([
           detail.tokenId, detail.id, ...(detail.tokenIds || []),
           address.type === 'Token' ? address.id : null,
@@ -411,8 +430,19 @@ export function createTokenRendererSystem() {
         if (actorIds.size) {
           for (const token of api.tokens.list()) if (actorIds.has(String(token.actorId))) ids.add(String(token.id));
         }
+        if (!ids.size && actorIds.size) return;
+        const fields = Array.isArray(detail.fields) ? detail.fields : Object.keys(detail.changed || {});
+        const positionOnly = ids.size && !actorIds.size && fields.length
+          && fields.every(field => ['x', 'y'].includes(String(field)));
         if (!ids.size) pendingFullRender = true;
-        else for (const id of ids) pendingRenderIds.add(id);
+        else if (positionOnly) {
+          for (const id of ids) if (!pendingRenderIds.has(id)) pendingPositionIds.add(id);
+        } else {
+          for (const id of ids) {
+            pendingPositionIds.delete(id);
+            pendingRenderIds.add(id);
+          }
+        }
         if (eventRenderFrame === null) eventRenderFrame = requestFrame(flushEventRender);
       }
 
@@ -501,3 +531,4 @@ export function createTokenRendererSystem() {
     },
   });
 }
+import { contentImageAttributes } from '../content/references.js';

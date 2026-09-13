@@ -2,13 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
 import { validateAuthoritativeTokenMovePath } from '../src/server/movement-authority-entry.js';
+import lanzhou from '../reference/maps/lanzhou/runtime.json' with { type: 'json' };
+import { createNavigationGrid, inspectDirectNavigationPath } from '../src/engine/navigation.js';
+import { deriveSceneState } from '../src/engine/state.js';
 
 function context(overrides = {}) {
   const mapPackage = createMinimalReferencePackage();
   const token = {
     id: 'token-a', actorId: 'actor-a', actorLink: true, actorDelta: null,
     placement: 'map', x: 700, y: 430, diameterMeters: 1,
-    elevationFt: 0, locked: false,
+    elevationMeters: 0, locked: false,
     ...overrides,
   };
   const scene = {
@@ -56,4 +59,31 @@ test('unknown external MapPackages use the explicit bounds-only fallback', () =>
   assert.deepEqual(validateAuthoritativeTokenMovePath({
     ...value, waypoints: [{ x: 9999, y: 9999 }],
   }), { valid: true, collisionValidation: 'bounds-only' });
+});
+
+test('Lanzhou server collision uses the same production capability data as the browser', () => {
+  const value = context({ x: 3364, y: 1470 });
+  value.scene.mapPackage = { id: lanzhou.id, version: lanzhou.version };
+  value.origin = { x: 3364, y: 1470 };
+  value.waypoints = [{ x: 3364, y: 1630 }];
+  const check = () => {
+    const server = validateAuthoritativeTokenMovePath(value);
+    const navigation = createNavigationGrid(lanzhou, deriveSceneState(value.scene.sceneEvents), null, {
+      appState: { preferences: { featureStates: value.scene.featureStates } },
+      moverContext: value.token,
+    });
+    const browser = inspectDirectNavigationPath(navigation, value.origin, value.waypoints[0]);
+    assert.equal(server.valid, browser.valid, 'server cannot omit the browser MapPackage capabilities');
+    return server;
+  };
+  assert.equal(check().code, 'path_blocked');
+  value.scene.featureStates = { 'gate-north': { open: true } };
+  assert.equal(check().valid, true);
+  value.origin = { x: 2440, y: 2500 };
+  value.waypoints = [{ x: 2510, y: 2500 }];
+  value.scene.sceneEvents = [{
+    id: 'wall-breach', type: 'damage', objectIds: [],
+    clipHits: [{ featureId: 'yamen-wall-west', polygon: [[2445, 2475], [2495, 2475], [2495, 2525], [2445, 2525]] }],
+  }];
+  assert.equal(check().code, 'path_blocked', 'the wall breach does not erase the neighboring workshop');
 });

@@ -1,6 +1,4 @@
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 function currentMapId(api) {
   return String(api.mapPackage?.id ?? api.mapPackage?.mapId ?? '');

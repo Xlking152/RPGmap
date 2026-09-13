@@ -19,7 +19,7 @@ function worldState() {
         schemaVersion: 3,
         id: 'world-fog-bounds',
         name: 'Fog bounds',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         actors: [],
         statusDefinitions: [],
         activeSceneId: 'scene-lanzhou',

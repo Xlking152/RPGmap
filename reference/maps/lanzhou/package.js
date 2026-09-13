@@ -205,7 +205,7 @@ function wallSegmentFeature(id, name, start, end, width = 14) {
       ruinStyle: 'rammed-earth',
       minCoverage: 0.22,
       capabilities: Object.freeze({
-        navigation: Object.freeze({ blockingHeightFt: 12 }),
+        navigation: Object.freeze({ blockingHeightMeters: 3.6576 }),
       }),
     },
   );
@@ -1327,7 +1327,7 @@ export function createLanzhouMapData(artAssets = {}) {
     title: BUILT_IN_LANZHOU_MAP.title,
     name: '北宋兰州城（1104）',
     version: BUILT_IN_LANZHOU_MAP.version,
-    compatibleMapVersions: Object.freeze(['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4', '1.0.5']),
+    compatibleMapVersions: Object.freeze(['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4', '1.0.5', '1.0.6']),
     period: '北宋·崇宁三年（1104）',
     width: MAP_WIDTH,
     height: MAP_HEIGHT,

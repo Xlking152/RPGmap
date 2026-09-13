@@ -37,6 +37,7 @@ export function installEntityStyles(documentNode) {
     .entity-card-actions input[type="number"] { width:72px; }
     .token-config { padding:0; overflow:hidden; }
     .token-config > .entity-card-top { padding:10px 10px 2px; }
+    .token-movement-adjudication { margin:6px 10px 0; padding:7px 9px; border-left:3px solid #a66b16; background:#fff4d8; color:#71470c; font-size:12px; overflow-wrap:anywhere; }
     .token-config-tabs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border-bottom:1px solid #dce3e0; }
     .token-config-tabs button { min-width:0; border:0; border-top:1px solid #dce3e0; padding:9px 4px; background:#eef3ef; color:#526366; cursor:pointer; font-weight:750; }
     .token-config-tabs button.active { color:#176d76; background:#fff; box-shadow:inset 0 -3px #176d76; }
@@ -62,8 +63,8 @@ export function installEntityStyles(documentNode) {
     .entity-sheet-title input { width:100%; font-size:20px; font-weight:800; border:0; border-bottom:1px solid #aab5b3; background:transparent; padding:3px 0; }
     .entity-formbar { display:flex; gap:7px; align-items:center; flex-wrap:wrap; margin-top:7px; }
     .entity-formbar select { min-width:140px; }
-    .entity-sheet-tabs { position:sticky; top:93px; z-index:2; display:flex; gap:2px; padding:0 12px; background:#eef3ef; border-bottom:1px solid rgba(40,70,70,.16); }
-    .entity-sheet-tab { border:0; background:transparent; padding:10px 13px; cursor:pointer; font-weight:750; color:#4c5d5f; }
+    .entity-sheet-tabs { display:flex; gap:2px; padding:0 12px; min-width:0; overflow-x:auto; background:#eef3ef; border-bottom:1px solid rgba(40,70,70,.16); }
+    .entity-sheet-tab { flex:0 0 auto; white-space:nowrap; border:0; background:transparent; padding:10px 13px; cursor:pointer; font-weight:750; color:#4c5d5f; }
     .entity-sheet-tab.active { color:#176d76; box-shadow:inset 0 -3px #176d76; }
     .entity-sheet-body { padding:16px; display:grid; gap:14px; }
     .entity-section { border:1px solid rgba(60,80,80,.18); border-radius:10px; padding:12px; background:#fff; }
@@ -101,8 +102,13 @@ export function installEntityStyles(documentNode) {
     .entity-limited-sheet.entity-sheet-v3 .entity-sheet-header .entity-avatar,
     .entity-limited-sheet.entity-sheet-v3 .entity-sheet-header .entity-avatar img { width:78px; height:78px; border-radius:10px; }
     .entity-public-profile-editor { display:grid; gap:10px; }
+    .entity-field-notices { position:sticky; bottom:0; z-index:4; padding:8px 12px; background:#fff5df; border-top:1px solid #d3b263; color:#69451d; font-size:12px; }
+    .entity-field-notices[hidden] { display:none; }
+    .entity-field-notices > div { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:3px 0; }
+    .entity-field-notices span { flex:1 1 160px; overflow-wrap:anywhere; }
+    [data-sheet-field-state="conflict"] { outline:2px solid #ba741d; outline-offset:1px; }
     .entity-public-profile-editor > label { display:grid; gap:5px; font-weight:700; color:#526366; }
-    .entity-public-profile-editor textarea { width:100%; box-sizing:border-box; resize:vertical; }
+    .entity-public-profile-editor textarea { width:100%; box-sizing:border-box; resize:vertical; font:inherit; padding:7px; border:1px solid #aab8b4; border-radius:4px; }
     .entity-public-status-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px 10px; max-height:180px; overflow:auto; }
     .entity-public-status-option { display:flex; gap:5px; align-items:center; }
     .entity-public-profile-preview { display:grid; gap:10px; padding:10px; border:1px dashed #b8c6c1; border-radius:8px; background:#f5f7f4; }
@@ -132,7 +138,7 @@ export function installEntityStyles(documentNode) {
 export function entityAvatarHtml(actor, ruleset) {
   const presentation = describeActor(actor, { ruleset }) || {};
   const avatar = presentation.avatarDataUrl;
-  if (avatar) return `<span class="entity-avatar"><img src="${escapeEntityHtml(avatar)}" alt=""></span>`;
+  if (avatar) return `<span class="entity-avatar"><img ${contentImageAttributes(avatar, escapeEntityHtml)} alt=""></span>`;
   return `<span class="entity-avatar">${escapeEntityHtml((actor?.name?.trim()?.[0] || '?').toUpperCase())}</span>`;
 }
 
@@ -165,7 +171,7 @@ export function renderEntitySheetSection(section) {
       const ratio = Number(item.max) > 0
         ? Math.max(0, Math.min(100, Number(item.current) / Number(item.max) * 100))
         : 0;
-      return `<div class="entity-resource" data-sheet-role="${escapeEntityHtml(item.role || '')}">
+      return `<div class="entity-resource" data-sheet-role="${escapeEntityHtml(item.role || '')}" title="${escapeEntityHtml(item.explanation || '')}">
         <strong>${escapeEntityHtml(item.label || item.id)}</strong>
         <button type="button" class="small-button"${operationData(item.decrementOperation)}>−</button>
         <label><input type="number" step="1" value="${escapeEntityHtml(item.current)}"${operationData(item.currentOperation)}> / </label>
@@ -219,3 +225,4 @@ export function classifyNewImportedActor(actor, actorType = 'pc') {
   });
   return { ...actor, type: classification.type, partyId: classification.partyId };
 }
+import { contentImageAttributes } from '../content/references.js';

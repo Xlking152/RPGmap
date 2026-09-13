@@ -38,8 +38,8 @@ function trustedMetricsForScene(scene) {
 function trustedMetricsForOperations(state, operations) {
   const fogSceneIds = new Set((Array.isArray(operations) ? operations : [])
     .filter(operation => String(operation?.type || '').startsWith('scene.fog.')
-      || String(operation?.type || '') === 'token.movePath')
-    .map(operation => String(operation?.payload?.sceneId || ''))
+      || ['token.move', 'token.movePath', 'token.reposition'].includes(String(operation?.type || '')))
+    .map(operation => String(operation?.payload?.sceneId || state?.preferences?.worldV2?.activeSceneId || ''))
     .filter(Boolean));
   if (!fogSceneIds.size) return null;
 

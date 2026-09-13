@@ -9,7 +9,7 @@ function state() {
   const actor = { id: 'actor-a', name: 'A', runtime: { hp: 10 }, effects: [] };
   const token = {
     id: 'token-a', actorId: 'actor-a', actorLink: false, actorDelta: null, effects: [],
-    diameterMeters: 1, rotation: 0, elevationFt: 0, hidden: false, locked: false, showName: true,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0, hidden: false, locked: false, showName: true,
     x: 1, y: 1,
   };
   return migrateTestStateToWorldV3({
@@ -24,7 +24,7 @@ function state() {
         schemaVersion: 2,
         id: 'world-test',
         name: 'Test World',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         activeSceneId: 'scene-test',
         actors: [structuredClone(actor)],
         statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
@@ -33,7 +33,7 @@ function state() {
           tokens: [{
             id: 'token-a', actorId: 'actor-a', actorLink: false, actorDelta: null,
             placement: 'map', x: 1, y: 1, featureId: null,
-            diameterMeters: 1, rotation: 0, elevationFt: 0,
+            diameterMeters: 1, rotation: 0, elevationMeters: 0,
             hidden: false, locked: false, showName: true, effects: [],
           }],
           markers: [], attackAreas: [], sceneEvents: [], settings: { gridVisible: true },

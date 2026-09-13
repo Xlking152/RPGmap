@@ -86,6 +86,25 @@ test('offline Promise API uses the local reducer, commits, and emits status:chan
   assert.equal(runtime.api.status.resolve({ actorId: 'actor-1' }).capabilities.canMove, true);
 });
 
+test('status resolution reuses normalized state until a canonical state event', () => {
+  const runtime = fakeApi();
+  let reads = 0;
+  const read = runtime.api.getState;
+  runtime.api.getState = () => { reads += 1; return read(); };
+  createStatusController().register(runtime.api);
+  assert.equal(reads, 1);
+  for (let index = 0; index < 500; index += 1) {
+    assert.equal(runtime.api.status.resolve({ actorId: 'actor-1' }).capabilities.canMove, true);
+  }
+  assert.equal(reads, 1);
+  runtime.api.emit('state:patch', { source: 'document.batch', changeSet: {
+    tokens: [{ sceneId: 'scene-1', upsertIds: ['token-1'], removeIds: [], fields: { 'token-1': ['x', 'y'] } }],
+  } });
+  assert.equal(reads, 1);
+  runtime.api.emit('state:commit', { source: 'server', state: runtime.state });
+  assert.equal(reads, 1);
+});
+
 test('LAN Promise and success event wait for multiplayer confirmation and canonical state', async () => {
   let confirm;
   const calls = [];

@@ -10,11 +10,11 @@ function actor() {
   return { id: 'actor-a', name: 'A', type: 'pc', partyId: 'party-default', system: {}, effects: [] };
 }
 
-function token(id, x, y, elevationFt = 0) {
+function token(id, x, y, elevationMeters = 0) {
   return {
     id, actorId: 'actor-a', actorLink: true, actorDelta: null,
     placement: 'map', x, y, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt,
+    diameterMeters: 1, rotation: 0, elevationMeters,
     controllerUserIds: [],
     visibility: { mode: 'party', userIds: [] },
     vision: {
@@ -29,9 +29,9 @@ function token(id, x, y, elevationFt = 0) {
 
 function world(tokens) {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: 'world-test', name: 'World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     actors: [actor()],
     statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
     activeSceneId: 'scene-a',
@@ -102,7 +102,7 @@ test('atomic group move preserves formation, elevation and visual waypoint trans
   const [leader, wing] = fx.getWorld().scenes[0].tokens;
   assert.deepEqual({ x: leader.x, y: leader.y }, { x: 8.5, y: 8.5 });
   assert.deepEqual({ x: wing.x, y: wing.y }, { x: 11.5, y: 9.5 });
-  assert.equal(wing.elevationFt, 20);
+  assert.equal(wing.elevationMeters, 20);
   assert.deepEqual(fx.prepared.get('leader'), [{ x: 8.5, y: 2.5 }, { x: 8.5, y: 8.5 }]);
   assert.deepEqual(fx.prepared.get('wing'), [{ x: 11.5, y: 3.5 }, { x: 11.5, y: 9.5 }]);
 });

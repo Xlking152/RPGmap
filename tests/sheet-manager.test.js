@@ -110,7 +110,7 @@ test('lazy Entity UI uses live per-window contexts without archived DOM promotio
   assert.match(liveUi, /createActorSheetManager/);
   assert.match(liveUi, /data-sheet-window-key/);
   assert.match(liveUi, /function resolveSheetRecord\(record\)/);
-  assert.match(liveUi, /function renderSheetRecord\(record\)/);
+  assert.match(liveUi, /function renderSheetRecord\(record, changes = null\)/);
   assert.match(liveUi, /function renderAllSheets\(\)/);
   assert.match(liveUi, /performCanonicalRuntimeOperation\(operation, \{[\s\S]*record = null/);
   assert.doesNotMatch(liveUi, /let openActorId|let openTokenId|let openTab/);

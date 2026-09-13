@@ -1,5 +1,11 @@
 export const ACCESS_SCHEMA_VERSION = 4;
 
+export function canPlaceActorTemplate(actor, grants = {}) {
+  if (!actor) return false;
+  return Boolean((Array.isArray(grants?.actorIds) && grants.actorIds.includes(String(actor.id)))
+    || (actor.organization?.placementRestricted !== true && Array.isArray(grants?.actorTypes) && grants.actorTypes.includes(String(actor.type))));
+}
+
 export const ACTOR_ACCESS = Object.freeze({
   NONE: 'none',
   LIMITED: 'limited',

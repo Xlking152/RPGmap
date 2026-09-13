@@ -9,9 +9,7 @@ import {
 
 export const INFINITE_HORROR_ACTOR_SYSTEM_VERSION = 3;
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -237,6 +235,24 @@ export function createDefaultInfiniteHorrorActor(context = {}) {
   }, context);
 }
 
+export function copyInfiniteHorrorTemplateSystem(actor) {
+  const system = normalizeInfiniteHorrorSystem(actor.system);
+  const form = system.forms.find(item => item.id === system.currentFormId) || system.forms[0];
+  if (!form) throw Object.assign(new Error('Template form is missing'), { code: 'template_form_missing' });
+  const initial = initialRuntime(form);
+  const health = system.runtime.health;
+  const maximum = health.maxOverride ?? form.healthBase.baseMax;
+  initial.health = { ...health, ...INFINITE_HORROR_HEALTH.createRuntime({ mode: health.mode, max: maximum, simpleCurrent: maximum }), maxOverride: health.maxOverride };
+  for (const [id, resource] of Object.entries(initial.resources)) {
+    const prior = system.runtime.resources[id] || {};
+    initial.resources[id] = { ...prior, ...resource, maxOverride: prior.maxOverride ?? null, current: prior.maxOverride ?? resource.current };
+  }
+  const customResources = system.runtime.customResources.map(resource => ({
+    ...clone(resource), current: Math.max(0, finite(resource.max)),
+  }));
+  return { ...system, runtime: { ...system.runtime, ...initial, customResources } };
+}
+
 export function migrateInfiniteHorrorActor(rawActor = {}) {
   const actor = object(rawActor);
   const existing = clone(object(actor.system));
@@ -444,42 +460,66 @@ export function canonicalizeInfiniteHorrorAttributePath(path) {
   return value;
 }
 
-function effectsFor(actor, target, context = {}) {
+function calculationEffectSources(actor, target, context = {}) {
   const effects = Array.isArray(context.effects) ? context.effects : (Array.isArray(actor?.effects) ? actor.effects : []);
-  return effects.filter(effect => effect?.enabled !== false)
+  return effects
     .flatMap(effect => (effect.changes || []).map(change => ({
-      ...change,
+      sourceId: String(effect.id || effect.definitionId || effect.statusId || ''),
+      label: text(effect.label || effect.name || effect.definitionId || effect.statusId, 'Status'),
+      priority: finite(change?.priority ?? effect?.priority, 0),
+      mode: String(change?.mode || 'add'),
       value: change?.mode === 'add'
         ? finite(change?.value) * Math.max(1, Math.floor(finite(effect?.stacks, 1)))
         : change?.value,
+      enabled: effect?.enabled !== false,
+      target: canonicalizeInfiniteHorrorAttributePath(change?.target),
     })))
-    .filter(change => canonicalizeInfiniteHorrorAttributePath(change?.target) === canonicalizeInfiniteHorrorAttributePath(target));
+    .filter(change => change.target === canonicalizeInfiniteHorrorAttributePath(target))
+    .sort((left, right) => left.priority - right.priority || left.sourceId.localeCompare(right.sourceId));
+}
+
+function resolveCalculation(actor, target, baseValue, context = {}, initialSources = [], minimum = null) {
+  let result = finite(baseValue);
+  const sources = [...initialSources, ...calculationEffectSources(actor, target, context)]
+    .sort((left, right) => finite(left.priority) - finite(right.priority)
+      || String(left.sourceId || '').localeCompare(String(right.sourceId || '')))
+    .map(source => {
+      const before = result;
+      const enabled = source.enabled !== false;
+      if (enabled) result = applyMode(result, source.mode, source.value);
+      if (minimum !== null) result = Math.max(minimum, result);
+      return {
+        sourceId: String(source.sourceId || ''),
+        label: text(source.label, String(source.sourceId || 'Modifier')),
+        priority: finite(source.priority),
+        mode: String(source.mode || 'add'),
+        value: finite(source.value),
+        before,
+        after: result,
+        applied: enabled,
+        reason: enabled ? null : 'disabled',
+      };
+    });
+  return { target: canonicalizeInfiniteHorrorAttributePath(target), baseValue: finite(baseValue), sources, result };
 }
 
 function resolveAttributeValue(actor, form, attributeId, context = {}) {
   const source = form?.attributes?.find(item => String(item?.id) === String(attributeId));
   if (!source) return null;
-  let value = finite(source.base ?? source.value);
+  const base = finite(source.base ?? source.value);
   const adjustment = finite(actor.system?.runtime?.attributeAdjustments?.[attributeId]);
-  value += adjustment;
-  for (const change of effectsFor(actor, `system.attributes.${attributeId}`, context)) {
-    value = applyMode(value, change.mode, change.value);
-  }
-  return { ...clone(source), base: finite(source.base ?? source.value), adjustment, value };
+  const calculation = resolveCalculation(actor, `system.attributes.${attributeId}`, base, context,
+    adjustment === 0 ? [] : [{ sourceId: `runtime:${attributeId}`, label: 'Runtime adjustment', priority: -100, mode: 'add', value: adjustment, enabled: true }]);
+  return { ...clone(source), base, adjustment, value: calculation.result, calculation };
 }
 
 function resolveResourceValue(actor, form, resourceId, context = {}) {
   const custom = actor.system?.runtime?.customResources?.find(item => String(item?.id) === String(resourceId));
   if (custom) {
-    let max = Math.max(0, finite(custom.max));
-    for (const change of effectsFor(actor, `system.resources.${resourceId}.max`, context)) {
-      max = Math.max(0, applyMode(max, change.mode, change.value));
-    }
-    let current = finite(custom.current);
-    for (const change of effectsFor(actor, `system.resources.${resourceId}.current`, context)) {
-      current = applyMode(current, change.mode, change.value);
-    }
-    return { ...clone(custom), max, current, custom: true };
+    const maxCalculation = resolveCalculation(actor, `system.resources.${resourceId}.max`, custom.max, context, [], 0);
+    const currentCalculation = resolveCalculation(actor, `system.resources.${resourceId}.current`, custom.current, context);
+    return { ...clone(custom), max: maxCalculation.result, current: currentCalculation.result, custom: true,
+      calculations: { max: maxCalculation, current: currentCalculation } };
   }
 
   const base = form?.resourceBases?.[resourceId];
@@ -489,42 +529,37 @@ function resolveResourceValue(actor, form, resourceId, context = {}) {
     maxOverride: null,
     policy: 'preserve',
   };
-  let max = runtime.maxOverride === null || runtime.maxOverride === undefined
-    ? finite(base.baseMax)
-    : finite(runtime.maxOverride);
-  for (const change of effectsFor(actor, `system.resources.${resourceId}.max`, context)) {
-    max = Math.max(0, applyMode(max, change.mode, change.value));
-  }
-  let current = finite(runtime.current, max);
-  for (const change of effectsFor(actor, `system.resources.${resourceId}.current`, context)) {
-    current = applyMode(current, change.mode, change.value);
-  }
+  const maxOverride = runtime.maxOverride === null || runtime.maxOverride === undefined ? [] : [{
+    sourceId: `runtime:${resourceId}:max`, label: 'Runtime maximum', priority: -100, mode: 'set', value: runtime.maxOverride, enabled: true,
+  }];
+  const maxCalculation = resolveCalculation(actor, `system.resources.${resourceId}.max`, base.baseMax, context, maxOverride, 0);
+  const currentCalculation = resolveCalculation(actor, `system.resources.${resourceId}.current`, finite(runtime.current, maxCalculation.result), context);
   return {
     id: resourceId,
     name: base.name,
     kind: base.kind,
     baseMax: finite(base.baseMax),
-    max,
-    current,
+    max: maxCalculation.result,
+    current: currentCalculation.result,
     policy: runtime.policy || 'preserve',
     custom: false,
+    calculations: { max: maxCalculation, current: currentCalculation },
   };
 }
 
 function resolveHealthValue(actor, form, context = {}) {
   const runtime = actor.system?.runtime?.health || {};
-  let max = runtime.maxOverride === null || runtime.maxOverride === undefined
-    ? finite(form?.healthBase?.baseMax)
-    : finite(runtime.maxOverride);
-  for (const change of effectsFor(actor, 'system.health.max', context)) {
-    max = Math.max(0, applyMode(max, change.mode, change.value));
-  }
+  const maxOverride = runtime.maxOverride === null || runtime.maxOverride === undefined ? [] : [{
+    sourceId: 'runtime:health:max', label: 'Runtime maximum', priority: -100, mode: 'set', value: runtime.maxOverride, enabled: true,
+  }];
+  const calculation = resolveCalculation(actor, 'system.health.max', form?.healthBase?.baseMax, context, maxOverride, 0);
+  const max = calculation.result;
   const normalized = INFINITE_HORROR_HEALTH.normalizeRuntime(runtime, {
     defaultMode: INFINITE_HORROR_HEALTH.defaultModeForSource(form?.source?.type),
     max,
     simpleCurrent: max,
   });
-  return INFINITE_HORROR_HEALTH.resolve(normalized, { max });
+  return { ...INFINITE_HORROR_HEALTH.resolve(normalized, { max }), calculation };
 }
 
 function resolveBadStatus(actor, form, statusId) {
@@ -590,6 +625,18 @@ export function deriveInfiniteHorrorActor(actor, context = {}) {
     badStatuses: (form.badStatuses || []).map(item => resolveBadStatus(normalizedActor, form, item.id)).filter(Boolean),
     combat: clone(form.combat || { attacks: [], defenses: [] }),
   };
+}
+
+export function explainInfiniteHorrorCalculation(actor, request = {}) {
+  const context = request.context && typeof request.context === 'object' ? request.context : {};
+  const target = canonicalizeInfiniteHorrorAttributePath(request.target);
+  const derived = deriveInfiniteHorrorActor(actor, context);
+  if (target === 'system.health.max') return clone(derived?.health?.calculation || null);
+  let match = /^system\.resources\.([^.]+)\.(current|max)$/.exec(target);
+  if (match) return clone(derived?.resources?.find(item => String(item.id) === match[1])?.calculations?.[match[2]] || null);
+  match = /^system\.attributes\.([^.]+)$/.exec(target);
+  if (match) return clone(derived?.attributes?.find(item => String(item.id) === match[1])?.calculation || null);
+  return null;
 }
 
 export function infiniteHorrorAttributePaths(actor) {
@@ -698,9 +745,42 @@ function healthResult(actor, operation, context = {}) {
   };
 }
 
+function fieldOperationValue(actor, operation, context) {
+  const runtime = actor.system.runtime;
+  if (operation.type === 'variant.set') return actor.system.currentFormId;
+  if (operation.type === 'attribute.set-adjustment') return runtime.attributeAdjustments[operation.attributeId] || 0;
+  if (operation.type === 'bad-status.set-current') return runtime.badStatuses[operation.statusId] || 0;
+  if (['resource.set-current', 'resource.set-max'].includes(operation.type)) {
+    const field = operation.type === 'resource.set-current' ? 'current' : 'max';
+    return resolveInfiniteHorrorAttribute(actor, `system.resources.${operation.resourceId}.${field}`);
+  }
+  if (operation.type === 'detection.set-override') {
+    const detection = deriveInfiniteHorrorActor(actor, context).detection;
+    return operation.field === 'sense' ? detection.senses?.[operation.sense] : detection[operation.field];
+  }
+  return undefined;
+}
+
+function updateInfiniteHorrorPortrait(actor, reference) {
+  const form = currentFormFromSystem(actor.system);
+  if (!form) return { changed: false, blocked: 'variant_not_found' };
+  const previous = form.avatarDataUrl;
+  form.avatarDataUrl = reference;
+  if (!actor.img || actor.img === previous) actor.img = reference;
+  if (actor.prototypeToken?.texture && (!actor.prototypeToken.texture.src || actor.prototypeToken.texture.src === previous)) {
+    actor.prototypeToken.texture.src = reference;
+  }
+  return { changed: true, value: reference };
+}
+
 export function applyInfiniteHorrorActorOperation(actor, operation = {}, context = {}) {
   actor.system = normalizeInfiniteHorrorSystem(actor.system);
   const type = String(operation?.type || '');
+  if (Object.hasOwn(operation, 'expectedValue')) {
+    const current = fieldOperationValue(actor, operation, context);
+    if (current === undefined) return { changed: false, blocked: 'field_precondition_unsupported' };
+    if (String(current ?? '') !== String(operation.expectedValue ?? '')) return { changed: false, blocked: 'document_field_conflict' };
+  }
   if (type === 'health.resolve') return { changed: false, value: deriveInfiniteHorrorActor(actor, context).health };
   if (['health.set-mode', 'health.runtime', 'health.damage', 'health.healing'].includes(type)) {
     return healthResult(actor, operation, context);
@@ -814,10 +894,7 @@ export function applyInfiniteHorrorActorOperation(actor, operation = {}, context
     return { changed: true, value };
   }
   if (type === 'avatar.set') {
-    const form = currentFormFromSystem(actor.system);
-    if (!form) return { changed: false, blocked: 'variant_not_found' };
-    form.avatarDataUrl = typeof operation.avatarDataUrl === 'string' ? operation.avatarDataUrl : null;
-    return { changed: true, value: form.avatarDataUrl };
+    return updateInfiniteHorrorPortrait(actor, typeof operation.avatarDataUrl === 'string' ? operation.avatarDataUrl : null);
   }
   return { changed: false, blocked: 'unknown_actor_operation' };
 }
@@ -827,6 +904,16 @@ function statusLevel(status) {
   if (status.severe > 0 && status.current >= status.severe) return 'severe';
   if (status.light > 0 && status.current >= status.light) return 'warning';
   return '';
+}
+
+function calculationSummary(calculation) {
+  if (!calculation) return '';
+  const applied = calculation.sources?.filter(source => source.applied).map(source => {
+    const sign = source.mode === 'add' && Number(source.value) >= 0 ? '+' : '';
+    return `${source.label} ${sign}${source.value}`;
+  }) || [];
+  const ignored = calculation.sources?.filter(source => !source.applied).map(source => `${source.label}（未生效）`) || [];
+  return [`基础 ${calculation.baseValue}`, ...applied, ...ignored, `结果 ${calculation.result}`].join(' · ');
 }
 
 export function describeInfiniteHorrorActor(actor, context = {}) {
@@ -858,13 +945,14 @@ export function describeInfiniteHorrorActorSheet(actor, context = {}) {
     maxOperation: { type: 'resource.set-max', resourceId: resource.id },
     decrementOperation: { type: 'resource.step', resourceId: resource.id, amount: -1 },
     deleteOperation: resource.custom ? { type: 'resource.remove-custom', resourceId: resource.id } : null,
+    explanation: calculationSummary(resource.calculations?.max),
   }));
   const attributes = (derived?.attributes || []).map(attribute => ({
     id: attribute.id,
     label: attribute.name,
     value: attribute.value,
     base: attribute.base,
-    detail: attribute.legendaryBonus ? `基础 ${attribute.base} · 传奇 ${attribute.legendaryBonus}` : `基础 ${attribute.base}`,
+    detail: calculationSummary(attribute.calculation),
     adjustment: attribute.adjustment,
     operation: { type: 'attribute.set-adjustment', attributeId: attribute.id },
   }));
@@ -985,7 +1073,19 @@ export const INFINITE_HORROR_ACTOR = Object.freeze({
   derive: deriveInfiniteHorrorActor,
   attributePaths: infiniteHorrorAttributePaths,
   resolveAttribute: resolveInfiniteHorrorAttribute,
+  explainCalculation: explainInfiniteHorrorCalculation,
   applyRuntimeOperation: applyInfiniteHorrorActorOperation,
+  templates: Object.freeze({ copySystem: copyInfiniteHorrorTemplateSystem }),
+  portrait: Object.freeze({
+    describe(actor) {
+      const form = currentFormFromSystem(actor.system);
+      return { variantId: form?.id || null, reference: form?.avatarDataUrl || actor.img || null };
+    },
+    update(actor, { reference }) {
+      const result = updateInfiniteHorrorPortrait(actor, reference);
+      if (!result.changed) throw Object.assign(new Error('Actor portrait is unavailable'), { code: result.blocked });
+    },
+  }),
   instances: Object.freeze({
     createDelta: createInfiniteHorrorInstanceDelta,
     normalizeDelta: normalizeInfiniteHorrorInstanceDelta,

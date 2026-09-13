@@ -1,10 +1,10 @@
 import { assertStatusState, STATUS_SCHEMA_VERSION } from './status-operations.mjs';
-import { assertFeatureStatePatch, isPlainObject } from './world-operations.mjs';
+import { assertFeatureStatePatch, assertTemplateLibrary, isPlainObject } from './world-operations.mjs';
 
 const ACTOR_TYPES = new Set(['pc', 'monster', 'npc', 'summon', 'other']);
 const VISIBILITY_MODES = new Set(['public', 'party', 'gm', 'users']);
 
-export const WORLD_V2_SCHEMA_VERSION = 3;
+export const WORLD_V2_SCHEMA_VERSION = 4;
 export const WORLD_V2_STATE_KEY = 'worldV2';
 
 function fail(message, code = 'invalid_world_v2') {
@@ -143,7 +143,19 @@ function assertTokenAccess(token, actor, label) {
   }
   if (Object.hasOwn(vision, 'rangeOverrideMeters')) fail(`${label}.vision.rangeOverrideMeters is legacy-only`);
   stringIds(vision.overrideUserIds, `${label}.vision.overrideUserIds`);
+  if (token.light !== undefined) {
+    const light = object(token.light, `${label}.light`);
+    if (typeof light.enabled !== 'boolean') fail(`${label}.light.enabled must be boolean`);
+    for (const field of ['rangeMeters', 'intensity', 'elevationOffsetMeters']) {
+      if (!Number.isFinite(Number(light[field])) || Number(light[field]) < 0) fail(`${label}.light.${field} is invalid`);
+    }
+    if (Number(light.intensity) > 4) fail(`${label}.light.intensity is invalid`);
+    if (!/^#[0-9a-f]{6}$/i.test(String(light.color || ''))) fail(`${label}.light.color is invalid`);
+    if (!['scene', 'none'].includes(String(light.occlusion))) fail(`${label}.light.occlusion is invalid`);
+  }
   if (Object.hasOwn(token, 'hidden')) fail(`${label}.hidden is legacy-only`, 'legacy_token_hidden_forbidden');
+  if (Object.hasOwn(token, 'elevationFt')) fail(`${label}.elevationFt is legacy-only`, 'legacy_height_forbidden');
+  if (!Number.isFinite(Number(token.elevationMeters)) || Number(token.elevationMeters) < 0) fail(`${label}.elevationMeters is invalid`);
 }
 
 function assertMarker(marker, label) {
@@ -158,13 +170,27 @@ function assertMarker(marker, label) {
 }
 
 export function assertWorldV2(value) {
+  assertTemplateLibrary(value?.templateLibrary);
   const world = object(value, 'worldV2');
-  if (Number(world.schemaVersion) !== WORLD_V2_SCHEMA_VERSION) fail('worldV2.schemaVersion must be 3');
+  if (Number(world.schemaVersion) !== WORLD_V2_SCHEMA_VERSION) fail('worldV2.schemaVersion must be 4');
   cleanId(world.id, 'worldV2.id');
   const ruleset = object(world.ruleset, 'worldV2.ruleset');
   cleanId(ruleset.id, 'worldV2.ruleset.id');
   if (typeof ruleset.version !== 'string' || !ruleset.version.trim()) fail('worldV2.ruleset.version is required');
   const actorIds = unique(world.actors, 'worldV2.actors');
+  const journals = Array.isArray(world.journals) ? world.journals : [];
+  unique(journals, 'worldV2.journals');
+  journals.forEach((entry, index) => {
+    const label = `worldV2.journals[${index}]`;
+    const journal = object(entry, label);
+    if (typeof journal.title !== 'string' || !journal.title.trim() || journal.title.length > 240) fail(`${label}.title is invalid`);
+    if (!/^body:[a-f0-9]{64}$/.test(String(journal.bodyRef || ''))) fail(`${label}.bodyRef is invalid`);
+    const visibility = object(journal.visibility, `${label}.visibility`);
+    if (!VISIBILITY_MODES.has(String(visibility.mode))) fail(`${label}.visibility.mode is invalid`);
+    stringIds(visibility.userIds, `${label}.visibility.userIds`);
+    if (journal.partyId !== null && typeof journal.partyId !== 'string') fail(`${label}.partyId must be a string or null`);
+    if (visibility.mode === 'party' && !journal.partyId) fail(`${label}.partyId is required`);
+  });
   const actorById = new Map(world.actors.map(actor => [String(actor?.id ?? ''), actor]));
   world.actors.forEach((actor, index) => {
     if (!ACTOR_TYPES.has(String(actor.type))) fail(`worldV2.actors[${index}].type is invalid`);

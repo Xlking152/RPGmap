@@ -20,18 +20,18 @@ function optionalFiniteNonNegative(value) {
   return Number.isFinite(number) && number >= 0 ? number : null;
 }
 
-export function normalizeElevationFt(value, fallback = 0) {
+export function normalizeElevationMeters(value, fallback = 0) {
   return finiteNonNegative(value, fallback);
 }
 
-export function normalizeBlockingHeightFt(value, fallback = null) {
+export function normalizeBlockingHeightMeters(value, fallback = null) {
   const normalized = optionalFiniteNonNegative(value);
   if (normalized !== null) return normalized;
   return optionalFiniteNonNegative(fallback);
 }
 
-export function tokenElevationFt(token) {
-  return normalizeElevationFt(token?.elevationFt, 0);
+export function tokenElevationMeters(token) {
+  return normalizeElevationMeters(token?.elevationMeters, 0);
 }
 
 export function tokenDiameterMeters(token) {
@@ -41,15 +41,15 @@ export function tokenDiameterMeters(token) {
   return normalizeTokenDiameterMeters(token?.diameterMeters ?? token?.size, 1);
 }
 
-export function featureBlockingHeightFt(feature, featureState = null) {
-  const override = featureState?.custom?.blockingHeightFt;
+export function featureBlockingHeightMeters(feature, featureState = null) {
+  const override = featureState?.custom?.blockingHeightMeters;
   if (override !== undefined && override !== null && override !== '') {
-    const normalizedOverride = normalizeBlockingHeightFt(override);
+    const normalizedOverride = normalizeBlockingHeightMeters(override);
     if (normalizedOverride !== null) return normalizedOverride;
   }
-  return normalizeBlockingHeightFt(
-    feature?.capabilities?.navigation?.blockingHeightFt
-      ?? feature?.navigation?.blockingHeightFt,
+  return normalizeBlockingHeightMeters(
+    feature?.capabilities?.navigation?.blockingHeightMeters
+      ?? feature?.navigation?.blockingHeightMeters,
   );
 }
 
@@ -58,18 +58,25 @@ export function featureBlockingHeightFt(feature, featureState = null) {
  *
  * A Feature without a declared finite blocking height behaves like the legacy
  * 2D obstacle and always blocks. For a height-aware Feature, strict greater
- * than is required to clear it: elevationFt === blockingHeightFt still blocks.
+ * than is required to clear it: elevationMeters === blockingHeightMeters still blocks.
  */
 export function featureBlocksMover(feature, featureState = null, moverContext = null) {
   const navigation = feature?.capabilities?.navigation || feature?.navigation;
   if (!navigation?.blocks) return false;
-  const blockingHeight = featureBlockingHeightFt(feature, featureState);
+  const blockingHeight = featureBlockingHeightMeters(feature, featureState);
   if (blockingHeight === null) return true;
-  const elevationFt = normalizeElevationFt(moverContext?.elevationFt, 0);
-  return elevationFt <= blockingHeight;
+  const elevationMeters = normalizeElevationMeters(moverContext?.elevationMeters, 0);
+  return elevationMeters <= blockingHeight;
 }
 
-export function formatFt(value) {
-  const normalized = normalizeElevationFt(value, 0);
+export function formatMeters(value) {
+  const normalized = normalizeElevationMeters(value, 0);
   return Number.isInteger(normalized) ? String(normalized) : normalized.toFixed(1).replace(/\.0$/, '');
 }
+
+// Compatibility exports for extensions compiled against the pre-v2.4 API.
+export const normalizeElevationFt = normalizeElevationMeters;
+export const normalizeBlockingHeightFt = normalizeBlockingHeightMeters;
+export const tokenElevationFt = tokenElevationMeters;
+export const featureBlockingHeightFt = featureBlockingHeightMeters;
+export const formatFt = formatMeters;

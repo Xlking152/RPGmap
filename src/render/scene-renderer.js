@@ -652,6 +652,7 @@ export function createSceneRenderer({
       mapPackage.liquidBodies || [],
       mapPackage.features || [],
       mapPackage.floodRules || {},
+      mapPackage.metersPerUnit ?? 1,
     );
     renderFloods(floodLayer, floodRegions);
 

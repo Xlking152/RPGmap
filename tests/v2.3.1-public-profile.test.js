@@ -6,6 +6,7 @@ import { normalizeActorPublicProfile } from '../src/actor/public-profile.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { projectStateForAudience } from '../src/vision/audience.js';
 import { applyWorldOperations } from '../src/world/operations.js';
+import { createDocumentChanges, documentChangeSet } from '../src/documents/changes.js';
 
 const publicDefinition = {
   id: 'burning', name: '燃烧', description: 'secret mechanics', icon: 'flame', color: '#cc4400',
@@ -32,7 +33,7 @@ function token(id, effects) {
     id, actorId: 'npc-a', actorLink: false,
     actorDelta: { system: { secretHp: id === 'npc-1' ? 7 : 3 }, effects },
     placement: 'map', x: 10, y: 10, featureId: null, texture: { src: null }, color: '#334455',
-    diameterMeters: 1, rotation: 0, elevationFt: 0, locked: false, showName: true, effects: [],
+    diameterMeters: 1, rotation: 0, elevationMeters: 0, locked: false, showName: true, effects: [],
     controllerUserIds: [], visibility: { mode: 'users', userIds: ['viewer'] },
     vision: { enabled: false, preciseRangeOverrideMeters: null, vagueRangeOverrideMeters: null, overrideUserIds: [] },
   };
@@ -51,7 +52,7 @@ function state() {
     preferences: {
       worldV2: {
         schemaVersion: 3, id: 'world-a', name: 'World', activeSceneId: 'scene-a',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         actors, statusDefinitions: [publicDefinition, privateDefinition],
         scenes: [{
           id: 'scene-a', name: 'Scene', mapPackage: { id: 'minimal-reference', version: '1.0.0' },
@@ -81,8 +82,9 @@ test('public profile normalization is bounded, deterministic, and keeps no impli
   assert.deepEqual(normalizeActorPublicProfile({ summary: 'x', extension: { value: 1 } }).extension, { value: 1 });
 });
 
-test('actor.publicProfile.update filters unknown statuses and produces an Actor changeSet', () => {
-  const result = applyWorldOperations(state(), [{
+test('actor.publicProfile.update filters unknown statuses and produces an Actor Document change', () => {
+  const before = state();
+  const result = applyWorldOperations(before, [{
     type: 'actor.publicProfile.update', payload: {
       actorId: 'npc-a', publicProfile: {
         summary: '公开摘要', appearance: '', knownFacts: [],
@@ -92,7 +94,7 @@ test('actor.publicProfile.update filters unknown statuses and produces an Actor 
   }], { ruleset: infiniteHorrorRuleset, now: '2026-09-02T00:00:00.000Z' });
   assert.deepEqual(result.state.preferences.worldV2.actors[0].publicProfile.visibleStatusDefinitionIds, ['burning']);
   assert.deepEqual(result.state.preferences.worldV2.actors[0].publicProfile.extension, { sourceBook: 'local' });
-  assert.deepEqual(result.changeSet.actors.upsertIds, ['npc-a']);
+  assert.deepEqual(documentChangeSet(createDocumentChanges(before, result.state)).actors.upsertIds, ['npc-a']);
 });
 
 test('LIMITED projection exposes only curated profile and per-Token safe status summaries', () => {

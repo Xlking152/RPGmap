@@ -14,20 +14,28 @@ import {
   mergeActorDelta,
   normalizeActorDelta,
   rebaseActorDelta,
+  resolveTokenActor,
 } from '../token/actor.js';
 import { normalizeTokenAccess } from '../token/access.js';
 import { normalizeSceneToken } from '../token/model.js';
 import {
   exploreFogCircle,
   exploreFogSweep,
+  exploreFogVisibleCircle,
+  exploreFogVisibleSweep,
   hideFogCircle,
   normalizeFogState,
   resetFogParty,
 } from '../vision/fog.js';
+import { deriveSceneState } from '../engine/state.js';
+import { deriveVisionOccluders } from '../spatial/kernel.js';
 import { migrateWorldSchema3State } from './migration.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { advanceStatusDurations, STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { DOCUMENT_OPERATION_SCHEMA_VERSION } from '../documents/protocol.js';
+import { movementCapabilityFailure, normalizeMovementBudget } from '../movement/model.js';
+import { validateDoorInteraction } from '../interaction/door-authority.js';
+import { normalizeJournalEntry } from '../journal/model.js';
 
 export {
   DOCUMENT_BATCH_LIMIT,
@@ -46,13 +54,24 @@ export {
   migrateWorldSchema3State,
 };
 
+import { normalizeLibraryEntry, normalizeTemplateOrganization, assertTemplateLibrary, copyActorTemplate } from '../library/model.js';
+export { assertTemplateLibrary } from '../library/model.js';
+
 export const WORLD_OPERATION_SCHEMA_VERSION = DOCUMENT_OPERATION_SCHEMA_VERSION;
 export const WORLD_OPERATION_BATCH_LIMIT = 64;
 export const WORLD_OPERATION_CACHE_LIMIT = 512;
 
 const OPERATION_TYPES = new Set([
   'world.rename',
+  'world.library.upsert',
+  'world.library.delete',
+  'journal.upsert',
+  'journal.delete',
+  'actor.copy',
+  'actor.organization.update',
   'actor.upsert',
+  'actor.metadata.update',
+  'actor.portrait.update',
   'actor.publicProfile.update',
   'actor.delete',
   'actor.runtime.perform',
@@ -60,6 +79,7 @@ const OPERATION_TYPES = new Set([
   'token.create',
   'token.upsert',
   'token.move',
+  'token.reposition',
   'token.movePath',
   'token.actorDelta.replace',
   'token.delete',
@@ -71,6 +91,8 @@ const OPERATION_TYPES = new Set([
   'scene.activate',
   'scene.delete',
   'scene.content.replace',
+  'scene.settings.patch',
+  'scene.door.use',
   'scene.featureState.patch',
   'scene.fog.explore',
   'scene.fog.reset',
@@ -89,16 +111,28 @@ const OPERATION_TYPES = new Set([
 ]);
 
 const STATUS_TYPES = new Set([...OPERATION_TYPES].filter(type => type.startsWith('status.')));
+const COPY_ON_WRITE_TYPES = new Set([
+  'token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch',
+  'scene.door.use', 'scene.featureState.patch', 'scene.activate',
+  'scene.fog.explore', 'scene.fog.hide', 'scene.fog.reset',
+]);
+const TOKEN_POSITION_TYPES = new Set(['token.move', 'token.reposition']);
 const GRANULAR_OPERATION_TYPES = new Set([
-  'token.move', 'token.movePath', 'scene.featureState.patch', 'scene.activate',
+  'token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch', 'scene.door.use', 'scene.featureState.patch', 'scene.activate',
   'scene.fog.explore', 'scene.fog.hide', 'scene.fog.reset',
   'status.apply', 'status.remove', 'status.setStacks', 'status.batch',
   'status.definition.upsert', 'status.definition.delete', 'status.definition.import',
   'chat.append', 'chat.clear',
 ]);
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
+const clone = structuredClone;
+
+function cloneProjection(value) {
+  if (Array.isArray(value)) return value.map(cloneProjection);
+  if (!plainObject(value)) return value;
+  const result = {};
+  for (const [key, item] of Object.entries(value)) result[key] = cloneProjection(item);
+  return result;
 }
 
 function plainObject(value) {
@@ -146,15 +180,36 @@ function mapById(items = []) {
 
 function worldFromState(state) {
   const world = state?.preferences?.worldV2;
-  if (!plainObject(world) || ![2, 3].includes(Number(world.schemaVersion))) {
+  if (!plainObject(world) || ![2, 3, 4].includes(Number(world.schemaVersion))) {
     fail('World operation requires initialized World V2', 'world_v2_required');
   }
   return world;
 }
 
+export function markMovementAdjudicationRequired(state, ruleset) {
+  if (!ruleset?.movement?.describe) return false;
+  const world = worldFromState(state);
+  let changed = false;
+  for (const scene of world.scenes || []) {
+    for (let index = 0; index < (scene.tokens || []).length; index += 1) {
+      const token = scene.tokens[index];
+      const movement = token?.movement || {};
+      let actor;
+      try { actor = resolveTokenActor({ ...world, activeSceneId: scene.id }, token.id, { ruleset })?.actor; }
+      catch { continue; }
+      const descriptor = ruleset.movement.describe(actor, { token, scene, world }) || {};
+      const unavailable = Boolean(movementCapabilityFailure(descriptor, movement.mode || 'walk'))
+        || (Number(token.elevationMeters) > 0 && descriptor.fly !== true);
+      if (!unavailable || movement.adjudicationRequired === true) continue;
+      if (!changed) changed = true;
+      scene.tokens[index] = { ...token, movement: { ...structuredClone(movement), adjudicationRequired: true } };
+    }
+  }
+  return changed;
+}
+
 function cloneOperationInput(rawState, operations) {
-  const copyOnWriteTypes = new Set(['token.move', 'token.movePath', 'scene.featureState.patch', 'scene.activate']);
-  if (operations.some(operation => !copyOnWriteTypes.has(operation.type) && !STATUS_TYPES.has(operation.type))) return clone(rawState);
+  if (operations.some(operation => !COPY_ON_WRITE_TYPES.has(operation.type) && !STATUS_TYPES.has(operation.type))) return clone(rawState);
   const source = object(rawState, 'state');
   const preferences = { ...object(source.preferences, 'state.preferences') };
   const rawWorld = object(preferences.worldV2, 'state.preferences.worldV2');
@@ -168,9 +223,10 @@ function cloneOperationInput(rawState, operations) {
   for (const operation of operations) {
     if (operation.type === 'scene.activate') continue;
     const sceneId = String(operation.payload?.sceneId || world.activeSceneId || '');
-    const entry = sceneChanges.get(sceneId) || { tokens: false, featureStates: false };
-    if (operation.type === 'token.move' || operation.type === 'token.movePath') entry.tokens = true;
-    if (operation.type === 'scene.featureState.patch') entry.featureStates = true;
+    const entry = sceneChanges.get(sceneId) || { tokens: false, featureStates: false, settings: false };
+    if (['token.move', 'token.reposition', 'token.movePath'].includes(operation.type)) entry.tokens = true;
+    if (operation.type === 'scene.featureState.patch' || operation.type === 'scene.door.use') entry.featureStates = true;
+    if (operation.type === 'scene.settings.patch') entry.settings = true;
     sceneChanges.set(sceneId, entry);
   }
   for (const [sceneId, changes] of sceneChanges) {
@@ -179,6 +235,7 @@ function cloneOperationInput(rawState, operations) {
     const scene = { ...world.scenes[index] };
     if (changes.tokens) scene.tokens = [...(scene.tokens || [])];
     if (changes.featureStates) scene.featureStates = { ...(scene.featureStates || {}) };
+    if (changes.settings) scene.settings = { ...(scene.settings || {}) };
     world.scenes[index] = scene;
   }
   if (operations.some(operation => STATUS_TYPES.has(operation.type))) {
@@ -263,6 +320,12 @@ function normalizeMarker(raw) {
   return normalizeLightweightMarker(source);
 }
 
+function updateTokenAnchors(scene, tokenId, point) {
+  if (!point || !scene.attackAreas?.some(area => area?.anchor?.type === 'token' && String(area.anchor.tokenId) === tokenId)) return;
+  scene.attackAreas = scene.attackAreas.map(area => area?.anchor?.type === 'token' && String(area.anchor.tokenId) === tokenId
+    ? { ...area, origin: { x: point.x, y: point.y }, anchor: { type: 'token', tokenId } } : area);
+}
+
 function detachTokenAnchors(scene, token) {
   const tokenId = String(token?.id ?? '');
   scene.attackAreas = (Array.isArray(scene.attackAreas) ? scene.attackAreas : []).map(area => {
@@ -294,30 +357,43 @@ function pruneCombatReferences(state) {
 function mergeRuntimeToken(canonical, runtime) {
   if (!runtime || String(runtime.id ?? '') !== String(canonical.id ?? '')) return clone(canonical);
   const next = clone(canonical);
-  for (const key of ['actorLink', 'actorDelta', 'diameterMeters', 'rotation', 'elevationFt', 'controllerUserIds', 'visibility', 'vision', 'locked', 'showName', 'effects']) {
+  for (const key of ['actorLink', 'actorDelta', 'diameterMeters', 'rotation', 'elevationMeters', 'movement', 'light', 'controllerUserIds', 'visibility', 'vision', 'locked', 'showName', 'effects']) {
     if (runtime[key] !== undefined) next[key] = clone(runtime[key]);
   }
   return next;
 }
 
-function applyStatusProjectionToWorld(state) {
+function applyStatusProjectionToWorld(state, operation) {
   const world = worldFromState(state);
   const entity = state.preferences?.entitySystem;
-  if (!plainObject(entity)) return state;
-  const actors = mapById(entity.actors || []);
-  world.actors = (world.actors || []).map(actor => {
-    const projected = actors.get(String(actor.id));
-    if (!projected) return actor;
-    return {
-      ...actor,
-      effects: clone(Array.isArray(projected.effects) ? projected.effects : []),
-    };
-  });
-  if (Array.isArray(entity.statusDefinitions)) world.statusDefinitions = clone(entity.statusDefinitions);
+  if (!plainObject(entity)) return;
+  const actorIds = [];
+  const tokenIds = [];
+  const items = operation.type === 'status.batch'
+    ? operation.payload.operations
+    : [operation.payload];
+  for (const item of items) {
+    const target = item.target || item;
+    const id = target.targetId || target.id;
+    if (target.scope === 'actor') actorIds.push(id);
+    else if (target.scope) tokenIds.push(id);
+  }
+  if (actorIds.length) {
+    const actors = mapById(entity.actors || []);
+    world.actors = (world.actors || []).map(actor => actorIds.includes(actor.id)
+      ? { ...actor, effects: clone(actors.get(actor.id).effects || []) }
+      : actor);
+  }
+  if (operation.type.includes('.definition.') && Array.isArray(entity.statusDefinitions)) {
+    world.statusDefinitions = clone(entity.statusDefinitions);
+  }
   const scene = activeScene(world);
-  const tokens = mapById(entity.tokens || []);
-  scene.tokens = (scene.tokens || []).map(token => mergeRuntimeToken(token, tokens.get(String(token.id))));
-  return state;
+  if (tokenIds.length) {
+    const tokens = mapById(entity.tokens || []);
+    scene.tokens = (scene.tokens || []).map(token => tokenIds.includes(token.id)
+      ? mergeRuntimeToken(token, tokens.get(token.id))
+      : token);
+  }
 }
 
 export function projectWorldOperationState(rawState) {
@@ -354,11 +430,11 @@ function projectGranularOperationState(state, operations) {
   entity.schemaVersion = STATUS_SCHEMA_VERSION;
   state.preferences.entitySystem = entity;
   if (operations.some(operation => operation.type === 'scene.activate')) {
-    entity.tokens = clone(scene.tokens || []);
-    state.markers = clone(scene.markers || []);
-    state.attackAreas = clone(scene.attackAreas || []);
-    state.sceneEvents = clone(scene.sceneEvents || []);
-    state.preferences.featureStates = clone(scene.featureStates || {});
+    entity.tokens = cloneProjection(scene.tokens || []);
+    state.markers = cloneProjection(scene.markers || []);
+    state.attackAreas = cloneProjection(scene.attackAreas || []);
+    state.sceneEvents = cloneProjection(scene.sceneEvents || []);
+    state.preferences.featureStates = cloneProjection(scene.featureStates || {});
     if (plainObject(scene.settings) && scene.settings.gridVisible !== undefined) {
       state.preferences.gridVisible = scene.settings.gridVisible !== false;
     }
@@ -367,10 +443,15 @@ function projectGranularOperationState(state, operations) {
   }
   for (const operation of operations) {
     const payload = operation.payload || {};
-    if (operation.type === 'token.move' && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
-      const token = scene.tokens?.find(item => String(item?.id ?? '') === String(payload.tokenId ?? ''));
-      const index = entity.tokens?.findIndex(item => String(item?.id ?? '') === String(payload.tokenId ?? '')) ?? -1;
+    if (TOKEN_POSITION_TYPES.has(operation.type) && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
+      const tokenId = String(payload.tokenId ?? '');
+      const sceneIndex = scene.tokens?.findIndex(item => String(item?.id ?? '') === tokenId) ?? -1;
+      const token = sceneIndex >= 0 ? scene.tokens[sceneIndex] : null;
+      const index = String(entity.tokens?.[sceneIndex]?.id ?? '') === tokenId
+        ? sceneIndex
+        : (entity.tokens?.findIndex(item => String(item?.id ?? '') === tokenId) ?? -1);
       if (token && index >= 0) entity.tokens[index] = clone(token);
+      state.attackAreas = clone(scene.attackAreas || []);
     }
     if (operation.type === 'token.movePath' && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
       for (const tokenId of payload.tokenIds || []) {
@@ -380,7 +461,7 @@ function projectGranularOperationState(state, operations) {
       }
       state.attackAreas = clone(scene.attackAreas || []);
     }
-    if (operation.type === 'scene.featureState.patch'
+    if ((operation.type === 'scene.featureState.patch' || operation.type === 'scene.door.use')
       && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
       state.preferences.featureStates = plainObject(state.preferences.featureStates)
         ? state.preferences.featureStates
@@ -389,6 +470,10 @@ function projectGranularOperationState(state, operations) {
       if (Object.hasOwn(scene.featureStates || {}, featureId)) {
         state.preferences.featureStates[featureId] = clone(scene.featureStates[featureId]);
       } else delete state.preferences.featureStates[featureId];
+    }
+    if (operation.type === 'scene.settings.patch'
+      && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
+      state.preferences.gridVisible = scene.settings?.gridVisible !== false;
     }
   }
   delete state.preferences.featureInteractions;
@@ -437,6 +522,54 @@ function applyCanonicalOperation(state, operation, context = {}) {
     return { action: type, worldId: String(world.id) };
   }
 
+  if (type === 'world.library.upsert' || type === 'world.library.delete') {
+    if (payload.worldId != null && payload.worldId !== world.id) fail('Library World target mismatch', 'document_target_mismatch');
+    const id = identifier(payload.entry?.id ?? payload.entryId, 'entryId');
+    const previous = world.templateLibrary?.[id] ?? null;
+    if (!Object.hasOwn(payload, 'expectedBodyRef') || payload.expectedBodyRef !== (previous?.bodyRef ?? null)) fail('Library entry changed', 'document_field_conflict');
+    if (!Object.hasOwn(payload, 'expectedEntry') || !same(payload.expectedEntry, previous)) fail('Library metadata changed', 'document_field_conflict');
+    world.templateLibrary = { ...world.templateLibrary };
+    if (type === 'world.library.delete') delete world.templateLibrary[id];
+    else world.templateLibrary[id] = normalizeLibraryEntry(payload.entry);
+    assertTemplateLibrary(world.templateLibrary);
+    return { changed: true };
+  }
+
+  if (type === 'journal.upsert' || type === 'journal.delete') {
+    const journalId = identifier(payload.journal?.id ?? payload.journalId, 'journalId');
+    const index = (world.journals || []).findIndex(entry => String(entry?.id) === journalId);
+    const previous = index < 0 ? null : world.journals[index];
+    if (!Object.hasOwn(payload, 'expected') || !same(payload.expected, previous)) {
+      fail('Journal changed since editing began', 'document_field_conflict');
+    }
+    world.journals = [...(world.journals || [])];
+    if (type === 'journal.delete') {
+      if (index < 0) fail('Journal is missing', 'journal_not_found');
+      world.journals.splice(index, 1);
+    } else {
+      const entry = normalizeJournalEntry(payload.journal);
+      if (entry.id !== journalId) fail('Journal target mismatch', 'document_target_mismatch');
+      if (index < 0) world.journals.push(entry);
+      else world.journals[index] = entry;
+    }
+    return { action: type, journalId, created: type === 'journal.upsert' && index < 0 };
+  }
+
+  if (type === 'actor.copy') {
+    const { actor: source } = actorById(world, identifier(payload.actorId, 'actorId'));
+    const id = identifier(payload.newActorId, 'newActorId');
+    if (world.actors.some(actor => actor.id === id)) fail('Actor already exists', 'duplicate_id');
+    world.actors.push(copyActorTemplate(source, { id, name: payload.name || source.name, ruleset: context.ruleset }));
+    return { changed: true };
+  }
+
+  if (type === 'actor.organization.update') {
+    const { actor } = actorById(world, identifier(payload.actorId, 'actorId'));
+    if (!Object.hasOwn(payload, 'expected') || !same(payload.expected, actor.organization || {})) fail('Template organization changed', 'document_field_conflict');
+    actor.organization = normalizeTemplateOrganization(payload.organization);
+    return { changed: true };
+  }
+
   if (type === 'actor.upsert') {
     let actor = clone(object(payload.actor, 'actor.upsert.actor'));
     const actorId = identifier(actor.id, 'actor.id');
@@ -460,10 +593,54 @@ function applyCanonicalOperation(state, operation, context = {}) {
     return { action: type, actorId, created: index < 0 };
   }
 
+  if (type === 'actor.portrait.update') {
+    const actorId = identifier(payload.actorId, 'actorId');
+    const record = actorById(world, actorId);
+    const portrait = context.ruleset?.actor?.portrait;
+    if (!portrait) fail('Actor portrait contract is unavailable', 'actor_portrait_unsupported');
+    if (payload.reference !== null && !/^asset:[a-f0-9]{64}$/.test(payload.reference)) fail('Portrait requires a persisted image reference', 'invalid_content_reference');
+    if (!Object.hasOwn(payload, 'expectedReference') || !Object.hasOwn(payload, 'variantId')) fail('Portrait requires its previous reference and variant', 'field_precondition_required');
+    const current = portrait.describe(record.actor);
+    if ((current.reference || null) !== payload.expectedReference || (current.variantId || null) !== payload.variantId) fail('Portrait or variant changed since editing began', 'document_field_conflict');
+    portrait.update(record.actor, { reference: payload.reference });
+    record.actor.updatedAt = String(context.now || new Date().toISOString());
+    return { action: type, actorId };
+  }
+
+  if (type === 'actor.metadata.update') {
+    const actorId = identifier(payload.actorId, 'actorId');
+    const record = actorById(world, actorId);
+    const changes = object(payload.changes, 'actor.metadata.update.changes');
+    const fields = Object.keys(changes);
+    if (!fields.length || fields.some(key => !['name', 'type', 'partyId'].includes(key))) fail('Actor metadata fields are not allowed', 'actor_metadata_field_forbidden');
+    const expected = object(payload.expected, 'actor.metadata.update.expected');
+    if (Object.keys(expected).some(key => !fields.includes(key)) || fields.some(key => !Object.hasOwn(expected, key))) fail('Each metadata field requires its previous value', 'field_precondition_required');
+    for (const key of fields) {
+      if (String(record.actor[key] ?? '') !== String(expected[key] ?? '')) fail('Actor field changed since editing began', 'document_field_conflict');
+      if (changes[key] !== null && typeof changes[key] !== 'string') fail('Actor metadata must be text');
+    }
+    const next = { ...record.actor, ...changes };
+    next.name = String(next.name || '').trim().slice(0, 80) || '未命名角色';
+    if (Object.hasOwn(changes, 'type') && !['pc', 'npc', 'monster', 'summon', 'other'].includes(next.type)) fail('Unknown Actor classification');
+    if (Object.hasOwn(changes, 'partyId')) next.partyId = String(next.partyId || '').trim().slice(0, 80) || null;
+    if (actorUsesIndependentInstances(next) && allActorTokens(world, actorId).some(({ token }) => token.actorLink !== false)) fail('Independent templates require instance conversion', 'instance_detach_required');
+    next.updatedAt = String(context.now || new Date().toISOString());
+    world.actors[record.index] = next;
+    return { action: type, actorId };
+  }
+
   if (type === 'actor.publicProfile.update') {
     const actorId = identifier(payload.actorId, 'actorId');
     const record = actorById(world, actorId);
     const statusDefinitionIds = (world.statusDefinitions || []).map(definition => String(definition?.id || '')).filter(Boolean);
+    if (payload.expected !== undefined) {
+      const current = normalizeActorPublicProfile(record.actor.publicProfile, { statusDefinitionIds });
+      const expected = object(payload.expected, 'actor.publicProfile.update.expected');
+      for (const key of Object.keys(object(payload.publicProfile, 'publicProfile'))) {
+        if (!Object.hasOwn(current, key) || !Object.hasOwn(expected, key)) fail('Public profile field requires its previous value', 'field_precondition_required');
+        if (JSON.stringify(current[key]) !== JSON.stringify(expected[key])) fail('Public profile field changed since editing began', 'document_field_conflict');
+      }
+    }
     record.actor.publicProfile = normalizeActorPublicProfile(
       { ...record.actor.publicProfile, ...object(payload.publicProfile, 'actor.publicProfile.update.publicProfile') },
       { statusDefinitionIds },
@@ -511,6 +688,7 @@ function applyCanonicalOperation(state, operation, context = {}) {
 
   if (type === 'actor.instances.detach') {
     const record = actorById(world, payload.actorId);
+    if (Object.hasOwn(payload, 'expectedType') && payload.expectedType !== record.actor.type) fail('Actor classification changed since editing began', 'document_field_conflict');
     if (payload.actorType !== undefined) {
       record.actor.type = normalizeActorClassification({
         ...record.actor,
@@ -574,29 +752,37 @@ function applyCanonicalOperation(state, operation, context = {}) {
       const waypoints = array(payload.waypoints, 'waypoints').map((point, index) => ({
         x: finite(point?.x, `waypoints[${index}].x`),
         y: finite(point?.y, `waypoints[${index}].y`),
+        ...(point?.elevationMeters === undefined ? {} : { elevationMeters: finite(point.elevationMeters, `waypoints[${index}].elevationMeters`) }),
       }));
       if (!waypoints.length || waypoints.length > 64) fail('token.movePath requires 1-64 waypoints', 'world_operation_limit');
       const expectedOrigins = plainObject(payload.expectedOrigins) ? payload.expectedOrigins : {};
       const leaderRecord = tokenById(scene, leaderId);
       if (leaderRecord.token.placement !== 'map') fail('Movement leader is not on the map', 'token_not_on_map');
-      const leaderOrigin = { x: Number(leaderRecord.token.x), y: Number(leaderRecord.token.y) };
+      const leaderOrigin = { x: Number(leaderRecord.token.x), y: Number(leaderRecord.token.y), elevationMeters: Number(leaderRecord.token.elevationMeters) || 0 };
       const motion = [];
       const records = tokenIds.map(tokenId => {
         const record = tokenById(scene, tokenId);
         const token = record.token;
         if (token.placement !== 'map') fail(`Token ${tokenId} is not on the map`, 'token_not_on_map');
-        const origin = { x: Number(token.x), y: Number(token.y) };
+        const origin = { x: Number(token.x), y: Number(token.y), elevationMeters: Number(token.elevationMeters) || 0 };
         const expected = expectedOrigins[tokenId];
         if (!plainObject(expected)
+          || !Number.isFinite(expected.x) || !Number.isFinite(expected.y)
           || Math.abs(Number(expected.x) - origin.x) > 0.000001
-          || Math.abs(Number(expected.y) - origin.y) > 0.000001) {
+          || Math.abs(Number(expected.y) - origin.y) > 0.000001
+          || (expected.elevationMeters !== undefined
+            && Math.abs(Number(expected.elevationMeters) - origin.elevationMeters) > 0.000001)) {
           const error = new Error(`Token ${tokenId} moved since this route was planned`);
           error.code = 'entity_conflict';
           error.conflictIds = [tokenId];
           throw error;
         }
-        const offset = { x: origin.x - leaderOrigin.x, y: origin.y - leaderOrigin.y };
-        const route = waypoints.map(point => ({ x: point.x + offset.x, y: point.y + offset.y }));
+        const offset = { x: origin.x - leaderOrigin.x, y: origin.y - leaderOrigin.y, elevationMeters: origin.elevationMeters - leaderOrigin.elevationMeters };
+        const route = waypoints.map(point => ({
+          x: point.x + offset.x,
+          y: point.y + offset.y,
+          elevationMeters: (point.elevationMeters ?? leaderOrigin.elevationMeters) + offset.elevationMeters,
+        }));
         for (const [index, point] of route.entries()) {
           const width = Number(context.mapMetrics?.width);
           const height = Number(context.mapMetrics?.height);
@@ -607,37 +793,44 @@ function applyCanonicalOperation(state, operation, context = {}) {
         }
         const validation = context.validateTokenMovePath?.({
           state, world, scene, token, origin: clone(origin), waypoints: clone(route), method: payload.method,
+          movementMode: payload.movementMode, verticalAction: payload.verticalAction,
         });
         if (validation === false || validation?.valid === false) {
           fail(validation?.reason || `Token ${tokenId} route is not allowed`, validation?.code || 'path_blocked');
         }
-        return { ...record, tokenId, origin, route };
+        return { ...record, tokenId, origin, route, validation };
       });
       for (const record of records) {
         const destination = record.route.at(-1);
         scene.tokens[record.index] = {
           ...record.token,
-          placement: 'map', x: destination.x, y: destination.y, featureId: null,
+          placement: 'map', x: destination.x, y: destination.y,
+          elevationMeters: destination.elevationMeters,
+          ...(record.validation?.movementState || record.token.movement
+            ? { movement: clone(record.validation?.movementState || record.token.movement) }
+            : {}),
+          featureId: null,
         };
-        for (const area of scene.attackAreas || []) {
-          if (area?.anchor?.type === 'token' && String(area.anchor.tokenId) === record.tokenId) {
-            area.origin = clone(destination);
-            area.anchor = { type: 'token', tokenId: record.tokenId };
-          }
-        }
+        updateTokenAnchors(scene, record.tokenId, destination);
         motion.push({
           tokenId: record.tokenId,
           from: clone(record.origin),
           waypoints: clone(record.route),
           to: clone(destination),
           method: payload.method === 'keyboard' ? 'keyboard' : 'drag',
+          movementMode: record.validation?.movementMode || payload.movementMode || 'walk',
+          costMeters: Number(record.validation?.costMeters) || 0,
         });
       }
       return { action: type, sceneId: String(scene.id), tokenId: leaderId, tokenIds, motion };
     }
     const { index, token } = tokenById(scene, payload.tokenId);
-    if (type === 'token.move') {
-      const next = clone(token);
+    if (type === 'token.move' || type === 'token.reposition') {
+      if (type === 'token.reposition' && !['gm', 'offline'].includes(context.source?.role)) {
+        fail('Only the GM can reposition Tokens', 'token_reposition_gm_only');
+      }
+      if (type === 'token.reposition' && payload.placement === 'feature') fail('Reposition requires a map destination', 'invalid_destination');
+      const next = { ...token };
       if (payload.placement === 'feature') {
         next.placement = 'feature';
         next.featureId = identifier(payload.featureId, 'featureId');
@@ -647,9 +840,23 @@ function applyCanonicalOperation(state, operation, context = {}) {
         next.placement = 'map';
         next.x = finite(payload.x, 'x');
         next.y = finite(payload.y, 'y');
+        if (payload.elevationMeters !== undefined) next.elevationMeters = finite(payload.elevationMeters, 'elevationMeters');
         next.featureId = null;
+        if ((Number.isFinite(context.mapMetrics?.width) && (next.x < 0 || next.x > context.mapMetrics.width))
+          || (Number.isFinite(context.mapMetrics?.height) && (next.y < 0 || next.y > context.mapMetrics.height))) {
+          fail('Movement destination is outside the Scene', 'movement_out_of_bounds');
+        }
       }
+      const validation = context.validateTokenMovePath?.({ state, world, scene, token,
+        origin: { x: token.x, y: token.y, elevationMeters: token.elevationMeters }, destination: next, operationType: type,
+        movementMode: payload.movementMode, verticalAction: payload.verticalAction });
+      if (validation === false || validation?.valid === false) {
+        fail(validation?.reason || 'Movement is not allowed', validation?.code || 'path_blocked');
+      }
+      for (const operation of validation?.statusOperations || []) context.enqueueStatusOperation(operation);
+      if (validation?.movementState) next.movement = clone(validation.movementState);
       scene.tokens[index] = next;
+      updateTokenAnchors(scene, String(token.id), validation?.anchorPoint || (next.placement === 'map' ? next : null));
       return { action: type, sceneId: String(scene.id), tokenId: String(token.id) };
     }
     if (type === 'token.actorDelta.replace') {
@@ -732,11 +939,60 @@ function applyCanonicalOperation(state, operation, context = {}) {
     return { action: type, sceneId: String(scene.id) };
   }
 
+  if (type === 'scene.settings.patch') {
+    const scene = sceneById(world, payload.sceneId);
+    const patch = object(payload.patch, 'scene.settings.patch.patch');
+    const allowed = new Set([
+      'gridVisible', 'lineOfSightEnabled', 'movementBudgetMetersPerTurn',
+      'defaultDoorInteractionRangeMeters',
+    ]);
+    for (const key of Object.keys(patch)) {
+      if (!allowed.has(key)) fail(`Unsupported Scene setting: ${key}`, 'scene_setting_forbidden');
+    }
+    const next = { ...(plainObject(scene.settings) ? scene.settings : {}) };
+    if (Object.hasOwn(patch, 'gridVisible')) next.gridVisible = patch.gridVisible !== false;
+    if (Object.hasOwn(patch, 'lineOfSightEnabled')) next.lineOfSightEnabled = patch.lineOfSightEnabled === true;
+    if (Object.hasOwn(patch, 'movementBudgetMetersPerTurn')) {
+      try { next.movementBudgetMetersPerTurn = normalizeMovementBudget(patch.movementBudgetMetersPerTurn); }
+      catch (error) { fail(error.message, error.code); }
+    }
+    if (Object.hasOwn(patch, 'defaultDoorInteractionRangeMeters')) {
+      const range = finite(patch.defaultDoorInteractionRangeMeters, 'defaultDoorInteractionRangeMeters');
+      if (range < 0) fail('defaultDoorInteractionRangeMeters must be non-negative', 'scene_setting_invalid');
+      next.defaultDoorInteractionRangeMeters = range;
+    }
+    scene.settings = next;
+    return { action: type, sceneId: String(scene.id), settings: clone(next) };
+  }
+
+  if (type === 'scene.door.use') {
+    const scene = sceneById(world, payload.sceneId);
+    const featureId = identifier(payload.featureId, 'featureId');
+    const tokenId = identifier(payload.tokenId, 'tokenId');
+    const action = String(payload.action || '');
+    if (!['open', 'close'].includes(action)) fail('Door action must be open or close', 'door_action_invalid');
+    const { token } = tokenById(scene, tokenId);
+    const mapPackage = plainObject(context.mapPackage)
+      ? context.mapPackage
+      : plainObject(context.mapMetrics) ? context.mapMetrics : null;
+    const feature = mapPackage?.features?.find(item => String(item?.id ?? '') === featureId) || null;
+    const validation = validateDoorInteraction({ scene, token, feature, mapPackage, action, source: context.source });
+    if (!validation.valid) fail(validation.reason, validation.code);
+    scene.featureStates = plainObject(scene.featureStates) ? scene.featureStates : {};
+    scene.featureStates[featureId] = {
+      ...(plainObject(scene.featureStates[featureId]) ? scene.featureStates[featureId] : {}),
+      open: action === 'open',
+    };
+    return {
+      action: type, sceneId: String(scene.id), featureId, tokenId,
+      open: action === 'open', distanceMeters: validation.distanceMeters,
+    };
+  }
+
   if (type === 'scene.featureState.patch') {
     const scene = sceneById(world, payload.sceneId);
     const featureId = identifier(payload.featureId, 'featureId');
     const patch = payload.patch === null ? null : object(payload.patch, 'scene.featureState.patch.patch');
-    assertFeatureStatePatch(patch);
     scene.featureStates = plainObject(scene.featureStates) ? scene.featureStates : {};
     const next = applyFeatureStateMergePatch(scene.featureStates[featureId], patch);
     if (next === null || Object.keys(next).length === 0) delete scene.featureStates[featureId];
@@ -747,25 +1003,45 @@ function applyCanonicalOperation(state, operation, context = {}) {
   if (type.startsWith('scene.fog.')) {
     const scene = sceneById(world, payload.sceneId);
     const partyId = identifier(payload.partyId, 'partyId');
-    const map = plainObject(context.mapMetrics) ? context.mapMetrics : {};
+    const map = plainObject(context.mapPackage)
+      ? context.mapPackage
+      : plainObject(context.mapMetrics) ? context.mapMetrics : {};
+    const radiusMeters = type === 'scene.fog.reset' ? 0 : Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
+    const radiusUnits = radiusMeters / Math.max(0.000001, Number(map.metersPerUnit) || 1);
+    const dirtyBounds = type === 'scene.fog.reset' ? null : (payload.from && payload.to ? [payload.from, payload.to] : [payload])
+      .reduce((bounds, point) => ({
+        minX: Math.min(bounds.minX, finite(point.x, 'x') - radiusUnits),
+        minY: Math.min(bounds.minY, finite(point.y, 'y') - radiusUnits),
+        maxX: Math.max(bounds.maxX, finite(point.x, 'x') + radiusUnits),
+        maxY: Math.max(bounds.maxY, finite(point.y, 'y') + radiusUnits),
+      }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+    const lineOfSightEnabled = scene.settings?.lineOfSightEnabled === true;
+    const occluders = lineOfSightEnabled
+      ? deriveVisionOccluders(map, scene, deriveSceneState(scene.sceneEvents || []))
+      : [];
     if (type === 'scene.fog.reset') scene.fog = resetFogParty(scene.fog, partyId);
     else if (type === 'scene.fog.hide') {
-      const radiusMeters = Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
       scene.fog = hideFogCircle(scene.fog, partyId, {
         x: finite(payload.x, 'x'), y: finite(payload.y, 'y'),
         radiusMeters,
       }, map);
     } else if (payload.from && payload.to) {
-      const radiusMeters = Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
-      scene.fog = exploreFogSweep(scene.fog, partyId, payload.from, payload.to, radiusMeters, map);
+      scene.fog = lineOfSightEnabled
+        ? exploreFogVisibleSweep(scene.fog, partyId, payload.from, payload.to, radiusMeters, map, { occluders })
+        : exploreFogSweep(scene.fog, partyId, payload.from, payload.to, radiusMeters, map);
     } else {
-      const radiusMeters = Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
-      scene.fog = exploreFogCircle(scene.fog, partyId, {
+      const circle = {
         x: finite(payload.x, 'x'), y: finite(payload.y, 'y'),
+        elevationMeters: Math.max(0, finite(payload.elevationMeters ?? 0, 'elevationMeters')),
         radiusMeters,
-      }, map);
+      };
+      scene.fog = lineOfSightEnabled
+        ? exploreFogVisibleCircle(scene.fog, partyId, circle, map, {
+            sourceElevationMeters: circle.elevationMeters, occluders,
+          })
+        : exploreFogCircle(scene.fog, partyId, circle, map);
     }
-    return { action: type, sceneId: String(scene.id), partyId };
+    return { action: type, sceneId: String(scene.id), partyId, dirtyBounds };
   }
 
   if (type === 'combat.replace') {
@@ -859,7 +1135,8 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
   const state = cloneOperationInput(rawState, operations);
   worldFromState(state);
   const results = [];
-  for (const operation of operations) {
+  for (let index = 0; index < operations.length; index += 1) {
+    const operation = operations[index];
     if (STATUS_TYPES.has(operation.type)) {
       if (typeof context.applyStatus !== 'function') fail('Status operation handler is unavailable', 'status_handler_unavailable');
       const applied = context.applyStatus(state, { type: operation.type, ...clone(operation.payload) }, context);
@@ -868,125 +1145,41 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
         Object.keys(state).forEach(key => delete state[key]);
         Object.assign(state, clone(applied.state));
       }
-      applyStatusProjectionToWorld(state);
+      applyStatusProjectionToWorld(state, operation);
       results.push(...(Array.isArray(applied.results) ? clone(applied.results) : []));
     } else {
-      results.push(applyCanonicalOperation(state, operation, context));
+      const generated = [];
+      results.push(applyCanonicalOperation(state, operation, { ...context, enqueueStatusOperation(value) {
+        const status = normalizeWorldOperation(value);
+        if (!STATUS_TYPES.has(status.type)) fail('Movement may only generate status operations', 'invalid_world_operation');
+        generated.push(status);
+      } }));
+      if (generated.length) {
+        if (operations.length + generated.length > WORLD_OPERATION_BATCH_LIMIT) fail('Generated operations exceed batch limit', 'world_operation_limit');
+        // Feature effects use the just-committed canonical placement, not an old Entity projection.
+        const canonical = worldFromState(state);
+        state.preferences.entitySystem = { ...state.preferences.entitySystem,
+          schemaVersion: STATUS_SCHEMA_VERSION, actors: clone(canonical.actors),
+          tokens: clone(activeScene(canonical).tokens), statusDefinitions: clone(canonical.statusDefinitions || []),
+        };
+        operations.splice(index + 1, 0, ...generated);
+      }
     }
   }
+  const shouldRecheckMovement = operations.some(operation => operation.type.startsWith('actor.')
+    || operation.type.startsWith('status.')
+    || ['token.actorDelta.replace', 'token.upsert', 'token.create'].includes(operation.type));
+  const movementAdjudicationChanged = shouldRecheckMovement
+    && markMovementAdjudicationRequired(state, context.ruleset);
   const world = worldFromState(state);
   world.updatedAt = String(context.now || new Date().toISOString());
-  projectGranularOperationState(state, operations);
-  const changeSet = createOperationChangeSet(operations, results, rawState, state)
-    || createWorldOperationChangeSet(rawState, state);
-  applyFogOperationDirtyBounds(changeSet, operations, context.mapMetrics);
+  if (movementAdjudicationChanged) projectWorldOperationState(state);
+  else projectGranularOperationState(state, operations);
   return {
     state,
-    operations: clone(operations),
+    operations,
     results,
-    changeSet,
   };
-}
-
-function createOperationChangeSet(operations, results, beforeState, afterState) {
-  if (operations.some(operation => !GRANULAR_OPERATION_TYPES.has(operation.type))) return null;
-  const beforeWorld = worldFromState(beforeState);
-  const afterWorld = worldFromState(afterState);
-  const actorIds = new Set();
-  const tokenIdsByScene = new Map();
-  const featureIdsByScene = new Map();
-  const fogSceneIds = new Set();
-  const appendedIds = new Set();
-  let chatCleared = false;
-  let statusDefinitionsChanged = false;
-  let activeSceneChanged = false;
-  const activeSceneId = String(afterWorld.activeSceneId || beforeWorld.activeSceneId || '');
-  const addToken = (sceneId, tokenId) => {
-    const scene = String(sceneId || activeSceneId);
-    if (!scene || !tokenId) return;
-    if (!tokenIdsByScene.has(scene)) tokenIdsByScene.set(scene, new Set());
-    tokenIdsByScene.get(scene).add(String(tokenId));
-  };
-  const collectStatusTarget = payload => {
-    if (payload?.type === 'status.batch') {
-      for (const item of payload.operations || []) collectStatusTarget(item);
-      return;
-    }
-    const scope = String(payload?.scope || payload?.target?.scope || '');
-    const targetId = String(payload?.targetId || payload?.target?.targetId || '');
-    if (scope === 'actor' && targetId) actorIds.add(targetId);
-    else if ((scope === 'token' || scope === 'syntheticActor') && targetId) addToken(activeSceneId, targetId);
-  };
-  for (const operation of operations) {
-    const payload = operation.payload || {};
-    if (operation.type === 'token.move') addToken(payload.sceneId, payload.tokenId);
-    else if (operation.type === 'token.movePath') {
-      for (const tokenId of payload.tokenIds || []) addToken(payload.sceneId, tokenId);
-    }
-    else if (operation.type === 'scene.featureState.patch') {
-      const sceneId = String(payload.sceneId || activeSceneId);
-      if (!featureIdsByScene.has(sceneId)) featureIdsByScene.set(sceneId, new Set());
-      featureIdsByScene.get(sceneId).add(String(payload.featureId));
-    } else if (operation.type === 'scene.activate') activeSceneChanged = true;
-    else if (operation.type.startsWith('scene.fog.')) fogSceneIds.add(String(payload.sceneId || activeSceneId));
-    else if (operation.type.startsWith('status.definition.')) statusDefinitionsChanged = true;
-    else if (operation.type.startsWith('status.')) collectStatusTarget({ type: operation.type, ...payload });
-    else if (operation.type === 'chat.clear') chatCleared = true;
-  }
-  for (const result of results || []) if (result?.chatId) appendedIds.add(String(result.chatId));
-  return {
-    actors: { upsertIds: [...actorIds], removeIds: [] },
-    tokens: [...tokenIdsByScene].map(([sceneId, ids]) => ({ sceneId, upsertIds: [...ids], removeIds: [] })),
-    scenes: { upsertIds: [], removeIds: [], activeSceneChanged },
-    featureStates: [...featureIdsByScene].map(([sceneId, ids]) => ({ sceneId, featureIds: [...ids] })),
-    fog: [...fogSceneIds].map(sceneId => ({ sceneId, dirtyBounds: null })),
-    combatChanged: false,
-    chat: { appendedIds: [...appendedIds], cleared: chatCleared },
-    statusDefinitionsChanged,
-  };
-}
-
-function mergeBounds(left, right) {
-  if (!left || !right) return left || right || null;
-  return {
-    minX: Math.min(left.minX, right.minX),
-    minY: Math.min(left.minY, right.minY),
-    maxX: Math.max(left.maxX, right.maxX),
-    maxY: Math.max(left.maxY, right.maxY),
-  };
-}
-
-function fogOperationBounds(operation, mapMetrics = {}) {
-  if (!String(operation?.type || '').startsWith('scene.fog.')) return undefined;
-  if (operation.type === 'scene.fog.reset') return null;
-  const payload = plainObject(operation.payload) ? operation.payload : {};
-  const metersPerUnit = Math.max(0.000001, Number(mapMetrics?.metersPerUnit) || 1);
-  const radius = Math.max(0, Number(payload.radiusMeters) || 0) / metersPerUnit;
-  const points = payload.from && payload.to ? [payload.from, payload.to] : [payload];
-  const values = points.map(point => ({ x: Number(point?.x), y: Number(point?.y) }))
-    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
-  if (!values.length) return null;
-  return {
-    minX: Math.min(...values.map(point => point.x)) - radius,
-    minY: Math.min(...values.map(point => point.y)) - radius,
-    maxX: Math.max(...values.map(point => point.x)) + radius,
-    maxY: Math.max(...values.map(point => point.y)) + radius,
-  };
-}
-
-function applyFogOperationDirtyBounds(changeSet, operations, mapMetrics) {
-  const byScene = new Map();
-  for (const operation of operations) {
-    const bounds = fogOperationBounds(operation, mapMetrics);
-    if (bounds === undefined) continue;
-    const sceneId = String(operation.payload?.sceneId || '');
-    if (!sceneId) continue;
-    if (bounds === null || byScene.get(sceneId) === null) byScene.set(sceneId, null);
-    else byScene.set(sceneId, mergeBounds(byScene.get(sceneId), bounds));
-  }
-  for (const entry of changeSet.fog || []) {
-    if (byScene.has(String(entry.sceneId))) entry.dirtyBounds = clone(byScene.get(String(entry.sceneId)));
-  }
 }
 
 function diffById(beforeItems = [], afterItems = []) {
@@ -1021,70 +1214,6 @@ function sceneContent(scene) {
   };
 }
 
-function changedIds(beforeItems = [], afterItems = []) {
-  const diff = diffById(beforeItems, afterItems);
-  return {
-    upsertIds: diff.upsert.map(item => String(item.id)),
-    removeIds: diff.remove.map(String),
-  };
-}
-
-function chatMessages(state) {
-  const messages = state?.preferences?.chatSystem?.messages;
-  return Array.isArray(messages) ? messages : [];
-}
-
-export function createWorldOperationChangeSet(beforeState, afterState) {
-  const beforeWorld = worldFromState(beforeState);
-  const afterWorld = worldFromState(afterState);
-  const beforeScenes = mapById(beforeWorld.scenes);
-  const afterScenes = mapById(afterWorld.scenes);
-  const tokens = [];
-  const featureStates = [];
-  const fog = [];
-  for (const [sceneId, scene] of afterScenes) {
-    const previous = beforeScenes.get(sceneId);
-    const tokenChanges = changedIds(previous?.tokens || [], scene.tokens || []);
-    if (tokenChanges.upsertIds.length || tokenChanges.removeIds.length) tokens.push({ sceneId, ...tokenChanges });
-    const featureChanges = changedIds(
-      Object.entries(previous?.featureStates || {}).map(([id, state]) => ({ id, state })),
-      Object.entries(scene.featureStates || {}).map(([id, state]) => ({ id, state })),
-    );
-    const featureIds = [...new Set([...featureChanges.upsertIds, ...featureChanges.removeIds])];
-    if (featureIds.length) featureStates.push({ sceneId, featureIds });
-    if (!same(previous?.fog, scene.fog)) fog.push({ sceneId, dirtyBounds: null });
-  }
-  for (const [sceneId, scene] of beforeScenes) {
-    if (afterScenes.has(sceneId)) continue;
-    const removeIds = (scene.tokens || []).map(token => String(token.id));
-    if (removeIds.length) tokens.push({ sceneId, upsertIds: [], removeIds });
-  }
-  const beforeChat = chatMessages(beforeState);
-  const afterChat = chatMessages(afterState);
-  const beforeChatIds = new Set(beforeChat.map(message => String(message?.id || '')));
-  const appendedIds = afterChat
-    .filter(message => !beforeChatIds.has(String(message?.id || '')))
-    .map(message => String(message.id));
-  const cleared = beforeChat.length > 0 && afterChat.length === 0;
-  const sceneChanges = changedIds(
-    (beforeWorld.scenes || []).map(sceneMetadata),
-    (afterWorld.scenes || []).map(sceneMetadata),
-  );
-  return {
-    actors: changedIds(beforeWorld.actors || [], afterWorld.actors || []),
-    tokens,
-    scenes: {
-      ...sceneChanges,
-      activeSceneChanged: String(beforeWorld.activeSceneId || '') !== String(afterWorld.activeSceneId || ''),
-    },
-    featureStates,
-    fog,
-    combatChanged: !same(beforeState?.preferences?.combatSystem, afterState?.preferences?.combatSystem),
-    chat: { appendedIds, cleared },
-    statusDefinitionsChanged: !same(beforeWorld.statusDefinitions, afterWorld.statusDefinitions),
-  };
-}
-
 export function createWorldOperationPatch(beforeState, afterState) {
   const beforeWorld = worldFromState(beforeState);
   const afterWorld = worldFromState(afterState);
@@ -1094,6 +1223,11 @@ export function createWorldOperationPatch(beforeState, afterState) {
     patch.world.activeSceneId = String(afterWorld.activeSceneId ?? '');
   }
   patch.world.updatedAt = String(afterWorld.updatedAt || new Date().toISOString());
+  if (!same(beforeWorld.templateLibrary, afterWorld.templateLibrary)) {
+    patch.world.templateLibrary = diffById(Object.values(beforeWorld.templateLibrary || {}), Object.values(afterWorld.templateLibrary || {}));
+  }
+  const journals = diffById(beforeWorld.journals || [], afterWorld.journals || []);
+  if (journals.upsert.length || journals.remove.length) patch.world.journals = journals;
   const actors = diffById(beforeWorld.actors, afterWorld.actors);
   if (actors.upsert.length || actors.remove.length) patch.world.actors = actors;
   if (!same(beforeWorld.statusDefinitions, afterWorld.statusDefinitions)) {
@@ -1143,10 +1277,10 @@ function applyIdPatch(items, patch) {
   return [...values.values()];
 }
 
-export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false } = {}) {
+export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false, project = true, acceptedSchemaVersions = [WORLD_OPERATION_SCHEMA_VERSION] } = {}) {
   const state = mutate ? object(rawState, 'state') : clone(object(rawState, 'state'));
   const patch = object(rawPatch, 'patch');
-  if (Number(patch.schemaVersion) !== WORLD_OPERATION_SCHEMA_VERSION) {
+  if (!acceptedSchemaVersions.includes(Number(patch.schemaVersion))) {
     fail('Unsupported World operation patch schema', 'operation_patch_incompatible');
   }
   state.preferences = mutate
@@ -1157,7 +1291,12 @@ export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false } 
   if (worldPatch.name !== undefined) world.name = String(worldPatch.name);
   if (worldPatch.activeSceneId !== undefined) world.activeSceneId = String(worldPatch.activeSceneId);
   if (worldPatch.updatedAt !== undefined) world.updatedAt = String(worldPatch.updatedAt);
+  if (worldPatch.templateLibrary) {
+    world.templateLibrary = Object.fromEntries(applyIdPatch(Object.values(world.templateLibrary || {}), worldPatch.templateLibrary).map(entry => [entry.id, entry]));
+    assertTemplateLibrary(world.templateLibrary);
+  }
   if (worldPatch.actors) world.actors = applyIdPatch(world.actors, worldPatch.actors);
+  if (worldPatch.journals) world.journals = applyIdPatch(world.journals || [], worldPatch.journals);
   if (worldPatch.statusDefinitions !== undefined) world.statusDefinitions = clone(array(worldPatch.statusDefinitions, 'statusDefinitions'));
   if (worldPatch.scenes) {
     world.scenes = applyIdPatch(world.scenes, worldPatch.scenes);
@@ -1206,6 +1345,7 @@ export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false } 
   }
   if (patch.audienceVision === null) delete state.preferences.audienceVision;
   else if (patch.audienceVision !== undefined) state.preferences.audienceVision = clone(object(patch.audienceVision, 'audienceVision'));
+  if (!project) return state;
   return mutate ? projectPatchedOperationState(state, patch) : projectWorldOperationState(state);
 }
 
@@ -1295,6 +1435,16 @@ export function deriveWorldOperations(beforeState, afterState) {
   if (!same(beforeState?.preferences?.chatSystem, afterState?.preferences?.chatSystem)) unsupported.push('chat');
   if (!same(unsupportedProjection(beforeState), unsupportedProjection(afterState))) unsupported.push('runtime_state');
   if (!same(beforeWorld.statusDefinitions, afterWorld.statusDefinitions)) unsupported.push('status_definitions');
+
+  const journals = diffById(beforeWorld.journals || [], afterWorld.journals || []);
+  journals.upsert.forEach(journal => operations.push({ type: 'journal.upsert', payload: {
+    journal,
+    expected: beforeWorld.journals?.find(entry => String(entry.id) === String(journal.id)) || null,
+  } }));
+  journals.remove.forEach(journalId => operations.push({ type: 'journal.delete', payload: {
+    journalId,
+    expected: beforeWorld.journals?.find(entry => String(entry.id) === String(journalId)) || null,
+  } }));
 
   if (String(beforeWorld.name ?? '') !== String(afterWorld.name ?? '')) {
     operations.push({ type: 'world.rename', payload: { name: afterWorld.name } });

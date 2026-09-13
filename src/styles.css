@@ -644,3 +644,31 @@ button { color: inherit; }
   .field-grid { grid-template-columns: 1fr; }
   .field.full { grid-column: auto; }
 }
+.journal-dialog{width:min(900px,calc(100vw - 24px));height:min(680px,calc(100vh - 24px));padding:0;border:1px solid #82928d;background:#f5f7f4;color:#172623}
+[data-library-dialog]{font-size:14px;letter-spacing:0}
+[data-library-dialog] [role=tab]{flex:1;height:32px;border:1px solid #cbd6d0;border-radius:4px;background:#f4f7f5}
+[data-library-dialog] [aria-selected=true]{background:#e0eee8;border-color:#558477;color:#214d40;font-weight:600}
+[data-library-dialog] input:not([type=checkbox]),[data-library-dialog] select{min-height:32px;border:1px solid #bdccc4;border-radius:4px;padding:4px 6px}
+[data-library-dialog] button{cursor:pointer}
+[data-library-dialog] button:disabled{cursor:wait;opacity:.55}
+[data-library-dialog] button:focus-visible{outline:2px solid #397783;outline-offset:2px}
+[data-library-dialog] [data-library-conflict] button{margin:8px 8px 0 0;padding:5px 8px}
+.journal-dialog::backdrop{background:rgba(12,22,20,.52)}
+.journal-shell{display:grid;grid-template-columns:minmax(190px,260px) minmax(0,1fr);height:100%}
+.journal-index{border-right:1px solid #c3cfca;padding:12px;overflow:auto}
+.journal-index header,.journal-head{display:flex;align-items:center;gap:8px}
+.journal-index h2,.journal-head h2{font-size:16px;margin:0;flex:1}
+.journal-list{display:grid;gap:4px;margin-top:10px}
+.journal-list button{padding:8px;text-align:left;border:1px solid transparent;background:transparent;color:inherit;overflow-wrap:anywhere}
+.journal-list button[aria-current=true]{background:#dce8e2;border-color:#8ba69c}
+.journal-main{min-width:0;padding:14px;overflow:auto}
+.journal-form{display:grid;gap:10px}
+.journal-form label{display:grid;gap:4px;font-size:12px}
+.journal-form input,.journal-form select,.journal-form textarea{box-sizing:border-box;width:100%;padding:8px;border:1px solid #9aaba5;background:#fff;color:#172623}
+.journal-form textarea{min-height:280px;resize:vertical;font-family:ui-monospace,Consolas,monospace}
+.journal-actions{display:flex;gap:8px;flex-wrap:wrap}
+.journal-actions button,.journal-head button,.journal-index header button{min-height:34px;padding:6px 10px}
+.journal-message{min-height:20px;color:#8b2e28}
+.journal-article{line-height:1.58;overflow-wrap:anywhere}
+.journal-article img{max-width:100%;max-height:360px;display:block;object-fit:contain;margin:12px 0}
+@media(max-width:620px){.journal-shell{grid-template-columns:1fr;grid-template-rows:minmax(140px,32%) minmax(0,1fr)}.journal-index{border-right:0;border-bottom:1px solid #c3cfca}.journal-dialog{width:calc(100vw - 12px);height:calc(100vh - 12px)}}

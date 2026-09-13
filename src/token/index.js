@@ -30,5 +30,6 @@ export {
   setTokenHidden,
   setTokenDiameterMeters,
   setTokenRotation,
+  setTokenElevationMeters,
   setTokenElevationFt,
 } from './properties.js';

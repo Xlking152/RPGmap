@@ -1,7 +1,7 @@
 import { deriveFloodRegions } from './state.js';
 import { runtimeFeatureInteractionEffects } from '../interaction/effects.js';
 import { getFeatureState } from '../interaction/feature-state.js';
-import { featureBlocksMover } from '../elevation/model.js';
+import { featureBlockingHeightMeters, featureBlocksMover } from '../elevation/model.js';
 import {
   elevationNavigationAppState,
   getActiveMoverContext,
@@ -90,7 +90,7 @@ function featureRuntimeState(feature, appState) {
 
 function resolvedMoverContext(explicit) {
   const source = explicit ?? getActiveMoverContext();
-  const elevationFt = Number(source?.elevationFt);
+  const elevationMeters = Number(source?.elevationMeters);
   const requestedDiameter = Number(source?.diameterMeters);
   const collisionBypassGroups = [...new Set(
     (Array.isArray(source?.collisionBypassGroups) ? source.collisionBypassGroups : [])
@@ -99,26 +99,30 @@ function resolvedMoverContext(explicit) {
   )].sort();
   return Object.freeze({
     tokenId: source?.tokenId == null ? null : String(source.tokenId),
-    elevationFt: Number.isFinite(elevationFt) && elevationFt >= 0 ? elevationFt : 0,
+    elevationMeters: Number.isFinite(elevationMeters) && elevationMeters >= 0 ? elevationMeters : 0,
     diameterMeters: [1, 5, 10, 20].includes(requestedDiameter) ? requestedDiameter : 1,
     collisionBypassGroups: Object.freeze(collisionBypassGroups),
     statusVersion: String(source?.statusVersion || ''),
+    movementMode: ['walk', 'swim', 'waterWalk', 'fly'].includes(source?.movementMode) ? source.movementMode : null,
+    elevationAtPoint: typeof source?.elevationAtPoint === 'function' ? source.elevationAtPoint : null,
+    heightProfileKey: String(source?.heightProfileKey || ''),
   });
 }
 
 function chunkKey(column, row) { return `${column}:${row}`; }
 
-function chunkBounds(chunkColumn, chunkRow) {
-  const minX = chunkColumn * NAVIGATION_CHUNK_SIZE_METERS;
-  const minY = chunkRow * NAVIGATION_CHUNK_SIZE_METERS;
-  return { minX, minY, maxX: minX + NAVIGATION_CHUNK_SIZE_METERS, maxY: minY + NAVIGATION_CHUNK_SIZE_METERS };
+function chunkBounds(chunkColumn, chunkRow, cellSize) {
+  const span = NAVIGATION_CHUNK_SIZE_METERS * cellSize;
+  const minX = chunkColumn * span;
+  const minY = chunkRow * span;
+  return { minX, minY, maxX: minX + span, maxY: minY + span };
 }
 
 function boundsIntersect(left, right) {
   return left.minX < right.maxX && left.maxX > right.minX && left.minY < right.maxY && left.maxY > right.minY;
 }
 
-function addDescriptorToIndex(index, descriptor, columns, rows) {
+function addDescriptorToIndex(index, descriptor, columns, rows, cellSize) {
   if (!descriptor.polygon?.length) return;
   const polygons = [descriptor.polygon, descriptor.navigation?.blockingPolygon, descriptor.navigation?.passagePolygon]
     .filter(polygon => Array.isArray(polygon) && polygon.length >= 3);
@@ -131,10 +135,11 @@ function addDescriptorToIndex(index, descriptor, columns, rows) {
   }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
   if (!Number.isFinite(bounds.minX)) return;
   descriptor.bounds = bounds;
-  const minColumn = Math.max(0, Math.floor(bounds.minX / NAVIGATION_CHUNK_SIZE_METERS));
-  const maxColumn = Math.min(columns - 1, Math.floor(Math.max(bounds.minX, bounds.maxX - Number.EPSILON) / NAVIGATION_CHUNK_SIZE_METERS));
-  const minRow = Math.max(0, Math.floor(bounds.minY / NAVIGATION_CHUNK_SIZE_METERS));
-  const maxRow = Math.min(rows - 1, Math.floor(Math.max(bounds.minY, bounds.maxY - Number.EPSILON) / NAVIGATION_CHUNK_SIZE_METERS));
+  const span = NAVIGATION_CHUNK_SIZE_METERS * cellSize;
+  const minColumn = Math.max(0, Math.floor(bounds.minX / span));
+  const maxColumn = Math.min(columns - 1, Math.floor(Math.max(bounds.minX, bounds.maxX - Number.EPSILON) / span));
+  const minRow = Math.max(0, Math.floor(bounds.minY / span));
+  const maxRow = Math.min(rows - 1, Math.floor(Math.max(bounds.minY, bounds.maxY - Number.EPSILON) / span));
   for (let row = minRow; row <= maxRow; row += 1) {
     for (let column = minColumn; column <= maxColumn; column += 1) {
       const key = chunkKey(column, row);
@@ -149,15 +154,15 @@ function paintPolygon(chunk, polygon, apply, predicate = null) {
   if (!Array.isArray(polygon) || polygon.length < 3) return;
   const bounds = polygonBounds(polygon);
   if (!boundsIntersect(bounds, chunk.bounds)) return;
-  const minColumn = Math.max(0, Math.floor(bounds.minX - chunk.bounds.minX));
-  const maxColumn = Math.min(NAVIGATION_CHUNK_SIZE_METERS - 1, Math.floor(Math.max(bounds.minX, bounds.maxX - Number.EPSILON) - chunk.bounds.minX));
-  const minRow = Math.max(0, Math.floor(bounds.minY - chunk.bounds.minY));
-  const maxRow = Math.min(NAVIGATION_CHUNK_SIZE_METERS - 1, Math.floor(Math.max(bounds.minY, bounds.maxY - Number.EPSILON) - chunk.bounds.minY));
+  const minColumn = Math.max(0, Math.floor((bounds.minX - chunk.bounds.minX) / chunk.cellSize));
+  const maxColumn = Math.min(NAVIGATION_CHUNK_SIZE_METERS - 1, Math.floor((Math.max(bounds.minX, bounds.maxX - Number.EPSILON) - chunk.bounds.minX) / chunk.cellSize));
+  const minRow = Math.max(0, Math.floor((bounds.minY - chunk.bounds.minY) / chunk.cellSize));
+  const maxRow = Math.min(NAVIGATION_CHUNK_SIZE_METERS - 1, Math.floor((Math.max(bounds.minY, bounds.maxY - Number.EPSILON) - chunk.bounds.minY) / chunk.cellSize));
   for (let row = minRow; row <= maxRow; row += 1) {
-    const worldY = chunk.bounds.minY + row + 0.5;
+    const worldY = chunk.bounds.minY + (row + 0.5) * chunk.cellSize;
     if (worldY < 0 || worldY >= chunk.height) continue;
     for (let column = minColumn; column <= maxColumn; column += 1) {
-      const worldX = chunk.bounds.minX + column + 0.5;
+      const worldX = chunk.bounds.minX + (column + 0.5) * chunk.cellSize;
       if (worldX < 0 || worldX >= chunk.width) continue;
       const point = [worldX, worldY];
       if (pointInPolygon(point, polygon) && (!predicate || predicate(point))) apply(row * NAVIGATION_CHUNK_SIZE_METERS + column);
@@ -172,7 +177,7 @@ function featureIsDestroyed(feature, scene, state) {
 function makeChunk(base, scene, appState, moverContext, chunkColumn, chunkRow, floodRegions = null) {
   const key = chunkKey(chunkColumn, chunkRow);
   const descriptors = base.descriptorIndex.get(key) || [];
-  const chunk = { bounds: chunkBounds(chunkColumn, chunkRow), width: base.width, height: base.height };
+  const chunk = { bounds: chunkBounds(chunkColumn, chunkRow, base.cellSize), width: base.width, height: base.height, cellSize: base.cellSize };
   const flags = new Uint8Array(CHUNK_CELLS);
 
   // Terrain starts with roads and then water, retaining the existing priority.
@@ -180,13 +185,24 @@ function makeChunk(base, scene, appState, moverContext, chunkColumn, chunkRow, f
     paintPolygon(chunk, descriptor.polygon, index => { flags[index] |= CELL_ROAD; });
   }
   for (const descriptor of descriptors) if (descriptor.kind === 'water') {
-    paintPolygon(chunk, descriptor.polygon, index => { flags[index] |= CELL_BLOCKED | CELL_WATER; });
+    paintPolygon(chunk, descriptor.polygon, index => {
+      flags[index] |= CELL_WATER;
+      if (!['swim', 'waterWalk', 'fly'].includes(moverContext?.movementMode)) flags[index] |= CELL_BLOCKED;
+    });
   }
-  const terrainFlags = flags.slice();
   if (moverContext?.baseOnly) return flags.some(Boolean) ? flags : EMPTY_CHUNK;
 
-  // Feature blockers and passages are separate passes. A passage restores the
-  // terrain state, exactly as the prior grid implementation did.
+  // Bridge surfaces exempt only natural water. Feature, crater and flood
+  // blockers are composed afterwards, so none can be erased by that exemption.
+  for (const descriptor of descriptors) {
+    if (descriptor.kind !== 'bridge') continue;
+    const state = featureRuntimeState(descriptor.feature, appState);
+    if (featureIsDestroyed(descriptor.feature, scene, state)) continue;
+    const damages = clipDamageForFeature(scene, descriptor.feature.id);
+    paintPolygon(chunk, descriptor.polygon, index => { flags[index] = CELL_ROAD; }, point => !damages.some(polygon => pointInPolygon(point, polygon)));
+  }
+  // Resolve each source's own exemptions before OR-ing its remaining cells.
+  // Never clear an aggregate cell to implement an opening or wall breach.
   for (const descriptor of descriptors) {
     if (descriptor.kind !== 'feature') continue;
     const { feature, navigation } = descriptor;
@@ -196,35 +212,30 @@ function makeChunk(base, scene, appState, moverContext, chunkColumn, chunkRow, f
       || (navigation.collisionGroup && moverContext?.collisionBypassGroups?.includes(navigation.collisionGroup))
       || (navigation.passableWhenDestroyed && destroyed)
       || (navigation.passableWhenOpen && state?.open)
-      || !featureBlocksMover(feature, state, moverContext)) continue;
+      || (!moverContext?.elevationAtPoint && !featureBlocksMover(feature, state, moverContext))) continue;
     const blockFlags = CELL_BLOCKED
       | ((navigation.passableWhenDestroyed || navigation.damageCreatesPassage) ? CELL_DESTRUCTIBLE : 0);
-    paintPolygon(chunk, navigation.blockingPolygon || descriptor.polygon, index => { flags[index] |= blockFlags; });
-  }
-  for (const descriptor of descriptors) {
-    if (descriptor.kind !== 'feature') continue;
-    const { feature, navigation } = descriptor;
-    const state = featureRuntimeState(feature, appState);
-    const destroyed = featureIsDestroyed(feature, scene, state);
-    if ((navigation.passableWhenDestroyed && destroyed) || (navigation.passableWhenOpen && state?.open)) {
-      paintPolygon(chunk, navigation.passagePolygon || descriptor.polygon, index => { flags[index] = terrainFlags[index]; });
-    }
-    if (navigation.damageCreatesPassage) {
-      for (const damage of clipDamageForFeature(scene, feature.id)) {
-        paintPolygon(chunk, damage, index => { flags[index] = terrainFlags[index]; }, point => pointInPolygon(point, descriptor.polygon));
+    const damages = navigation.damageCreatesPassage ? clipDamageForFeature(scene, feature.id) : [];
+    const blockingHeight = featureBlockingHeightMeters(feature, state);
+    paintPolygon(chunk, navigation.blockingPolygon || descriptor.polygon, index => { flags[index] |= blockFlags; }, point => {
+      if (damages.length && pointInPolygon(point, descriptor.polygon)
+        && damages.some(polygon => pointInPolygon(point, polygon))) return false;
+      if (blockingHeight !== null && moverContext?.elevationAtPoint) {
+        const elevation = Number(moverContext.elevationAtPoint({ x: point[0], y: point[1] }));
+        if (Number.isFinite(elevation) && elevation > blockingHeight) return false;
       }
-    }
+      return true;
+    });
   }
-  for (const descriptor of descriptors) {
-    if (descriptor.kind !== 'bridge') continue;
-    const state = featureRuntimeState(descriptor.feature, appState);
-    if (featureIsDestroyed(descriptor.feature, scene, state)) continue;
-    const damages = clipDamageForFeature(scene, descriptor.feature.id);
-    paintPolygon(chunk, descriptor.polygon, index => { flags[index] = CELL_ROAD; }, point => !damages.some(polygon => pointInPolygon(point, polygon)));
-  }
-  for (const crater of scene?.craterRegions || []) paintPolygon(chunk, crater.polygon, index => { flags[index] |= CELL_BLOCKED | CELL_CRATER; });
-  for (const region of floodRegions || deriveFloodRegions(scene || {}, base.mapPackage.liquidBodies || [], base.mapPackage.features || [], base.mapPackage.floodRules || {})) {
-    paintPolygon(chunk, region.polygon, index => { flags[index] |= CELL_BLOCKED | CELL_WATER; });
+  for (const crater of scene?.craterRegions || []) paintPolygon(chunk, crater.polygon, index => {
+    flags[index] |= CELL_CRATER;
+    if (!moverContext?.movementMode) flags[index] |= CELL_BLOCKED;
+  });
+  for (const region of floodRegions || deriveFloodRegions(scene || {}, base.mapPackage.liquidBodies || [], base.mapPackage.features || [], base.mapPackage.floodRules || {}, base.metersPerUnit)) {
+    paintPolygon(chunk, region.polygon, index => {
+      flags[index] |= CELL_WATER;
+      if (!['swim', 'waterWalk', 'fly'].includes(moverContext?.movementMode)) flags[index] |= CELL_BLOCKED;
+    });
   }
   return flags.some(Boolean) ? flags : EMPTY_CHUNK;
 }
@@ -256,18 +267,23 @@ function makeGridFacade(navigation) {
 
 function runtimeGridRevision(appState, moverContext, scene) {
   const featureStates = appState?.preferences?.featureStates || {};
-  return `${moverContext.tokenId ?? ''}|${moverContext.elevationFt}|${moverContext.diameterMeters}|${moverContext.statusVersion || ''}|${(moverContext.collisionBypassGroups || []).join(',')}|${JSON.stringify(featureStates)}|${JSON.stringify(scene || {})}`;
+  return `${moverContext.tokenId ?? ''}|${moverContext.elevationMeters}|${moverContext.diameterMeters}|${moverContext.statusVersion || ''}|${moverContext.movementMode || ''}|${moverContext.heightProfileKey || ''}|${(moverContext.collisionBypassGroups || []).join(',')}|${JSON.stringify(featureStates)}|${JSON.stringify(scene || {})}`;
 }
 
 export function createNavigationBase(mapPackage) {
   const width = Number(mapPackage.width);
   const height = Number(mapPackage.height);
-  const columns = Math.ceil(width / NAVIGATION_CELL_SIZE_METERS);
-  const rows = Math.ceil(height / NAVIGATION_CELL_SIZE_METERS);
+  const metersPerUnit = Number(mapPackage.metersPerUnit ?? 1);
+  if (!Number.isFinite(metersPerUnit) || metersPerUnit <= 0) throw new Error('navigation map scale must be positive and finite');
+  const cellSize = NAVIGATION_CELL_SIZE_METERS / metersPerUnit;
+  const columns = Math.ceil(width / cellSize);
+  const rows = Math.ceil(height / cellSize);
+  if (![width, height].every(value => Number.isFinite(value) && value > 0)
+    || ![columns, rows].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('navigation map dimensions are invalid');
   const chunkColumns = Math.ceil(columns / NAVIGATION_CHUNK_SIZE_METERS);
   const chunkRows = Math.ceil(rows / NAVIGATION_CHUNK_SIZE_METERS);
   const descriptorIndex = new Map();
-  const add = descriptor => addDescriptorToIndex(descriptorIndex, descriptor, chunkColumns, chunkRows);
+  const add = descriptor => addDescriptorToIndex(descriptorIndex, descriptor, chunkColumns, chunkRows, cellSize);
   for (const buffer of mapPackage.roadBuffers || []) add({ kind: 'road', polygon: featurePolygon(buffer) });
   for (const body of mapPackage.liquidBodies || []) add({ kind: 'water', polygon: body.polygon });
   for (const feature of mapPackage.features || []) {
@@ -280,7 +296,7 @@ export function createNavigationBase(mapPackage) {
   }
   const baseChunks = new Map();
   const base = {
-    mapPackage, cellSize: NAVIGATION_CELL_SIZE_METERS, width, height, columns, rows,
+    mapPackage, cellSize, cellSizeMeters: NAVIGATION_CELL_SIZE_METERS, metersPerUnit, width, height, columns, rows,
     chunkColumns, chunkRows, descriptorIndex,
     cellFlags(cell) {
       const column = Number(cell?.x); const row = Number(cell?.y);
@@ -290,7 +306,7 @@ export function createNavigationBase(mapPackage) {
       const key = chunkKey(chunkColumn, chunkRow);
       let chunk = baseChunks.get(key);
       if (!chunk) {
-        chunk = makeChunk(base, {}, null, { elevationFt: 0, diameterMeters: 1, baseOnly: true }, chunkColumn, chunkRow, []);
+        chunk = makeChunk(base, {}, null, { elevationMeters: 0, diameterMeters: 1, baseOnly: true }, chunkColumn, chunkRow, []);
         baseChunks.set(key, chunk);
       }
       return chunk[(row % NAVIGATION_CHUNK_SIZE_METERS) * NAVIGATION_CHUNK_SIZE_METERS + (column % NAVIGATION_CHUNK_SIZE_METERS)];
@@ -304,7 +320,8 @@ export function createNavigationBase(mapPackage) {
 /** Build a lazy mover-aware field; no world-sized JavaScript array is made. */
 export function createNavigationGrid(mapPackage, scene = {}, staticBase = null, options = {}) {
   const base = staticBase || createNavigationBase(mapPackage);
-  if (base.width !== Number(mapPackage.width) || base.height !== Number(mapPackage.height)) throw new Error('navigation base does not match map dimensions');
+  if (base.mapPackage !== mapPackage || base.width !== Number(mapPackage.width) || base.height !== Number(mapPackage.height)
+    || base.metersPerUnit !== Number(mapPackage.metersPerUnit ?? 1)) throw new Error('navigation base does not match map dimensions, scale or source');
   const dynamicAppState = options.appState === undefined;
   const dynamicMover = options.moverContext === undefined;
   let snapshot = null;
@@ -319,12 +336,12 @@ export function createNavigationGrid(mapPackage, scene = {}, staticBase = null, 
       // Flood geometry is a scene-level derivation.  Compute it once for this
       // immutable navigation snapshot, never once per visited cell/chunk.
       const floodRegions = deriveFloodRegions(
-        scene || {}, base.mapPackage.liquidBodies || [], base.mapPackage.features || [], base.mapPackage.floodRules || {}
+        scene || {}, base.mapPackage.liquidBodies || [], base.mapPackage.features || [], base.mapPackage.floodRules || {}, base.metersPerUnit
       );
       snapshot = {
         occupancyByDiameter: new Map(),
         cellFlags(column, row) {
-          if (column < 0 || row < 0 || column >= base.columns || row >= base.rows) return CELL_BLOCKED | CELL_BOUNDARY;
+          if (!Number.isInteger(column) || !Number.isInteger(row) || column < 0 || row < 0 || column >= base.columns || row >= base.rows) return CELL_BLOCKED | CELL_BOUNDARY;
           const chunkColumn = Math.floor(column / NAVIGATION_CHUNK_SIZE_METERS);
           const chunkRow = Math.floor(row / NAVIGATION_CHUNK_SIZE_METERS);
           const key = chunkKey(chunkColumn, chunkRow);
@@ -340,7 +357,8 @@ export function createNavigationGrid(mapPackage, scene = {}, staticBase = null, 
     return snapshot;
   };
   const navigation = {
-    cellSize: base.cellSize, width: base.width, height: base.height, columns: base.columns, rows: base.rows,
+    cellSize: base.cellSize, cellSizeMeters: base.cellSizeMeters, metersPerUnit: base.metersPerUnit,
+    width: base.width, height: base.height, columns: base.columns, rows: base.rows,
     cellFlags(cell) { return resolveSnapshot().cellFlags(Number(cell?.x), Number(cell?.y)); },
     // A route obtains one immutable snapshot before it begins.  Re-checking
     // JSON state revision for every 1 m cell made a long direct drag costly.
@@ -380,7 +398,7 @@ function pointInsideNavigation(point, navigation) {
 
 export function snapNavigationPoint(point, navigation) {
   const cell = worldToCell(point, navigation);
-  return { x: cell.x + 0.5, y: cell.y + 0.5 };
+  return cellToWorld(cell, navigation);
 }
 
 function cellToWorld(cell, navigation) {
@@ -440,7 +458,7 @@ function inspectSnapshotOccupation(snapshot, base, cell, diameterMeters) {
     blockedCell: { x: column, y: row }, blockingCell: { x: column, y: row }, blockingFlags: CELL_BLOCKED,
   };
 
-  for (const offset of footprintOffsets(diameter, base.cellSize)) {
+  for (const offset of footprintOffsets(diameter, base.cellSizeMeters)) {
     const blockingCell = { x: column + offset.x, y: row + offset.y };
     const flags = snapshot.cellFlags(blockingCell.x, blockingCell.y);
     if (flags & CELL_BLOCKED) {
@@ -456,7 +474,7 @@ function inspectSnapshotOccupation(snapshot, base, cell, diameterMeters) {
 
 function inspectOccupation(navigation, cell, diameterMeters, readCellFlags = null, inspectCachedOccupation = null) {
   if (inspectCachedOccupation) return inspectCachedOccupation(cell);
-  for (const offset of footprintOffsets(diameterMeters, Number(navigation.cellSize) || NAVIGATION_CELL_SIZE_METERS)) {
+  for (const offset of footprintOffsets(diameterMeters, navigation.cellSizeMeters ?? (Number(navigation.cellSize) || NAVIGATION_CELL_SIZE_METERS))) {
     const blockingCell = { x: cell.x + offset.x, y: cell.y + offset.y };
     const flags = navigationCellFlags(navigation, blockingCell, readCellFlags);
     if (flags & CELL_BLOCKED) return { blockedCell: { ...cell }, blockingCell, blockingFlags: flags };
@@ -508,14 +526,21 @@ export function inspectDirectNavigationPath(navigation, startPoint, destinationP
     : null;
   let failure = null;
   let visitedCellCount = 0;
+  let encounteredFlags = 0;
+  const terrainCellCounts = { normal: 0, difficult: 0, water: 0, difficultWater: 0 };
   const traversal = traverseSupercover(startCell, endCell, cell => {
     visitedCellCount += 1;
+    const flags = navigationCellFlags(navigation, cell, readCellFlags);
+    encounteredFlags |= flags;
+    const difficult = Boolean(flags & CELL_CRATER);
+    const water = Boolean(flags & CELL_WATER);
+    terrainCellCounts[difficult && water ? 'difficultWater' : difficult ? 'difficult' : water ? 'water' : 'normal'] += 1;
     failure = inspectOccupation(navigation, cell, diameterMeters, readCellFlags, inspectCachedOccupation);
     return !failure;
   });
-  if (failure) return { valid: false, reason: 'blocked', visitedCellCount, ...failure };
+  if (failure) return { valid: false, reason: 'blocked', visitedCellCount, encounteredFlags, terrainCellCounts, ...failure };
   if (!traversal.completed) return { valid: false, reason: 'iteration-limit', visitedCellCount, blockedCell: null, blockingCell: null, blockingFlags: CELL_BOUNDARY };
-  return { valid: true, visitedCellCount, blockedCell: null, blockingCell: null, blockingFlags: 0 };
+  return { valid: true, visitedCellCount, encounteredFlags, terrainCellCounts, blockedCell: null, blockingCell: null, blockingFlags: 0 };
 }
 
 export function isNavigationSegmentWalkable(navigation, startPoint, endPoint, options = {}) {
@@ -525,7 +550,9 @@ export function isNavigationSegmentWalkable(navigation, startPoint, endPoint, op
 export function nearestWalkablePoint(navigation, point, maximumDistance = 30, options = {}) {
   if (!pointInsideNavigation(point, navigation)) return null;
   const origin = worldToCell(point, navigation);
-  const maximumCells = Math.ceil(maximumDistance / navigation.cellSize);
+  const metersPerUnit = navigation.metersPerUnit || 1;
+  const cellSizeMeters = navigation.cellSizeMeters ?? navigation.cellSize * metersPerUnit;
+  const maximumCells = Math.ceil(maximumDistance / cellSizeMeters);
   const diameterMeters = options.diameterMeters ?? navigation.moverContext?.diameterMeters ?? 1;
   const readCellFlags = typeof navigation?.queryCellFlags === 'function'
     ? navigation.queryCellFlags()
@@ -541,8 +568,8 @@ export function nearestWalkablePoint(navigation, point, maximumDistance = 30, op
         const cell = { x: origin.x + dx, y: origin.y + dy };
         if (!cellIsWalkable(navigation, cell, readCellFlags) || inspectOccupation(navigation, cell, diameterMeters, readCellFlags, inspectCachedOccupation)) continue;
         const world = cellToWorld(cell, navigation);
-        const distance = Math.hypot(world.x - Number(point.x), world.y - Number(point.y));
-        if (distance <= maximumDistance + navigation.cellSize / 2 && (!best || distance < best.distance)) best = { ...world, cell, distance };
+        const distance = Math.hypot(world.x - Number(point.x), world.y - Number(point.y)) * metersPerUnit;
+        if (distance <= maximumDistance + cellSizeMeters / 2 && (!best || distance < best.distance)) best = { ...world, cell, distance };
       }
     }
     if (best) return best;

@@ -15,7 +15,7 @@ function state() {
         schemaVersion: 3,
         id: 'world-large-vision',
         name: 'Large Vision',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         actors: [],
         statusDefinitions: [],
         activeSceneId: 'scene-a',

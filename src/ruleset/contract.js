@@ -154,6 +154,30 @@ function prepareVision(raw = {}) {
   });
 }
 
+function prepareMovement(raw = {}) {
+  return Object.freeze({
+    describe: actorFunction(raw.describe, () => ({
+      walk: true,
+      swim: true,
+      waterWalk: false,
+      fly: false,
+      swimCostMultiplier: 2,
+    })),
+    calculateCost: actorFunction(raw.calculateCost, context => context.defaultCostMeters),
+  });
+}
+
+function prepareCalculations(raw = {}) {
+  return Object.freeze({
+    explain: actorFunction(raw.explain, (_actor, request = {}) => Object.freeze({
+      target: text(request.target),
+      baseValue: Number(request.baseValue) || 0,
+      sources: Object.freeze([]),
+      result: Number(request.baseValue) || 0,
+    })),
+  });
+}
+
 function presentationOptions(value) {
   return Object.freeze((Array.isArray(value) ? value : []).map(option => Object.freeze({ ...option })));
 }
@@ -184,6 +208,8 @@ export function prepareRuleset(raw = {}) {
   const statuses = raw.statuses && typeof raw.statuses === 'object' ? raw.statuses : {};
   const importers = raw.importers && typeof raw.importers === 'object' ? raw.importers : {};
   const vision = raw.vision && typeof raw.vision === 'object' ? raw.vision : {};
+  const movement = raw.movement && typeof raw.movement === 'object' ? raw.movement : {};
+  const calculations = raw.calculations && typeof raw.calculations === 'object' ? raw.calculations : {};
 
   return Object.freeze({
     apiVersion,
@@ -215,6 +241,15 @@ export function prepareRuleset(raw = {}) {
         blocked: 'unknown_actor_operation',
       })),
       instances: prepareActorInstances(actor.instances),
+      templates: Object.freeze({ copySystem: optionalFunction(actor.templates?.copySystem) }),
+      portrait: Object.freeze({
+        describe: actorFunction(actor.portrait?.describe, document => ({ variantId: null, reference: document.img || null })),
+        update: actorFunction(actor.portrait?.update, (document, { reference }) => {
+          const previous = document.img;
+          document.img = reference;
+          if (document.prototypeToken?.texture && (!document.prototypeToken.texture.src || document.prototypeToken.texture.src === previous)) document.prototypeToken.texture.src = reference;
+        }),
+      }),
       presentation: prepareActorPresentation(actor.presentation),
     }),
     health: Object.freeze({
@@ -237,6 +272,8 @@ export function prepareRuleset(raw = {}) {
       canonicalizeChangeTarget: optionalFunction(statuses.canonicalizeChangeTarget),
     }),
     vision: prepareVision(vision),
+    movement: prepareMovement(movement),
+    calculations: prepareCalculations(calculations),
     importers: Object.freeze({ ...importers }),
     metadata: Object.freeze({ ...(raw.metadata || {}) }),
   });

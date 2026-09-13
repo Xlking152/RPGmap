@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   normalizeTokenRotation,
   setTokenDiameterMeters,
-  setTokenElevationFt,
+  setTokenElevationMeters,
   setTokenHidden,
   setTokenRotation,
   tokenPropertySnapshot,
@@ -19,7 +19,7 @@ function runtime(overrides = {}) {
     visibility: { mode: 'public', userIds: [] },
     diameterMeters: 5,
     rotation: 15,
-    elevationFt: 10,
+    elevationMeters: 10,
     locked: false,
     showName: true,
     ...overrides,
@@ -60,7 +60,7 @@ function withoutComments(source) {
 }
 
 test('Token property snapshot reads only canonical Token fields', () => {
-  const api = runtime({ visibility: { mode: 'gm', userIds: [] }, rotation: 725, elevationFt: 25 });
+  const api = runtime({ visibility: { mode: 'gm', userIds: [] }, rotation: 725, elevationMeters: 25 });
   assert.deepEqual(tokenPropertySnapshot(api, 'token-a'), {
     id: 'token-a',
     actorId: 'actor-a',
@@ -68,7 +68,7 @@ test('Token property snapshot reads only canonical Token fields', () => {
     visibility: { mode: 'gm', userIds: [] },
     diameterMeters: 5,
     rotation: 5,
-    elevationFt: 25,
+    elevationMeters: 25,
     locked: false,
     showName: true,
   });
@@ -79,12 +79,12 @@ test('Token property mutations use access operation for visibility and Token upd
   await setTokenHidden(api, 'token-a', true);
   await setTokenDiameterMeters(api, 'token-a', 10);
   await setTokenRotation(api, 'token-a', -45);
-  await setTokenElevationFt(api, 'token-a', 35);
+  await setTokenElevationMeters(api, 'token-a', 35);
   assert.deepEqual(api.calls, [
     { visibility: { mode: 'gm', userIds: [] } },
     { diameterMeters: 10 },
     { rotation: 315 },
-    { elevationFt: 35 },
+    { elevationMeters: 35 },
   ]);
 });
 
@@ -99,7 +99,7 @@ test('Entity Token controller owns property edits without Character or Entity pr
   const path = fileURLToPath(new URL('../src/entities/token-controller.js', import.meta.url));
   const source = withoutComments(await readFile(path, 'utf8'));
   assert.match(source, /setTokenDiameterMeters/);
-  assert.match(source, /setTokenElevationFt/);
+  assert.match(source, /setTokenElevationMeters/);
   assert.match(source, /setTokenHidden/);
   assert.match(source, /setTokenRotation/);
   assert.doesNotMatch(source, /state\.characters|preferences\.entitySystem|store\.persist|api\.commitState|api\.importState/);

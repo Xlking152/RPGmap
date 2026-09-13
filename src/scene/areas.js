@@ -61,12 +61,20 @@ export function createSceneAreaSystem() {
       let preview = null;
       let destroyed = false;
       const off = [];
+      const initialState = api.getState();
+      let cachedAreas = clone(initialState?.attackAreas || []);
+      let cachedMarkers = clone(initialState?.markers || []);
 
       const status = message => {
         const node = shell.querySelector?.('[data-role="map-status"]');
         if (node) node.textContent = message;
       };
-      const areas = () => api.getState()?.attackAreas || [];
+      const areas = () => cachedAreas;
+      const refreshAreas = event => {
+        const state = event?.detail?.state || api.getState();
+        cachedAreas = clone(state?.attackAreas || []);
+        cachedMarkers = clone(state?.markers || []);
+      };
       const selected = () => areas().find(area => String(area.id) === String(selectedAreaId)) || null;
 
       function tokenOrigin(tokenId) {
@@ -82,7 +90,7 @@ export function createSceneAreaSystem() {
 
       function resolvedOrigin(area) {
         if (area?.anchor?.type === 'marker') {
-          const marker = api.getState()?.markers?.find(item => String(item.id) === String(area.anchor.markerId));
+          const marker = cachedMarkers.find(item => String(item.id) === String(area.anchor.markerId));
           if (marker) return { x: Number(marker.x), y: Number(marker.y) };
         }
         if (area?.anchor?.type === 'token') {
@@ -108,6 +116,7 @@ export function createSceneAreaSystem() {
         const next = api.getState();
         next.attackAreas = clone(nextAreas);
         await Promise.resolve(api.commitState(next, { source, render: true }));
+        cachedAreas = clone(nextAreas);
         return true;
       }
 
@@ -197,7 +206,7 @@ export function createSceneAreaSystem() {
         const select = documentNode.createElement('select');
         select.name = 'anchor';
         const free = documentNode.createElement('option'); free.value = ''; free.textContent = '自由放置'; select.append(free);
-        for (const marker of api.getState()?.markers || []) {
+        for (const marker of cachedMarkers) {
           const option = documentNode.createElement('option'); option.value = `marker:${marker.id}`; option.textContent = `标记 · ${marker.name || marker.id}`; select.append(option);
         }
         for (const token of api.tokens?.list?.() || []) {
@@ -397,9 +406,20 @@ export function createSceneAreaSystem() {
       };
       documentNode.addEventListener('keydown', keydown);
 
-      for (const name of ['state:commit', 'state:import', 'token:move', 'token:delete', 'marker:move', 'marker:delete']) {
-        off.push(api.on?.(name, render));
+      for (const name of ['state:commit', 'state:import']) {
+        off.push(api.on?.(name, event => { refreshAreas(event); render(); }));
       }
+      for (const name of ['token:move', 'token:delete', 'marker:move', 'marker:delete']) {
+        const kind = name.startsWith('token') ? 'token' : 'marker';
+        off.push(api.on?.(name, event => {
+          const targetId = String(event?.detail?.tokenId || event?.detail?.markerId || event?.detail?.id || '');
+          if (targetId && areas().some(area => area.anchor?.type === kind
+            && String(area.anchor?.[`${kind}Id`] || '') === targetId)) render();
+        }));
+      }
+      off.push(api.on?.('scene:content-change', event => {
+        if (event.detail?.types?.some(type => ['AttackArea', 'Marker'].includes(type))) { refreshAreas(); render(); }
+      }));
       off.push(api.on?.('app:destroy', () => {
         destroyed = true;
         api.map.off('click', mapClick);

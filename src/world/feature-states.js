@@ -8,8 +8,14 @@ const MAX_KEYS = 256;
 const MAX_ARRAY_LENGTH = 1000;
 const MAX_STRING_LENGTH = 65536;
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
+const clone = structuredClone;
+
+function cloneFeatureValue(value) {
+  if (Array.isArray(value)) return value.map(cloneFeatureValue);
+  if (!isPlainObject(value)) return value;
+  const result = {};
+  for (const [key, item] of Object.entries(value)) result[key] = cloneFeatureValue(item);
+  return result;
 }
 
 export function isPlainObject(value) {
@@ -59,11 +65,11 @@ export function assertFeatureStatePatch(patch) {
 export function applyFeatureStateMergePatch(current, patch) {
   assertFeatureStatePatch(patch);
   if (patch === null) return null;
-  const result = isPlainObject(current) ? clone(current) : {};
+  const result = isPlainObject(current) ? cloneFeatureValue(current) : {};
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) delete result[key];
     else if (isPlainObject(value)) result[key] = applyFeatureStateMergePatch(result[key], value);
-    else result[key] = clone(value);
+    else result[key] = cloneFeatureValue(value);
   }
   return result;
 }

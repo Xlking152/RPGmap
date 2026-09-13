@@ -10,7 +10,7 @@ const mainSource = await readFile(new URL('../src/main.js', import.meta.url), 'u
 const mapRuntimeSource = await readFile(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
 
 test('Elevation V2 writes only through canonical Token Runtime', () => {
-  assert.match(elevationSource, /api\.tokens\.update\(token\.id, \{ elevationFt \}/);
+  assert.match(elevationSource, /setTokenElevationMeters\(api, token\.id, elevationMeters/);
   assert.match(elevationSource, /openTokenElevationEditor/);
   assert.match(elevationSource, /canControlToken/);
   assert.match(elevationSource, /canonicalSceneTokens: true/);
@@ -18,7 +18,7 @@ test('Elevation V2 writes only through canonical Token Runtime', () => {
 });
 
 test('Elevation implementation is Token/Feature-only with no AppCore compatibility alias', () => {
-  assert.match(elevationModelSource, /export function tokenElevationFt\(token\)/);
+  assert.match(elevationModelSource, /export function tokenElevationMeters\(token\)/);
   assert.match(elevationModelSource, /export function tokenDiameterMeters\(token\)/);
   assert.doesNotMatch(elevationModelSource, /tokenForCharacter|actorForCharacter|entityStateFromAppState|resolveStatuses|moverContextForCharacter|legacyAppCoreMoverContext/);
   assert.doesNotMatch(elevationIndexSource, /createElevationSystem|actorForCharacter|tokenForCharacter|entityStateFromAppState|moverContextForCharacter/);

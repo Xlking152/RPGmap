@@ -22,15 +22,15 @@ function state({ combat = null } = {}) {
         schemaVersion: 2,
         id: 'world-test',
         name: 'Test World',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         activeSceneId: 'scene-test',
         actors: structuredClone(actors),
         statusDefinitions: [],
         scenes: [{
           id: 'scene-test', name: 'Test Scene', mapPackage: { id: 'test', version: '1' },
           tokens: [
-            { id: 'token-a', actorId: 'actor-a', actorLink: true, actorDelta: null, placement: 'map', x: 1, y: 1, diameterMeters: 1, rotation: 0, elevationFt: 0, hidden: false, locked: false, showName: true, effects: [] },
-            { id: 'token-b', actorId: 'actor-b', actorLink: true, actorDelta: null, placement: 'map', x: 2, y: 2, diameterMeters: 1, rotation: 0, elevationFt: 0, hidden: false, locked: false, showName: true, effects: [] },
+            { id: 'token-a', actorId: 'actor-a', actorLink: true, actorDelta: null, placement: 'map', x: 1, y: 1, diameterMeters: 1, rotation: 0, elevationMeters: 0, hidden: false, locked: false, showName: true, effects: [] },
+            { id: 'token-b', actorId: 'actor-b', actorLink: true, actorDelta: null, placement: 'map', x: 2, y: 2, diameterMeters: 1, rotation: 0, elevationMeters: 0, hidden: false, locked: false, showName: true, effects: [] },
           ],
           markers: [], attackAreas: [], sceneEvents: [], settings: { gridVisible: true },
         }],

@@ -4,6 +4,7 @@ import '../styles.css';
 import { createRpgMapRuntime } from '../engine/runtime.js';
 import { createMemoryStorage } from '../app/storage.js';
 import { prepareStoredWorldState } from '../app/world-storage.js';
+import { prepareStoredWorldWithContent } from '../app/world-upgrade.js';
 import { createAppLifecycleSystem } from '../engine/lifecycle.js';
 import { createMovementSystem } from '../movement/index.js';
 import { createMeasurementSystem } from '../measurement/index.js';
@@ -33,6 +34,11 @@ import { createVisionFogSystem } from '../vision/index.js';
 import { createLightweightMarkerSystem } from '../marker/index.js';
 import { createPermissionSystem } from '../permissions/index.js';
 import { createDocumentBackendSystem } from '../documents/index.js';
+import { createPerformanceDiagnosticsSystem } from '../diagnostics/runtime.js';
+import { createContentSystem } from '../content/runtime.js';
+import { createTemplateLibrarySystem } from '../library/runtime.js';
+import { createJournalSystem } from '../journal/runtime.js';
+import { resolveRulesetReference, setActiveRuleset } from '../ruleset/index.js';
 
 export async function startMapRuntime({
   appContainer,
@@ -40,22 +46,24 @@ export async function startMapRuntime({
   mapPackageRegistry,
   mapReference,
   raw,
-  ruleset,
+  rulesetReference,
   serverRuntime,
-  worldDescriptor,
   worldId,
   worldManager,
   worldName,
   setBootStatus = () => {},
 } = {}) {
+  const ruleset = resolveRulesetReference(rulesetReference);
+  setActiveRuleset(ruleset.id);
   const mapPackage = await mapPackageRegistry.load(mapReference);
   const storageAdapter = serverRuntime ? createMemoryStorage() : bootstrapStorage;
-  const initialLoad = prepareStoredWorldState({
+  const initialLoad = await (serverRuntime ? prepareStoredWorldState : prepareStoredWorldWithContent)({
     worldId,
     worldName,
     mapPackage,
     ruleset,
     storageAdapter,
+    indexedDB: appContainer.ownerDocument.defaultView.indexedDB,
     raw: serverRuntime ? null : raw,
   });
 
@@ -74,6 +82,8 @@ export async function startMapRuntime({
     initialLoad,
     tools: [
       createAppLifecycleSystem(),
+      createPerformanceDiagnosticsSystem(),
+      createContentSystem({ serverRuntime, worldId }),
       createWorldSystem({ worldId, worldName }),
       createDocumentBackendSystem(),
       createSceneManagerSystem({
@@ -96,6 +106,8 @@ export async function startMapRuntime({
       createSceneAreaSystem(),
       createSceneAreaHandleSystem(),
       createAppShellUi(),
+      createTemplateLibrarySystem({ serverRuntime }),
+      createJournalSystem({ serverRuntime }),
       createLightweightMarkerSystem(),
       createMeasurementSystem(),
       createHealthSystem(),

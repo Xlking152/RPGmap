@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { assertWorldState, isSameChat } from './world-schema.mjs';
+import { assertSafeJson, assertWorldState, isSameChat } from './world-schema.mjs';
 import { statusStateChanged } from './status-operations.mjs';
 import { resolveStatusCapabilitiesForToken } from './status-capabilities-v2.mjs';
 
@@ -188,11 +188,15 @@ export function normalizeOwnership(raw) {
 }
 export function normalizeAccessState(raw) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : createAccessState();
+  assertSafeJson(source);
+  if (![1, 2, 3, 4].includes(Number(source.schemaVersion ?? 1))) {
+    throw Object.assign(new Error('Access schema is incompatible'), { code: 'access_schema_incompatible' });
+  }
   const users = [];
   const seen = new Set();
   for (const item of Array.isArray(source.users) ? source.users : []) {
     const id = String(item?.id || '').trim();
-    if (!id || seen.has(id)) continue;
+    if (!id || seen.has(id)) throw Object.assign(new Error('Access User IDs must be nonempty and unique'), { code: 'invalid_access_user_id' });
     seen.add(id);
     const ownership = normalizeOwnership(item.ownership);
     let defaultActorId = cleanActorId(item.defaultActorId);
@@ -200,27 +204,33 @@ export function normalizeAccessState(raw) {
     const keyHash = typeof item.playerKeyHash === 'string' && item.playerKeyHash.length === 64
       ? item.playerKeyHash
       : typeof item.claimHash === 'string' && item.claimHash.length === 64 ? item.claimHash : null;
+    const retained = structuredClone(item);
+    for (const key of ['authToken', 'playerKey', 'claimCode']) delete retained[key];
     users.push({
+      ...retained,
       id, name: cleanName(item.name), role: 'player', defaultActorId, ownership,
-      placementGrants: normalizePlacementGrants(item.placementGrants),
+      placementGrants: { ...(item.placementGrants && typeof item.placementGrants === 'object' && !Array.isArray(item.placementGrants) ? structuredClone(item.placementGrants) : {}),
+        ...normalizePlacementGrants(item.placementGrants) },
       tokenHash: typeof item.tokenHash === 'string' && item.tokenHash.length === 64 ? item.tokenHash : null,
       playerKeyHash: keyHash, claimHash: keyHash, disabled: item.disabled === true,
+      lineOfSightOverride: typeof item.lineOfSightOverride === 'boolean' ? item.lineOfSightOverride : null,
       createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
       updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString(),
     });
   }
   return {
+    ...structuredClone(source),
     schemaVersion: ACCESS_SCHEMA_VERSION,
     revision: Number.isSafeInteger(Number(source.revision)) && Number(source.revision) >= 0 ? Number(source.revision) : 0,
     users,
   };
 }
-function baseUser({ name, defaultActorId = null, ownership = {}, placementGrants = {} } = {}) {
+function baseUser({ name, defaultActorId = null, ownership = {}, placementGrants = {}, lineOfSightOverride = null } = {}) {
   const normalizedOwnership = normalizeOwnership(ownership);
   const actorId = cleanActorId(defaultActorId);
   if (actorId) normalizedOwnership[actorId] = OWNERSHIP.OWNER;
   const now = new Date().toISOString();
-  return { id: randomUUID(), name: cleanName(name), role: 'player', defaultActorId: actorId, ownership: normalizedOwnership, placementGrants: normalizePlacementGrants(placementGrants), tokenHash: null, playerKeyHash: null, claimHash: null, disabled: false, createdAt: now, updatedAt: now };
+  return { id: randomUUID(), name: cleanName(name), role: 'player', defaultActorId: actorId, ownership: normalizedOwnership, placementGrants: normalizePlacementGrants(placementGrants), lineOfSightOverride: typeof lineOfSightOverride === 'boolean' ? lineOfSightOverride : null, tokenHash: null, playerKeyHash: null, claimHash: null, disabled: false, createdAt: now, updatedAt: now };
 }
 export function createBoundUser(options = {}) {
   const playerKey = newPlayerKey();
@@ -257,7 +267,7 @@ export function updateUserRecord(user, patch = {}) {
   if (!user) return null;
   if (patch.name !== undefined) user.name = cleanName(patch.name, user.name);
   if (patch.ownership !== undefined) user.ownership = normalizeOwnership(patch.ownership);
-  if (patch.placementGrants !== undefined) user.placementGrants = normalizePlacementGrants(patch.placementGrants);
+  if (patch.placementGrants !== undefined) user.placementGrants = { ...user.placementGrants, ...normalizePlacementGrants(patch.placementGrants) };
   if (patch.defaultActorId !== undefined) {
     const actorId = cleanActorId(patch.defaultActorId);
     if (actorId) user.ownership[actorId] = OWNERSHIP.OWNER;
@@ -265,12 +275,15 @@ export function updateUserRecord(user, patch = {}) {
   }
   if (user.defaultActorId && user.ownership[user.defaultActorId] !== OWNERSHIP.OWNER) user.defaultActorId = null;
   if (patch.disabled !== undefined) user.disabled = patch.disabled === true;
+  if (patch.lineOfSightOverride !== undefined) {
+    user.lineOfSightOverride = typeof patch.lineOfSightOverride === 'boolean' ? patch.lineOfSightOverride : null;
+  }
   user.updatedAt = new Date().toISOString();
   return user;
 }
 export function publicUser(user) {
   if (!user) return null;
-  return { id: user.id, name: user.name, role: 'player', defaultActorId: user.defaultActorId || null, ownership: { ...user.ownership }, placementGrants: normalizePlacementGrants(user.placementGrants), disabled: user.disabled === true, claimed: Boolean(user.tokenHash), hasPlayerKey: Boolean(user.playerKeyHash), createdAt: user.createdAt, updatedAt: user.updatedAt };
+  return { id: user.id, name: user.name, role: 'player', defaultActorId: user.defaultActorId || null, ownership: { ...user.ownership }, placementGrants: normalizePlacementGrants(user.placementGrants), lineOfSightOverride: typeof user.lineOfSightOverride === 'boolean' ? user.lineOfSightOverride : null, disabled: user.disabled === true, claimed: Boolean(user.tokenHash), hasPlayerKey: Boolean(user.playerKeyHash), createdAt: user.createdAt, updatedAt: user.updatedAt };
 }
 export function ownershipLevel(user, actorId) { return !user || !actorId ? OWNERSHIP.NONE : user.ownership?.[String(actorId)] || OWNERSHIP.NONE; }
 export function actorCatalogFromWorld(state) { return (entityState(state).actors || []).map(actor => ({ id: String(actor.id), name: cleanName(actor.name, 'Actor') })); }

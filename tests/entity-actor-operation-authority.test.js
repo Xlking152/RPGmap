@@ -25,5 +25,7 @@ test('Actor editor reloads canonical projection after failed World writes', () =
   assert.match(source, /catch \(error\)[\s\S]*canonical Actor update failed/);
   assert.match(source, /finally \{[\s\S]*store\.load\(\{ migrateLegacy: false, dropMarkers: false \}\)/);
   assert.match(source, /if \(!await persistActorAndRender\(actor, \{ source: 'entities:actor\.create' \}\)\) return/);
-  assert.match(source, /await persistActorAndRender\(baseActor, \{ source: 'entities:actor\.classification' \}\)/);
+  assert.match(source, /type: 'actor\.metadata\.update', payload: \{[\s\S]*changes: \{ type: nextType \}, expected: \{ type: expected \}/);
+  assert.match(source, /drafts\.settle\(key, \{ success: false/);
+  assert.doesNotMatch(source, /baseActor\.(name|type|partyId)\s*=/);
 });

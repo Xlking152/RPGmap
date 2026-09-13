@@ -1,9 +1,8 @@
 import { createInitialActorDelta, normalizeActorDelta } from './actor.js';
 import { normalizeTokenAccess } from './access.js';
+import { normalizeMovementState } from '../movement/model.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 function text(value, fallback = '') {
   const result = typeof value === 'string' ? value.trim() : '';
@@ -76,6 +75,22 @@ function normalizeTexture(value) {
   };
 }
 
+export function normalizeTokenLight(value) {
+  const source = object(value);
+  const rangeMeters = Math.max(0, finite(source.rangeMeters, 0));
+  const intensity = Math.max(0, Math.min(4, finite(source.intensity, 1)));
+  const color = /^#[0-9a-f]{6}$/i.test(String(source.color || '')) ? String(source.color) : '#fff3c4';
+  return {
+    ...clone(source),
+    enabled: source.enabled === true && rangeMeters > 0,
+    rangeMeters,
+    intensity,
+    color,
+    elevationOffsetMeters: Math.max(0, finite(source.elevationOffsetMeters, 0)),
+    occlusion: source.occlusion === 'none' ? 'none' : 'scene',
+  };
+}
+
 export function normalizeSceneToken(raw, { actorId, tokenId, actor = null, ruleset = null } = {}) {
   const source = object(raw);
   const placement = source.placement === 'feature' || source.featureId != null ? 'feature' : 'map';
@@ -101,7 +116,9 @@ export function normalizeSceneToken(raw, { actorId, tokenId, actor = null, rules
     color: text(source.color) || null,
     diameterMeters: Math.max(0.1, finite(source.diameterMeters ?? source.size, 1)),
     rotation: finite(source.rotation, 0),
-    elevationFt: finite(source.elevationFt, 0),
+    elevationMeters: finite(source.elevationMeters, 0),
+    movement: normalizeMovementState(source.movement),
+    light: normalizeTokenLight(source.light),
     controllerUserIds: access.controllerUserIds,
     visibility: access.visibility,
     vision: access.vision,
@@ -153,7 +170,9 @@ export function createSceneToken(world, {
   color = null,
   diameterMeters = 1,
   rotation = 0,
-  elevationFt = 0,
+  elevationMeters = 0,
+  movement = null,
+  light = null,
   hidden = false,
   controllerUserIds = [],
   visibility = null,
@@ -185,7 +204,9 @@ export function createSceneToken(world, {
       color,
       diameterMeters,
       rotation,
-      elevationFt,
+      elevationMeters,
+      movement,
+      light,
       hidden,
       controllerUserIds,
       visibility,

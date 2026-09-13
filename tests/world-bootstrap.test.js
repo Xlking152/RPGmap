@@ -48,7 +48,7 @@ function legacyState() {
 test('World bootstrap classifies empty, legacy, and World V2 state without normalization', () => {
   const empty = readWorldBootstrap(null, { defaultRuleset: ruleset });
   assert.deepEqual({ kind: empty.kind, ruleset: empty.ruleset }, {
-    kind: 'empty', ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    kind: 'empty', ruleset: { id: 'infinite-horror', version: '1.1.0' },
   });
   assert.equal(readWorldBootstrap(legacyState(), { defaultRuleset: ruleset }).kind, 'legacy');
 
@@ -56,14 +56,14 @@ test('World bootstrap classifies empty, legacy, and World V2 state without norma
   const initial = prepareStoredWorldState({ mapPackage, ruleset, storageAdapter: storage, raw: null });
   const modern = readWorldBootstrap(initial.state, { defaultRuleset: ruleset });
   assert.equal(modern.kind, 'world-v2');
-  assert.deepEqual(modern.ruleset, { id: 'infinite-horror', version: '1.0.0' });
+  assert.deepEqual(modern.ruleset, { id: 'infinite-horror', version: '1.1.0' });
 });
 
 test('new offline state owns World V2 before Runtime systems register', () => {
   const storage = createMemoryStorage();
   const loaded = prepareStoredWorldState({ mapPackage, ruleset, storageAdapter: storage, raw: null });
   const world = loaded.state.preferences[WORLD_STATE_KEY];
-  assert.equal(world.schemaVersion, 3);
+  assert.equal(world.schemaVersion, 4);
   assert.equal(world.ruleset.id, 'infinite-horror');
   assert.equal(world.activeSceneId, activeWorldScene(world).id);
   assert.equal(loaded.blocked, false);
@@ -139,7 +139,7 @@ test('prepared modern World preserves Actor system, Synthetic Delta, Effects, de
     id: 'token-a', actorId: 'actor-a', actorLink: false,
     actorDelta: { system: { runtime: { resources: { custom: { current: 1 } } } } },
     placement: 'map', x: 12, y: 18, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     controllerUserIds: [],
     visibility: { mode: 'public', userIds: [] },
     vision: { enabled: true, rangeOverrideMeters: null, overrideUserIds: [] },
@@ -155,12 +155,25 @@ test('prepared modern World preserves Actor system, Synthetic Delta, Effects, de
   assert.deepEqual(activeWorldScene(prepared).mapPackage, { id: 'test-map', version: '1.0.0' });
 });
 
+test('a structurally addressable but invalid canonical World is backed up and blocks startup', () => {
+  const storage = createMemoryStorage();
+  const initial = prepareStoredWorldState({ mapPackage, ruleset, storageAdapter: storage, raw: null }).state;
+  activeWorldScene(initial.preferences[WORLD_STATE_KEY]).fog.cellSizeMeters = 10;
+  const raw = JSON.stringify(initial);
+  assert.equal(readWorldBootstrap(raw, { defaultRuleset: ruleset }).kind, 'world-v2');
+  assert.throws(
+    () => prepareStoredWorldState({ mapPackage, ruleset, storageAdapter: storage, raw }),
+    error => error.code === 'fog_schema_incompatible' && error.recoveryRequired === true,
+  );
+  assert.equal(storage.get(`${worldStateStorageKey(mapPackage)}:backup:invalid`), raw);
+});
+
 test('server bootstrap metadata resolves before the authenticated World snapshot', async () => {
   const metadata = {
     initialized: true,
     kind: 'world-v2',
     schemaVersion: 3,
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
   };
   assert.deepEqual(readServerWorldBootstrap(metadata, { defaultRuleset: ruleset }).ruleset, metadata.ruleset);
   assert.equal(readServerWorldBootstrap({ initialized: true, kind: 'legacy' }, { defaultRuleset: ruleset }).kind, 'legacy');

@@ -2,17 +2,19 @@ import { canonicalAttackAreas } from './attack-anchors.js';
 import { normalizeActorDocument } from '../actor/index.js';
 import { createInitialActorDelta, normalizeActorDelta } from '../token/actor.js';
 import { normalizeTokenAccess } from '../token/access.js';
+import { normalizeTokenLight } from '../token/model.js';
 import { normalizeFogState } from '../vision/fog.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { normalizeFeatureStateRecords } from './feature-states.js';
 import { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 import { STATUS_SCHEMA_VERSION } from '../status/model.js';
+import { assertTemplateLibrary } from '../library/model.js';
+import { normalizeMovementBudget, normalizeMovementState } from '../movement/model.js';
+import { normalizeJournalCollection } from '../journal/model.js';
 
 export { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 function text(value, fallback = '') {
   const result = typeof value === 'string' ? value.trim() : '';
@@ -92,7 +94,9 @@ function normalizeWorldToken(raw, actorIds, { rawActorsById = new Map(), actorsB
     featureId: placement === 'feature' ? id(token.featureId) : null,
     diameterMeters: Math.max(0.1, finite(token.diameterMeters ?? token.size, 1)),
     rotation: finite(token.rotation, 0),
-    elevationFt: finite(token.elevationFt, 0),
+    elevationMeters: finite(token.elevationMeters, 0),
+    movement: normalizeMovementState(token.movement),
+    light: normalizeTokenLight(token.light),
     controllerUserIds: access.controllerUserIds,
     visibility: access.visibility,
     vision: access.vision,
@@ -133,12 +137,19 @@ function normalizeScene(raw, {
     sceneEvents: clone(array(source.sceneEvents)),
     featureStates: normalizeFeatureStateRecords(source.featureStates),
     fog: normalizeFogState(source.fog),
-    settings: { ...clone(object(source.settings)), gridVisible: source.settings?.gridVisible !== false },
+    settings: {
+      ...clone(object(source.settings)),
+      gridVisible: source.settings?.gridVisible !== false,
+      lineOfSightEnabled: source.settings?.lineOfSightEnabled === true,
+      movementBudgetMetersPerTurn: normalizeMovementBudget(source.settings?.movementBudgetMetersPerTurn),
+      defaultDoorInteractionRangeMeters: Math.max(0, finite(source.settings?.defaultDoorInteractionRangeMeters, 2)),
+    },
   };
 }
 
 export function normalizeWorldV2(raw, { mapPackage = null, ruleset = null } = {}) {
   const source = object(raw);
+  assertTemplateLibrary(source.templateLibrary);
   const rawActors = array(source.actors).filter(Boolean);
   const actors = rawActors
     .map(actor => normalizeActorDocument(actor, ruleset ? { ruleset } : {}));
@@ -172,6 +183,7 @@ export function normalizeWorldV2(raw, { mapPackage = null, ruleset = null } = {}
     activeSceneId,
     actors,
     statusDefinitions: rulesetStatusDefinitions(source.statusDefinitions, ruleset),
+    journals: normalizeJournalCollection(source.journals),
     scenes,
     createdAt: text(source.createdAt, now),
     updatedAt: text(source.updatedAt, now),
@@ -212,6 +224,7 @@ export function createWorldV2FromRuntimeState(state, { mapPackage, ruleset, worl
     activeSceneId: sceneId,
     actors,
     statusDefinitions: clone(array(entity.statusDefinitions)),
+    journals: [],
     scenes: [{
       id: sceneId,
       name: text(mapPackage?.title ?? mapPackage?.name, mapRef.id),
@@ -250,7 +263,9 @@ function runtimeTokenFromWorld(token) {
     featureId: token.placement === 'feature' ? token.featureId : null,
     diameterMeters: token.diameterMeters,
     rotation: token.rotation,
-    elevationFt: token.elevationFt,
+    elevationMeters: token.elevationMeters,
+    movement: clone(token.movement),
+    light: clone(token.light),
     controllerUserIds: clone(token.controllerUserIds || []),
     visibility: clone(token.visibility || {}),
     vision: clone(token.vision || {}),

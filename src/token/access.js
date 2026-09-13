@@ -3,9 +3,7 @@ import { actorUsesIndependentInstances } from '../actor/classification.js';
 export const TOKEN_VISIBILITY_MODES = Object.freeze(['public', 'party', 'gm', 'users']);
 const VISIBILITY_MODE_SET = new Set(TOKEN_VISIBILITY_MODES);
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -25,6 +23,7 @@ export function normalizeUserIds(value, { max = 64 } = {}) {
 }
 
 export function defaultTokenVisibility(actor) {
+  if (actor?.organization?.placementRestricted === true) return 'gm';
   if (actor?.type === 'pc') return actor.partyId ? 'party' : 'public';
   if (actor?.type === 'summon' && actor.partyId) return 'party';
   return 'gm';

@@ -6,7 +6,9 @@ import {
   createClaimableUser,
   bindWithPlayerKey,
   normalizeAccessState,
+  publicUser,
   resetUserPlayerKey,
+  updateUserRecord,
   validatePlayerWorldPush,
   verifyPlayerKey,
   verifyUserCredential,
@@ -19,7 +21,7 @@ import { migrateTestStateToWorldV3 } from './helpers/world-v3.js';
 function canonicalToken(id, actorId, x, y) {
   return {
     id, actorId, actorLink: true, actorDelta: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     hidden: false, locked: false, showName: true, effects: [], x, y,
   };
 }
@@ -28,7 +30,7 @@ function sceneToken(id, actorId, x, y) {
   return {
     id, actorId, actorLink: true, actorDelta: null,
     placement: 'map', x, y, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     hidden: false, locked: false, showName: true, effects: [],
   };
 }
@@ -60,7 +62,7 @@ function world({ activeActorId = null } = {}) {
         schemaVersion: 2,
         id: 'world-test',
         name: 'Test World',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         activeSceneId: 'scene-test',
         actors: structuredClone(actors),
         statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
@@ -115,6 +117,15 @@ test('access normalization never exposes raw credentials and keeps default Actor
   assert.equal(normalized.schemaVersion, ACCESS_SCHEMA_VERSION);
 });
 
+test('GM-managed LOS override is normalized and exposed without granting a Player write path', () => {
+  const { user } = createBoundUser({ name: 'LOS', lineOfSightOverride: true });
+  assert.equal(publicUser(user).lineOfSightOverride, true);
+  updateUserRecord(user, { lineOfSightOverride: false });
+  assert.equal(normalizeAccessState({ schemaVersion: 4, users: [user] }).users[0].lineOfSightOverride, false);
+  updateUserRecord(user, { lineOfSightOverride: 'forged' });
+  assert.equal(user.lineOfSightOverride, null);
+});
+
 test('Access Schema 4 preserves LIMITED and enforces the shared action matrix', () => {
   const normalized = normalizeAccessState({ schemaVersion: 3, users: [{
     id: 'u-limited', name: 'Limited', ownership: { 'actor-a': 'limited' },
@@ -146,6 +157,26 @@ test('access normalization preserves formal monster placement grants', () => {
     placementGrants: { actorTypes: ['monster', 'npc', 'forged'], actorIds: [], markerKinds: [] },
   }] });
   assert.deepEqual(normalized.users[0].placementGrants.actorTypes, ['monster', 'npc']);
+});
+
+test('Access migration preserves safe extensions without publishing them or retaining plaintext credentials', () => {
+  const original = { schemaVersion: 3, extension: { private: true }, users: [{ id: 'owner', name: 'Owner', extension: { private: 'note' },
+    playerKey: 'PLAINTEXT', placementGrants: { actorTypes: ['npc'], extension: { source: 'legacy' } } }] };
+  const normalized = normalizeAccessState(original);
+  assert.deepEqual(normalized.extension, original.extension);
+  assert.deepEqual(normalized.users[0].extension, original.users[0].extension);
+  assert.deepEqual(normalized.users[0].placementGrants.extension, { source: 'legacy' });
+  assert.equal(normalized.users[0].playerKey, undefined);
+  assert.equal(publicUser(normalized.users[0]).extension, undefined);
+  assert.equal(publicUser(normalized.users[0]).placementGrants.extension, undefined);
+  assert.deepEqual(normalizeAccessState(normalized), normalized);
+  assert.equal(original.schemaVersion, 3);
+});
+
+test('Access migration rejects unknown schemas, duplicate identities and dangerous extension keys', () => {
+  assert.throws(() => normalizeAccessState({ schemaVersion: 99, users: [] }), { code: 'access_schema_incompatible' });
+  assert.throws(() => normalizeAccessState({ users: [{ id: 'duplicate' }, { id: 'duplicate' }] }), { code: 'invalid_access_user_id' });
+  assert.throws(() => normalizeAccessState(JSON.parse('{"users":[],"extension":{"__proto__":{}}}')));
 });
 
 test('Player may change owned Actor but not unowned Actor or Combat state in World V2', () => {

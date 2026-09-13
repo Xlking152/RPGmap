@@ -49,7 +49,7 @@ function sameColor(left, right) {
 
 function ghostIcon(descriptor) {
   const portrait = descriptor.avatarDataUrl
-    ? `<img src="${escapeHtml(descriptor.avatarDataUrl)}" alt="">`
+    ? `<img ${contentImageAttributes(descriptor.avatarDataUrl, escapeHtml)} alt="">`
     : `<span>${escapeHtml(descriptor.initial)}</span>`;
   const size = Number(descriptor.sizePixels) || 42;
   const blocked = descriptor.blocked ? ' blocked' : '';
@@ -188,3 +188,4 @@ export function createMovementGhostRenderer() {
     },
   });
 }
+import { contentImageAttributes } from '../content/references.js';

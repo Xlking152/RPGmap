@@ -2,9 +2,7 @@ import { getCompatibilityRuleset } from '../ruleset/active-compat.js';
 import { normalizeActorClassification } from './classification.js';
 import { normalizeActorPublicProfile } from './public-profile.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -200,6 +198,15 @@ export function resolveActorAttribute(actor, path, context = {}) {
   if (!actor) return null;
   const ruleset = getCompatibilityRuleset(context.ruleset);
   return actorRules(ruleset).resolveAttribute(compatibleActor(actor, ruleset), String(path || ''), context);
+}
+
+export function explainActorCalculation(actor, target, context = {}) {
+  if (!actor) return null;
+  const ruleset = getCompatibilityRuleset(context.ruleset);
+  return ruleset.calculations.explain(compatibleActor(actor, ruleset), {
+    target: String(target || ''),
+    context,
+  });
 }
 
 export function performActorOperation(actor, operation = {}, context = {}) {

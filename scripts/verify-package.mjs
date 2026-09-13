@@ -25,6 +25,8 @@ const EXPECTED_ROOT_ENTRIES = [
   'app',
   'docs',
   'http-runtime.mjs',
+  'content-storage.mjs',
+  'content-history.mjs',
   'launcher.mjs',
   'map',
   'permissions-model.mjs',
@@ -37,6 +39,7 @@ const EXPECTED_ROOT_ENTRIES = [
   'world-operations.mjs',
   'movement-authority.mjs',
   'world-wal.mjs',
+  'storage-upgrade.mjs',
   'world-schema.mjs',
   'world-v2.mjs',
   'websocket-runtime.mjs',
@@ -104,8 +107,8 @@ const version = JSON.parse(await readFile(path.join(root, 'VERSION.json'), 'utf8
 if (version.version !== packageJson.version || version.releaseTag !== `v${packageJson.version}`) {
   fail(`VERSION.json does not match package version ${packageJson.version}`);
 }
-if (version.worldSchema !== 3) fail(`VERSION.json worldSchema must be 3, received ${version.worldSchema}`);
-if (version.operationSchema !== 3) fail(`VERSION.json operationSchema must be 3, received ${version.operationSchema}`);
+if (version.worldSchema !== 4) fail(`VERSION.json worldSchema must be 4, received ${version.worldSchema}`);
+if (version.operationSchema !== 4) fail(`VERSION.json operationSchema must be 4, received ${version.operationSchema}`);
 if (version.statusSchema !== 4) fail(`VERSION.json statusSchema must be 4, received ${version.statusSchema}`);
 if (version.accessSchema !== 4) fail(`VERSION.json accessSchema must be 4, received ${version.accessSchema}`);
 if (!/^[0-9a-f]{40}$/i.test(String(version.commit || ''))) fail('VERSION.json commit must be a full Git commit');
@@ -116,16 +119,18 @@ if (expectedCommit && String(version.commit).toLowerCase() !== expectedCommit) {
 const manifestPath = path.join(root, 'app', '.vite', 'manifest.json');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 const htmlEntry = manifest['index.html'];
-const runtimeEntry = manifest['src/runtime/map-runtime.js'];
 const defaultMapEntry = manifest['src/map-package/default-map.js'];
 const lanzhouDataEntry = manifest['reference/maps/lanzhou/runtime.json'];
 const lanzhouSvgEntry = manifest['reference/maps/lanzhou/runtime.svg'];
 if (!htmlEntry?.isEntry) fail('manifest is missing index.html entry');
-if (!runtimeEntry?.isDynamicEntry) fail('manifest is missing dynamic Map Runtime entry');
+const runtimeKey = (htmlEntry.dynamicImports || []).find(key => key === 'src/runtime/map-runtime.js'
+  || manifest[key]?.name === 'map-runtime-core');
+const runtimeEntry = runtimeKey ? manifest[runtimeKey] : null;
+if (!runtimeEntry?.file?.endsWith('.js')) fail('manifest is missing dynamic Map Runtime entry');
 if (!defaultMapEntry?.isDynamicEntry) fail('manifest is missing dynamic Lanzhou MapPackage entry');
 if (!lanzhouDataEntry?.file?.endsWith('.json')) fail('manifest is missing Lanzhou runtime data');
 if (!lanzhouSvgEntry?.file?.endsWith('.svg')) fail('manifest is missing Lanzhou runtime SVG');
-for (const key of ['src/runtime/map-runtime.js', 'src/map-package/default-map.js']) {
+for (const key of [runtimeKey, 'src/map-package/default-map.js']) {
   if (!(htmlEntry.dynamicImports || []).includes(key)) fail(`index.html does not dynamically import ${key}`);
 }
 

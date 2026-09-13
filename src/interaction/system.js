@@ -69,7 +69,8 @@ function portrait(documentNode, view) {
   node.style.setProperty('--token-color', view.color || '#3d9b63');
   if (view.avatarDataUrl) {
     const image = documentNode.createElement('img');
-    image.src = view.avatarDataUrl;
+    if (contentReference(view.avatarDataUrl)?.kind === 'asset') image.dataset.contentRef = view.avatarDataUrl;
+    else image.src = view.avatarDataUrl;
     image.alt = '';
     node.append(image);
   } else {
@@ -150,10 +151,20 @@ export function createFeatureInteractionSystem() {
       function actionPermission(action, tokenId) {
         const capabilities = api.multiplayer?.getCapabilities?.();
         if (!capabilities || capabilities.connected === false) return { ok: true, reason: '' };
-        if (['damage', 'restore', 'open', 'close'].includes(action)) {
+        if (['damage', 'restore'].includes(action)) {
           return capabilities.canManageStructure === true
             ? { ok: true, reason: '' }
             : { ok: false, reason: '只有 GM 可以修改 Feature 与场景结构' };
+        }
+        if (['open', 'close'].includes(action)) {
+          if (!tokenId) return { ok: false, reason: '请先选择一个受控 Token' };
+          const token = api.tokens.get?.(tokenId);
+          const allowed = token && (api.permissions?.can
+            ? api.permissions.can('token.control', { token, tokenId: token.id })
+            : api.multiplayer?.canControlToken?.(token.id) !== false);
+          return allowed
+            ? { ok: true, reason: '' }
+            : { ok: false, reason: '当前 Token 没有开门权限' };
         }
         if (['enter', 'exit'].includes(action)) {
           if (!tokenId) return { ok: false, reason: '请先选择 Token' };
@@ -382,9 +393,13 @@ export function createFeatureInteractionSystem() {
       }));
       off.push(api.selection?.subscribe?.(() => renderInspection()));
       for (const eventName of [
-        'state:import', 'state:commit', 'scene:restore', 'token:create', 'token:delete',
-        'token:move', 'token:property-change', 'status:change', 'feature:state-change', 'multiplayer:capabilities',
+        'state:import', 'state:commit', 'scene:restore', 'feature:state-change',
       ]) off.push(api.on?.(eventName, () => { syncFeatureVisualState(); renderInspection(); }));
+      const renderInspectionIfSelected = () => { if (selectedFeatureId) renderInspection(); };
+      for (const eventName of [
+        'token:create', 'token:delete', 'token:move', 'token:property-change',
+        'status:change', 'multiplayer:capabilities',
+      ]) off.push(api.on?.(eventName, renderInspectionIfSelected));
       off.push(api.on?.('scene:damage', () => {
         void ejectDestroyedFeatureOccupants().finally(() => { syncFeatureVisualState(); renderInspection(); });
       }));
@@ -401,3 +416,4 @@ export function createFeatureInteractionSystem() {
     },
   });
 }
+import { contentReference } from '../content/references.js';

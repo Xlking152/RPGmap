@@ -219,7 +219,7 @@ function token({ id, actor: source, x, y, visibility }) {
     id, actorId: source.id, actorLink: source.type === 'pc',
     actorDelta: source.type === 'pc' ? null : infiniteHorrorRuleset.actor.instances.createDelta(source),
     placement: 'map', x, y, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     controllerUserIds: [], visibility: { mode: visibility, userIds: [] },
     vision: { enabled: true, rangeOverrideMeters: null, overrideUserIds: [] },
     locked: false, showName: true, effects: [],
@@ -238,7 +238,7 @@ try {
   const state = initial?.state ? structuredClone(initial.state) : {
     version: 2,
     mapId: 'northern-song-lanzhou-1104',
-    mapVersion: '1.0.6',
+    mapVersion: '1.1.0',
     markers: [], attackAreas: [], sceneEvents: [],
     preferences: {
       entitySystem: { schemaVersion: 3, actors: [], tokens: [], statusDefinitions: [] },
@@ -250,12 +250,12 @@ try {
     schemaVersion: 3,
     id: 'world-packaged-smoke',
     name: 'Packaged Smoke World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     activeSceneId: 'scene-packaged-smoke',
     actors: [], statusDefinitions: [],
     scenes: [{
       id: 'scene-packaged-smoke', name: 'Packaged Smoke Scene',
-      mapPackage: { id: 'northern-song-lanzhou-1104', version: '1.0.6' },
+      mapPackage: { id: 'northern-song-lanzhou-1104', version: '1.1.0' },
       tokens: [], markers: [], attackAreas: [], sceneEvents: [], featureStates: {},
       fog: { schemaVersion: 1, cellSizeMeters: 5, exploredByParty: {} },
       settings: { gridVisible: true },
@@ -342,7 +342,7 @@ try {
     } }],
   }));
   const [move, moved] = await Promise.all([moveCommitted, moveAck]);
-  assert(move.revision === moved.revision && move.patch.world.scenes.fog.length > 0,
+  assert(move.revision === moved.revision && move.changes.some(change => change.document.type === 'Fog'),
     'Token move did not atomically persist its fog sweep');
 
   const deniedPromise = waitForMessage(playerSocket, message =>

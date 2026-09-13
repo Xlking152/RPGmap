@@ -16,7 +16,7 @@ function token(id, actorId, x, y) {
   return {
     id, actorId, actorLink: true, actorDelta: null,
     placement: 'map', x, y, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     hidden: false, locked: false, showName: true, effects: [],
   };
 }
@@ -25,7 +25,7 @@ function movementFixture() {
   let currentWorld = {
     schemaVersion: 2,
     id: 'world-fast', name: 'Fast',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     actors: [{ id: 'actor-a', name: 'A' }],
     statusDefinitions: [], activeSceneId: 'scene-a',
     scenes: [{
@@ -128,18 +128,18 @@ test('combat movement authority is locked to the active Token instance, not only
   assert.equal(currentCombatTokenId(state), 'monster-2');
 });
 
-test('movement fast path validates once per direct commit and reuses same-context navigation grids', async () => {
+test('movement fast path validates once per direct commit through shared movement authority', async () => {
   const fixture = movementFixture();
   const first = await fixture.api.movementFast.moveTokenTo('a', { x: 5.5, y: 1.5 });
   assert.equal(first.valid, true);
   assert.equal(first.committed, true);
   assert.equal(fixture.getInspectCount(), 1);
   assert.equal(fixture.getWorld().scenes[0].tokens.find(item => item.id === 'a').x, 5.5);
-  assert.equal(fixture.api.movementFast.getNavigationCacheSize(), 1);
+  assert.equal(fixture.api.movementFast.getNavigationCacheSize(), 0);
 
   const second = await fixture.api.movementFast.validateTokenMove('b', { x: 6.5, y: 2.5 });
   assert.equal(second.valid, true);
-  assert.equal(fixture.api.movementFast.getNavigationCacheSize(), 1);
+  assert.equal(fixture.api.movementFast.getNavigationCacheSize(), 0);
 });
 
 test('Movement V5 uses visible RAF route previews and coalesced WASD segments', () => {

@@ -5,9 +5,7 @@ import { applyAreaHandleDrag, areaHandlePoints } from './area-handle-geometry.js
 const STYLE_ID = 'rpgmap-scene-area-handle-style';
 const MAX_AREA_SCALE = 4;
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 function installStyles(documentNode) {
   if (!documentNode?.head || documentNode.getElementById(STYLE_ID)) return;
@@ -207,8 +205,17 @@ export function createSceneAreaHandleSystem() {
       mapElement.addEventListener('click', renderSoon, true);
       const panel = api.uiPanels?.get?.('areas');
       panel?.addEventListener('click', renderSoon, true);
-      for (const name of ['state:commit', 'state:import', 'area:create', 'token:move', 'token:delete', 'marker:move', 'marker:delete']) {
+      for (const name of ['state:commit', 'state:import', 'area:create']) {
         off.push(api.on?.(name, renderSoon));
+      }
+      for (const name of ['token:move', 'token:delete', 'marker:move', 'marker:delete']) {
+        const kind = name.startsWith('token') ? 'token' : 'marker';
+        off.push(api.on?.(name, event => {
+          const selected = api.sceneAreas.getSelected();
+          const targetId = String(event?.detail?.tokenId || event?.detail?.markerId || event?.detail?.id || '');
+          if (targetId && selected?.anchor?.type === kind
+            && String(selected.anchor?.[`${kind}Id`] || '') === targetId) renderSoon();
+        }));
       }
       off.push(api.on?.('app:destroy', () => {
         destroyed = true;

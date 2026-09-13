@@ -1,8 +1,6 @@
 import { normalizeActorDocument } from '../actor/index.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -103,6 +101,15 @@ export function resolveTokenActor(world, tokenId, { ruleset } = {}) {
   if (!token) throw new Error(`Unknown Token: ${tokenId}`);
   const rawBaseActor = (world?.actors || []).find(actor => String(actor?.id ?? '') === String(token.actorId));
   if (!rawBaseActor) throw new Error(`Token ${tokenId} references missing Actor: ${token.actorId}`);
+
+  return resolveTokenActorDocuments(rawBaseActor, token, { ruleset });
+}
+
+export function resolveTokenActorDocuments(rawBaseActor, token, { ruleset } = {}) {
+  if (!token || typeof token !== 'object') throw new Error('Synthetic Actor resolution requires a Token');
+  if (!rawBaseActor || typeof rawBaseActor !== 'object') {
+    throw new Error(`Token ${token.id || '(missing)'} references missing Actor: ${token.actorId || '(missing)'}`);
+  }
 
   const synthetic = token.actorLink === false;
   const actorOptions = ruleset ? { ruleset } : {};

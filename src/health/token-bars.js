@@ -65,6 +65,9 @@ export function createHealthTokenBars() {
       installStyles(documentNode);
       const layer = L.layerGroup([], { pane: PANE }).addTo(api.map);
       const markers = new Map();
+      const signatures = new Map();
+      const pendingIds = new Set();
+      let pendingFullRender = false;
       const movingTokenIds = new Set();
       let fullRenderFrame = null;
       let destroyed = false;
@@ -81,34 +84,41 @@ export function createHealthTokenBars() {
         const marker = markers.get(id);
         if (marker) layer.removeLayer(marker);
         markers.delete(id);
+        signatures.delete(id);
       }
 
-      function upsertToken(tokenId) {
+      function upsertToken(tokenId, resolvedToken = null, resolvedHealth = undefined) {
         if (destroyed) return;
         const id = String(tokenId || '');
         if (!id) return;
-        removeToken(id);
-        const token = api.tokens.get?.(id);
-        if (!token || token.hidden === true || token.placement !== 'map') return;
-        if (movingTokenIds.has(id) || api.renderer?.isTokenMoving?.(id)) return;
+        const token = resolvedToken || api.tokens.get?.(id);
+        if (!token || token.hidden === true || token.placement !== 'map') { removeToken(id); return; }
+        if (movingTokenIds.has(id) || api.renderer?.isTokenMoving?.(id)) { removeToken(id); return; }
         const x = Number(token.x);
         const y = Number(token.y);
-        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-        const health = api.health?.resolveToken?.(id);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) { removeToken(id); return; }
+        const health = resolvedHealth === undefined ? api.health?.resolveToken?.(id) : resolvedHealth;
         const html = barHtml(health, api.ruleset);
-        if (!html) return;
+        if (!html) { removeToken(id); return; }
         const tokenPixels = Math.max(18, Math.min(144, tokenDiameterMeters(token) * pixelsPerMeter()));
         const barWidth = Math.max(28, Math.min(160, tokenPixels * 1.1));
-        const marker = L.marker(worldToLatLng({ x, y }, api.mapPackage.height), {
+        const point = worldToLatLng({ x, y }, api.mapPackage.height);
+        const signature = `${tokenPixels}:${barWidth}:${html}`;
+        const existing = markers.get(id);
+        if (existing && signatures.get(id) === signature) { existing.setLatLng(point); return; }
+        const icon = L.divIcon({
+          className: 'rpgmap-healthbar-marker',
+          html: html.replace('class="rpgmap-token-healthbar"', `class="rpgmap-token-healthbar" style="width:${barWidth}px"`),
+          iconSize: [barWidth, 10],
+          iconAnchor: [barWidth / 2, -(tokenPixels / 2 + 6)],
+        });
+        signatures.set(id, signature);
+        if (existing) { existing.setLatLng(point); existing.setIcon(icon); return; }
+        const marker = L.marker(point, {
           pane: PANE,
           interactive: false,
           keyboard: false,
-          icon: L.divIcon({
-            className: 'rpgmap-healthbar-marker',
-            html: html.replace('class="rpgmap-token-healthbar"', `class="rpgmap-token-healthbar" style="width:${barWidth}px"`),
-            iconSize: [barWidth, 10],
-            iconAnchor: [barWidth / 2, -(tokenPixels / 2 + 6)],
-          }),
+          icon,
         }).addTo(layer);
         markers.set(id, marker);
       }
@@ -117,18 +127,33 @@ export function createHealthTokenBars() {
         fullRenderFrame = null;
         if (destroyed) return;
         const live = new Set();
-        for (const token of api.tokens.list()) {
+        const tokens = api.tokens.list();
+        const healthById = new Map((api.health?.resolveTokens?.(tokens.map(token => token.id)) || [])
+          .map(entry => [String(entry.tokenId), entry.health]));
+        for (const token of tokens) {
           const id = String(token?.id || '');
           if (!id) continue;
           live.add(id);
-          upsertToken(id);
+          upsertToken(id, token, healthById.get(id) || null);
         }
         for (const id of [...markers.keys()]) if (!live.has(id)) removeToken(id);
       }
 
       function scheduleFullRender() {
+        pendingFullRender = true;
+        scheduleTokenRender();
+      }
+
+      function scheduleTokenRender(id = null) {
+        if (id) pendingIds.add(id);
         if (destroyed || fullRenderFrame !== null) return;
-        fullRenderFrame = requestFrame(renderAll);
+        fullRenderFrame = requestFrame(() => {
+          fullRenderFrame = null;
+          if (pendingFullRender) renderAll();
+          else for (const tokenId of pendingIds) upsertToken(tokenId);
+          pendingFullRender = false;
+          pendingIds.clear();
+        });
       }
 
       function tokenIdFromEvent(event) {
@@ -145,14 +170,28 @@ export function createHealthTokenBars() {
         return [...ids];
       }
 
-      off.push(api.on('token:create', event => upsertToken(tokenIdFromEvent(event))));
-      off.push(api.on('token:move', event => upsertToken(tokenIdFromEvent(event))));
+      function moveTokenBar(event) {
+        const id = tokenIdFromEvent(event);
+        const marker = markers.get(id);
+        if (!marker) return;
+        const token = api.tokens.get?.(id);
+        const x = Number(token?.x);
+        const y = Number(token?.y);
+        if (!token || token.placement !== 'map' || !Number.isFinite(x) || !Number.isFinite(y)) {
+          removeToken(id);
+          return;
+        }
+        marker.setLatLng(worldToLatLng({ x, y }, api.mapPackage.height));
+      }
+
+      off.push(api.on('token:create', event => scheduleTokenRender(tokenIdFromEvent(event))));
+      off.push(api.on('token:move', moveTokenBar));
       off.push(api.on('token:delete', event => removeToken(tokenIdFromEvent(event))));
-      off.push(api.on('token:size-change', event => upsertToken(tokenIdFromEvent(event))));
+      off.push(api.on('token:size-change', event => scheduleTokenRender(tokenIdFromEvent(event))));
       for (const eventName of ['health:change', 'status:change', 'actor:change']) {
         off.push(api.on(eventName, event => {
           const ids = tokenIdsFromEvent(event);
-          if (ids.length) ids.forEach(upsertToken);
+          if (ids.length) ids.forEach(id => scheduleTokenRender(id));
           else scheduleFullRender();
         }));
       }
@@ -177,6 +216,7 @@ export function createHealthTokenBars() {
         fullRenderFrame = null;
         movingTokenIds.clear();
         markers.clear();
+        signatures.clear(); pendingIds.clear();
         api.map.off('zoomend', scheduleFullRender);
         api.map.off('resize', scheduleFullRender);
         layer.clearLayers();

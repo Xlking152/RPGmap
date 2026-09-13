@@ -3,7 +3,7 @@ import {
   exportRuntimeState,
   prepareRuntimeState,
 } from '../engine/runtime-state.js';
-import { createWorldV2FromRuntimeState, projectWorldV2ToRuntimeState } from '../world/model.js';
+import { WORLD_STATE_KEY, createWorldV2FromRuntimeState, projectWorldV2ToRuntimeState } from '../world/model.js';
 import { canonicalWorldStorageKey, legacyMapWorldStorageKey } from '../world/manager.js';
 
 export function worldStateStorageKey(target) {
@@ -19,6 +19,13 @@ export function readStoredWorldState({ worldId = null, mapPackage, storageAdapte
   if (!storageAdapter?.get) throw new Error('World persistence requires storage adapter');
   const storageKey = worldId ? canonicalWorldStorageKey(worldId) : worldStateStorageKey(mapPackage);
   return Object.freeze({ storageKey, raw: storageAdapter.get(storageKey) });
+}
+
+function hasCanonicalWorld(raw) {
+  try {
+    const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Boolean(value?.preferences?.[WORLD_STATE_KEY]);
+  } catch { return false; }
 }
 
 function initialWorldState(mapPackage, ruleset, { worldId = 'world-default', worldName = '' } = {}) {
@@ -88,15 +95,22 @@ export function createWorldStatePersistence({
         };
       }
     } catch (error) {
-      console.warn('[RPGmap] World save load failed; starting empty runtime', error);
+      console.warn('[RPGmap] World save load failed', error);
       let notice = null;
       if (raw) {
+        let preserved = false;
         try {
           preserveRaw(raw, 'invalid');
+          preserved = true;
           notice = { message: '原存档无法读取，已保留备份并创建空白 World', type: 'error' };
         } catch {
           blocked = true;
           notice = { message: '原存档无法读取且无法备份；自动保存已暂停', type: 'error' };
+        }
+        if (preserved && hasCanonicalWorld(raw)) {
+          blocked = true;
+          error.recoveryRequired = true;
+          throw error;
         }
       }
       return { state: initialWorldState(mapPackage, ruleset, { worldId: worldId || 'world-default', worldName }), notice };

@@ -4,12 +4,12 @@ import { createWorldSystem } from '../src/world/system.js';
 import { WORLD_STATE_KEY, activeWorldScene } from '../src/world/model.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 
-const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图' };
+const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图', width: 100, height: 100, features: [], metersPerUnit: 1 };
 function actor() { return { id: 'actor-1', name: '角色', currentFormId: 'form-1', forms: [{ id: 'form-1', tokenAppearance: { color: '#3d9b63' }, avatarDataUrl: null }], runtime: {}, effects: [] }; }
 function state() {
   return {
     saveVersion: 2, mapId: 'test-map', mapVersion: '1.0.0', markers: [], attackAreas: [], sceneEvents: [],
-    preferences: { gridVisible: true, entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [{ id: 'token-1', actorId: 'actor-1', placement: 'map', x: 1.5, y: 2.5, diameterMeters: 1, rotation: 0, elevationFt: 0, hidden: false, locked: false, showName: true, effects: [] }] } },
+    preferences: { gridVisible: true, entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [{ id: 'token-1', actorId: 'actor-1', placement: 'map', x: 1.5, y: 2.5, diameterMeters: 1, rotation: 0, elevationMeters: 0, hidden: false, locked: false, showName: true, effects: [] }] } },
   };
 }
 function apiFixture() {

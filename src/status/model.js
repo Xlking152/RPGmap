@@ -19,7 +19,7 @@ const MAX_DEFINITIONS = 128;
 const MAX_EFFECTS_PER_TARGET = 64;
 const MAX_BATCH_OPERATIONS = 64;
 
-function clone(value) { return value === undefined ? undefined : structuredClone(value); }
+const clone = value => structuredClone(value);
 function plainObject(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
 function finite(value, fallback = 0) { const number = Number(value); return Number.isFinite(number) ? number : fallback; }
 function integer(value, fallback = 1, minimum = 1, maximum = MAX_STACKS) {
@@ -324,7 +324,9 @@ export function resolveStatusCapabilities(statuses = []) {
 }
 
 export function resolveStatuses(rawEntityState, context = {}) {
-  const entityState = normalizeEntityStatusState(rawEntityState);
+  const entityState = context.assumeNormalized === true
+    ? rawEntityState
+    : normalizeEntityStatusState(rawEntityState);
   const definitions = getStatusDefinitions(entityState);
   const definitionsById = new Map(definitions.map(definition => [definition.id, definition]));
   const { actor, token } = targetContext(entityState, context);
@@ -606,8 +608,8 @@ export function reduceStatusOperation(rawEntityState, message, context = {}) {
   return { state, results };
 }
 
-export function statusStateFingerprint(rawEntityState) {
-  const state = normalizeEntityStatusState(rawEntityState);
+export function statusStateFingerprint(rawEntityState, { assumeNormalized = false } = {}) {
+  const state = assumeNormalized ? rawEntityState : normalizeEntityStatusState(rawEntityState);
   return stableHash({
     definitions: state.statusDefinitions,
     actors: state.actors.map(actor => ({ id: actor.id, effects: actor.effects, system: actor.system || null })),

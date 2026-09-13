@@ -1,15 +1,15 @@
 # RPGmap
 
-RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.3.4**，提供 World/Scene 管理、Actor 模板与 Token 实例、分段移动与测距、生命/伤势、Status V4、战斗、折叠聊天、四级权限投影、精确/模糊侦测、隐身与战争迷雾，以及 Windows 本机/局域网多人运行包。
+RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.4.0**，提供 World/Scene 管理、Actor 模板与 Token 实例、米制空间移动、生命/伤势、Status V4、战斗、折叠聊天、四级权限投影、三维感知与光源、战争迷雾、模板资料库和 Journal，以及 Windows 本机/局域网多人运行包。
 
-内置的“北宋兰州城”是复杂 Reference MapPackage，用于验证建筑、城墙、城门、桥梁、水体、破坏、洪水、导航和 29 张 WebP 美术资源能够通过通用 Core 运行。v2.3.3 为州衙补充了连接既有仪门的低矮可破坏院墙；v2.3.4 改善怪物/NPC 长名称列表与已探索地图的辨识度。
+内置的“北宋兰州城”是复杂 Reference MapPackage，用于验证建筑、城墙、城门、桥梁、水体、破坏、洪水、导航、有限高度 LOS 和 29 张 WebP 美术资源能够通过通用 Core 运行。v2.4.0 将旧英尺字段迁移到米制空间，并保持稳定 Feature、Actor、Token 与 Scene 引用。
 
 ## 快速开始
 
 正式 Windows Release：
 
 1. 安装 Node.js `20.19+` 或 `22.12+`。
-2. 下载并解压 `RPGmap-v2.3.4.zip`。
+2. 下载并解压 `RPGmap-v2.4.0.zip`。
 3. 双击 `start-rpgmap.bat`。
 4. GM 使用启动窗口中的 Local URL 与 GM Secret；同一局域网的 Player 使用 LAN URL 与 Join Code。
 
@@ -35,7 +35,9 @@ RPGmap 仅面向本机和可信局域网，不应直接暴露到公网。World�
 - 规则系统：Infinite Horror Actor、Health、B/L/A 伤势、Status/Effect、Damage/Healing；侦测分为精确与模糊范围，并结合明暗环境、暗视等感官能力计算。
 - 生命与批量操作：生命展示与可编辑字段由当前 Ruleset 的 Health Presentation 决定。Infinite Horror 在实例抽屉显示完好/B/L/A 伤势与对应编辑字段；普通 HP 或 DND 类规则可只显示 `current/max`。批量伤害/恢复也从 Ruleset 提供的伤害类型、恢复类型和标签生成。地图右下角保持紧凑的 Primary Token 大头像、名称、实例类型和 Ruleset 生命摘要，不再用大尺寸多选编辑 HUD 遮挡地图。
 - 战斗与聊天：先攻、回合权限、共享聊天与系统日志；当前战斗者离开本回合起点后，会保留不可交互的回合起点幻影直到下一回合。普通 Player 在战斗中只能移动当前回合的 Token 实例，不能通过同 Actor 模板的其他 Token 绕过 Combat Turn Lock；GM 可按需要调整多个 Token。
-- Local/LAN：Document Operation Protocol 3 在现有 World 权威层上按 Actor、Token、Scene、Chat、Combat、Status 与 Fog 地址提交白名单 intent；普通操作只广播逐会话安全差量。最近 256 次/5 分钟提交可供断线续传，WAL 在 ACK 前刷盘，revision、幂等和 AudienceProjection 继续由服务器裁决。权限区分 NONE、LIMITED、OBSERVER、OWNER 与 Token 控制权；怪物/NPC/召唤物实例使用 `controllerUserIds` 的 Token-first 控制权。
+- Local/LAN：Document Operation Protocol 4 按 Actor、Token、Scene、Chat、Combat、Status、Feature 与 Fog 地址提交白名单 intent；普通操作只广播逐会话安全 Document changes。最近 256 次/5 分钟提交可供断线续传，WAL 在 ACK 前刷盘，revision、幂等和 AudienceProjection 继续由服务器裁决。
+- 资产与资料：图片和正文使用不可变内容哈希，浏览器离线存入 IndexedDB，LAN 通过鉴权 HTTP 按需读取；模板资料库支持搜索、标签、收藏、复制、归档和带依赖 ZIP，Journal 使用安全 Markdown 与图片引用。
+- 空间与交互：Token 支持步行、游泳、水上行走、飞行、起飞和降落；服务端按能力、路径、高度、地形成本和回合预算原子验证。门交互使用独立 intent，校验控制权、距离、锁、可见性和排除门自身后的 LOS。
 - 视野与迷雾：玩家选择自己控制的 Token 作为唯一实时视野来源；视野圆心可跟随本地移动预测，但探索只在服务器确认后写入。模糊范围使用保留地图原色的冷灰透明薄雾，未探索区仍接近纯黑，历史探索保持极暗。精确与模糊范围实际看过的 5 米网格区域按 Scene 与队伍持久化共享，GM 可重置或重新隐藏。显式导入或实例覆盖的侦测距离按 Ruleset 原值运行，不再被 Fog 的 120 m 实现上限截断。
 - 隐身与可见性：Token 支持公开、队伍、仅 GM 和指定用户；隐身 Token 仅向 GM、控制者、队友及明确授权用户以半透明形式投影。
 - 其他指示物：陷阱、目标点、区域和注释使用轻量 Marker；指示物库分别提供怪物、NPC 与其他模板区域，怪物/NPC 的首次 XLSX 导入不需要预先打开角色库。GM 可在模板卡 Edit 模式修改新实例的默认生命规则，但不改动已有 Unlinked Token；也可在危险区删除模板及所有 Scene 中的关联实例。当前 Scene 实例抽屉可检查 Ruleset 生命字段与状态，并执行批量状态、伤害和恢复。怪物、NPC 与召唤物状态写入各自 Synthetic Actor Token 的 `actorDelta.effects`，不会修改模板或其他实例。
@@ -63,8 +65,8 @@ Scene
 - Core 提供通用能力，不理解 Infinite Horror 私有字段或兰州分类。
 - Ruleset 拥有 `Actor.system`、派生、展示与规则操作。
 - MapPackage 描述地图尺寸、SVG/资产、Feature、Capability 与 Navigation，不保存 Campaign 状态。
-- World schema 3 是持久化权威；Entity/UI/compatibility projection 与玩家 AudienceProjection 只能只读生成，不能覆盖服务器 World。
-- 普通多人写入使用 operation schema 3 的 Document batch；完整 World 只用于初始化、显式恢复/导入、无法续传的 revision 缺口、Audience 身份变化和跨 MapPackage Scene。
+- World schema 4 是持久化权威；Entity/UI/compatibility projection 与玩家 AudienceProjection 只能只读生成，不能覆盖服务器 World。
+- 普通多人写入使用 operation schema 4 的 Document batch；完整 World 只用于初始化、显式恢复/导入、无法续传的 revision 缺口、Audience 身份变化和跨 MapPackage Scene。
 
 v2.3.2 将 Local/LAN 写入升级为 FVTT 思路的轻量 Document Backend：界面提交白名单 Document intent，服务器鉴权、归约、WAL 落盘后，再按每个会话广播 create/update/delete/move/append 差量。移动使用一次性权威 waypoint 事务和本地预测，修复浏览器原生拖图；断线可按 revision 续传且重复 `operationId` 不会重复执行。500 Token、GM+6 Player 的同机回环基准中，移动/状态/聊天综合 p95 稳定低于 60 ms。Fog 改为静态探索层与动态冷灰薄雾层，Actor Sheet V3 和 Token Renderer 按 Document/Part 在同一动画帧内合并更新。
 

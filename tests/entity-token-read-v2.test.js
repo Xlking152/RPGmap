@@ -15,7 +15,7 @@ function token(overrides = {}) {
     y: 18.5,
     diameterMeters: 5,
     rotation: 45,
-    elevationFt: 10,
+    elevationMeters: 10,
     hidden: false,
     showName: true,
     effects: [],

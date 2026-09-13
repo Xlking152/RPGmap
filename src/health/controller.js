@@ -1,5 +1,6 @@
 import { deriveActorDocument, performActorOperation } from '../actor/index.js';
 import { EntityStore } from '../entities/store.js';
+import { resolveActorEffects } from '../status/model.js';
 
 function uniqueIds(values = []) {
   return [...new Set(values.filter(value => value !== null && value !== undefined).map(String))];
@@ -70,6 +71,19 @@ function healthTargetForSubject(store, api, actorId, tokenId = null) {
 export function createHealthController() {
   return {
     register(api) {
+      function readContext(actor, definitions = api.status?.getDefinitions?.() || []) {
+        return { ruleset: api.ruleset, effects: resolveActorEffects(actor, definitions) };
+      }
+
+      function readTokenHealth(tokenId, definitions = api.status?.getDefinitions?.() || []) {
+        try {
+          const resolved = api.tokens?.resolveActor?.(tokenId);
+          return resolved?.actor ? resolveActorHealth(resolved.actor, readContext(resolved.actor, definitions)) : null;
+        } catch {
+          return null;
+        }
+      }
+
       async function commitHealthOperations(operations, {
         actorIds = [],
         tokenIds = [],
@@ -155,23 +169,27 @@ export function createHealthController() {
       }
 
       const healthApi = {
+        resolveTokens(tokenIds = []) {
+          const definitions = api.status?.getDefinitions?.() || [];
+          const linkedHealth = new Map();
+          return tokenIds.map(String).flatMap(tokenId => {
+            const token = api.tokens?.get?.(tokenId);
+            if (!token) return [];
+            if (token.actorLink === false) return [{ tokenId, health: readTokenHealth(tokenId, definitions) }];
+            const actorId = String(token.actorId || '');
+            if (!linkedHealth.has(actorId)) {
+              const actor = api.tokens?.getActor?.(actorId);
+              linkedHealth.set(actorId, actor ? resolveActorHealth(actor, readContext(actor, definitions)) : null);
+            }
+            return [{ tokenId, health: linkedHealth.get(actorId) }];
+          });
+        },
         resolveActor(actorId) {
-          const store = new EntityStore(api);
-          store.load({ migrateLegacy: false, dropMarkers: false });
-          const actor = store.actor(actorId);
-          return actor ? resolveActorHealth(actor, store.actorContext(actor)) : null;
+          const actor = api.tokens?.getActor?.(actorId);
+          return actor ? resolveActorHealth(actor, readContext(actor)) : null;
         },
         resolveToken(tokenId) {
-          const store = new EntityStore(api);
-          store.load({ migrateLegacy: false, dropMarkers: false });
-          if (api.tokens?.resolveActor) {
-            try {
-              const resolved = api.tokens.resolveActor(tokenId);
-              if (resolved?.actor) return resolveActorHealth(resolved.actor, store.actorContext(resolved.actor));
-            } catch {}
-          }
-          const actor = store.actorForToken(tokenId);
-          return actor ? resolveActorHealth(actor, store.actorContext(actor)) : null;
+          return readTokenHealth(tokenId);
         },
         async setMode(actorId, mode, { tokenId = null } = {}) {
           const store = new EntityStore(api);

@@ -29,7 +29,7 @@ export function createWorldWal({ filePath, applyPatch, maxBytes = DEFAULT_MAX_BY
   let bytes = 0;
   let lastCompactedAt = Date.now();
 
-  async function replay(snapshot) {
+  async function replay(snapshot, { repairTail = true } = {}) {
     let source;
     try { source = await readFile(filePath, 'utf8'); }
     catch (error) {
@@ -41,8 +41,6 @@ export function createWorldWal({ filePath, applyPatch, maxBytes = DEFAULT_MAX_BY
     if (source && !source.endsWith('\n')) {
       const boundary = source.lastIndexOf('\n');
       complete = boundary >= 0 ? source.slice(0, boundary + 1) : '';
-      await truncate(filePath, Buffer.byteLength(complete));
-      bytes = Buffer.byteLength(complete);
     }
     let current = structuredClone(snapshot);
     const lines = complete.split(/\r?\n/).filter(Boolean);
@@ -66,6 +64,12 @@ export function createWorldWal({ filePath, applyPatch, maxBytes = DEFAULT_MAX_BY
         state,
         recentStatusOperations: Array.isArray(record.results) ? record.results : current.recentStatusOperations,
       };
+    }
+    // Validate all complete records before touching a torn tail. Upgrade reads
+    // stay read-only so the checkpoint can preserve the original WAL bytes.
+    if (repairTail && source !== complete) {
+      await truncate(filePath, Buffer.byteLength(complete));
+      bytes = Buffer.byteLength(complete);
     }
     return current;
   }
@@ -99,6 +103,10 @@ export function createWorldWal({ filePath, applyPatch, maxBytes = DEFAULT_MAX_BY
       const handle = await open(filePath, 'a');
       await handle.close();
     });
+    adoptCheckpoint();
+  }
+
+  function adoptCheckpoint() {
     bytes = 0;
     lastCompactedAt = Date.now();
   }
@@ -108,7 +116,7 @@ export function createWorldWal({ filePath, applyPatch, maxBytes = DEFAULT_MAX_BY
     catch (error) { if (error?.code === 'ENOENT') return 0; throw error; }
   }
 
-  return Object.freeze({ append, replay, reset, shouldCompact, size });
+  return Object.freeze({ append, replay, reset, adoptCheckpoint, shouldCompact, size });
 }
 
 export { checksum as worldWalChecksum };

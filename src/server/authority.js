@@ -1,9 +1,35 @@
 import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
 import { mergeActorDelta } from '../token/actor.js';
+import { deriveSceneState } from '../engine/state.js';
+import {
+  deriveVisionOccluders,
+  deriveSceneLightSources,
+  isPathPreciselyVisible,
+  sphereGroundRadiusMeters,
+} from '../spatial/kernel.js';
 
 export { canUserControlToken, projectStateForAudience } from '../vision/audience.js';
+export { sphereGroundRadiusMeters } from '../spatial/kernel.js';
 
 export const serverRuleset = infiniteHorrorRuleset;
+
+export function motionPathPreciselyVisible({ motion, vision, mapPackage, scene } = {}) {
+  if (String(motion?.tokenId || '') === String(vision?.tokenId || '')) {
+    return Number(vision?.preciseRangeMeters ?? vision?.rangeMeters) > 0;
+  }
+  const points = [motion?.from, ...(motion?.waypoints || []), motion?.to].filter(Boolean);
+  const lineOfSightEnabled = vision?.lineOfSightEnabled === true;
+  const occluders = lineOfSightEnabled
+    ? deriveVisionOccluders(mapPackage, scene, deriveSceneState(scene?.sceneEvents || []))
+    : [];
+  return isPathPreciselyVisible(points, vision, {
+    metersPerUnit: mapPackage?.metersPerUnit || 1,
+    lineOfSightEnabled,
+    occluders,
+    lights: deriveSceneLightSources(mapPackage, scene),
+    ambient: scene?.settings?.lighting || 'normal',
+  });
+}
 
 export function describeVisionForToken(state, tokenId) {
   const world = state?.preferences?.worldV2;
@@ -13,21 +39,25 @@ export function describeVisionForToken(state, tokenId) {
   if (!token || !actor || token.placement !== 'map' || token.vision?.enabled === false) return null;
   const resolved = token.actorLink === false ? mergeActorDelta(actor, token.actorDelta) : actor;
   const described = serverRuleset.vision.describe(resolved, {
-    token, scene, lighting: scene?.settings?.lighting || 'normal',
+    token, scene, lighting: 'normal',
   });
-  const override = token.vision?.rangeOverrideMeters;
-  const rangeMeters = override === null || override === undefined
+  const legacyOverride = token.vision?.rangeOverrideMeters;
+  const preciseOverride = token.vision?.preciseRangeOverrideMeters ?? legacyOverride;
+  const vagueOverride = token.vision?.vagueRangeOverrideMeters ?? legacyOverride;
+  const rangeMeters = preciseOverride === null || preciseOverride === undefined
     ? Number(described.rangeMeters) || 0
-    : Number(override) || 0;
-  const vagueRangeMeters = override === null || override === undefined
+    : Number(preciseOverride) || 0;
+  const vagueRangeMeters = vagueOverride === null || vagueOverride === undefined
     ? Math.max(rangeMeters, Number(described.vagueRangeMeters ?? rangeMeters) || 0)
-    : rangeMeters;
+    : Math.max(rangeMeters, Number(vagueOverride) || 0);
   if (vagueRangeMeters <= 0) return null;
   return {
     sceneId: String(scene.id), tokenId: String(token.id), actorId: String(actor.id),
     partyId: actor.partyId == null ? null : String(actor.partyId),
-    x: Number(token.x), y: Number(token.y), rangeMeters,
+    x: Number(token.x), y: Number(token.y), elevationMeters: Number(token.elevationMeters) || 0, rangeMeters,
     preciseRangeMeters: rangeMeters, vagueRangeMeters,
-    senses: structuredClone(described.senses || {}), lighting: described.lighting || 'normal',
+    preciseGroundRangeMeters: sphereGroundRadiusMeters(rangeMeters, token.elevationMeters) ?? 0,
+    vagueGroundRangeMeters: sphereGroundRadiusMeters(vagueRangeMeters, token.elevationMeters) ?? 0,
+    senses: structuredClone(described.senses || {}), lighting: scene?.settings?.lighting || 'normal',
   };
 }

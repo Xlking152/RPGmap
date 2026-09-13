@@ -8,6 +8,13 @@ import {
   deriveWorldOperations,
 } from '../src/world/operations.js';
 import { reduceStatusOperation } from '../src/status/model.js';
+import { createDefaultActor } from '../src/actor/model.js';
+import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
+import { prepareRuleset } from '../src/ruleset/contract.js';
+import {
+  createDocumentChanges,
+  documentChangeSet,
+} from '../src/documents/changes.js';
 
 function actor(id, current = 10) {
   return { id, name: id, system: { resources: { hp: { current, max: 10 } } }, effects: [], notes: '' };
@@ -17,7 +24,7 @@ function token(id, actorId, overrides = {}) {
   return {
     id, actorId, actorLink: true, actorDelta: null,
     placement: 'map', x: 10, y: 20, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     hidden: false, locked: false, showName: true, effects: [],
     ...overrides,
   };
@@ -29,7 +36,7 @@ function state() {
   const world = {
     schemaVersion: 2,
     id: 'world-a', name: 'World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     activeSceneId: 'scene-a', actors: structuredClone(actors), statusDefinitions: [],
     scenes: [{
       id: 'scene-a', name: 'Scene', mapPackage: { id: 'map-a', version: '1.0.0' },
@@ -66,6 +73,113 @@ test('World operation envelope rejects unknown operations and invalid revisions'
     }),
     error => error.code === 'invalid_revision',
   );
+});
+
+test('Scene settings use a bounded granular operation', () => {
+  const initial = state();
+  const committed = applyWorldOperations(initial, [{
+    type: 'scene.settings.patch',
+    payload: { sceneId: 'scene-a', patch: {
+      movementBudgetMetersPerTurn: 24,
+      lineOfSightEnabled: true,
+      defaultDoorInteractionRangeMeters: 2.5,
+    } },
+  }]);
+  const scene = committed.state.preferences.worldV2.scenes[0];
+  assert.equal(scene.settings.movementBudgetMetersPerTurn, 24);
+  assert.equal(scene.settings.lineOfSightEnabled, true);
+  assert.equal(scene.settings.defaultDoorInteractionRangeMeters, 2.5);
+  assert.deepEqual(documentChangeSet(createDocumentChanges(initial, committed.state)).scenes.upsertIds, ['scene-a']);
+  assert.equal(initial.preferences.worldV2.scenes[0].settings.movementBudgetMetersPerTurn, undefined);
+  assert.throws(() => applyWorldOperations(initial, [{
+    type: 'scene.settings.patch',
+    payload: { sceneId: 'scene-a', patch: { unsafeExtension: true } },
+  }]), { code: 'scene_setting_forbidden' });
+});
+
+test('Scene activation creates independent read projections without mutating canonical World data', () => {
+  const initial = state();
+  const sceneB = structuredClone(initial.preferences.worldV2.scenes[0]);
+  sceneB.id = 'scene-b';
+  sceneB.name = 'Scene B';
+  sceneB.tokens[0].visibility = { mode: 'public', userIds: [] };
+  sceneB.featureStates = { 'door-b': { open: true, custom: { extension: { keep: true } } } };
+  initial.preferences.worldV2.scenes.push(sceneB);
+
+  const committed = applyWorldOperations(initial, [{
+    type: 'scene.activate', payload: { sceneId: 'scene-b' },
+  }]);
+  const canonical = committed.state.preferences.worldV2.scenes[1];
+  committed.state.preferences.entitySystem.tokens[0].visibility.mode = 'gm';
+  committed.state.preferences.featureStates['door-b'].custom.extension.keep = false;
+
+  assert.equal(canonical.tokens[0].visibility.mode, 'public');
+  assert.equal(canonical.featureStates['door-b'].custom.extension.keep, true);
+  assert.equal(initial.preferences.worldV2.activeSceneId, 'scene-a');
+});
+
+test('Actor metadata writes preserve newer runtime fields and reject stale field preconditions', () => {
+  const initial = state();
+  initial.preferences.worldV2.actors[0].type = 'pc';
+  initial.preferences.worldV2.actors[0].partyId = 'party-default';
+  const actorBefore = structuredClone(initial.preferences.worldV2.actors[0]);
+  const update = { type: 'actor.metadata.update', payload: { actorId: 'actor-a', changes: { name: 'renamed' }, expected: { name: 'actor-a' } } };
+  const committed = applyWorldOperations(initial, [update]);
+  const after = committed.state.preferences.worldV2.actors[0];
+  assert.equal(after.name, 'renamed');
+  assert.deepEqual(after.system, actorBefore.system);
+  assert.deepEqual(after.effects, actorBefore.effects);
+  assert.equal(initial.preferences.worldV2.actors[0].name, 'actor-a');
+  assert.throws(() => applyWorldOperations(committed.state, [update]), error => error.code === 'document_field_conflict');
+  assert.throws(() => applyWorldOperations(initial, [{ ...update, payload: { ...update.payload, changes: { system: {} } } }]), error => error.code === 'actor_metadata_field_forbidden');
+  assert.throws(() => applyWorldOperations(initial, [{ ...update, payload: { ...update.payload, expected: {} } }]), error => error.code === 'field_precondition_required');
+  const parallel = applyWorldOperations(committed.state, [{ type: 'actor.metadata.update', payload: {
+    actorId: 'actor-a', changes: { partyId: 'other-party' }, expected: { partyId: 'party-default' },
+  } }]);
+  assert.equal(parallel.state.preferences.worldV2.actors[0].name, 'renamed');
+});
+
+test('portrait intent compares only the edited image and keeps concurrent runtime data intact', () => {
+  const initial = state(), ruleset = infiniteHorrorRuleset;
+  const document = createDefaultActor({ id: 'actor-a', ruleset });
+  document.system.runtime.customExtension = { consumed: 3 };
+  initial.preferences.worldV2.actors[0] = document;
+  const current = ruleset.actor.portrait.describe(document);
+  const update = { type: 'actor.portrait.update', payload: {
+    actorId: document.id, reference: `asset:${'a'.repeat(64)}`,
+    expectedReference: current.reference, variantId: current.variantId,
+  } };
+  const next = applyWorldOperations(initial, [update], { ruleset }).state;
+  const saved = next.preferences.worldV2.actors[0];
+  assert.equal(saved.img, update.payload.reference);
+  assert.deepEqual(saved.system.runtime, document.system.runtime);
+  assert.deepEqual(saved.effects, document.effects);
+  assert.deepEqual(next.preferences.worldV2.scenes, initial.preferences.worldV2.scenes);
+  assert.throws(() => applyWorldOperations(next, [update], { ruleset }), { code: 'document_field_conflict' });
+  assert.throws(() => applyWorldOperations(initial, [{ ...update, payload: { ...update.payload, variantId: 'another-variant' } }], { ruleset }), { code: 'document_field_conflict' });
+  assert.throws(() => applyWorldOperations(initial, [{ ...update, payload: { ...update.payload, reference: 'https://invalid.example/image.png' } }], { ruleset }), { code: 'invalid_content_reference' });
+});
+
+test('minimal Rulesets use the Core portrait contract without any variant or health paths', () => {
+  const initial = state();
+  const ruleset = prepareRuleset({ id: 'portrait-test', version: '1', title: 'Portrait Test', actor: {} });
+  const next = applyWorldOperations(initial, [{ type: 'actor.portrait.update', payload: {
+    actorId: 'actor-a', reference: `asset:${'b'.repeat(64)}`, expectedReference: null, variantId: null,
+  } }], { ruleset }).state;
+  assert.equal(next.preferences.worldV2.actors[0].img, `asset:${'b'.repeat(64)}`);
+  assert.deepEqual(next.preferences.worldV2.actors[0].system, initial.preferences.worldV2.actors[0].system);
+});
+
+test('Public profile compare-and-set protects dirty fields without conflicting with unrelated fields', () => {
+  const initial = state();
+  const actor = initial.preferences.worldV2.actors[0];
+  actor.publicProfile = { summary: 'before', appearance: 'remote', knownFacts: [], visibleStatusDefinitionIds: [] };
+  const operation = { type: 'actor.publicProfile.update', payload: {
+    actorId: actor.id, publicProfile: { summary: 'after' }, expected: { summary: 'before' },
+  } };
+  const committed = applyWorldOperations(initial, [operation]);
+  assert.equal(committed.state.preferences.worldV2.actors[0].publicProfile.appearance, 'remote');
+  assert.throws(() => applyWorldOperations(committed.state, [operation]), error => error.code === 'document_field_conflict');
 });
 
 test('atomic operations update Actor, Token, Scene and Combat through one reducer', () => {
@@ -196,6 +310,43 @@ test('Status and Effect operations use the injected reducer in offline and serve
   assert.equal(applied.results[0].action, 'apply');
 });
 
+test('Status projection replaces only targeted Actor and Token documents', () => {
+  const initial = state();
+  const definition = {
+    id: 'status-focused', name: 'Focused', category: 'neutral', scopes: ['actor', 'token'],
+    maxStacks: 1, changes: [], capabilities: {},
+  };
+  initial.preferences.worldV2.statusDefinitions = [structuredClone(definition)];
+  initial.preferences.entitySystem.statusDefinitions = [structuredClone(definition)];
+  const beforeActors = initial.preferences.worldV2.actors;
+  const beforeTokens = initial.preferences.worldV2.scenes[0].tokens;
+  const applied = applyWorldOperations(initial, [{
+    type: 'status.batch', payload: { operations: [
+      { type: 'status.apply', scope: 'actor', targetId: 'actor-a', statusId: definition.id },
+      { type: 'status.apply', scope: 'token', targetId: 'token-a', statusId: definition.id },
+    ] },
+  }], {
+    now: '2026-09-07T00:00:00.000Z',
+    applyStatus(current, operation, context) {
+      const reduced = reduceStatusOperation(current.preferences.entitySystem, operation, {
+        ...context, assumeNormalized: true,
+      });
+      current.preferences.entitySystem = reduced.state;
+      return { state: current, results: reduced.results };
+    },
+  });
+  const actors = applied.state.preferences.worldV2.actors;
+  const tokens = applied.state.preferences.worldV2.scenes[0].tokens;
+  assert.notStrictEqual(actors[0], beforeActors[0]);
+  assert.strictEqual(actors[1], beforeActors[1]);
+  assert.notStrictEqual(tokens[0], beforeTokens[0]);
+  assert.strictEqual(tokens[1], beforeTokens[1]);
+  assert.equal(actors[0].effects[0].definitionId, definition.id);
+  assert.equal(tokens[0].effects[0].definitionId, definition.id);
+  assert.deepEqual(beforeActors[0].effects, []);
+  assert.deepEqual(beforeTokens[0].effects, []);
+});
+
 test('combat.advance updates turn, round, and Status V4 durations atomically', () => {
   const initial = state();
   const definition = {
@@ -249,25 +400,38 @@ test('World Operation V2 carries Status V4 definition imports through the shared
     },
   });
   assert.equal(applied.state.preferences.worldV2.statusDefinitions.some(item => item.id === 'status-imported'), true);
-  assert.equal(applied.changeSet.statusDefinitionsChanged, true);
+  assert.equal(documentChangeSet(createDocumentChanges(initial, applied.state)).statusDefinitionsChanged, true);
 });
 
-test('Fog changeSet carries bounded circle and sweep invalidation rectangles', () => {
+test('Fog Document changes carry bounded circle and sweep invalidation rectangles', () => {
   const initial = state();
-  const applied = applyWorldOperations(initial, [
+  const operations = [
     { type: 'scene.fog.explore', payload: {
       sceneId: 'scene-a', partyId: 'party-a', x: 20, y: 30, radiusMeters: 10,
     } },
     { type: 'scene.fog.explore', payload: {
       sceneId: 'scene-a', partyId: 'party-a', from: { x: 40, y: 50 }, to: { x: 60, y: 70 }, radiusMeters: 20,
     } },
-  ], { mapMetrics: { metersPerUnit: 2 } });
-  assert.deepEqual(applied.changeSet.fog, [{
+  ];
+  const metrics = { metersPerUnit: 2 };
+  const applied = applyWorldOperations(initial, operations, { mapMetrics: metrics });
+  assert.strictEqual(applied.state.preferences.worldV2.actors, initial.preferences.worldV2.actors);
+  assert.strictEqual(applied.state.preferences.worldV2.scenes[0].tokens, initial.preferences.worldV2.scenes[0].tokens);
+  assert.notStrictEqual(applied.state.preferences.worldV2.scenes[0], initial.preferences.worldV2.scenes[0]);
+  assert.equal(initial.preferences.worldV2.scenes[0].fog, undefined);
+  const changes = createDocumentChanges(initial, applied.state, null, {
+    fog: applied.results,
+  });
+  assert.deepEqual(documentChangeSet(changes).fog, [{
     sceneId: 'scene-a', dirtyBounds: { minX: 15, minY: 25, maxX: 70, maxY: 80 },
   }]);
 
-  const reset = applyWorldOperations(applied.state, [{
+  const resetOperations = [{
     type: 'scene.fog.reset', payload: { sceneId: 'scene-a', partyId: 'party-a' },
-  }], { mapMetrics: { metersPerUnit: 2 } });
-  assert.deepEqual(reset.changeSet.fog, [{ sceneId: 'scene-a', dirtyBounds: null }]);
+  }];
+  const reset = applyWorldOperations(applied.state, resetOperations, { mapMetrics: metrics });
+  const resetChanges = createDocumentChanges(applied.state, reset.state, null, {
+    fog: reset.results,
+  });
+  assert.deepEqual(documentChangeSet(resetChanges).fog, [{ sceneId: 'scene-a', dirtyBounds: null }]);
 });

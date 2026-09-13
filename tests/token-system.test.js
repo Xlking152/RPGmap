@@ -5,7 +5,8 @@ import { createTokenRuntimeSystem } from '../src/token/system.js';
 import { WORLD_STATE_KEY, activeWorldScene } from '../src/world/model.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 
-const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图' };
+const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图', width: 100, height: 100,
+  features: [{ id: 'building-a', enterable: true, entrance: [22.5, 21.5], center: [25, 25] }], metersPerUnit: 1 };
 
 function actor() {
   return {
@@ -99,6 +100,36 @@ test('TokenSystem supports multiple Token instances for the same Actor without C
   assertNoCharacterProjection(fixture.current());
 });
 
+test('TokenSystem indexes a large Scene without cloning World per Token read', () => {
+  const tokens = Array.from({ length: 500 }, (_, index) => ({
+    id: `token-${index}`, actorId: 'actor-1', actorLink: true, x: index, y: 0,
+  }));
+  const world = {
+    schemaVersion: 4,
+    activeSceneId: 'scene-1',
+    actors: [actor()],
+    scenes: [{ id: 'scene-1', tokens }],
+  };
+  let worldReads = 0;
+  const listeners = new Map();
+  const api = {
+    ruleset: infiniteHorrorRuleset,
+    world: {
+      get() { worldReads += 1; return structuredClone(world); },
+      async commit() {},
+    },
+    on(type, listener) { listeners.set(type, listener); return () => listeners.delete(type); },
+    emit() {},
+  };
+
+  createTokenRuntimeSystem().register(api);
+  assert.equal(worldReads, 1);
+  assert.equal(api.tokens.list().length, 500);
+  for (const token of tokens) assert.equal(api.tokens.get(token.id).id, token.id);
+  assert.equal(api.tokens.getActor('actor-1').id, 'actor-1');
+  assert.equal(worldReads, 1);
+});
+
 test('TokenSystem move and feature placement update canonical World placement', async () => {
   const fixture = apiFixture();
   await fixture.api.tokens.create({ actorId: 'actor-1', id: 'token-one', x: 1, y: 1 });
@@ -124,7 +155,7 @@ test('TokenSystem preserves actorLink/actorDelta and deletes canonical state onl
     actorDelta: { system: { runtime: { health: { current: 5 } } } },
   });
   await fixture.api.tokens.update('npc-one', {
-    visibility: { mode: 'gm', userIds: [] }, elevationFt: 15,
+    visibility: { mode: 'gm', userIds: [] }, elevationMeters: 15,
   });
   const token = fixture.api.tokens.get('npc-one');
   assert.equal(token.actorLink, false);
@@ -132,7 +163,7 @@ test('TokenSystem preserves actorLink/actorDelta and deletes canonical state onl
   assert.equal(token.actorDelta.system.runtime.resources?.hp, undefined);
   assert.equal(Object.hasOwn(token.actorDelta, 'runtime'), false);
   assert.equal(token.visibility.mode, 'gm');
-  assert.equal(token.elevationFt, 15);
+  assert.equal(token.elevationMeters, 15);
 
   await fixture.api.tokens.remove('npc-one');
   assert.equal(fixture.api.tokens.get('npc-one'), null);

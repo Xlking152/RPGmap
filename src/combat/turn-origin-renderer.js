@@ -28,7 +28,7 @@ export function createCombatTurnOriginRenderer() {
         if (!model || (Math.abs(model.x - origin.x) <= 1e-6 && Math.abs(model.y - origin.y) <= 1e-6)) return;
         L.marker(worldToLatLng(origin, api.mapPackage.height), {
           pane: PANE, icon: tokenIcon(api, model), opacity: 0.32, interactive: false, keyboard: false,
-        }).bindTooltip(`起点 · ${origin.elevationFt} ft`, {
+        }).bindTooltip(`起点 · ${origin.elevationMeters} m`, {
           permanent: true, direction: 'top', className: 'marker-tooltip',
         }).addTo(layer);
       }

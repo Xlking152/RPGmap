@@ -348,6 +348,9 @@ export function createLightweightMarkerSystem() {
       }
       const renderAll = () => { renderMap(); renderPanel(); };
       const off = ['state:commit', 'state:import', 'scene:activate', 'multiplayer:capabilities'].map(name => api.on?.(name, renderAll));
+      off.push(api.on?.('scene:content-change', event => {
+        if (event.detail?.types?.includes('Marker')) renderAll();
+      }));
       renderAll();
       api.on?.('app:destroy', () => {
         off.forEach(dispose => dispose?.());

@@ -136,10 +136,51 @@ function normalizeNavigationCapability(feature, declared) {
     passableWhenOpen: source.passableWhenOpen === true,
     passableWhenDestroyed: source.passableWhenDestroyed === true,
     damageCreatesPassage: source.damageCreatesPassage === true,
-    blockingHeightFt: asOptionalNonNegativeNumber(source.blockingHeightFt, 'feature navigation blockingHeightFt'),
+    blockingHeightMeters: asOptionalNonNegativeNumber(source.blockingHeightMeters, 'feature navigation blockingHeightMeters'),
     blockingPolygon: normalizeNavigationPolygon(source.blockingPolygon, 'feature navigation blockingPolygon'),
     passageTile,
     passagePolygon: normalizeNavigationPolygon(source.passagePolygon, 'feature navigation passagePolygon'),
+  });
+}
+
+function normalizeVisionCapability(feature, declared, navigation) {
+  const source = declared.vision ?? feature.vision;
+  if (!source || typeof source !== 'object' || source.occluder !== true) return null;
+  return Object.freeze({
+    ...source,
+    occluder: true,
+    blockingHeightMeters: asOptionalNonNegativeNumber(
+      source.blockingHeightMeters ?? navigation?.blockingHeightMeters,
+      'feature vision blockingHeightMeters',
+    ),
+    polygon: normalizeNavigationPolygon(
+      source.polygon ?? navigation?.blockingPolygon ?? feature.geometry?.points,
+      'feature vision polygon',
+    ),
+    passableWhenOpen: source.passableWhenOpen === true,
+    passableWhenDestroyed: source.passableWhenDestroyed !== false,
+  });
+}
+
+function normalizeLightDescriptor(value, index) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`Invalid MapPackage: lights[${index}] must be an object`);
+  }
+  const x = Number(value.x);
+  const y = Number(value.y);
+  const elevationMeters = asOptionalNonNegativeNumber(value.elevationMeters, `lights[${index}].elevationMeters`) ?? 0;
+  const rangeMeters = asOptionalNonNegativeNumber(value.rangeMeters, `lights[${index}].rangeMeters`) ?? 0;
+  const intensity = Number(value.intensity ?? 1);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(intensity) || intensity < 0 || intensity > 4) {
+    throw new TypeError(`Invalid MapPackage: lights[${index}] has invalid coordinates or intensity`);
+  }
+  const color = /^#[0-9a-f]{6}$/i.test(String(value.color || '')) ? String(value.color) : '#fff3c4';
+  return Object.freeze({
+    ...value,
+    id: asNonEmptyString(value.id, `lights[${index}].id`),
+    x, y, elevationMeters, rangeMeters, intensity, color,
+    enabled: value.enabled !== false && rangeMeters > 0,
+    occlusion: value.occlusion === 'none' ? 'none' : 'scene',
   });
 }
 
@@ -247,6 +288,7 @@ function normalizeFeature(feature, index, destructibleCategories) {
     ?? feature.interactive
     ?? Object.values(actions).some(Boolean);
   const navigation = normalizeNavigationCapability(feature, declared);
+  const vision = normalizeVisionCapability(feature, declared, navigation);
   const statusRules = normalizeStatusRulesCapability(declared);
 
   const capabilities = Object.freeze({
@@ -258,6 +300,7 @@ function normalizeFeature(feature, index, destructibleCategories) {
     openable: Boolean(openable),
     actions,
     navigation,
+    vision,
     statusRules,
   });
   return Object.freeze({ ...feature, id, category, capabilities });
@@ -302,6 +345,7 @@ export function prepareMapPackage(rawPackage, { source = 'unknown' } = {}) {
     logicalLayers: Object.freeze(layerPlan.map((entry) => entry.id)),
     featureTaxonomy,
     features,
+    lights: Object.freeze((Array.isArray(rawPackage.lights) ? rawPackage.lights : []).map(normalizeLightDescriptor)),
     featureCount: features.length,
     svg,
     createSvg: render,
@@ -317,6 +361,6 @@ export function mapPackageCapabilities(mapPackage) {
     enterableCount: features.filter((feature) => feature.capabilities?.enterable).length,
     openableCount: features.filter((feature) => feature.capabilities?.openable).length,
     navigationObstacleCount: features.filter((feature) => feature.capabilities?.navigation?.blocks).length,
-    heightAwareObstacleCount: features.filter((feature) => Number.isFinite(feature.capabilities?.navigation?.blockingHeightFt)).length,
+    heightAwareObstacleCount: features.filter((feature) => Number.isFinite(feature.capabilities?.navigation?.blockingHeightMeters)).length,
   });
 }

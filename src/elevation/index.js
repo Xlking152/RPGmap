@@ -1,13 +1,13 @@
 export {
-  featureBlockingHeightFt,
+  featureBlockingHeightMeters,
   featureBlocksMover,
-  formatFt,
-  normalizeBlockingHeightFt,
-  normalizeElevationFt,
+  formatMeters,
+  normalizeBlockingHeightMeters,
+  normalizeElevationMeters,
   normalizeTokenDiameterMeters,
   TOKEN_DIAMETERS_METERS,
   tokenDiameterMeters,
-  tokenElevationFt,
+  tokenElevationMeters,
 } from './model.js';
 
 export {

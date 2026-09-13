@@ -45,6 +45,7 @@ for (const file of [
   'world-v2.mjs',
   'websocket-runtime.mjs',
   'world-wal.mjs',
+  'storage-upgrade.mjs',
   'launcher.mjs',
   'start-rpgmap.bat',
 ]) {
@@ -59,6 +60,7 @@ async function bundleServerModule(entry, fileName) {
       emptyOutDir: false,
       minify: false,
       outDir: root,
+      rollupOptions: { external: id => id.startsWith('node:') },
       lib: {
         entry: path.join(projectRoot, entry),
         formats: ['es'],
@@ -73,13 +75,15 @@ await bundleServerModule('src/server/authority.js', 'ruleset-authority.mjs');
 await bundleServerModule('src/server/movement-authority-entry.js', 'movement-authority.mjs');
 await bundleServerModule('src/permissions/model.js', 'permissions-model.mjs');
 await bundleServerModule('deployment/local-server/status-operations.mjs', 'status-operations.mjs');
+await bundleServerModule('deployment/local-server/content-storage.mjs', 'content-storage.mjs');
+await bundleServerModule('deployment/local-server/content-history.mjs', 'content-history.mjs');
 await copy('文档/操作指南.md', 'docs/OPERATION-GUIDE.md');
 
 await writeFile(path.join(root, 'VERSION.json'), `${JSON.stringify({
   app: 'RPGmap', version, releaseTag: `v${version}`,
   commit: await sourceCommit(),
-  worldSchema: 3,
-  operationSchema: 3,
+  worldSchema: 4,
+  operationSchema: 4,
   statusSchema: 4,
   accessSchema: 4,
   serverMode: 'multiplayer', platform: 'windows', storageMode: 'portable-map-root-server-authoritative',

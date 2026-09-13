@@ -13,7 +13,7 @@ test('production Lanzhou package loads generated data and SVG as local runtime a
   ]);
   const runtimeData = JSON.parse(runtimeDataText);
   assert.equal(runtimeData.id, 'northern-song-lanzhou-1104');
-  assert.equal(runtimeData.version, '1.0.6');
+  assert.equal(runtimeData.version, '1.1.0');
   assert.equal(runtimeData.features.length, runtimeData.featureCount);
   assert.equal(runtimeData.features.length, 103);
   assert.equal(Object.hasOwn(runtimeData, 'svg'), false);
@@ -31,10 +31,11 @@ test('production Lanzhou package loads generated data and SVG as local runtime a
   assert.equal(new Set(placeholders).size, 28);
 });
 
-test('LAN operation broadcasts derive audience change sets from cropped patches', async () => {
+test('LAN operation broadcasts carry one changes representation from audience projections', async () => {
   const server = await read('deployment/local-server/server.mjs');
-  assert.match(server, /audienceChangeSetFromPatch/);
-  assert.match(server, /changeSet:\s*audienceChangeSetFromPatch\(patch, afterProjection, changeSet\)/);
+  const broadcast = server.slice(server.indexOf('function broadcastOperationCommit('), server.indexOf('function sendAudienceSnapshot('));
+  assert.match(broadcast, /changes:\s*createDocumentChanges\(beforeProjection, afterProjection/);
+  assert.doesNotMatch(broadcast, /changeSet:\s*audienceChangeSetFromPatch|\n\s*patch,/);
   assert.doesNotMatch(server, /createWorldOperationChangeSet\(beforeProjection, afterProjection\)/);
   assert.match(server, /operation\.type === 'actor\.upsert' \|\| operation\.type === 'actor\.delete'/);
 });

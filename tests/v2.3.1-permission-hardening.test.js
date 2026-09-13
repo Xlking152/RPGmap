@@ -33,7 +33,7 @@ function token({ controllerUserIds = [], userIds = ['viewer'] } = {}) {
     color: '#334455',
     diameterMeters: 1,
     rotation: 0,
-    elevationFt: 0,
+    elevationMeters: 0,
     locked: false,
     showName: true,
     effects: [],

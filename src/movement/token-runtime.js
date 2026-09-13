@@ -6,7 +6,7 @@ import {
   nearestWalkablePoint,
 } from '../engine/navigation.js';
 import { deriveSceneState } from '../engine/state.js';
-import { tokenDiameterMeters, tokenElevationFt } from '../elevation/model.js';
+import { tokenDiameterMeters, tokenElevationMeters } from '../elevation/model.js';
 import { reduceStatusOperation } from '../status/model.js';
 import {
   getActiveSceneToken,
@@ -14,10 +14,9 @@ import {
   placeSceneTokenInFeature,
 } from '../token/model.js';
 import { applySyntheticActorStatusOperation } from '../token/synthetic-status.js';
+import { createMovementAuthority } from './authority.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -30,7 +29,10 @@ function array(value) {
 function finitePoint(value) {
   const x = Number(value?.x);
   const y = Number(value?.y);
-  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+  const elevationMeters = Number(value?.elevationMeters);
+  return Number.isFinite(x) && Number.isFinite(y) ? {
+    x, y, ...(Number.isFinite(elevationMeters) && elevationMeters >= 0 ? { elevationMeters } : {}),
+  } : null;
 }
 
 function samePoint(a, b) {
@@ -93,7 +95,7 @@ function moverContext(api, token) {
   const status = movementStatusContext(api, token);
   return Object.freeze({
     tokenId: String(token.id),
-    elevationFt: tokenElevationFt(token),
+    elevationMeters: tokenElevationMeters(token),
     diameterMeters: tokenDiameterMeters(token),
     statusVersion: status?.statusVersion || 'none',
     collisionBypassGroups: Object.freeze([...(status?.capabilities?.collisionBypassGroups || [])]),
@@ -172,10 +174,21 @@ export function createMovementTokenRuntimeSystem() {
       }
 
       const staticBase = createNavigationBase(api.mapPackage);
+      const authoritativeValidate = createMovementAuthority(() => api.mapPackage);
       let navigationGrid = null;
       let navigationRevision = null;
       let pendingPlan = null;
       let pendingGroupPlan = null;
+      const preferredModes = new Map();
+
+      const getPreferredMode = tokenId => preferredModes.get(String(tokenId))
+        || api.tokens.get(tokenId)?.movement?.mode || 'walk';
+      const setPreferredMode = (tokenId, mode) => {
+        const value = ['walk', 'swim', 'waterWalk', 'fly'].includes(String(mode)) ? String(mode) : 'walk';
+        preferredModes.set(String(tokenId), value);
+        api.emit?.('movement:mode-change', { tokenId: String(tokenId), mode: value });
+        return value;
+      };
 
       function navigation(token) {
         const state = api.getState?.() || {};
@@ -231,6 +244,7 @@ export function createMovementTokenRuntimeSystem() {
         const start = finitePoint(from) || tokenMapPoint(token);
         const to = finitePoint(destination);
         if (!token) return movementFailure('token_not_found', '找不到要移动的 Token');
+        if (token.locked === true) return movementFailure('token_locked', 'Token 已锁定');
         if (!start) return movementFailure('token_not_on_map', 'Token 当前不在地图上');
         if (!to) return movementFailure('invalid_destination', '移动终点无效');
 
@@ -258,25 +272,45 @@ export function createMovementTokenRuntimeSystem() {
       function inspectTokenMove(tokenId, destination, options = {}) {
         const access = inspectMovementAccess(tokenId, destination, options);
         if (!access.valid) return access;
-        const inspected = inspectDirectNavigationPath(navigation(access.token), access.from, access.destination);
-        return inspected?.valid === false
-          ? movementFailure('path_blocked', inspected.reason || '路径不可通行', inspected)
-          : clone({ code: 'ok', ...inspected, valid: true });
+        const state = api.getState?.() || {};
+        const validated = authoritativeValidate({
+          state,
+          world: api.world.get(),
+          scene: api.world.getActiveScene(),
+          token: access.token,
+          origin: { ...access.from, elevationMeters: tokenElevationMeters(access.token) },
+          waypoints: [{
+            ...access.destination,
+            elevationMeters: access.destination.elevationMeters ?? tokenElevationMeters(access.token),
+          }],
+          ruleset: api.ruleset,
+          movementMode: options.movementMode || getPreferredMode(tokenId),
+          verticalAction: options.verticalAction,
+          status: movementStatusContext(api, access.token),
+        });
+        return validated.valid
+          ? clone({ code: 'ok', ...validated })
+          : movementFailure(validated.code || 'path_blocked', validated.reason || '路径不可通行', validated);
       }
 
       async function validateTokenMove(tokenId, destination, options = {}) {
         const access = inspectMovementAccess(tokenId, destination, options);
         if (!access.valid) return access;
-        const route = await findDirectNavigationPath(navigation(access.token), access.from, access.destination);
-        if (!route) {
-          const inspected = inspectTokenMove(tokenId, destination, options);
-          return inspected.valid ? movementFailure('path_blocked', '路径不可通行') : inspected;
-        }
-        return clone({ valid: true, code: 'ok', ...route });
+        const inspected = inspectTokenMove(tokenId, destination, options);
+        if (!inspected.valid) return inspected;
+        return clone({
+          valid: true,
+          code: 'ok',
+          points: [access.from, access.destination],
+          destination: access.destination,
+          distance: inspected.costMeters,
+          ...inspected,
+        });
       }
 
-      async function planTokenMove(tokenId, destination, arrival = null) {
-        const result = await validateTokenMove(tokenId, destination);
+      async function planTokenMove(tokenId, destination, arrival = null, options = {}) {
+        const movementMode = options.movementMode || getPreferredMode(tokenId);
+        const result = await validateTokenMove(tokenId, destination, { ...options, movementMode });
         if (!result.valid) {
           pendingPlan = null;
           return null;
@@ -291,6 +325,8 @@ export function createMovementTokenRuntimeSystem() {
           destination: clone(result.destination || to),
           route: clone(result),
           arrival: clone(arrival),
+          movementMode,
+          verticalAction: options.verticalAction || null,
         };
         return clone({ ...result, arrival });
       }
@@ -298,7 +334,9 @@ export function createMovementTokenRuntimeSystem() {
       async function executePlan(plan) {
         const current = api.tokens.get(plan.tokenId);
         const from = tokenMapPoint(current);
-        const route = await validateTokenMove(plan.tokenId, plan.destination);
+        const route = await validateTokenMove(plan.tokenId, plan.destination, {
+          movementMode: plan.movementMode, verticalAction: plan.verticalAction,
+        });
         if (!route.valid) throw movementError(route);
 
         let world = api.world.get();
@@ -311,29 +349,36 @@ export function createMovementTokenRuntimeSystem() {
           const action = api.interaction?.actionsForFeature?.(featureId, { tokenId: current.id })
             ?.find?.(entry => entry.id === 'enter');
           if (action?.enabled === false) throw new Error(action.reason || '当前无法进入 Feature');
-          world = placeSceneTokenInFeature(world, current.id, featureId).world;
+          if (!api.world.performOperations) world = placeSceneTokenInFeature(world, current.id, featureId).world;
           anchorPoint = featurePoint(feature) || anchorPoint;
           reason = `feature.enter:${featureId}`;
         } else {
-          world = moveSceneToken(world, current.id, route.destination || plan.destination).world;
+          if (!api.world.performOperations) world = moveSceneToken(world, current.id, route.destination || plan.destination).world;
         }
 
-        if (array(plan.arrival?.statusMutations).length) {
-          world = applyMovementStatusMutations(world, current.id, plan.arrival.statusMutations, {
-            source: {
-              type: 'feature',
-              featureId: plan.arrival.featureId || null,
-              action: plan.arrival.featureAction || 'enter',
-            },
+        if (api.world.performOperations) {
+          const payload = { sceneId: world.activeSceneId, tokenId: current.id };
+          await api.world.performOperations([plan.arrival?.type === 'feature'
+            ? { type: 'token.move', payload: { ...payload, placement: 'feature', featureId: plan.arrival.featureId } }
+            : { type: 'token.movePath', payload: { ...payload, tokenIds: [current.id],
+              expectedOrigins: { [current.id]: from }, waypoints: [anchorPoint], method: 'drag',
+              movementMode: plan.movementMode, verticalAction: plan.verticalAction } }],
+          { source: reason.startsWith('feature.') ? 'feature:enter' : 'movement:token', kind: 'token' });
+        } else {
+          if (array(plan.arrival?.statusMutations).length) {
+            world = applyMovementStatusMutations(world, current.id, plan.arrival.statusMutations, {
+              source: {
+                type: 'feature',
+                featureId: plan.arrival.featureId || null,
+                action: plan.arrival.featureAction || 'enter',
+              },
+            });
+          }
+          world = updateAnchoredAreas(world, current.id, anchorPoint);
+          await api.world.commit(world, {
+            source: reason.startsWith('feature.') ? 'feature:enter' : 'movement:token', reason, render: true,
           });
         }
-        world = updateAnchoredAreas(world, current.id, anchorPoint);
-
-        await api.world.commit(world, {
-          source: reason.startsWith('feature.') ? 'feature:enter' : 'movement:token',
-          reason,
-          render: true,
-        });
         invalidateNavigation();
         const committed = api.tokens.get(current.id);
         emitMoved(committed, { from, to: anchorPoint, arrival: plan.arrival, reason });
@@ -348,8 +393,9 @@ export function createMovementTokenRuntimeSystem() {
         return true;
       }
 
-      async function moveTokenTo(tokenId, destination, arrival = null) {
-        const result = await validateTokenMove(tokenId, destination);
+      async function moveTokenTo(tokenId, destination, arrival = null, options = {}) {
+        const movementMode = options.movementMode || getPreferredMode(tokenId);
+        const result = await validateTokenMove(tokenId, destination, { ...options, movementMode });
         if (!result.valid) return result;
         const token = api.tokens.get(tokenId);
         try {
@@ -360,6 +406,8 @@ export function createMovementTokenRuntimeSystem() {
             destination: clone(result.destination || destination),
             route: clone(result),
             arrival: clone(arrival),
+            movementMode,
+            verticalAction: options.verticalAction || null,
           });
           return clone({ ...result, committed: true });
         } catch (error) {
@@ -427,11 +475,19 @@ export function createMovementTokenRuntimeSystem() {
           const target = points.at(-1);
           moves.push({ ...member, points, target });
           api.renderer?.prepareTokenVisualRoute?.(member.tokenId, points.slice(1));
-          world = moveSceneToken(world, member.tokenId, target).world;
-          world = updateAnchoredAreas(world, member.tokenId, target);
+          if (!api.world.performOperations) {
+            world = moveSceneToken(world, member.tokenId, target).world;
+            world = updateAnchoredAreas(world, member.tokenId, target);
+          }
         }
         try {
-          await api.world.commit(world, { source: 'movement:group', reason: 'token.group-move', render: true });
+          if (api.world.performOperations) {
+            await api.world.performOperations([{ type: 'token.movePath', payload: {
+              sceneId: world.activeSceneId, tokenId: plan.leaderId, tokenIds: plan.members.map(member => member.tokenId),
+              expectedOrigins: Object.fromEntries(plan.members.map(member => [member.tokenId, member.origin])),
+              waypoints: plan.leaderPoints.slice(1), method: 'drag',
+            } }], { source: 'movement:group', kind: 'token' });
+          } else await api.world.commit(world, { source: 'movement:group', reason: 'token.group-move', render: true });
         } catch (error) {
           moves.forEach(move => api.renderer?.prepareTokenVisualRoute?.(move.tokenId, []));
           throw error;
@@ -473,19 +529,21 @@ export function createMovementTokenRuntimeSystem() {
         const safe = nearestWalkablePoint(navigation(token), target, 120);
         if (!safe) return false;
 
-        let world = moveSceneToken(api.world.get(), token.id, safe).world;
-        if (array(options.statusMutations).length) {
-          world = applyMovementStatusMutations(world, token.id, options.statusMutations, {
-            source: options.source || { type: 'feature', featureId: feature.id, action: 'exit' },
-          });
-        }
-        world = updateAnchoredAreas(world, token.id, safe);
         try {
-          await api.world.commit(world, {
-            source: 'feature:exit',
-            reason: `feature.exit:${feature.id}`,
-            render: true,
-          });
+          if (api.world.performOperations) {
+            await api.world.performOperations([{ type: 'token.move', payload: {
+              sceneId: api.world.get().activeSceneId, tokenId: token.id, placement: 'map', x: safe.x, y: safe.y,
+            } }], { source: 'feature:exit', kind: 'token' });
+          } else {
+            let world = moveSceneToken(api.world.get(), token.id, safe).world;
+            if (array(options.statusMutations).length) {
+              world = applyMovementStatusMutations(world, token.id, options.statusMutations, {
+                source: options.source || { type: 'feature', featureId: feature.id, action: 'exit' },
+              });
+            }
+            world = updateAnchoredAreas(world, token.id, safe);
+            await api.world.commit(world, { source: 'feature:exit', reason: `feature.exit:${feature.id}`, render: true });
+          }
         } catch (error) {
           emitCancelled(token.id, error);
           return false;
@@ -510,6 +568,8 @@ export function createMovementTokenRuntimeSystem() {
         moveTokenTo,
         planTokenGroupMove,
         commitTokenGroupMove,
+        getPreferredMode,
+        setPreferredMode,
         inspectTokenMove,
         exitFeature,
         cancelPending() { pendingPlan = null; pendingGroupPlan = null; },

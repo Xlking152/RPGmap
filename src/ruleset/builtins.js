@@ -1,8 +1,4 @@
-const BUILT_IN_RULESETS = Object.freeze([Object.freeze({
-  id: 'infinite-horror',
-  title: '无限跑团',
-  version: '1.0.0',
-})]);
+import { listBuiltInRulesets as listBuiltInRulesetMetadata } from './metadata.js';
 
 function rulesetError(message, code) {
   const error = new Error(message);
@@ -11,14 +7,14 @@ function rulesetError(message, code) {
 }
 
 export function listBuiltInRulesets() {
-  return BUILT_IN_RULESETS.map(item => ({ ...item }));
+  return listBuiltInRulesetMetadata();
 }
 
 export function resolveBuiltInRulesetReference(reference = {}) {
   const id = typeof reference?.id === 'string' ? reference.id.trim() : '';
   const version = typeof reference?.version === 'string' ? reference.version.trim() : '';
   if (!id || !version) rulesetError('World ruleset id and version are required', 'world_ruleset_missing');
-  const metadata = BUILT_IN_RULESETS.find(item => item.id === id);
+  const metadata = listBuiltInRulesetMetadata().find(item => item.id === id);
   if (!metadata) rulesetError(`Unknown ruleset: ${id}`, 'unknown_ruleset');
   if (metadata.version !== version) {
     rulesetError(

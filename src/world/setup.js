@@ -21,7 +21,7 @@ export function renderWorldManager(container, {
         <div><strong>${escapeHtml(world.name)}</strong><span>${escapeHtml(world.ruleset?.id || '未绑定规则')} · ${escapeHtml(world.mapPackage?.id || '未绑定地图')}</span></div>
         <div class="world-manager-actions"><button type="button" data-world-open="${escapeHtml(world.id)}">进入</button><button type="button" class="danger" data-world-delete="${escapeHtml(world.id)}">删除</button></div>
       </article>`).join('')
-    : '<div class="world-manager-empty">还没有本地 World。创建一个 World 后，再进入 Scene 地图。</div>';
+    : '<div class="world-manager-empty">暂无本地 World</div>';
   const defaultRuleset = rulesets[0]?.id || '';
   const defaultMap = mapPackages[0]?.id || '';
 
@@ -31,7 +31,6 @@ export function renderWorldManager(container, {
     </style>
     <div class="rpgmap-boot-card" style="width:min(760px,94vw)">
       <h1 class="rpgmap-boot-title">RPGmap · World Manager</h1>
-      <p class="rpgmap-boot-status">先选择 World。World 绑定 Ruleset；进入后由 Active Scene 决定要加载的 MapPackage。</p>
       <div class="world-manager-list">${worldCards}</div>
       <form class="world-create-form" data-world-create-form>
         <label class="wide">World 名称<input name="name" maxlength="120" value="新 World" required></label>

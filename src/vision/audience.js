@@ -1,10 +1,18 @@
 import { mergeActorDelta } from '../token/actor.js';
 import { normalizeFogState } from './fog.js';
 import { normalizeActorPublicProfile } from '../actor/public-profile.js';
+import { canPlaceActorTemplate } from '../permissions/model.js';
+import { deriveSceneState } from '../engine/state.js';
+import {
+  deriveVisionOccluders,
+  deriveSceneLightSources,
+  perceptionLevelAtPoint,
+  resolveLineOfSightEnabled,
+  sphereGroundRadiusMeters,
+} from '../spatial/kernel.js';
+import { journalVisibleToAudience } from '../journal/model.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 // Audience projection is executed once per connected session for every
 // authoritative commit. Cloning the complete World here made a one-Token
@@ -145,7 +153,7 @@ function currentVision(world, context, actors) {
   if (!token || !actor || token.placement !== 'map' || !tokenControlled(token, actor, context)) return null;
   const resolved = token.actorLink === false ? mergeActorDelta(actor, token.actorDelta) : actor;
   const description = context.ruleset?.vision?.describe?.(resolved, {
-    token, user: context.user, scene, lighting: scene?.settings?.lighting || 'normal',
+    token, user: context.user, scene, lighting: 'normal',
   }) || {};
   const legacyOverride = token.vision?.rangeOverrideMeters;
   const preciseOverride = token.vision?.preciseRangeOverrideMeters ?? legacyOverride;
@@ -163,19 +171,28 @@ function currentVision(world, context, actors) {
   if (token.vision?.enabled === false || vagueRangeMeters <= 0) return null;
   return {
     tokenId: String(token.id), x: Number(token.x), y: Number(token.y),
+    elevationMeters: Number(token.elevationMeters) || 0,
     rangeMeters: effectivePreciseRangeMeters,
     preciseRangeMeters: effectivePreciseRangeMeters,
     vagueRangeMeters: Math.max(effectivePreciseRangeMeters, vagueRangeMeters),
-    senses: clone(description.senses || {}), lighting: description.lighting || 'normal',
+    preciseGroundRangeMeters: sphereGroundRadiusMeters(effectivePreciseRangeMeters, token.elevationMeters) ?? 0,
+    vagueGroundRangeMeters: sphereGroundRadiusMeters(
+      Math.max(effectivePreciseRangeMeters, vagueRangeMeters), token.elevationMeters,
+    ) ?? 0,
+    lineOfSightEnabled: resolveLineOfSightEnabled(scene, context.lineOfSightOverride),
+    senses: clone(description.senses || {}),
+    lighting: scene?.settings?.lighting || 'normal',
   };
 }
 
-function detectionLevel(token, vision, metersPerUnit) {
+function detectionLevel(token, vision, metersPerUnit, {
+  lineOfSightEnabled = false, occluders = [], lights = [], ambient = 'normal',
+} = {}) {
   if (!vision || token?.placement !== 'map') return 'none';
-  const distance = Math.hypot(Number(token.x) - vision.x, Number(token.y) - vision.y) * metersPerUnit;
-  if (distance <= vision.preciseRangeMeters) return 'precise';
-  if (distance <= vision.vagueRangeMeters) return 'vague';
-  return 'none';
+  const target = { x: Number(token.x), y: Number(token.y), elevationMeters: Number(token.elevationMeters) || 0 };
+  return perceptionLevelAtPoint({
+    vision, target, ambient, lights, occluders, metersPerUnit, lineOfSightEnabled,
+  });
 }
 
 function restrictedActor(actor) {
@@ -216,8 +233,7 @@ function publicStatusesForToken(token, actor, definitions) {
 
 function actorPlacementGranted(actor, context) {
   const grants = context.user?.placementGrants || {};
-  return (Array.isArray(grants.actorIds) && grants.actorIds.map(String).includes(String(actor.id)))
-    || (Array.isArray(grants.actorTypes) && grants.actorTypes.map(String).includes(String(actor.type)));
+  return canPlaceActorTemplate(actor, grants);
 }
 
 function restrictedToken(token, {
@@ -245,7 +261,17 @@ function restrictedToken(token, {
     color: vague ? '#7b8587' : token.color == null ? null : String(token.color),
     diameterMeters: Number(token.diameterMeters) || 1,
     rotation: Number(token.rotation) || 0,
-    elevationFt: Number(token.elevationFt) || 0,
+    elevationMeters: Number(token.elevationMeters) || 0,
+    light: vague || token.light?.enabled !== true ? {
+      enabled: false, rangeMeters: 0, intensity: 0, color: '#fff3c4', elevationOffsetMeters: 0, occlusion: 'scene',
+    } : {
+      enabled: true,
+      rangeMeters: Math.max(0, Number(token.light.rangeMeters) || 0),
+      intensity: Math.max(0, Math.min(4, Number(token.light.intensity) || 0)),
+      color: /^#[0-9a-f]{6}$/i.test(String(token.light.color || '')) ? String(token.light.color) : '#fff3c4',
+      elevationOffsetMeters: Math.max(0, Number(token.light.elevationOffsetMeters) || 0),
+      occlusion: token.light.occlusion === 'none' ? 'none' : 'scene',
+    },
     locked: token.locked === true,
     showName: vague ? false : token.showName !== false,
     effects: [],
@@ -335,10 +361,22 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     } else if (state.preferences) delete state.preferences.audienceVision;
     return state;
   }
+  delete world.templateLibrary;
   const parties = viewerParties(world, context);
+  world.journals = (world.journals || [])
+    .filter(entry => journalVisibleToAudience(entry, {
+      role: context.role, userId: context.userId, partyIds: [...parties],
+    }))
+    .map(entry => structuredClone(entry));
   const definitions = new Map((world.statusDefinitions || []).map(item => [String(item?.id ?? ''), item]));
   const vision = currentVision(world, context, actors);
   const metersPerUnit = Math.max(0.000001, Number(context.mapMetrics?.metersPerUnit) || 1);
+  const currentScene = activeScene(world);
+  const lineOfSightEnabled = resolveLineOfSightEnabled(currentScene, context.lineOfSightOverride);
+  const occluders = lineOfSightEnabled && context.mapPackage
+    ? deriveVisionOccluders(context.mapPackage, currentScene, deriveSceneState(currentScene?.sceneEvents || []))
+    : [];
+  const lights = deriveSceneLightSources(context.mapPackage, currentScene);
   const visibleTokenIds = new Set();
   const privateActorIds = new Set();
   const referencedActorIds = new Set();
@@ -357,7 +395,11 @@ export function projectStateForAudience(rawState, rawContext = {}) {
       if (tokenInvisible(rawToken, actor, definitions) && !authorized && !visibilityOverride) return [];
       const hostile = !authorized;
       const requiresDetection = hostile && !visibilityOverride;
-      const level = requiresDetection && isActive ? detectionLevel(rawToken, vision, metersPerUnit) : 'precise';
+      const level = requiresDetection && isActive
+        ? detectionLevel(rawToken, vision, metersPerUnit, {
+          lineOfSightEnabled, occluders, lights, ambient: currentScene?.settings?.lighting || 'normal',
+        })
+        : 'precise';
       if (requiresDetection && (!isActive || level === 'none')) return [];
       let token = clone(rawToken);
       if (authorized) {

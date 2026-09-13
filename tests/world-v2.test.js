@@ -22,7 +22,7 @@ function legacyState() {
     markers: [{ id: 'marker-1', name: 'M', x: 2, y: 3, color: '#3498db', visible: true }],
     characters: [{ id: 'token-1', name: '测试角色', color: '#3d9b63', avatarDataUrl: null, visible: true, location: { type: 'map', x: 10.5, y: 20.5 } }],
     attackAreas: [], sceneEvents: [],
-    preferences: { gridVisible: true, entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [{ id: 'token-1', actorId: 'actor-1', diameterMeters: 1, rotation: 0, elevationFt: 5, hidden: false, locked: false, showName: true, effects: [] }] } },
+    preferences: { gridVisible: true, entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [{ id: 'token-1', actorId: 'actor-1', diameterMeters: 1, rotation: 0, elevationMeters: 5, hidden: false, locked: false, showName: true, effects: [] }] } },
   };
 }
 function modernState() {
@@ -30,7 +30,7 @@ function modernState() {
     saveVersion: 2, mapId: mapPackage.id, mapVersion: mapPackage.version,
     markers: [{ id: 'marker-1', name: 'M', x: 2, y: 3, color: '#3498db', visible: true }],
     attackAreas: [], sceneEvents: [],
-    preferences: { gridVisible: true, entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [{ id: 'token-1', actorId: 'actor-1', placement: 'map', x: 10.5, y: 20.5, diameterMeters: 1, rotation: 0, elevationFt: 5, hidden: false, locked: false, showName: true, effects: [] }] } },
+    preferences: { gridVisible: true, entitySystem: { schemaVersion: 3, statusDefinitions: [], actors: [actor()], tokens: [{ id: 'token-1', actorId: 'actor-1', placement: 'map', x: 10.5, y: 20.5, diameterMeters: 1, rotation: 0, elevationMeters: 5, hidden: false, locked: false, showName: true, effects: [] }] } },
   };
 }
 
@@ -58,7 +58,7 @@ test('World V2 projects canonical Scene Tokens into Entity reducer state without
   assert.equal(projected.preferences.entitySystem.tokens[0].x, 44.5);
   assert.equal(projected.preferences.entitySystem.tokens[0].actorId, 'actor-1');
   assert.equal(projected.preferences.entitySystem.tokens[0].characterId, undefined);
-  assert.equal(projected.preferences[WORLD_STATE_KEY].schemaVersion, 3);
+  assert.equal(projected.preferences[WORLD_STATE_KEY].schemaVersion, 4);
 });
 
 test('runtime projection synchronization is read-only and preserves canonical World data', () => {

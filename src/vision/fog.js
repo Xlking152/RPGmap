@@ -1,3 +1,5 @@
+import { inspectLineOfSight } from '../spatial/kernel.js';
+
 export const FOG_SCHEMA_VERSION = 1;
 export const FOG_CELL_SIZE_METERS = 5;
 
@@ -7,9 +9,7 @@ const MAX_ROW_SPANS = 4096;
 // Ruleset-facing sight-radius ceiling.
 const MAX_UNBOUNDED_FOG_RADIUS_METERS = 50000;
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -170,10 +170,10 @@ function circleCoversMap(circle, grid) {
   return radiusUnits >= farthestMapCornerUnits(circle, grid);
 }
 
-function rasterCircle(rows, circle, mode, map = {}) {
+function rasterCircle(rows, circle, mode, map = {}, predicate = null) {
   const grid = mapGrid(map);
   if (grid.bounded && (grid.maxRow < 0 || grid.maxColumn < 0)) return;
-  if (circleCoversMap(circle, grid)) {
+  if (typeof predicate !== 'function' && circleCoversMap(circle, grid)) {
     applyFullMap(rows, mode, grid);
     return;
   }
@@ -191,8 +191,26 @@ function rasterCircle(rows, circle, mode, map = {}) {
     const start = Math.max(0, Math.floor((cx - dx) / grid.cellUnits));
     const end = Math.min(grid.maxColumn, Math.floor((cx + dx) / grid.cellUnits));
     if (end < start) continue;
-    if (mode === 'remove') removeSpan(rows, row, start, end);
-    else addSpan(rows, row, start, end);
+    if (typeof predicate !== 'function') {
+      if (mode === 'remove') removeSpan(rows, row, start, end);
+      else addSpan(rows, row, start, end);
+      continue;
+    }
+    let runStart = null;
+    for (let column = start; column <= end; column += 1) {
+      const visible = predicate({
+        x: (column + 0.5) * grid.cellUnits,
+        y,
+        elevationMeters: 0,
+      });
+      if (visible && runStart === null) runStart = column;
+      if ((!visible || column === end) && runStart !== null) {
+        const runEnd = visible && column === end ? column : column - 1;
+        if (mode === 'remove') removeSpan(rows, row, runStart, runEnd);
+        else addSpan(rows, row, runStart, runEnd);
+        runStart = null;
+      }
+    }
   }
 }
 
@@ -200,6 +218,31 @@ export function exploreFogCircle(rawFog, partyId, circle, map = {}) {
   const fog = normalizeFogState(rawFog, map);
   rasterCircle(partyRows(fog, partyId), circle, 'add', map);
   return fog;
+}
+
+export function exploreFogVisibleCircle(rawFog, partyId, circle, map = {}, {
+  sourceElevationMeters = 0,
+  occluders = [],
+} = {}) {
+  const fog = normalizeFogState(rawFog, map);
+  const source = { x: finite(circle?.x), y: finite(circle?.y), elevationMeters: finite(sourceElevationMeters) };
+  rasterCircle(partyRows(fog, partyId), circle, 'add', map, target => inspectLineOfSight({
+    from: source, to: target, occluders, metersPerUnit: mapScale(map),
+  }).clear);
+  return fog;
+}
+
+export function visibleFogRowsForCircle(circle, map = {}, {
+  sourceElevationMeters = 0,
+  occluders = [],
+  predicate = null,
+} = {}) {
+  const rows = {};
+  const source = { x: finite(circle?.x), y: finite(circle?.y), elevationMeters: finite(sourceElevationMeters) };
+  rasterCircle(rows, circle, 'add', map, target => inspectLineOfSight({
+    from: source, to: target, occluders, metersPerUnit: mapScale(map),
+  }).clear && (typeof predicate !== 'function' || predicate(target)));
+  return rows;
 }
 
 export function exploreFogSweep(rawFog, partyId, from, to, radiusMeters, map = {}) {
@@ -229,6 +272,29 @@ export function exploreFogSweep(rawFog, partyId, from, to, radiusMeters, map = {
       y: finite(from?.y) + (finite(to?.y) - finite(from?.y)) * ratio,
       radiusMeters,
     }, 'add', map);
+  }
+  return fog;
+}
+
+export function exploreFogVisibleSweep(rawFog, partyId, from, to, radiusMeters, map = {}, {
+  occluders = [],
+} = {}) {
+  let fog = normalizeFogState(rawFog, map);
+  const grid = mapGrid(map);
+  const distanceMeters = Math.hypot(finite(to?.x) - finite(from?.x), finite(to?.y) - finite(from?.y)) * grid.metersPerUnit;
+  const steps = Math.max(1, Math.ceil(distanceMeters / (FOG_CELL_SIZE_METERS / 2)));
+  for (let index = 0; index <= steps; index += 1) {
+    const ratio = index / steps;
+    const source = {
+      x: finite(from?.x) + (finite(to?.x) - finite(from?.x)) * ratio,
+      y: finite(from?.y) + (finite(to?.y) - finite(from?.y)) * ratio,
+      elevationMeters: finite(from?.elevationMeters)
+        + (finite(to?.elevationMeters) - finite(from?.elevationMeters)) * ratio,
+    };
+    fog = exploreFogVisibleCircle(fog, partyId, { ...source, radiusMeters }, map, {
+      sourceElevationMeters: source.elevationMeters,
+      occluders,
+    });
   }
   return fog;
 }

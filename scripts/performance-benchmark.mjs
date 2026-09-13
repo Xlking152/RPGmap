@@ -32,7 +32,7 @@ function token(index) {
     featureId: null,
     diameterMeters: 1,
     rotation: 0,
-    elevationFt: 0,
+    elevationMeters: 0,
     hidden: false,
     locked: false,
     showName: true,
@@ -51,7 +51,7 @@ function scene(id, tokens, offset) {
     sceneEvents: [],
     featureStates: Object.fromEntries(Array.from({ length: FEATURE_STATE_COUNT / 2 }, (_, index) => [
       `feature-${offset + index}`,
-      { open: index % 2 === 0, custom: { blockingHeightFt: index % 40, extension: { index } } },
+      { open: index % 2 === 0, custom: { blockingHeightMeters: index % 40, extension: { index } } },
     ])),
     settings: { gridVisible: true },
   };
@@ -76,7 +76,7 @@ function fixture() {
         schemaVersion: 2,
         id: 'benchmark-world',
         name: 'Benchmark World',
-        ruleset: { id: 'infinite-horror', version: '1.0.0' },
+        ruleset: { id: 'infinite-horror', version: '1.1.0' },
         activeSceneId: 'scene-a',
         actors,
         statusDefinitions: [],

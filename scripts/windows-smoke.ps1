@@ -13,17 +13,6 @@ if (-not (Test-Path -LiteralPath $batch -PathType Leaf)) {
   throw "Packaged launcher is missing: $batch"
 }
 
-function Clear-RpgMapSmokeState {
-  Remove-Item -LiteralPath (Join-Path $rootPath 'map\world.json'), (Join-Path $rootPath 'map\world.operations.ndjson'), (Join-Path $rootPath 'map\users.json') -Force -ErrorAction SilentlyContinue
-  foreach ($relative in @('map\backups', 'map\uploads')) {
-    $directory = Join-Path $rootPath $relative
-    if (-not (Test-Path -LiteralPath $directory -PathType Container)) { continue }
-    Get-ChildItem -LiteralPath $directory -File -ErrorAction SilentlyContinue | ForEach-Object {
-      Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
-    }
-  }
-}
-
 function Invoke-RpgMapBrowserSmoke {
   param(
     [Parameter(Mandatory = $true)]
@@ -84,8 +73,6 @@ function Invoke-RpgMapSheetFinalBrowserSmoke {
   throw "Packaged $Browser Character/NPC final smoke failed after 2 attempts."
 }
 
-Clear-RpgMapSmokeState
-
 # Reserve an ephemeral loopback port instead of assuming 30000 is free on the
 # hosted Windows image. The listener is released immediately before launch.
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -101,6 +88,18 @@ $previousSmokeBrowser = $env:RPGMAP_SMOKE_BROWSER
 $env:RPGMAP_SMOKE_BROWSER = $Browser
 
 $logRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+$logRoot = [System.IO.Path]::GetFullPath($logRoot).TrimEnd('\', '/')
+$smokeRoot = [System.IO.Path]::GetFullPath((Join-Path $logRoot "rpgmap-smoke-$([Guid]::NewGuid().ToString('N')).package"))
+if (-not $smokeRoot.StartsWith("$logRoot\", [System.StringComparison]::OrdinalIgnoreCase) -or (Test-Path -LiteralPath $smokeRoot)) {
+  throw 'Smoke package directory must be new and inside the temporary root.'
+}
+New-Item -ItemType Directory -Path $smokeRoot | Out-Null
+# The launcher intentionally pins data to its own map directory. Exercise that
+# production behavior using a package copy, never the caller's actual saves.
+Get-ChildItem -LiteralPath $rootPath -Force | Where-Object { $_.Name -ne 'map' } | ForEach-Object {
+  Copy-Item -LiteralPath $_.FullName -Destination $smokeRoot -Recurse -Force
+}
+$rootPath = $smokeRoot
 $stdout = Join-Path $logRoot "rpgmap-smoke-$PID.stdout.log"
 $stderr = Join-Path $logRoot "rpgmap-smoke-$PID.stderr.log"
 $serverPidFile = Join-Path $logRoot "rpgmap-smoke-$PID.server.pid"
@@ -198,5 +197,9 @@ try {
   }
   Remove-Item -LiteralPath $stdout, $stderr, $serverPidFile -Force -ErrorAction SilentlyContinue
   $env:RPGMAP_SMOKE_BROWSER = $previousSmokeBrowser
-  Clear-RpgMapSmokeState
+  $resolvedSmokeRoot = (Resolve-Path -LiteralPath $smokeRoot).Path
+  if ($resolvedSmokeRoot -ne $smokeRoot -or -not $resolvedSmokeRoot.StartsWith("$logRoot\", [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Smoke cleanup refused a changed data path.'
+  }
+  Remove-Item -LiteralPath $resolvedSmokeRoot -Recurse -Force
 }

@@ -38,7 +38,7 @@ function state() {
     schemaVersion: 2,
     id: 'world-a',
     name: 'World A',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     activeSceneId: 'scene-a',
     actors: [],
     statusDefinitions: [],
@@ -66,14 +66,14 @@ test('scene.featureState.patch applies recursive JSON Merge Patch without copyin
   const initial = state();
   initial.preferences.worldV2.scenes[0].featureStates.gate = {
     open: false,
-    custom: { blockingHeightFt: 20, extension: { channel: 1, retained: true } },
+    custom: { blockingHeightMeters: 20, extension: { channel: 1, retained: true } },
   };
   const applied = applyWorldOperations(initial, [{
     type: 'scene.featureState.patch',
     payload: {
       sceneId: 'scene-a',
       featureId: 'gate',
-      patch: { open: true, custom: { blockingHeightFt: null, extension: { channel: 2 } } },
+      patch: { open: true, custom: { blockingHeightMeters: null, extension: { channel: 2 } } },
     },
   }]).state;
   assert.deepEqual(applied.preferences.worldV2.scenes[0].featureStates.gate, {

@@ -7,6 +7,7 @@ import {
   undoLastSceneEvent,
 } from './state.js';
 import { createWorldStatePersistence } from '../app/world-storage.js';
+import { persistPreparedWorldContent, prepareWorldContentState } from '../app/world-upgrade.js';
 import {
   exportRuntimeState,
   prepareRuntimeState,
@@ -14,13 +15,11 @@ import {
 } from './runtime-state.js';
 import { createMapPresentation } from '../render/map-presentation.js';
 import { createSceneRenderer } from '../render/scene-renderer.js';
-import { applyWorldOperationPatch } from '../world/operations.js';
+import { applyDocumentChanges, documentChangeSet } from '../documents/changes.js';
 
 const MAX_SAVE_FILE_BYTES = 5 * 1024 * 1024;
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = structuredClone;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -107,6 +106,13 @@ export function createRpgMapRuntime({
   let selectedFeatureId = null;
   let destroyed = false;
   let gridFrame = null;
+  let importPending = false;
+  let recoveryBlocked = false;
+
+  function assertWritable() {
+    if (recoveryBlocked) throw Object.assign(new Error('storage_recovery_required'), { code: 'storage_recovery_required' });
+    if (importPending) throw Object.assign(new Error('world_import_busy'), { code: 'world_import_busy' });
+  }
 
   const persistence = createWorldStatePersistence({
     worldId,
@@ -268,6 +274,7 @@ export function createRpgMapRuntime({
   }
 
   function commitState(nextState, { source = 'local', render = true } = {}) {
+    assertWritable();
     state = normalizeState(nextState);
     if (render) renderScene();
     persistence.schedule();
@@ -282,19 +289,22 @@ export function createRpgMapRuntime({
     const tokenChanges = Array.isArray(changeSet.tokens) ? changeSet.tokens : [];
     const changedTokenIds = [];
     for (const entry of tokenChanges) {
+      if (entry.sceneId && String(entry.sceneId) !== String(state.preferences?.worldV2?.activeSceneId)) continue;
       for (const tokenId of entry?.removeIds || []) {
-        emit('token:delete', { id: String(tokenId), tokenId: String(tokenId), canonical: true });
+        emit('token:delete', { id: String(tokenId), tokenId: String(tokenId), source, canonical: true });
       }
       for (const tokenId of entry?.upsertIds || []) {
         const id = String(tokenId);
-        changedTokenIds.push(id);
-        emit('token:property-change', { id, tokenId: id, canonical: true });
+        const fields = entry.fields?.[id];
+        const positionOnly = fields?.length && fields.every(field => ['x', 'y', 'elevationMeters', 'elevationMeters'].includes(field));
+        if (!positionOnly) changedTokenIds.push(id);
+        emit(positionOnly ? 'token:move' : 'token:property-change', { id, tokenId: id, fields, sceneId: entry.sceneId, source, canonical: true });
       }
     }
     if (actorIds.length) emit('actor:change', { actorIds, canonical: true });
     if (actorIds.length || changedTokenIds.length) {
       emit('health:change', { actorIds, tokenIds: changedTokenIds, canonical: true });
-      emit('status:change', { actorIds, tokenIds: changedTokenIds, canonical: true });
+      emit('status:change', { actorIds, tokenIds: changedTokenIds, source, canonical: true });
     }
     if (changeSet.statusDefinitionsChanged) emit('status:definitions-change', { canonical: true });
     if (changeSet.combatChanged) emit('combat:change', { canonical: true });
@@ -307,9 +317,17 @@ export function createRpgMapRuntime({
     for (const entry of changeSet.fog || []) {
       emit('fog:change', { sceneId: entry.sceneId, dirtyBounds: clone(entry.dirtyBounds || null), canonical: true });
     }
-    if (changeSet.scenes?.activeSceneChanged || changeSet.scenes?.upsertIds?.length || changeSet.scenes?.removeIds?.length) {
+    for (const entry of changeSet.sceneContent || []) {
+      if (String(entry.sceneId) !== String(state.preferences?.worldV2?.activeSceneId)) continue;
+      if (entry.types.includes('SceneEvent')) renderScene();
+      emit('scene:content-change', { ...entry, canonical: true });
+    }
+    if (changeSet.scenes?.activeSceneChanged) {
       renderScene();
-      emit('scene:activate', { sceneId: state.preferences?.worldV2?.activeSceneId || null, canonical: true });
+      emit('scene:activate', { sceneId: state.preferences?.worldV2?.activeSceneId || null, source, canonical: true });
+    } else if (changeSet.scenes?.upsertIds?.length || changeSet.scenes?.removeIds?.length) {
+      if (changeSet.scenes.upsertIds?.includes(String(state.preferences?.worldV2?.activeSceneId))) renderScene();
+      emit('scene:update', { sceneIds: [...(changeSet.scenes.upsertIds || []), ...(changeSet.scenes.removeIds || [])], source, canonical: true });
     }
     const detail = { source, revision, changeSet: clone(changeSet) };
     if (!String(source || '').startsWith('document.')) detail.state = clone(state);
@@ -320,14 +338,18 @@ export function createRpgMapRuntime({
   function applyAuthoritativePatchState(nextState, {
     source = 'world.operation', changeSet = {}, revision = null,
   } = {}) {
+    assertWritable();
     state = normalizeState(nextState);
     return emitAuthoritativeChanges({ source, changeSet, revision });
   }
 
-  function applyAuthoritativeDocumentPatch(patch, {
-    source = 'document.batch', changeSet = {}, revision = null,
+  function applyAuthoritativeDocumentChanges(changes, {
+    source = 'document.batch', revision = null, updatedAt = null, operationId = null,
   } = {}) {
-    state = applyWorldOperationPatch(state, patch, { mutate: true });
+    assertWritable();
+    state = applyDocumentChanges(state, changes, { updatedAt });
+    const changeSet = documentChangeSet(changes);
+    api.documents?.applyCommitted?.(changes, { revision, operationId });
     return emitAuthoritativeChanges({ source, changeSet, revision });
   }
 
@@ -347,14 +369,44 @@ export function createRpgMapRuntime({
     return { offline: true };
   }
 
-  async function importState(raw, { source = 'file-import', persist = true } = {}) {
-    const prepared = prepareRuntimeState(raw, { mapPackage, ruleset });
+  async function importState(raw, options = {}) {
+    assertWritable();
+    const local = options !== false && options.persist !== false && !api.multiplayer?.getStatus?.().connected;
+    if (local) importPending = true;
+    try { return await importPreparedState(raw, options); }
+    catch (error) {
+      if (error.recoveryRequired) {
+        recoveryBlocked = true;
+        persistence.cancel();
+        showToast('存档回退未完成，已暂停全部写入；请保留备份并重新载入恢复', 'error');
+      }
+      throw error;
+    }
+    finally { if (local) importPending = false; }
+  }
+
+  async function importPreparedState(raw, options) {
+    const { source = 'file-import', persist = true, records = [] } = options === false ? { persist: false, source: 'server' } : options;
+    const migrateContent = persist && api.content;
+    const prepared = migrateContent ? await prepareWorldContentState(raw, { mapPackage, ruleset }) : prepareRuntimeState(raw, { mapPackage, ruleset });
     const normalized = normalizeState(prepared.state);
-    if (persist) persistence.replace(normalized);
+    if (persist && api.multiplayer?.getStatus?.().connected) {
+      const { persistArchiveContent } = await import('../content/archive.js');
+      const content = [...records, ...(prepared.records || []).map(record => ({ reference: `asset:${record.id}`, blob: new Blob([record.bytes], { type: record.type }) }))];
+      await persistArchiveContent(content, api.content);
+      await api.multiplayer.performWorldOperation(normalized, { reason: `file-import:${source}` });
+      return true;
+    }
+    if (migrateContent) {
+      if (!persistence.persistNow()) throw new Error('world_persistence_blocked');
+      const beforeRaw = storageAdapter.get(persistence.storageKey);
+      await persistPreparedWorldContent({ state: normalized, records: [...records, ...(prepared.records || [])], inputRaw: raw, beforeRaw,
+        worldId, mapPackage, ruleset, storageAdapter, indexedDB: documentNode.defaultView.indexedDB });
+    } else if (persist) persistence.replace(normalized);
     state = normalized;
     selectedFeatureId = null;
     renderScene();
-    emit('state:import', { source, state: clone(state), migrated: prepared.migrated === true });
+    emit('state:import', { source, state: clone(state), migrated: prepared.migrated === true, persist });
     if (prepared.migrated) {
       emit('state:migrate', {
         fromVersion: prepared.fromVersion,
@@ -370,13 +422,15 @@ export function createRpgMapRuntime({
     return exportRuntimeState(state, { mapPackage, ruleset });
   }
 
-  function downloadState() {
+  async function downloadState() {
     const payload = exportState();
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const blob = api.content
+      ? await (await import('../content/archive.js')).exportContentArchive(payload, api.content)
+      : new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = documentNode.createElement('a');
     link.href = url;
-    link.download = `${worldId || mapPackage.id}-world-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `${worldId || mapPackage.id}-world-${new Date().toISOString().slice(0, 10)}.${api.content ? 'zip' : 'json'}`;
     documentNode.body.append(link);
     link.click();
     link.remove();
@@ -387,6 +441,15 @@ export function createRpgMapRuntime({
 
   async function importFile(file) {
     if (!file) return false;
+    if (/\.zip$/i.test(file.name) || file.type === 'application/zip') {
+      const { MAX_ARCHIVE_BYTES, readContentArchive } = await import('../content/archive.js');
+      if (!api.content || file.size > MAX_ARCHIVE_BYTES) throw new Error('archive_size_exceeded');
+      const archive = readContentArchive(new Uint8Array(await file.arrayBuffer()));
+      // Validate before writing any dependencies; publish the World only after
+      // every immutable content record has committed successfully.
+      prepareRuntimeState(archive.state, { mapPackage, ruleset });
+      return importState(archive.state, { source: 'file-import', persist: true, records: archive.records });
+    }
     if (file.size > MAX_SAVE_FILE_BYTES) throw new Error('存档文件超过 5 MB 上限');
     const text = await file.text();
     return importState(JSON.parse(text), { source: 'file-import', persist: true });
@@ -445,6 +508,7 @@ export function createRpgMapRuntime({
   }
 
   function persistNow() {
+    if (importPending || recoveryBlocked) return false;
     return persistence.persistNow();
   }
 
@@ -468,7 +532,7 @@ export function createRpgMapRuntime({
     getSelectedFeatureId: () => selectedFeatureId,
     commitState,
     applyAuthoritativePatchState,
-    applyAuthoritativeDocumentPatch,
+    applyAuthoritativeDocumentChanges,
     commitAuthoritativeState,
     persistNow,
     exportState,

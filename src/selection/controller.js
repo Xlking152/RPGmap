@@ -93,8 +93,9 @@ export function createSelectionController(state, notify) {
         highlightLayer.clearLayers();
         const selected = new Set(state.snapshot().ids);
         const primaryId = state.primaryId;
-        for (const token of tokens()) {
-          if (!selected.has(String(token.id)) || token?.placement !== 'map' || token.hidden === true) continue;
+        for (const tokenId of selected) {
+          const token = api.tokens.get?.(tokenId);
+          if (token?.placement !== 'map' || token.hidden === true) continue;
           const x = Number(token.x);
           const y = Number(token.y);
           if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
@@ -241,7 +242,10 @@ export function createSelectionController(state, notify) {
         state.replace([id], id);
         publish('single');
       });
-      api.on('token:move', renderSelection);
+      api.on('token:move', event => {
+        const tokenId = String(event.detail?.tokenId || event.detail?.id || '');
+        if (tokenId && state.snapshot().ids.includes(tokenId)) renderSelection();
+      });
       api.on('token:delete', event => {
         const id = event.detail?.tokenId || event.detail?.id;
         if (!id) return;

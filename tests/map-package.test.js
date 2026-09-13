@@ -69,8 +69,8 @@ test('Lanzhou map package keeps the 6000 x 5000 contract and the layered SVG str
   assert.deepEqual(ROAD_RULES.widthsMeters, { major: 12, secondary: 7, alley: 3, country: 8 });
   assert.deepEqual(ROAD_RULES.setbacksMeters, { building: 3, streetShop: 1.5 });
   assert.equal(lanzhouMapPackage.roadRules, ROAD_RULES);
-  assert.equal(lanzhouMapPackage.version, '1.0.6');
-  assert.deepEqual([...lanzhouMapPackage.compatibleMapVersions], ['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4', '1.0.5']);
+  assert.equal(lanzhouMapPackage.version, '1.1.0');
+  assert.deepEqual([...lanzhouMapPackage.compatibleMapVersions], ['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4', '1.0.5', '1.0.6']);
   assert.equal(lanzhouMapPackage.navigation.roads.length, 10);
   assert.equal(lanzhouMapPackage.navigation.gateways.length, 6);
   assert.deepEqual(lanzhouMapPackage.floodRules, {

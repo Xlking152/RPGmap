@@ -28,8 +28,8 @@ function api({ valid = true } = {}) {
         tokens.set(token.id, token);
         return token;
       },
-      async move(tokenId, point) {
-        calls.push({ type: 'move', tokenId, point });
+      async reposition(tokenId, point) {
+        calls.push({ type: 'reposition', tokenId, point });
         const current = tokens.get(String(tokenId));
         const token = { ...current, placement: 'map', featureId: null, ...point };
         tokens.set(String(tokenId), token);
@@ -68,7 +68,7 @@ test('Actor placement writes through api.tokens.create with the existing Actor i
         actorDelta: null,
         diameterMeters: 1,
         rotation: 0,
-        elevationFt: 0,
+        elevationMeters: 0,
         visibility: null,
         locked: false,
         showName: true,
@@ -94,7 +94,7 @@ test('Actor placement forwards independent-instance linkage and instance name', 
   assert.equal(created.options.name, '怪物1');
 });
 
-test('Token repositioning validates while excluding itself and writes only through api.tokens.move', async () => {
+test('Token repositioning validates while excluding itself and uses the distinct reposition intent', async () => {
   const runtime = api();
   const result = await relocateActorTokenAtPoint(runtime, 'token-existing', { x: 21.2, y: 31.9 });
   assert.equal(result.ok, true);
@@ -104,14 +104,14 @@ test('Token repositioning validates while excluding itself and writes only throu
   });
   assert.deepEqual(runtime.calls, [
     { type: 'inspect', characterId: 'token-existing', point: { x: 21.5, y: 31.5 } },
-    { type: 'move', tokenId: 'token-existing', point: { x: 21.5, y: 31.5 } },
+    { type: 'reposition', tokenId: 'token-existing', point: { x: 21.5, y: 31.5 } },
   ]);
 });
 
-test('blocked Token repositioning never calls api.tokens.move', async () => {
+test('blocked Token repositioning never submits the reposition intent', async () => {
   const runtime = api({ valid: false });
   const result = await relocateActorTokenAtPoint(runtime, 'token-existing', { x: 21.2, y: 31.9 });
   assert.equal(result.ok, false);
   assert.equal(result.token, null);
-  assert.equal(runtime.calls.filter(call => call.type === 'move').length, 0);
+  assert.equal(runtime.calls.filter(call => call.type === 'reposition').length, 0);
 });

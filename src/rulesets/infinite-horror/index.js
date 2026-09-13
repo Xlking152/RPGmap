@@ -12,7 +12,7 @@ export const infiniteHorrorRuleset = prepareRuleset({
   apiVersion: 1,
   id: 'infinite-horror',
   title: '无限跑团',
-  version: '1.0.0',
+  version: '1.1.0',
   actor: INFINITE_HORROR_ACTOR,
   health: INFINITE_HORROR_HEALTH,
   statuses: {
@@ -25,6 +25,27 @@ export const infiniteHorrorRuleset = prepareRuleset({
       return INFINITE_HORROR_ACTOR.derive(actor, context)?.detection
         || Object.freeze({ enabled: false, rangeMeters: 0, preciseRangeMeters: 0, vagueRangeMeters: 0, senses: {} });
     },
+  },
+  movement: {
+    describe(actor, context = {}) {
+      const granted = {
+        ...(actor?.system?.runtime?.movementCapabilities || {}),
+        ...(context.token?.movement?.capabilities || {}),
+      };
+      return Object.freeze({
+        walk: granted.walk !== false,
+        swim: granted.swim !== false,
+        waterWalk: granted.waterWalk === true,
+        fly: granted.fly === true,
+        swimCostMultiplier: Number.isFinite(Number(granted.swimSpeedMeters)) ? 1 : 2,
+      });
+    },
+    calculateCost({ defaultCostMeters }) {
+      return defaultCostMeters;
+    },
+  },
+  calculations: {
+    explain: INFINITE_HORROR_ACTOR.explainCalculation,
   },
   importers: {
     xlsx: {

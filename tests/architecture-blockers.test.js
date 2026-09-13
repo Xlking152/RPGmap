@@ -15,7 +15,7 @@ function rawWorld() {
     schemaVersion: 2,
     id: 'world-test',
     name: 'World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     activeSceneId: 'scene-a',
     actors: [{ id: 'actor-a' }],
     statusDefinitions: [],
@@ -99,7 +99,7 @@ test('persisted World validation runs before normalization can repair invalid gr
 
 test('World normalization refuses to use a different or incompatible active Ruleset', () => {
   const world = rawWorld();
-  assert.equal(assertWorldRuleset(world, { id: 'infinite-horror', version: '1.0.0' }).id, 'infinite-horror');
+  assert.equal(assertWorldRuleset(world, { id: 'infinite-horror', version: '1.1.0' }).id, 'infinite-horror');
   assert.throws(
     () => assertWorldRuleset(world, { id: 'other', version: '1.0.0' }),
     error => error.code === 'world_ruleset_reload_required',

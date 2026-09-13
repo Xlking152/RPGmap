@@ -193,7 +193,11 @@ export function createFeatureOperations({
         const mutations = statusMutationsFor(feature, action, state, tokenId);
         if (typeof performOperations === 'function') {
           await performOperations([
-            { type: 'scene.featureState.patch', payload: { featureId: feature.id, patch: { open } } },
+            { type: 'scene.door.use', payload: {
+              featureId: feature.id,
+              tokenId,
+              action,
+            } },
             ...statusWorldOperations(mutations),
           ], { source: `feature:${action}` });
         } else {

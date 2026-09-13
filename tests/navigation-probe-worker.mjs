@@ -13,6 +13,6 @@ const map = workerData.map || {
 
 const navigation = createNavigationGrid(map, {}, null, {
   appState: { sceneEvents: [], preferences: { featureStates: {} } },
-  moverContext: { elevationFt: 0, diameterMeters: 1 },
+  moverContext: { elevationMeters: 0, diameterMeters: 1 },
 });
 parentPort.postMessage(inspectDirectNavigationPath(navigation, workerData.start, workerData.destination));

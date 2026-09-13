@@ -1,17 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { createActorFromRulesetImport } from '../src/actor/index.js';
+import { createActorFromRulesetImport, createDefaultActor } from '../src/actor/index.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 import { isFogCellExplored } from '../src/vision/fog.js';
 import { WORLD_OPERATION_SCHEMA_VERSION } from '../src/world/operations.js';
+import { applyDocumentChanges } from '../src/documents/changes.js';
 import { STATUS_SCHEMA_VERSION } from '../src/status/model.js';
 import { ACCESS_SCHEMA_VERSION } from '../src/permissions/model.js';
+import { createWorldWal } from '../deployment/local-server/world-wal.mjs';
+import { BUILT_IN_LANZHOU_MAP } from '../src/map-package/constants.js';
 
 const WEBSOCKET_WAIT_TIMEOUT_MS = 15_000;
 
@@ -114,7 +117,7 @@ async function startServer(extraEnv = {}, existingMapDir = null) {
   const serverPath = fileURLToPath(new URL('../deployment/local-server/server.mjs', import.meta.url));
   const child = spawn(process.execPath, [serverPath], {
     env: { ...process.env, NODE_ENV: 'test', RPGMAP_TEST_ALLOW_MISSING_ORIGIN: '1', RPGMAP_GM_SECRET: 'TEST-GM-SECRET', PORT: '0', RPGMAP_MAP_DIR: mapDir, RPGMAP_PUBLIC_DIR: mapDir, ...extraEnv },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   let stderr = '';
   child.stderr.setEncoding('utf8');
@@ -139,7 +142,11 @@ async function startServer(extraEnv = {}, existingMapDir = null) {
 async function stopServer(runtime, { removeMap = true } = {}) {
   if (runtime.child.exitCode === null && runtime.child.signalCode === null) {
     const exited = new Promise(resolve => runtime.child.once('exit', resolve));
-    runtime.child.kill('SIGTERM');
+    if (runtime.shutdownRequested !== true) {
+      runtime.shutdownRequested = true;
+      if (runtime.child.connected) runtime.child.send('rpgmap.shutdown', () => {});
+      else runtime.child.kill('SIGTERM');
+    }
     const stopped = await Promise.race([
       exited.then(() => true),
       new Promise(resolve => setTimeout(() => resolve(false), 5_000)),
@@ -154,6 +161,56 @@ async function stopServer(runtime, { removeMap = true } = {}) {
   }
   if (removeMap) await rm(runtime.mapDir, { recursive: true, force: true });
 }
+
+test('Local server graceful shutdown closes active sessions for immediate reconnect', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Shutdown GM', requestedRole: 'gm' });
+    const closed = new Promise(resolve => gm.ws.addEventListener('close', resolve, { once: true }));
+    const exited = new Promise(resolve => runtime.child.once('exit', resolve));
+    runtime.shutdownRequested = true;
+    runtime.child.send('rpgmap.shutdown', () => {});
+    const event = await Promise.race([
+      closed,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('graceful shutdown timeout')), 2000)),
+    ]);
+    assert.equal(event.code, 1012);
+    await Promise.race([
+      exited,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('server exit timeout')), 2000)),
+    ]);
+  } finally {
+    await stopServer(runtime);
+  }
+});
+
+test('Full World replacement refreshes the cached Access Actor catalog', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Replacement GM', requestedRole: 'gm' });
+    const initial = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    await initial;
+
+    const replacement = initialWorldV2();
+    replacement.preferences.worldV2.actors[0].name = 'Replacement Actor';
+    replacement.preferences.entitySystem.actors[0].name = 'Replacement Actor';
+    const replaced = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 2);
+    gm.ws.send(JSON.stringify({
+      type: 'world.push', operationId: 'replacement-catalog', baseRevision: 1,
+      state: replacement, reason: 'file-import:replacement-catalog',
+    }));
+    await replaced;
+
+    const catalogPromise = waitForMessage(gm.ws, message => message.type === 'access.snapshot');
+    gm.ws.send(JSON.stringify({ type: 'access.request' }));
+    const catalog = await catalogPromise;
+    assert.equal(catalog.actors.find(actor => actor.id === 'actor-a').name, 'Replacement Actor');
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
+  }
+});
 
 function initialWorld() {
   return {
@@ -193,7 +250,7 @@ function initialWorldV2() {
     actorDelta: null,
     diameterMeters: 1,
     rotation: 0,
-    elevationFt: 0,
+    elevationMeters: 0,
     hidden: false,
     locked: false,
     showName: true,
@@ -207,7 +264,7 @@ function initialWorldV2() {
     schemaVersion: 2,
     id: 'world-test',
     name: 'Test World',
-    ruleset: { id: 'infinite-horror', version: '1.0.0' },
+    ruleset: { id: 'infinite-horror', version: '1.1.0' },
     activeSceneId: 'scene-test',
     actors: structuredClone(actors),
     statusDefinitions: structuredClone(INFINITE_HORROR_STATUS_DEFINITIONS),
@@ -252,7 +309,7 @@ function accessToken({ id, actor, x, y, visibility = 'public' }) {
     id, actorId: actor.id, actorLink: actor.type === 'pc',
     actorDelta: actor.type === 'pc' ? null : infiniteHorrorRuleset.actor.instances.createDelta(actor),
     placement: 'map', x, y, featureId: null,
-    diameterMeters: 1, rotation: 0, elevationFt: 0,
+    diameterMeters: 1, rotation: 0, elevationMeters: 0,
     controllerUserIds: [], visibility: { mode: visibility, userIds: [] },
     vision: { enabled: true, rangeOverrideMeters: null, overrideUserIds: [] },
     locked: false, showName: true, effects: [],
@@ -296,6 +353,75 @@ function initialTokenVisionWorld() {
 
 function clone(value) { return structuredClone(value); }
 
+test('content HTTP credentials are bound to a live authenticated WebSocket session', async () => {
+  const runtime = await startServer();
+  const sockets = [];
+  try {
+    const gm = await openAndHello(runtime.url, { requestedRole: 'gm', name: 'GM' }); sockets.push(gm.ws);
+    assert.match(gm.welcome.contentToken, /^[a-f0-9]{64}$/);
+    assert.equal(gm.welcome.session.contentToken, undefined);
+    const pending = await openAndHello(runtime.url, { requestedRole: 'player', name: 'Pending' }); sockets.push(pending.ws);
+    assert.equal(pending.welcome.contentToken, null);
+    const request = (headers = {}) => fetch(`${runtime.httpUrl}/api/content`, { headers });
+    assert.equal((await request()).status, 401);
+    const headers = { Authorization: `Bearer ${gm.welcome.contentToken}` };
+    assert.equal((await request({ ...headers, Origin: 'http://hostile.example' })).status, 401);
+    assert.equal((await request(headers)).status, 200);
+    const closed = new Promise(resolve => gm.ws.addEventListener('close', resolve, { once: true }));
+    gm.ws.close(); await closed;
+    assert.equal((await request(headers)).status, 401);
+  } finally { sockets.forEach(socket => socket.close()); await stopServer(runtime); }
+});
+
+test('LAN migrates inline images before startup, retains original bytes and does not repeat the upgrade', async () => {
+  const mapDir = await mkdtemp(path.join(tmpdir(), 'rpgmap-inline-upgrade-'));
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOc8AAAAASUVORK5CYII=', 'base64');
+  const state = initialWorldV2();
+  state.preferences.worldV2.actors[0].img = `data:image/png;base64,${png.toString('base64')}`;
+  state.preferences.worldV2.actors[0].notes = 'retain original notes';
+  const original = JSON.stringify({ schemaVersion: 1, worldId: 'default', revision: 1, state });
+  await writeFile(path.join(mapDir, 'world.json'), original);
+  let runtime = await startServer({}, mapDir);
+  try {
+    const gm = await openAndHello(runtime.url, { requestedRole: 'gm', name: 'GM' });
+    const snapshot = await requestWorldSnapshot(gm.ws);
+    const actor = snapshot.state.preferences.worldV2.actors[0];
+    assert.match(actor.img, /^asset:[a-f0-9]{64}$/);
+    assert.equal(actor.notes, 'retain original notes');
+    const request = await fetch(`${runtime.httpUrl}/api/content/${actor.img.slice(6)}`, { headers: { Authorization: `Bearer ${gm.welcome.contentToken}` } });
+    assert.equal(request.status, 200);
+    assert.deepEqual(Buffer.from(await request.arrayBuffer()), png);
+    const backups = await readdir(path.join(mapDir, 'backups'));
+    const checkpoint = backups.find(name => name.startsWith('upgrade-'));
+    assert.equal(await readFile(path.join(mapDir, 'backups', checkpoint, 'before/world.json'), 'utf8'), original);
+    const once = await readFile(path.join(mapDir, 'world.json'), 'utf8');
+    gm.ws.close();
+    await stopServer(runtime, { removeMap: false });
+    runtime = await startServer({}, mapDir);
+    assert.equal(await readFile(path.join(mapDir, 'world.json'), 'utf8'), once);
+    assert.deepEqual(await readdir(path.join(mapDir, 'backups')), backups);
+  } finally { await stopServer(runtime); }
+});
+
+test('LAN rejects damaged inline import without advancing revision or publishing partial content', async () => {
+  const runtime = await startServer();
+  const gm = await openAndHello(runtime.url, { requestedRole: 'gm', name: 'GM' });
+  try {
+    const state = initialWorldV2();
+    state.preferences.worldV2.actors[0].img = 'data:image/png;base64,broken';
+    const denied = waitForMessage(gm.ws, value => value.operationId === 'broken-image');
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, operationId: 'broken-image', state, reason: 'file-import:image' }));
+    assert.equal((await denied).code, 'invalid_image_data_url');
+    assert.equal((await (await fetch(`${runtime.httpUrl}/api/health`)).json()).world.initialized, false);
+    assert.deepEqual(await readdir(path.join(runtime.mapDir, 'uploads')), []);
+    assert.deepEqual(await readdir(path.join(runtime.mapDir, 'backups')), []);
+    delete state.preferences.worldV2.actors[0].img;
+    const accepted = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, operationId: 'valid-image', state, reason: 'file-import:image' }));
+    await accepted;
+  } finally { gm.ws.close(); await stopServer(runtime); }
+});
+
 test('health exposes only World bootstrap metadata for empty and initialized LAN state', async () => {
   const runtime = await startServer();
   try {
@@ -319,12 +445,12 @@ test('health exposes only World bootstrap metadata for empty and initialized LAN
     assert.deepEqual(health.world, {
       initialized: true,
       kind: 'world-v2',
-      schemaVersion: 3,
+      schemaVersion: 4,
       worldId: 'world-test',
       name: 'Test World',
       activeSceneId: 'scene-test',
       mapPackage: { id: 'test', version: '1' },
-      ruleset: { id: 'infinite-horror', version: '1.0.0' },
+      ruleset: { id: 'infinite-horror', version: '1.1.0' },
     });
     assert.equal(Object.hasOwn(health.world, 'state'), false);
     gm.ws.close();
@@ -378,10 +504,59 @@ test('LAN startup migrates global Feature State once and backs up the original W
     assert.equal(Object.hasOwn(durable.state.preferences, 'featureStates'), false);
     assert.equal(durable.state.preferences.worldV2.scenes[0].featureStates.gate.custom.extension, 4);
     const backups = await readdir(path.join(mapDir, 'backups'));
-    assert.ok(backups.some(name => name.startsWith('world.backup.')));
+    const upgrade = backups.find(name => name.startsWith('upgrade-'));
+    assert.ok(upgrade);
+    const checkpoint = path.join(mapDir, 'backups', upgrade);
+    const original = JSON.parse(await readFile(path.join(checkpoint, 'before', 'world.json'), 'utf8'));
+    assert.deepEqual(original.state, state);
+    const manifest = JSON.parse(await readFile(path.join(checkpoint, 'manifest.json'), 'utf8'));
+    assert.deepEqual(manifest.before.map(record => record.path), ['world.json', 'users.json', 'world.operations.ndjson']);
+    assert.equal(await readFile(path.join(mapDir, 'world.operations.ndjson'), 'utf8'), '');
   } finally {
     await stopServer(runtime);
   }
+});
+
+test('LAN replays old WAL semantics before migration and checkpoints all original files without repeat conversion', async () => {
+  const mapDir = await mkdtemp(path.join(tmpdir(), 'rpgmap-wal-upgrade-'));
+  const state = initialWorldV2();
+  const snapshot = { schemaVersion: 1, worldId: 'default', revision: 1, updatedAt: null, state };
+  const original = JSON.stringify(snapshot);
+  await writeFile(path.join(mapDir, 'world.json'), original);
+  const users = '{"schemaVersion":3,"users":[],"extension":{"retain":true}}';
+  await writeFile(path.join(mapDir, 'users.json'), users);
+  await mkdir(path.join(mapDir, 'uploads', 'content'), { recursive: true });
+  await writeFile(path.join(mapDir, 'uploads', 'content', 'legacy.content'), 'retained dependency');
+  const walFile = path.join(mapDir, 'world.operations.ndjson');
+  const wal = createWorldWal({ filePath: walFile, applyPatch: state => state });
+  const target = { ...state.preferences.worldV2.scenes[0].tokens[0], x: 44, hidden: true, extension: { newest: true } };
+  await wal.append({ baseRevision: 1, revision: 2, operationId: 'legacy-durable-move', patch: {
+    schemaVersion: 3, world: { scenes: { tokens: [{ sceneId: 'scene-test', upsert: [target], remove: [] }] } },
+  }, results: [{ operationId: 'legacy-durable-move', revision: 2, results: [] }] });
+  await appendFile(walFile, '{"torn":');
+  const originalWal = await readFile(walFile);
+  let runtime = await startServer({}, mapDir);
+  try {
+    const durable = JSON.parse(await readFile(path.join(mapDir, 'world.json'), 'utf8'));
+    assert.equal(durable.revision, 2);
+    assert.equal(durable.state.preferences.worldV2.schemaVersion, 4);
+    const token = durable.state.preferences.worldV2.scenes[0].tokens[0];
+    assert.equal(token.x, 44);
+    assert.equal(token.visibility.mode, 'gm');
+    assert.equal(Object.hasOwn(token, 'hidden'), false);
+    assert.equal(token.extension.newest, true);
+    assert.equal(durable.recentStatusOperations[0].operationId, 'legacy-durable-move');
+    const backups = await readdir(path.join(mapDir, 'backups'));
+    const checkpoint = path.join(mapDir, 'backups', backups.find(name => name.startsWith('upgrade-')), 'before');
+    assert.equal(await readFile(path.join(checkpoint, 'world.json'), 'utf8'), original);
+    assert.equal(await readFile(path.join(checkpoint, 'users.json'), 'utf8'), users);
+    assert.deepEqual(await readFile(path.join(checkpoint, 'world.operations.ndjson')), originalWal);
+    assert.equal(await readFile(path.join(checkpoint, 'uploads', 'content', 'legacy.content'), 'utf8'), 'retained dependency');
+    await stopServer(runtime, { removeMap: false });
+    runtime = await startServer({}, mapDir);
+    assert.deepEqual(await readdir(path.join(mapDir, 'backups')), backups);
+    assert.deepEqual(JSON.parse(await readFile(path.join(mapDir, 'world.json'), 'utf8')), durable);
+  } finally { await stopServer(runtime); }
 });
 
 async function sendStatusAndWait(ws, message) {
@@ -422,6 +597,188 @@ async function requestWorldSnapshot(ws, reason = 'request') {
   ws.send(JSON.stringify({ type: 'world.snapshot.request' }));
   return snapshotPromise;
 }
+
+test('LAN validates closed gates and rolls back an entire group when one route hits a separate wall', async () => {
+  const runtime = await startServer();
+  let gm, player;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Navigation GM', requestedRole: 'gm' });
+    const state = initialWorldV2();
+    const scene = state.preferences.worldV2.scenes[0];
+    scene.mapPackage = { id: BUILT_IN_LANZHOU_MAP.id, version: BUILT_IN_LANZHOU_MAP.version, width: 6000, height: 5000 };
+    scene.tokens[0].x = 3364;
+    scene.tokens[1].x = 3420;
+    for (const token of scene.tokens) token.y = 1470;
+    const inactive = structuredClone(scene);
+    inactive.id = 'scene-inactive';
+    inactive.tokens[0].actorId = 'actor-b';
+    state.preferences.worldV2.scenes.push(inactive);
+    state.mapId = BUILT_IN_LANZHOU_MAP.id;
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' }));
+    await initialized;
+    const claimed = waitForMessage(gm.ws, message => message.type === 'access.claim');
+    gm.ws.send(JSON.stringify({
+      type: 'access.user.create', name: 'Navigation Player', defaultActorId: 'actor-a',
+      ownership: { 'actor-a': 'owner', 'actor-b': 'owner' },
+    }));
+    player = await openAndHello(runtime.url, { name: 'Navigation Player', requestedRole: 'player', claimCode: (await claimed).claimCode });
+    const move = (operationId, baseRevision, tokenIds = ['token-a']) => ({
+      type: 'world.operation', operationId, baseRevision, operations: [{
+        type: 'token.movePath', payload: {
+          sceneId: 'scene-test', tokenId: 'token-a', tokenIds, method: 'drag',
+          waypoints: [{ x: 3364, y: 1630 }],
+          expectedOrigins: { 'token-a': { x: 3364, y: 1470 }, 'token-b': { x: 3420, y: 1470 } },
+        },
+      }],
+    });
+    const reject = async (message, code = 'path_blocked') => {
+      const pending = waitForMessage(player.ws, reply => reply.type === 'world.operation.denied' && reply.operationId === message.operationId);
+      player.ws.send(JSON.stringify(message));
+      const denied = await pending;
+      assert.equal(denied.code, code);
+      assert.equal(denied.revision, message.baseRevision);
+      assert.equal(denied.state, undefined);
+      assert.equal(denied.world, undefined);
+    };
+    await reject(move('closed-gate-route', 1));
+    const direct = { type: 'token.move', payload: { sceneId: scene.id, tokenId: 'token-a', placement: 'map', x: 3364, y: 1630 } };
+    await reject({ type: 'world.operation', operationId: 'closed-gate-legacy', baseRevision: 1, operations: [direct] });
+    await reject({ type: 'world.operation', operationId: 'forged-reposition', baseRevision: 1,
+      operations: [{ ...direct, type: 'token.reposition' }] }, 'token_reposition_gm_only');
+    await reject({ type: 'world.operation', operationId: 'cross-scene-move', baseRevision: 1,
+      operations: [{ ...direct, payload: { ...direct.payload, sceneId: inactive.id } }] }, 'scene_not_active');
+    const inactivePath = move('cross-scene-path', 1);
+    inactivePath.operations[0].payload.sceneId = inactive.id;
+    await reject(inactivePath, 'scene_not_active');
+    await reject({ type: 'world.operation', operationId: 'forged-feature-entry', baseRevision: 1,
+      operations: [{ type: 'token.move', payload: { sceneId: scene.id, tokenId: 'token-a', placement: 'feature', featureId: 'gate-north' } }] }, 'feature_transition_forbidden');
+    await sendWorldOperationsAndWait(gm.ws, {
+      type: 'world.operation', operationId: 'open-navigation-gate', baseRevision: 1,
+      operations: [{ type: 'scene.featureState.patch', payload: { sceneId: scene.id, featureId: 'gate-north', patch: { open: true } } }],
+    });
+    await reject(move('group-separate-wall', 2, ['token-a', 'token-b']));
+    const unchanged = await requestWorldSnapshot(gm.ws);
+    assert.equal(unchanged.revision, 2);
+    assert.deepEqual(unchanged.state.preferences.worldV2.scenes[0].tokens.map(token => [token.x, token.y]), [[3364, 1470], [3420, 1470]]);
+    const passed = await sendWorldOperationsAndWait(player.ws, move('open-gate-route', 2));
+    assert.equal(passed.ack.revision, 3);
+    const final = await requestWorldSnapshot(gm.ws);
+    assert.deepEqual(final.state.preferences.worldV2.scenes[0].tokens.map(token => [token.x, token.y]), [[3364, 1630], [3420, 1470]]);
+    const wal = await waitForWalRecord(path.join(runtime.mapDir, 'world.operations.ndjson'), record => record.revision === 3);
+    assert.equal(wal.operationId, 'open-gate-route');
+    const rooted = { type: 'status.apply', payload: { scope: 'token', targetId: 'token-a', statusId: 'status-rooted' } };
+    await reject({ type: 'world.operation', operationId: 'root-and-move', baseRevision: 3,
+      operations: [rooted, { ...direct, payload: { ...direct.payload, y: 1650 } }] }, 'status_movement_forbidden');
+    assert.equal((await requestWorldSnapshot(gm.ws)).state.preferences.worldV2.scenes[0].tokens[0].effects.length, 0);
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'gm-relocate', baseRevision: 3,
+      operations: [{ ...direct, type: 'token.reposition', payload: { ...direct.payload, y: 1470 } }] });
+    const restored = await requestWorldSnapshot(gm.ws);
+    assert.equal(restored.revision, 4);
+    assert.equal(restored.state.preferences.worldV2.scenes[0].tokens[0].y, 1470);
+    assert.deepEqual(restored.state.preferences.worldV2.scenes[1].tokens, unchanged.state.preferences.worldV2.scenes[1].tokens);
+  } finally {
+    gm?.ws.close(); player?.ws.close();
+    await stopServer(runtime);
+  }
+});
+
+test('LAN library commits remain private, reject Player writes and replay indexes with their durable bodies', async () => {
+  let runtime = await startServer(), gm, player;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Library GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    const canonical = (await initialized).state.preferences.worldV2;
+    const claim = waitForMessage(gm.ws, value => value.type === 'access.claim');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Library Player', defaultActorId: 'actor-a', ownership: { 'actor-a': 'owner' } }));
+    player = await openAndHello(runtime.url, { name: 'Library Player', requestedRole: 'player', claimCode: (await claim).claimCode });
+    const body = { schemaVersion: 1, kind: 'actor-template', actor: createDefaultActor({ id: 'private-template', ruleset: infiniteHorrorRuleset }), ruleset: canonical.ruleset, statusDefinitions: [] };
+    const uploaded = await fetch(`${runtime.httpUrl}/api/content`, { method: 'POST', headers: {
+      Authorization: `Bearer ${gm.welcome.contentToken}`, 'Content-Type': 'application/vnd.rpgmap.actor-template+json',
+    }, body: JSON.stringify(body) });
+    assert.equal(uploaded.status, 201, await uploaded.clone().text());
+    const content = await uploaded.json();
+    const entry = { id: 'secret-library-entry', name: 'Private Library Title', type: 'pc', tags: [], archived: false,
+      bodyRef: content.reference, ruleset: canonical.ruleset };
+    const message = { type: 'document.batch', operationSchema: WORLD_OPERATION_SCHEMA_VERSION, operationId: 'library-create', baseRevision: 1,
+      writes: [{ action: 'create', document: { type: 'World', id: canonical.id }, intent: 'world.library.upsert',
+        data: { entry, expectedBodyRef: null, expectedEntry: null } }] };
+    const ack = waitForMessage(gm.ws, value => value.type === 'document.batch.ack' && value.operationId === message.operationId);
+    const change = waitForMessage(player.ws, value => value.type === 'document.batch.committed' && value.operationId === message.operationId);
+    gm.ws.send(JSON.stringify(message));
+    assert.equal((await ack).revision, 2);
+    const playerChange = await change;
+    assert.equal(playerChange.revision, 2); assert.deepEqual(playerChange.changes, []);
+    for (const privateValue of [entry.id, entry.name, content.reference]) assert.equal(JSON.stringify(playerChange).includes(privateValue), false);
+    const retryAck = waitForMessage(gm.ws, value => value.type === 'document.batch.ack' && value.operationId === message.operationId);
+    gm.ws.send(JSON.stringify(message)); assert.equal((await retryAck).revision, 2);
+    const denied = waitForMessage(player.ws, value => value.type === 'document.batch.denied' && value.operationId === 'forged-library');
+    player.ws.send(JSON.stringify({ ...message, operationId: 'forged-library', baseRevision: 2 }));
+    const rejected = await denied;
+    assert.equal(rejected.code, 'world_library_upsert_gm_only');
+    assert.equal(Object.hasOwn(rejected, 'state'), false);
+    assert.equal(JSON.stringify(rejected).includes(entry.name), false);
+    const snapshot = await requestWorldSnapshot(player.ws);
+    assert.equal(snapshot.state.preferences.worldV2.templateLibrary, undefined);
+    const owned = snapshot.state.preferences.worldV2.actors.find(actor => actor.id === 'actor-a');
+    for (const [intent, data, code] of [
+      ['actor.upsert', { actor: { ...owned, organization: { tags: ['forged'], archived: true } } }, 'actor_organization_gm_only'],
+      ['actor.copy', { newActorId: 'forged-copy' }, 'actor_copy_gm_only'],
+    ]) {
+      const operationId = `deny-${intent}`;
+      const response = waitForMessage(player.ws, value => value.type === 'document.batch.denied' && value.operationId === operationId);
+      player.ws.send(JSON.stringify({ type: 'document.batch', operationSchema: WORLD_OPERATION_SCHEMA_VERSION, baseRevision: 2, operationId,
+        writes: [{ action: 'update', document: { type: 'Actor', id: owned.id }, intent, data }] }));
+      assert.equal((await response).code, code);
+    }
+    assert.equal((await fetch(`${runtime.httpUrl}/api/content/${content.id}`, { headers: { Authorization: `Bearer ${player.welcome.contentToken}` } })).status, 404);
+    player.ws.close(); gm.ws.close();
+    await stopServer(runtime, { removeMap: false });
+    runtime = await startServer({}, runtime.mapDir);
+    gm = await openAndHello(runtime.url, { name: 'Restored GM', requestedRole: 'gm' });
+    const restored = await requestWorldSnapshot(gm.ws);
+    assert.deepEqual(restored.state.preferences.worldV2.templateLibrary[entry.id], entry);
+    assert.deepEqual(await (await fetch(`${runtime.httpUrl}/api/content/${content.id}`, { headers: { Authorization: `Bearer ${gm.welcome.contentToken}` } })).json(), body);
+  } finally { player?.ws.close(); gm?.ws.close(); await stopServer(runtime); }
+});
+
+test('Document field edits revalidate ownership and compare field values at the current revision', async () => {
+  const runtime = await startServer();
+  let gm; let player;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Field GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialWorldV2(), reason: 'init' }));
+    await initialized;
+    const claim = waitForMessage(gm.ws, value => value.type === 'access.claim');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Field Player', defaultActorId: 'actor-a', ownership: { 'actor-a': 'owner' } }));
+    player = await openAndHello(runtime.url, { name: 'Field Player', requestedRole: 'player', claimCode: (await claim).claimCode });
+    let revision = 1;
+    async function submit(ws, operationId, actorId, changes, expected, code = null) {
+      const response = waitForMessage(ws, value => value.type === (code ? 'document.batch.denied' : 'document.batch.ack') && value.operationId === operationId);
+      const commit = code ? null : waitForMessage(ws, value => value.type === 'document.batch.committed' && value.operationId === operationId);
+      ws.send(JSON.stringify({ type: 'document.batch', operationSchema: WORLD_OPERATION_SCHEMA_VERSION, operationId, baseRevision: revision, writes: [{ action: 'update', document: { type: 'Actor', id: actorId }, intent: 'actor.metadata.update', data: { changes, expected } }] }));
+      const result = await response;
+      if (code) {
+        assert.equal(result.code, code); assert.equal(result.revision, revision);
+        assert.equal(Object.hasOwn(result, 'state'), false);
+      } else {
+        const committed = await commit;
+        assert.equal(committed.revision, ++revision);
+        assert.equal(Object.hasOwn(committed, 'patch'), false);
+        assert.deepEqual(committed.changes.find(change => change.document.type === 'Actor').changed.name, changes.name);
+      }
+    }
+    const actorName = initialWorldV2().preferences.worldV2.actors[0].name;
+    await submit(player.ws, 'owned-field', 'actor-a', { name: 'player edit' }, { name: actorName });
+    await submit(gm.ws, 'concurrent-field', 'actor-a', { name: 'GM edit' }, { name: 'player edit' });
+    await submit(player.ws, 'stale-field', 'actor-a', { name: 'stale overwrite' }, { name: 'player edit' }, 'document_field_conflict');
+    await submit(player.ws, 'unowned-field', 'actor-b', { name: 'forged' }, { name: '' }, 'actor_not_owned');
+    await submit(player.ws, 'classification-field', 'actor-a', { partyId: 'forged' }, { partyId: 'party-default' }, 'actor_classification_gm_only');
+    await submit(player.ws, 'retry-field', 'actor-a', { name: 'explicit retry' }, { name: 'GM edit' });
+  } finally { player?.ws.close(); gm?.ws.close(); await stopServer(runtime); }
+});
 
 function tokenRuntimeHealth(snapshot, tokenId) {
   const scene = snapshot.state.preferences.worldV2.scenes
@@ -465,9 +822,10 @@ test('generic World operations commit atomically, broadcast patches, and recover
     assert.equal(committed.ack.revision, 2);
     assert.equal(committed.ack.duplicate, false);
     assert.equal(Object.hasOwn(committed.committed, 'state'), false);
-    assert.equal(committed.committed.patch.schemaVersion, WORLD_OPERATION_SCHEMA_VERSION);
-    assert.equal(committed.committed.patch.world.actors.upsert[0].notes, 'updated through actor.upsert');
-    assert.equal(committed.committed.patch.world.scenes.tokens[0].upsert[0].x, 37);
+    assert.equal(Object.hasOwn(committed.committed, 'patch'), false);
+    assert.equal(Object.hasOwn(committed.committed, 'changeSet'), false);
+    assert.equal(committed.committed.changes.find(change => change.document.type === 'Actor').changed.notes, 'updated through actor.upsert');
+    assert.equal(committed.committed.changes.find(change => change.document.type === 'Token').changed.x, 37);
 
     const requestedPromise = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.reason === 'request');
     gm.ws.send(JSON.stringify({ type: 'world.snapshot.request' }));
@@ -503,7 +861,7 @@ test('generic World operations commit atomically, broadcast patches, and recover
       }],
     });
     assert.equal(status.committed.revision, 3);
-    assert.equal(status.committed.patch.world.actors.upsert[0].effects[0].definitionId, 'status-rooted');
+    assert.equal(status.committed.changes.find(change => change.document.type === 'Actor').changed.effects[0].definitionId, 'status-rooted');
 
     const invalidPromise = waitForMessage(gm.ws, message =>
       message.type === 'world.operation.denied' && message.operationId === 'generic-invalid-1');
@@ -561,7 +919,7 @@ test('generic World operations reuse Player ownership and status permission chec
       }],
     });
     assert.equal(moved.committed.revision, 2);
-    assert.equal(moved.committed.patch.world.scenes.tokens[0].upsert[0].x, 16);
+    assert.equal(moved.committed.changes.find(change => change.document.type === 'Token').changed.x, 16);
 
     const combat = await sendWorldOperationsAndWait(gm.ws, {
       type: 'world.operation', operationId: 'generic-combat-start-1', baseRevision: 2,
@@ -623,7 +981,7 @@ test('generic World operations reuse Player ownership and status permission chec
       }],
     });
     assert.equal(playerStatus.committed.revision, 4);
-    assert.equal(playerStatus.committed.patch.world.actors.upsert[0].effects[0].definitionId, 'status-rooted');
+    assert.equal(playerStatus.committed.changes.find(change => change.document.type === 'Actor').changed.effects[0].definitionId, 'status-rooted');
 
     const featureStatePromise = waitForMessage(player.ws, message =>
       message.type === 'world.operation.denied' && message.operationId === 'player-feature-state-1');
@@ -659,7 +1017,7 @@ test('generic World operation idempotency survives a LAN server restart', async 
     await initialized;
     const committed = await sendWorldOperationsAndWait(gm.ws, operation);
     assert.equal(committed.committed.revision, 2);
-    assert.equal(committed.committed.patch.world.name, 'Restart-safe World');
+    assert.equal(committed.committed.changes.find(change => change.document.type === 'World').changed.name, 'Restart-safe World');
     gm.ws.close();
 
     await stopServer(runtime, { removeMap: false });
@@ -880,8 +1238,8 @@ test('GM status protocol is authoritative, revisioned, durable, and idempotent',
     });
     assert.equal(featureCommit.committed.originSessionId, gm.welcome.session.id);
     assert.equal(featureCommit.committed.revision, 8);
-    assert.equal(featureCommit.committed.patch.world.scenes.tokens[0].upsert[0].x, 42);
-    assert.equal(featureCommit.committed.patch.world.actors.upsert[0].effects[0].definitionId, 'status-rooted');
+    assert.equal(featureCommit.committed.changes.find(change => change.document.type === 'Token').changed.x, 42);
+    assert.equal(featureCommit.committed.changes.find(change => change.document.type === 'Actor').changed.effects[0].definitionId, 'status-rooted');
 
     const walRecord = await waitForWalRecord(path.join(runtime.mapDir, 'world.operations.ndjson'), value => value?.revision === 8);
     assert.equal(walRecord.operationId, 'feature-world-1');
@@ -1186,7 +1544,7 @@ test('LAN keeps same-template NPC Health isolated and requires a controlled Toke
       } }],
     });
     assert.equal(damaged.committed.revision, 3);
-    assert.equal(JSON.stringify(damaged.committed.patch).includes('token-b2'), false);
+    assert.equal(JSON.stringify(damaged.committed.changes).includes('token-b2'), false);
 
     const actorOnlyDenied = waitForMessage(player.ws, message =>
       message.type === 'world.operation.denied' && message.operationId === 'npc-actor-only');
@@ -1329,8 +1687,8 @@ test('LAN placement grants expose a restricted template and server-initialize a 
       } }],
     });
     assert.equal(placed.committed.revision, 2);
-    const projectedToken = placed.committed.patch.world.scenes.tokens
-      .flatMap(item => item.upsert || []).find(item => item.id === 'player-npc');
+    const projectedToken = placed.committed.changes
+      .find(item => item.document.type === 'Token' && item.document.id === 'player-npc').changed;
     assert.equal(projectedToken.actorLink, false);
     assert.deepEqual(projectedToken.controllerUserIds, [claim.user.id]);
     assert.deepEqual(projectedToken.visibility, { mode: 'users', userIds: [claim.user.id] });
@@ -1347,8 +1705,8 @@ test('LAN placement grants expose a restricted template and server-initialize a 
       } }],
     });
     assert.equal(markerCommit.committed.revision, 3);
-    const projectedMarker = markerCommit.committed.patch.world.scenes.content
-      .flatMap(item => item.markers || []).find(item => item.id === 'player-trap');
+    const projectedMarker = markerCommit.committed.changes
+      .find(item => item.document.type === 'Marker' && item.document.id === 'player-trap').changed;
     assert.deepEqual(projectedMarker.controllerUserIds, [claim.user.id]);
     assert.deepEqual(projectedMarker.visibility, { mode: 'users', userIds: [claim.user.id] });
 
@@ -1410,10 +1768,11 @@ test('hidden NPC commits advance Player revision without leaking canonical entit
     });
     const playerCommit = await playerCommitPromise;
     assert.equal(playerCommit.revision, 2);
-    assert.equal(playerCommit.results.length, 0);
-    assert.equal(JSON.stringify(playerCommit.patch).includes('token-b2'), false);
-    assert.equal(JSON.stringify(playerCommit.patch).includes('actor-b'), false);
-    assert.equal(JSON.stringify(playerCommit.patch).includes('Hostile Template'), false);
+    assert.equal(Object.hasOwn(playerCommit, 'results'), false);
+    assert.deepEqual(playerCommit.changes, []);
+    assert.equal(JSON.stringify(playerCommit).includes('token-b2'), false);
+    assert.equal(JSON.stringify(playerCommit).includes('actor-b'), false);
+    assert.equal(JSON.stringify(playerCommit).includes('Hostile Template'), false);
 
     const deniedPromise = waitForMessage(player.ws, message =>
       message.type === 'world.operation.denied' && message.operationId === 'forged-hidden-damage');
@@ -1535,7 +1894,7 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     const [ack, source, teammateCommit] = await Promise.all([sourceAck, sourceSnapshot, teammateFogCommit]);
     assert.equal(ack.revision, 2);
     assert.equal(source.state.preferences.audienceVision.source.tokenId, 'token-a');
-    assert.ok(teammateCommit.patch.world.scenes.fog.length > 0);
+    assert.ok(teammateCommit.changes.some(change => change.document.type === 'Fog'));
 
     const teammateBeforeMove = await requestWorldSnapshot(playerB.ws);
     assert.equal(teammateBeforeMove.state.preferences.audienceVision.source, null);
@@ -1555,7 +1914,7 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     });
     const teammateMove = await teammateMoveCommit;
     assert.equal(move.committed.revision, teammateMove.revision);
-    assert.ok(teammateMove.patch.world.scenes.fog.length > 0);
+    assert.ok(teammateMove.changes.some(change => change.document.type === 'Fog'));
     const sourceAfterMove = await requestWorldSnapshot(playerA.ws);
     assert.equal(sourceAfterMove.state.preferences.audienceVision.source.x, 45);
     assert.equal(sourceAfterMove.state.preferences.audienceVision.source.y, 10);
@@ -1612,7 +1971,7 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     assert.equal(commitB.operationId, acknowledged.operationId);
     assert.equal(acknowledged.revision, 4);
     assert.equal(denied.revision, 4);
-    assert.ok(commitB.patch.world.scenes.fog.length > 0);
+    assert.ok(commitB.changes.some(change => change.document.type === 'Fog'));
     assert.equal(denied.code, 'revision_conflict');
     assert.equal(Object.hasOwn(denied, 'state'), false);
     const deniedSocket = denied.operationId === 'fog-concurrent-a' ? playerA.ws : playerB.ws;
@@ -1639,6 +1998,61 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     reconnected.ws.close();
   } finally {
     await stopServer(runtime, { removeMap: true });
+  }
+});
+
+test('LAN movement and Fog fast path matches a fresh private Audience projection', async () => {
+  const runtime = await startServer();
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Projection GM', requestedRole: 'gm' });
+    const state = initialTokenVisionWorld();
+    const world = state.preferences.worldV2;
+    const actor = world.actors.find(item => item.id === 'actor-a');
+    const source = world.scenes[0].tokens.find(item => item.id === 'token-a');
+    const companion = { ...structuredClone(source), id: 'token-a2', x: 14 };
+    world.actors = [actor];
+    world.scenes[0].tokens = [source, companion];
+    state.preferences.entitySystem.actors = structuredClone(world.actors);
+    state.preferences.entitySystem.tokens = structuredClone(world.scenes[0].tokens);
+    const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'projection-fast-path-init' }));
+    await initialized;
+
+    const claimPromise = waitForMessage(gm.ws, message => message.type === 'access.claim');
+    gm.ws.send(JSON.stringify({
+      type: 'access.user.create', name: 'Projection Player', defaultActorId: actor.id,
+      ownership: { [actor.id]: 'owner' },
+    }));
+    const claim = await claimPromise;
+    const player = await openAndClaim(runtime.url, {
+      name: 'Projection Player', claimCode: claim.claimCode, visionSourceTokenId: source.id,
+    });
+    const before = player.welcome.world.state;
+    const moved = await sendWorldOperationsAndWait(player.ws, {
+      type: 'world.operation', operationId: 'projection-fast-path-move', baseRevision: 1,
+      operations: [{ type: 'token.move', payload: {
+        sceneId: world.activeSceneId, tokenId: source.id, placement: 'map', x: 12, y: 10,
+      } }],
+    });
+    const projected = applyDocumentChanges(before, moved.committed.changes);
+    const fresh = await requestWorldSnapshot(player.ws);
+    assert.deepEqual(
+      projected.preferences.worldV2.scenes[0].tokens,
+      fresh.state.preferences.worldV2.scenes[0].tokens,
+    );
+    assert.deepEqual(
+      projected.preferences.worldV2.scenes[0].fog,
+      fresh.state.preferences.worldV2.scenes[0].fog,
+    );
+    assert.deepEqual(projected.preferences.audienceVision, fresh.state.preferences.audienceVision);
+    assert.equal(projected.preferences.audienceVision.source.x, 12);
+    assert.ok(Object.keys(projected.preferences.worldV2.scenes[0]
+      .fog.exploredByParty['party-a'].rows).length > 0);
+
+    player.ws.close();
+    gm.ws.close();
+  } finally {
+    await stopServer(runtime);
   }
 });
 
@@ -1758,7 +2172,8 @@ test('GM public profile update reaches a connected LIMITED player as a safe patc
     }));
     const [playerCommit, gmCommit] = await Promise.all([playerCommitPromise, gmCommitPromise]);
     assert.equal(gmCommit.revision, 2);
-    const projectedActor = playerCommit.patch.world.actors.upsert.find(actor => actor.id === 'actor-b');
+    const projectedActor = applyDocumentChanges(player.welcome.world.state, playerCommit.changes)
+      .preferences.worldV2.actors.find(actor => actor.id === 'actor-b');
     assert.deepEqual(projectedActor.publicProfile, {
       schemaVersion: 1, summary: '城门附近的已知敌人', appearance: '披着灰色斗篷',
       knownFacts: ['行动谨慎'], visibleStatusDefinitionIds: ['status-invisible'],

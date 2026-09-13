@@ -1,5 +1,6 @@
-import { normalizeElevationFt, normalizeTokenDiameterMeters } from '../elevation/model.js';
+import { normalizeElevationMeters, normalizeTokenDiameterMeters } from '../elevation/model.js';
 import { normalizeEntityStatusState, STATUS_SCHEMA_VERSION } from '../status/model.js';
+import { normalizeMovementState } from '../movement/model.js';
 import {
   createActorFromRulesetImport,
   deriveActorDocument,
@@ -7,9 +8,7 @@ import {
   performActorOperation,
 } from '../actor/index.js';
 
-function clone(value) {
-  return value === undefined ? undefined : structuredClone(value);
-}
+const clone = value => structuredClone(value);
 
 function finite(value, fallback = 0) {
   const number = Number(value);
@@ -51,7 +50,8 @@ export function createTokenForActor(actorId, tokenId, overrides = {}) {
     color: typeof overrides.color === 'string' ? overrides.color : null,
     diameterMeters: normalizeTokenDiameterMeters(overrides.diameterMeters ?? overrides.size, 1),
     rotation: finite(overrides.rotation, 0),
-    elevationFt: normalizeElevationFt(overrides.elevationFt, 0),
+    elevationMeters: normalizeElevationMeters(overrides.elevationMeters, 0),
+    movement: normalizeMovementState(overrides.movement),
     hidden: Boolean(overrides.hidden),
     locked: Boolean(overrides.locked),
     showName: overrides.showName !== false,
@@ -73,7 +73,7 @@ export function normalizeEntityState(raw, { ruleset } = {}) {
         next.id = String(next.id ?? '');
         const diameterMeters = normalizeTokenDiameterMeters(next.diameterMeters ?? next.size, 1);
         delete next.size;
-        return { ...next, diameterMeters, elevationFt: normalizeElevationFt(next.elevationFt, 0) };
+        return { ...next, diameterMeters, elevationMeters: normalizeElevationMeters(next.elevationMeters, 0), movement: normalizeMovementState(next.movement) };
       })
       .filter(token => token.id)
     : [];

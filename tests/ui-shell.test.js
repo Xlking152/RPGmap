@@ -17,6 +17,9 @@ const sceneRenderer = readFileSync(new URL('../src/render/scene-renderer.js', im
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const indexSource = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const viteSource = readFileSync(new URL('../vite.config.js', import.meta.url), 'utf8');
+const packageSource = readFileSync(new URL('../scripts/package-local-server.mjs', import.meta.url), 'utf8');
+const packageVerifierSource = readFileSync(new URL('../scripts/verify-package.mjs', import.meta.url), 'utf8');
+const browserSmokeSource = readFileSync(new URL('../scripts/browser-smoke.mjs', import.meta.url), 'utf8');
 
 test('application entry boots the Character-free World/Scene Token runtime', () => {
   assert.match(mainSource, /await import\('\.\/runtime\/map-runtime\.js'\)/);
@@ -36,26 +39,33 @@ test('application chrome keeps the restrained neutral, river and brick palette',
   assert.match(styles, /\.section \{[\s\S]*?border-bottom: 1px solid var\(--line\);/);
   assert.doesNotMatch(styles, /linear-gradient/i);
   assert.equal(packageJson.dependencies.lucide, '1.30.0');
-  assert.equal(packageJson.version, '2.3.4');
-  assert.match(indexSource, /application-version" content="2\.3\.4"/);
-  assert.match(indexSource, /RPGmap 2\.3\.4/);
+  assert.equal(packageJson.version, '2.4.0');
+  assert.match(indexSource, /application-version" content="2\.4\.0"/);
+  assert.match(indexSource, /RPGmap 2\.4\.0/);
 });
 
 test('production registry splits the built-in map and large vendors without suppressing chunk warnings', () => {
   assert.match(mainSource, /registerBuiltInMapPackages/);
-  assert.match(mainSource, /loadBuiltInRulesetReference/);
+  assert.match(mainSource, /listBuiltInRulesets/);
   assert.match(mainSource, /await import\('\.\/runtime\/map-runtime\.js'\)/);
   assert.match(mapRuntimeSource, /mapPackageRegistry\.load/);
+  assert.match(mapRuntimeSource, /resolveRulesetReference/);
   assert.doesNotMatch(mainSource, /leaflet|styles\.css|createRpgMapRuntime/);
   assert.doesNotMatch(mainSource, /ruleset\/index\.js|rulesets\/infinite-horror/);
   assert.match(rulesetBuiltinsSource, /await import\('\.\/index\.js'\)/);
   assert.match(builtinsSource, /await import\('\.\/default-map\.js'\)/);
-  assert.match(viteSource, /manualChunks/);
-  assert.match(viteSource, /vendor-leaflet/);
-  assert.match(viteSource, /vendor-icons/);
-  assert.match(viteSource, /vendor-geometry/);
+  assert.match(viteSource, /codeSplitting/);
+  assert.match(viteSource, /modulePreload: false/);
+  assert.match(viteSource, /map-runtime-core/);
+  assert.match(viteSource, /lazy-runtime-tools/);
   assert.doesNotMatch(viteSource, /chunkSizeWarningLimit/);
   assert.match(viteSource, /manifest: true/);
+  assert.match(packageSource, /worldSchema: 4/);
+  assert.match(packageVerifierSource, /version\.worldSchema !== 4/);
+  assert.match(packageVerifierSource, /manifest\[key\]\?\.name === 'map-runtime-core'/);
+  assert.match(browserSmokeSource, /value\.rulesetId === 'infinite-horror'/);
+  assert.match(browserSmokeSource, /manifest\[key\]\?\.name === 'map-runtime-core'/);
+  assert.doesNotMatch(browserSmokeSource, /assets\\\/ruleset-/);
 });
 
 test('modern shell owns Actor/current panels and Token-first tools without legacy proxies', () => {
