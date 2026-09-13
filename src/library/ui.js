@@ -5,7 +5,7 @@ export function createLibraryView(api, { gm }) {
   const dialog = doc.createElement('dialog');
   dialog.dataset.libraryDialog = 'true';
   dialog.style.cssText = 'width:760px;max-width:calc(100vw - 24px);max-height:85vh;box-sizing:border-box;padding:16px;border:1px solid #aab8b6;border-radius:6px;color:#253b39;background:#fff';
-  dialog.innerHTML = `<header style="display:flex;align-items:center;justify-content:space-between"><h2 style="font-size:18px;margin:0">模板与图片资料库</h2><span data-close></span></header>
+  dialog.innerHTML = `<header style="display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:2;background:#fff;padding-bottom:8px"><h2 style="font-size:18px;margin:0;min-width:0">模板与图片资料库</h2><span data-close style="flex-shrink:0"></span></header>
     <div role="tablist" style="display:flex;gap:4px;margin:12px 0"><button type="button" role="tab" data-tab="actors">模板</button><button type="button" role="tab" data-tab="library">资料库</button><button type="button" role="tab" data-tab="assets">图片</button></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="search" data-search aria-label="搜索名称或标签" placeholder="名称或标签" style="flex:1;min-width:120px;width:120px"><select data-type aria-label="类型"><option value="">全部类型</option><option value="pc">PC</option><option value="monster">怪物</option><option value="npc">NPC</option><option value="summon">召唤物</option><option value="other">其他</option></select><select data-sort aria-label="排序"><option value="name">名称</option><option value="type">类型</option><option value="favorite">收藏优先</option></select></div>
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:10px 0"><label><input type="checkbox" data-archived> 显示归档</label><label><input type="checkbox" data-favorites> 仅收藏</label><span data-upload></span><span data-package-control></span></div>
@@ -49,7 +49,10 @@ export function createLibraryView(api, { gm }) {
   };
   const clearDetail = () => { rememberDetail(); rememberDetail = () => {}; epoch++; if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = null; detail.replaceChildren(); detail.hidden = true; };
   const close = () => { clearDetail(); dialog.close(); };
-  dialog.querySelector('[data-close]').append(button(X, '关闭', close));
+  const closeButton = button(X, '关闭', close);
+  closeButton.append('关闭');
+  closeButton.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:6px 10px;white-space:nowrap;border:1px solid #aab8b6;border-radius:4px;background:#fff;color:#253b39';
+  dialog.querySelector('[data-close]').append(closeButton);
   dialog.addEventListener('cancel', clearDetail);
   const file = doc.createElement('input'); file.type = 'file'; file.accept = 'image/png,image/jpeg,image/webp'; file.hidden = true;
   dialog.append(file);

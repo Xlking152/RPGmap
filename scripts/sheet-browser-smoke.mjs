@@ -484,7 +484,16 @@ try {
     const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     await writeFile(path.join(path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR), 'packaged-library.png'), Buffer.from(capture.data, 'base64'));
   }
-  await evaluate(`document.querySelector('[data-library-dialog] [aria-label="关闭"]').click()`);
+  await evaluate(`(() => {
+    const dialog = document.querySelector('[data-library-dialog]');
+    const close = dialog.querySelector('[data-close] button');
+    if (close.textContent.trim() !== '关闭') throw new Error('Library needs a visible close label');
+    dialog.scrollTop = dialog.scrollHeight;
+    const rect = close.getBoundingClientRect();
+    if (rect.top < 0 || rect.bottom > innerHeight || rect.width < 44) throw new Error('Library close is clipped');
+    close.click();
+    if (dialog.open) throw new Error('Library close did not dismiss dialog');
+  })()`);
 
   if (process.env.RPGMAP_SMOKE_SCREENSHOT_DIR) {
     const directory = path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR);

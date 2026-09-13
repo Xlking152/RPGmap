@@ -476,6 +476,14 @@ export function createVisionFogSystem() {
         }));
       }
       retain(api.on?.('vision:source-change', () => scheduleRender(null)));
+      retain(api.on?.('token:delete', () => {
+        synchronizeLocalVision();
+        clearUnavailableConnectedSource();
+        scheduleRender(null);
+      }));
+      retain(api.on?.('scene:content-change', event => {
+        if (event.detail?.types?.includes('SceneEvent')) scheduleRender(null);
+      }));
       retain(api.on?.('token:visual-position', event => {
         if (String(event?.detail?.tokenId || '') === String(confirmedSourceTokenId() || '')) scheduleRender(null);
       }));
