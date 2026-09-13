@@ -1,5 +1,6 @@
 import { installStatusUiStyles, renderStatusStrip, resolveStatusUiSnapshot } from '../status/ui.js';
 import { describeActor } from '../actor/index.js';
+import { resetCurrentScene } from './scene-reset.js';
 
 const STYLE_ID = 'rpgmap-app-shell-v2-style';
 
@@ -147,6 +148,7 @@ export function createAppShellUiV2() {
 
       let exportButton = null;
       let importButton = null;
+      let resetButton = null;
       if (toolbarRight) {
         toolbarRight.replaceChildren();
         exportButton = button(documentNode, '导出', async () => {
@@ -154,7 +156,16 @@ export function createAppShellUiV2() {
           catch (error) { api.showToast?.(`导出失败：${error.message}`, 'error'); }
         });
         importButton = button(documentNode, '导入', () => importInput.click());
-        toolbarRight.append(exportButton, importButton, button(documentNode, '回到底图', () => api.resetView?.()));
+        resetButton = button(documentNode, '全局回撤', async () => {
+          if (resetButton.disabled) return;
+          resetButton.disabled = true;
+          try {
+            await resetCurrentScene(api, message => documentNode.defaultView?.confirm?.(message) === true);
+          } catch (error) {
+            api.showToast?.(`全局回撤失败：${error?.message || error}`, 'error');
+          } finally { resetButton.disabled = false; }
+        });
+        toolbarRight.append(exportButton, importButton, button(documentNode, '回到底图', () => api.resetView?.()), resetButton);
       }
 
       importInput.addEventListener('change', async () => {
@@ -241,6 +252,7 @@ export function createAppShellUiV2() {
         if (myActorButton) myActorButton.hidden = !player;
         if (exportButton) exportButton.hidden = player;
         if (importButton) importButton.hidden = player;
+        if (resetButton) resetButton.hidden = player;
         if (player && actorPanel?.classList?.contains('active')) activatePanel('current');
         renderCurrent();
       }

@@ -211,6 +211,7 @@ export function createMovementController({ settings } = {}) {
           const result = await api.movementFast.moveTokenPath(
             members.map(member => member.tokenId), current.tokenId, routePoints.slice(1), { method: 'drag' },
           );
+          if (interaction !== current) return false;
           if (!result?.valid) {
             drawPreview(target, { valid: false });
             status(`移动失败：${result?.reason || '当前位置不可通行'}`);
@@ -547,6 +548,10 @@ export function createMovementController({ settings } = {}) {
         if (String(primary || '') !== String(interaction.tokenId)) reset();
       });
       if (selectionOff) off.push(selectionOff);
+      off.push(api.on?.('token:delete', event => {
+        const tokenId = String(event.detail?.tokenId || event.detail?.id || '');
+        if (interaction?.members?.some(member => String(member.tokenId) === tokenId)) reset();
+      }));
       const stepOff = settings.subscribe(() => {
         if (interaction?.current) {
           interaction.current = snapPoint(interaction.current);

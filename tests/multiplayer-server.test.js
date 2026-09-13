@@ -642,6 +642,8 @@ test('LAN validates closed gates and rolls back an entire group when one route h
       assert.equal(denied.world, undefined);
     };
     await reject(move('closed-gate-route', 1));
+    await reject({ type: 'world.operation', operationId: 'forged-scene-reset', baseRevision: 1,
+      operations: [{ type: 'scene.reset', payload: { sceneId: scene.id } }] }, 'scene_reset_gm_only');
     const direct = { type: 'token.move', payload: { sceneId: scene.id, tokenId: 'token-a', placement: 'map', x: 3364, y: 1630 } };
     await reject({ type: 'world.operation', operationId: 'closed-gate-legacy', baseRevision: 1, operations: [direct] });
     await reject({ type: 'world.operation', operationId: 'forged-reposition', baseRevision: 1,
@@ -677,6 +679,15 @@ test('LAN validates closed gates and rolls back an entire group when one route h
     assert.equal(restored.revision, 4);
     assert.equal(restored.state.preferences.worldV2.scenes[0].tokens[0].y, 1470);
     assert.deepEqual(restored.state.preferences.worldV2.scenes[1].tokens, unchanged.state.preferences.worldV2.scenes[1].tokens);
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'gm-scene-reset', baseRevision: 4,
+      operations: [{ type: 'scene.reset', payload: { sceneId: scene.id } }] });
+    const reset = await requestWorldSnapshot(gm.ws);
+    assert.deepEqual(reset.state.preferences.worldV2.scenes[0].tokens, []);
+    assert.deepEqual(reset.state.preferences.worldV2.actors, restored.state.preferences.worldV2.actors);
+    assert.deepEqual(reset.state.preferences.worldV2.scenes[1], restored.state.preferences.worldV2.scenes[1]);
+    assert.deepEqual((await requestWorldSnapshot(player.ws)).state.preferences.worldV2.scenes[0].tokens, []);
+    const resetWal = await waitForWalRecord(path.join(runtime.mapDir, 'world.operations.ndjson'), record => record.revision === 5);
+    assert.equal(resetWal.operationId, 'gm-scene-reset');
   } finally {
     gm?.ws.close(); player?.ws.close();
     await stopServer(runtime);

@@ -210,6 +210,9 @@ export function createMovementFastPathSystem() {
       for (const eventName of ['scene:damage', 'scene:restore', 'scene:undo', 'state:import']) {
         api.on?.(eventName, () => grids.clear());
       }
+      api.on?.('scene:content-change', event => {
+        if (event.detail?.types?.includes('SceneEvent')) grids.clear();
+      });
     },
   });
 }

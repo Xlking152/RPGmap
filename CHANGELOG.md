@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.4.1
+
+- 修复 NPC、怪物 XLSX 导入后模板列表不立即显示的问题：监听权威 Actor 更新，无需切换面板或额外点击，不自动放置 Token。
+- 顶部新增 GM 专用“全局回撤”，确认后通过单个原子操作清除当前地图全部 Token 和破坏效果；保留角色卡、NPC／怪物模板、迷雾探索、普通指示物及其他地图。同步清理失效选择、移动预览和战斗引用，并刷新导航与视线。
+- 资料库右上角提供明确的“× 关闭”按钮，标题栏滚动时保持可见，保留 Esc 退出。
+- 新增模板刷新、百个 Token 回撤、取消／失败、联机权限与同步回归测试；总 JS gzip 预算增加 1 KiB，首屏预算不变。
+- 应用版本升至 `2.4.1`，World、operation、Status、Access schema 均保持 `4`；Ruleset 与 MapPackage 版本不变。联机主机和玩家应使用同一版本。
+
 ## v2.4.0
 
 - 将持久化升级到 World schema `4`、operation schema `4`、Access schema `4`，Infinite Horror Ruleset 升至 `1.1.0`，Lanzhou MapPackage 升至 `1.1.0`；旧 WAL 先按原语义重放，再以包含 World、Access、WAL 和内容依赖的事务备份执行升级，已知英尺字段严格乘 `0.3048`。

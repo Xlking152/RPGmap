@@ -14,7 +14,9 @@ import { prepareRuleset } from '../src/ruleset/contract.js';
 import {
   createDocumentChanges,
   documentChangeSet,
+  applyDocumentChanges,
 } from '../src/documents/changes.js';
+import { worldOperationsToDocumentWrites, documentWritesToWorldOperations } from '../src/documents/protocol.js';
 
 function actor(id, current = 10) {
   return { id, name: id, system: { resources: { hp: { current, max: 10 } } }, effects: [], notes: '' };
@@ -57,6 +59,59 @@ function state() {
     },
   };
 }
+
+test('Scene reset atomically removes all Tokens and damage, preserving templates and unrelated content', () => {
+  const initial = state();
+  const world = initial.preferences.worldV2;
+  const scene = world.scenes[0];
+  world.actors[0].type = 'pc';
+  world.actors[1].type = 'monster';
+  world.actors.push({ ...actor('npc'), type: 'npc' });
+  scene.tokens = Array.from({ length: 100 }, (_, index) => token(`token-${index}`, world.actors[index % 3].id));
+  scene.sceneEvents = [{ id: 'damage-a', type: 'damage', featureIds: ['wall-a'] }];
+  scene.markers = [{ id: 'note-a', kind: 'note', x: 1, y: 2 }];
+  scene.fog = { schemaVersion: 1, parties: {} };
+  scene.featureStates = { door: { open: true } };
+  scene.attackAreas = [{ id: 'area-a', anchor: { type: 'token', tokenId: 'token-0' }, origin: { x: 0, y: 0 } }];
+  world.scenes.push({ ...structuredClone(scene), id: 'scene-b' });
+  initial.preferences.combatSystem.combat = { combatants: [{ tokenId: 'token-0', actorId: 'actor-a' }], turnIndex: 0 };
+  const before = structuredClone(initial);
+  const operations = [{ type: 'scene.reset', payload: { sceneId: 'scene-a' } }];
+  const writes = worldOperationsToDocumentWrites(operations);
+  assert.deepEqual(documentWritesToWorldOperations(writes), operations);
+  const context = { source: { role: 'gm' }, now: '2026-09-13T00:00:00.000Z' };
+  const applied = applyWorldOperations(initial, operations, context);
+  const result = applied.state.preferences.worldV2;
+  assert.equal(applied.results[0].tokenIds.length, 100);
+  assert.deepEqual(result.scenes[0].tokens, []);
+  assert.deepEqual(result.scenes[0].sceneEvents, []);
+  for (const field of ['markers', 'fog', 'settings', 'featureStates']) assert.deepEqual(result.scenes[0][field], scene[field]);
+  assert.deepEqual(result.scenes[0].attackAreas[0].anchor, { type: 'free', markerId: null });
+  assert.deepEqual(result.scenes[0].attackAreas[0].origin, { x: 10, y: 20 });
+  assert.deepEqual(result.actors, world.actors);
+  assert.deepEqual(result.scenes[1], world.scenes[1]);
+  assert.equal(applied.state.preferences.combatSystem.combat, null);
+  assert.deepEqual(initial, before);
+  const changes = createDocumentChanges(initial, applied.state);
+  const replay = applyDocumentChanges(initial, changes, { updatedAt: context.now });
+  assert.deepEqual(replay.preferences.worldV2, result);
+  const saved = JSON.parse(JSON.stringify(replay));
+  assert.deepEqual(saved.preferences.worldV2.scenes[0].tokens, []);
+  assert.deepEqual(applyWorldOperations(applied.state, operations, context).state, applied.state);
+  const replaced = applyWorldOperations(applied.state, [{ type: 'token.create', payload: {
+    sceneId: 'scene-a', token: token('replacement', 'actor-a'),
+  } }], context);
+  assert.equal(replaced.state.preferences.worldV2.scenes[0].tokens.length, 1);
+});
+
+test('Scene reset rejects players and invalid scenes without partial mutation', () => {
+  const initial = state();
+  const before = structuredClone(initial);
+  const reset = { type: 'scene.reset', payload: { sceneId: 'scene-a' } };
+  assert.throws(() => applyWorldOperations(initial, [reset], { source: { role: 'player' } }), { code: 'scene_reset_gm_only' });
+  assert.throws(() => applyWorldOperations(initial, [reset, { ...reset, payload: { sceneId: 'missing' } }], { source: { role: 'offline' } }), { code: 'scene_not_found' });
+  assert.deepEqual(initial, before);
+});
 
 test('World operation envelope rejects unknown operations and invalid revisions', () => {
   assert.throws(

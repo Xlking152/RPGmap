@@ -91,6 +91,7 @@ const OPERATION_TYPES = new Set([
   'scene.activate',
   'scene.delete',
   'scene.content.replace',
+  'scene.reset',
   'scene.settings.patch',
   'scene.door.use',
   'scene.featureState.patch',
@@ -928,6 +929,18 @@ function applyCanonicalOperation(state, operation, context = {}) {
     if (index < 0) fail(`Unknown Scene: ${sceneId}`, 'scene_not_found');
     world.scenes.splice(index, 1);
     return { action: type, sceneId };
+  }
+
+  if (type === 'scene.reset') {
+    if (!['gm', 'offline'].includes(context.source?.role)) {
+      fail('Only the GM can reset the Scene', 'scene_reset_gm_only');
+    }
+    const scene = sceneById(world, payload.sceneId);
+    const tokenIds = (scene.tokens || []).map(token => String(token.id));
+    for (const token of scene.tokens || []) detachTokenAnchors(scene, token);
+    scene.tokens = [];
+    scene.sceneEvents = [];
+    return { action: type, sceneId: String(scene.id), tokenIds };
   }
 
   if (type === 'scene.content.replace') {

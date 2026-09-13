@@ -580,6 +580,9 @@ export function createMovementTokenRuntimeSystem() {
       for (const eventName of ['scene:damage', 'scene:restore', 'scene:undo', 'state:import', 'status:change', 'token:size-change', 'elevation:token-change']) {
         api.on?.(eventName, invalidateNavigation);
       }
+      api.on?.('scene:content-change', event => {
+        if (event.detail?.types?.includes('SceneEvent')) invalidateNavigation();
+      });
       api.emit?.('movement:token-runtime-ready', { schemaVersion: 2, canonical: 'Scene.tokens[]' });
     },
   });
