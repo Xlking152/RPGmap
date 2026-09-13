@@ -1,0 +1,54 @@
+name: Publish RPGmap v2.4.0
+
+on:
+  push:
+    branches: [release-v2.4.0]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 09c5d472c16d0bd7b028a31eec083d0231ceebd6
+
+      - name: Download verified main candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download 34735847741 \
+            --repo Xlking152/RPGmap \
+            --name RPGmap-candidate-v09c5d472c16d0bd7b028a31eec083d0231ceebd6 \
+            --dir release-assets
+
+      - name: Verify release assets
+        run: |
+          set -euo pipefail
+          ZIP="$(find release-assets -type f -name 'RPGmap-v2.4.0.zip' -print -quit)"
+          SUM="$(find release-assets -type f -name 'RPGmap-v2.4.0.zip.sha256' -print -quit)"
+          test -n "$ZIP"
+          test -n "$SUM"
+          EXPECTED="$(awk '{print $1}' "$SUM")"
+          ACTUAL="$(sha256sum "$ZIP" | awk '{print $1}')"
+          test "$EXPECTED" = "$ACTUAL"
+          printf 'ZIP=%s\nSUM=%s\n' "$ZIP" "$SUM" >> "$GITHUB_ENV"
+
+      - name: Create v2.4.0 tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v2.4.0 --repo Xlking152/RPGmap >/dev/null 2>&1; then
+            gh release upload v2.4.0 "$ZIP" "$SUM" --repo Xlking152/RPGmap --clobber
+          else
+            gh release create v2.4.0 "$ZIP" "$SUM" \
+              --repo Xlking152/RPGmap \
+              --target 09c5d472c16d0bd7b028a31eec083d0231ceebd6 \
+              --title 'RPGmap v2.4.0' \
+              --notes 'RPGmap v2.4.0 正式测试发布。代码、全量测试、bundle 检查及 Windows packaged smoke 已通过；本 Release 用于后续真实 Radmin VPN Direct/Relay 多机验收。验收发现的问题将在后续补丁版本修复。'
+          fi
