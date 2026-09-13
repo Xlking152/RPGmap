@@ -39,7 +39,7 @@ test('application chrome keeps the restrained neutral, river and brick palette',
   assert.match(styles, /\.section \{[\s\S]*?border-bottom: 1px solid var\(--line\);/);
   assert.doesNotMatch(styles, /linear-gradient/i);
   assert.equal(packageJson.dependencies.lucide, '1.30.0');
-  assert.equal(packageJson.version, '2.4.0');
+  assert.equal(packageJson.version, '2.4.1');
   assert.match(indexSource, /application-version" content="2\.4\.0"/);
   assert.match(indexSource, /RPGmap 2\.4\.0/);
 });
