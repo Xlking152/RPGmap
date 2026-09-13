@@ -654,7 +654,11 @@ button { color: inherit; }
 [data-library-dialog] button:focus-visible{outline:2px solid #397783;outline-offset:2px}
 [data-library-dialog] [data-library-conflict] button{margin:8px 8px 0 0;padding:5px 8px}
 .journal-dialog::backdrop{background:rgba(12,22,20,.52)}
-.journal-shell{display:grid;grid-template-columns:minmax(190px,260px) minmax(0,1fr);height:100%}
+.journal-dialog[open]{display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}
+.journal-toolbar{display:flex;align-items:center;gap:12px;padding:10px 12px;border-bottom:1px solid #c3cfca}
+.journal-toolbar h2{flex:1;min-width:0;margin:0;font-size:16px}
+.journal-toolbar button{flex-shrink:0;min-height:36px;padding:6px 12px;cursor:pointer;border:1px solid #82928d;border-radius:4px;background:#fff;color:inherit}
+.journal-shell{display:grid;grid-template-columns:minmax(190px,260px) minmax(0,1fr);min-height:0}
 .journal-index{border-right:1px solid #c3cfca;padding:12px;overflow:auto}
 .journal-index header,.journal-head{display:flex;align-items:center;gap:8px}
 .journal-index h2,.journal-head h2{font-size:16px;margin:0;flex:1}

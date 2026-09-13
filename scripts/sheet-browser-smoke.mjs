@@ -539,6 +539,42 @@ try {
     await writeFile(path.join(path.resolve(process.env.RPGMAP_SMOKE_SCREENSHOT_DIR), 'packaged-library-mobile.png'), Buffer.from(capture.data, 'base64'));
   }
   await evaluate(`document.querySelector('[data-library-dialog] [aria-label="关闭"]').click()`);
+  await evaluate(`document.querySelector('[data-journal]').click()`);
+  await retryWithSnapshot(() => evaluate(`Boolean(document.querySelector('.journal-dialog[open] [data-journal-close]'))`), 'Journal empty-state close control');
+  const journalAudit = await evaluate(`(() => {
+    const dialog = document.querySelector('.journal-dialog');
+    const close = dialog.querySelector('[data-journal-close]');
+    const visibleClose = () => {
+      const bounds = close.getBoundingClientRect();
+      if (bounds.width < 44 || bounds.height < 32 || bounds.left < 0 || bounds.right > innerWidth
+        || bounds.top < 0 || bounds.bottom > innerHeight
+        || !close.contains(document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2))) {
+        throw new Error('Journal close is hidden or clipped');
+      }
+    };
+    visibleClose(); close.click();
+    if (dialog.open) throw new Error('Empty Journal did not close');
+    return { emptyClose: true };
+  })()`);
+  await evaluate(`document.querySelector('[data-journal]').click()`);
+  await retryWithSnapshot(() => evaluate(`Boolean(document.querySelector('.journal-dialog[open]'))`), 'Journal reopen');
+  await evaluate(`(() => {
+    const dialog = document.querySelector('.journal-dialog');
+    dialog.querySelector('[data-add]').click();
+    if (!dialog.querySelector('.journal-form')) throw new Error('Journal edit form missing');
+    const main = dialog.querySelector('.journal-main'); main.scrollTop = main.scrollHeight;
+    const close = dialog.querySelector('[data-journal-close]'), bounds = close.getBoundingClientRect();
+    if (!close.contains(document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2))) throw new Error('Journal edit scroll hid close');
+    close.click();
+    if (dialog.open) throw new Error('Editing Journal did not close');
+  })()`);
+  journalAudit.editClose = true;
+  await evaluate(`document.querySelector('[data-journal]').click()`);
+  await retryWithSnapshot(() => evaluate(`Boolean(document.querySelector('.journal-dialog[open]'))`), 'Journal reopen before Escape');
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await retryWithSnapshot(() => evaluate(`!document.querySelector('.journal-dialog').open`), 'Journal Escape close');
+  journalAudit.escapeClose = true;
   await new Promise(resolve => setTimeout(resolve, 400));
   const { checkOfflineContentUpgrade } = await import('./content-browser-checkpoint.mjs');
   const offlineUpgrade = await checkOfflineContentUpgrade({ socket, send, evaluate, retry: retryWithSnapshot, targetUrl });
@@ -551,7 +587,7 @@ try {
 
   console.log(JSON.stringify({ ready, fixtureRevision: setup.revision, liveSheets: opened, drag: dragAudit, tabs: tabAudit,
     health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit, drafts: draftAudit, publicProfile: publicProfileAudit,
-    portrait: { reference: portraitAudit.reference, runtimePreserved: true }, library: libraryAudit, mobile: mobileAudit, offlineUpgrade }));
+    portrait: { reference: portraitAudit.reference, runtimePreserved: true }, library: libraryAudit, journal: journalAudit, mobile: mobileAudit, offlineUpgrade }));
   await send('Browser.close');
   browserClosed = true;
 } catch (error) {
