@@ -132,6 +132,8 @@ export function createMovementFastPathSystem() {
         const expectedOrigins = {};
         let distance = 0;
         const predicted = [];
+        const connected = api.multiplayer?.getStatus?.()?.connected === true;
+        let predictedLocally = false;
         try {
           for (const tokenId of tokenIds) {
             const token = api.tokens.get(tokenId);
@@ -157,7 +159,14 @@ export function createMovementFastPathSystem() {
             expectedOrigins[tokenId] = origin;
             predicted.push({ tokenId, route });
           }
-          for (const item of predicted) api.renderer?.predictTokenVisualRoute?.(item.tokenId, item.route);
+          // Offline movement can animate immediately because the same runtime is authoritative.
+          // LAN movement waits for document.batch.committed; the server-provided motion route is
+          // then animated by the renderer. This prevents a rejected/stale request from visibly
+          // moving a Token and snapping it back to the previous authoritative position.
+          if (!connected) {
+            for (const item of predicted) api.renderer?.predictTokenVisualRoute?.(item.tokenId, item.route);
+            predictedLocally = true;
+          }
           const sceneId = String(api.world.get()?.activeSceneId || '');
           const result = await api.documents.dispatch({
             action: 'move',
@@ -170,7 +179,9 @@ export function createMovementFastPathSystem() {
           api.movement.invalidateNavigation?.();
           return { valid: true, code: 'ok', committed: true, distance, destination: waypoints.at(-1), result };
         } catch (error) {
-          for (const tokenId of tokenIds) api.renderer?.rollbackTokenVisual?.(tokenId);
+          if (predictedLocally) {
+            for (const tokenId of tokenIds) api.renderer?.rollbackTokenVisual?.(tokenId);
+          }
           api.emit?.('token:move-cancelled', {
             id: String(leaderId), tokenId: String(leaderId), tokenIds,
             code: error?.code || 'movement_failed', reason: error?.message || String(error || 'movement cancelled'),
