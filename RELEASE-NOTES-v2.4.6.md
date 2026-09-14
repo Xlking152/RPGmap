@@ -1,5 +1,6 @@
 - 修复多人联机中快速选择或切换视野来源时出现 `Another vision source request is pending` / `vision_source_busy` 的问题。
 - `vision.source.set` 现在按顺序提交并合并相同 Token 的重复请求，避免多个 selection 更新同时争用单一 ACK 槽位。
 - 当新的非空视野来源仍在等待服务器确认时，旧来源失效触发的自动 `null` 清理不会覆盖新的选择。
-- 增加重复选择、快速 A→B 切换以及过期自动清理竞争条件的回归测试。
+- 路径不可穿透的 `structure` 现在默认同时阻挡视线：`navigation.blocks=true` 且 `collisionGroup='structure'` 时，Core 自动复用同一 blocking polygon、高度以及开门／摧毁后的通行状态生成 LOS occluder；可通过 `vision.occluder=false` 显式允许视线穿透。
+- 增加重复选择、快速 A→B 切换、过期自动清理竞争条件，以及结构障碍默认视线遮挡／开门／摧毁／显式例外的回归测试。
 - 应用版本升至 `2.4.6`；World、operation、Status 与 Access schema 均不变，现有存档无需迁移。
