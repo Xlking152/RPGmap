@@ -157,6 +157,7 @@ export function createFeatureInteractionSystem() {
             : { ok: false, reason: '只有 GM 可以修改 Feature 与场景结构' };
         }
         if (['open', 'close'].includes(action)) {
+          if (capabilities.role === 'gm' || capabilities.role === 'offline') return { ok: true, reason: '' };
           if (!tokenId) return { ok: false, reason: '请先选择一个受控 Token' };
           const token = api.tokens.get?.(tokenId);
           const allowed = token && (api.permissions?.can

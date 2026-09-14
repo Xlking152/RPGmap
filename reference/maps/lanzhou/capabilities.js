@@ -142,7 +142,7 @@ export function applyLanzhouCapabilities(features = [], navigation = {}) {
 
     if (!openable && !navigationCapability) return feature;
 
-    const visionOccluder = feature.category === 'wall' || openable || declaredVision.occluder === true
+    const visionOccluder = feature.category === 'building' || feature.category === 'wall' || openable || declaredVision.occluder === true
       ? Object.freeze({
           ...declaredVision,
           occluder: true,

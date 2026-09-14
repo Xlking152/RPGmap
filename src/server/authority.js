@@ -6,6 +6,7 @@ import {
   deriveSceneLightSources,
   isPathPreciselyVisible,
   sphereGroundRadiusMeters,
+  visionIgnoresOcclusion,
 } from '../spatial/kernel.js';
 
 export { canUserControlToken, projectStateForAudience } from '../vision/audience.js';
@@ -18,7 +19,7 @@ export function motionPathPreciselyVisible({ motion, vision, mapPackage, scene }
     return Number(vision?.preciseRangeMeters ?? vision?.rangeMeters) > 0;
   }
   const points = [motion?.from, ...(motion?.waypoints || []), motion?.to].filter(Boolean);
-  const lineOfSightEnabled = vision?.lineOfSightEnabled === true;
+  const lineOfSightEnabled = vision?.lineOfSightEnabled !== false && !visionIgnoresOcclusion(vision);
   const occluders = lineOfSightEnabled
     ? deriveVisionOccluders(mapPackage, scene, deriveSceneState(scene?.sceneEvents || []))
     : [];
@@ -59,5 +60,6 @@ export function describeVisionForToken(state, tokenId) {
     preciseGroundRangeMeters: sphereGroundRadiusMeters(rangeMeters, token.elevationMeters) ?? 0,
     vagueGroundRangeMeters: sphereGroundRadiusMeters(vagueRangeMeters, token.elevationMeters) ?? 0,
     senses: structuredClone(described.senses || {}), lighting: scene?.settings?.lighting || 'normal',
+    lineOfSightEnabled: true,
   };
 }

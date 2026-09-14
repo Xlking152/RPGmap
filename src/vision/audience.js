@@ -7,8 +7,8 @@ import {
   deriveVisionOccluders,
   deriveSceneLightSources,
   perceptionLevelAtPoint,
-  resolveLineOfSightEnabled,
   sphereGroundRadiusMeters,
+  visionIgnoresOcclusion,
 } from '../spatial/kernel.js';
 import { journalVisibleToAudience } from '../journal/model.js';
 
@@ -179,7 +179,7 @@ function currentVision(world, context, actors) {
     vagueGroundRangeMeters: sphereGroundRadiusMeters(
       Math.max(effectivePreciseRangeMeters, vagueRangeMeters), token.elevationMeters,
     ) ?? 0,
-    lineOfSightEnabled: resolveLineOfSightEnabled(scene, context.lineOfSightOverride),
+    lineOfSightEnabled: true,
     senses: clone(description.senses || {}),
     lighting: scene?.settings?.lighting || 'normal',
   };
@@ -372,8 +372,8 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const vision = currentVision(world, context, actors);
   const metersPerUnit = Math.max(0.000001, Number(context.mapMetrics?.metersPerUnit) || 1);
   const currentScene = activeScene(world);
-  const lineOfSightEnabled = resolveLineOfSightEnabled(currentScene, context.lineOfSightOverride);
-  const occluders = lineOfSightEnabled && context.mapPackage
+  const lineOfSightEnabled = true;
+  const occluders = context.mapPackage
     ? deriveVisionOccluders(context.mapPackage, currentScene, deriveSceneState(currentScene?.sceneEvents || []))
     : [];
   const lights = deriveSceneLightSources(context.mapPackage, currentScene);
@@ -397,7 +397,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
       const requiresDetection = hostile && !visibilityOverride;
       const level = requiresDetection && isActive
         ? detectionLevel(rawToken, vision, metersPerUnit, {
-          lineOfSightEnabled, occluders, lights, ambient: currentScene?.settings?.lighting || 'normal',
+          lineOfSightEnabled: lineOfSightEnabled && !visionIgnoresOcclusion(vision), occluders, lights, ambient: currentScene?.settings?.lighting || 'normal',
         })
         : 'precise';
       if (requiresDetection && (!isActive || level === 'none')) return [];

@@ -50,8 +50,8 @@ const baseline = Object.freeze({
 });
 const limits = Object.freeze({
   initialJsGzip: 11726,
-  // Allow 1 KiB for the confirmed Scene reset flow and canonical UI invalidation.
-  totalJsGzip: 311024,
+  // Allow the v2.4.5 gate/vision authority flow to add up to another 1 KiB.
+  totalJsGzip: 312048,
   totalCssGzip: Math.floor(baseline.totalCssGzip * 1.05),
 });
 const measured = {

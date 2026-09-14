@@ -135,6 +135,12 @@ export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = n
   });
 }
 
+// X-ray changes perception only: it bypasses solid Feature occlusion without
+// changing range, lighting, movement, or collision rules.
+export function visionIgnoresOcclusion(vision) {
+  return vision?.senses?.xrayVision === true;
+}
+
 export function inspectLineOfSight({
   from,
   to,
@@ -201,9 +207,11 @@ export function inspectLineOfSight({
   return Object.freeze({ clear: true, code: 'ok' });
 }
 
-export function resolveLineOfSightEnabled(scene, userOverride = null) {
-  if (typeof userOverride === 'boolean') return userOverride;
-  return scene?.settings?.lineOfSightEnabled === true;
+export function resolveLineOfSightEnabled() {
+  // Feature occlusion is part of character perception in v2.4.5. The legacy
+  // Scene/User switches remain readable for save compatibility but cannot
+  // disable the authoritative visibility rule.
+  return true;
 }
 
 export function lightContributionAtPoint(point, lights = [], {

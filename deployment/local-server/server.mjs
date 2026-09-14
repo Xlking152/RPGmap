@@ -1239,7 +1239,7 @@ function authorizeOperations(session, operations) {
       if (sceneId !== String(world.state?.preferences?.worldV2?.activeSceneId || '')) {
         operationDenied('scene_not_active', 'Players may interact with doors only in the active Scene');
       }
-      authorizeMovedToken(tokenId);
+      if (session.role !== 'gm') authorizeMovedToken(tokenId);
       return value;
     }
     if (value.type === 'actor.upsert') {
@@ -1326,6 +1326,7 @@ function appendVisionExplorationOperations(operations) {
           payload: {
             sceneId: vision.sceneId,
             partyId: vision.partyId,
+            visionSourceTokenId: vision.tokenId,
             from: operation.type === 'token.reposition' ? to : {
               x: vision.x, y: vision.y, elevationMeters: vision.elevationMeters,
             },
@@ -1829,6 +1830,7 @@ server.on('upgrade', (req, socket) => {
             type: 'scene.fog.explore',
             payload: {
               sceneId: vision.sceneId, partyId: vision.partyId,
+              visionSourceTokenId: vision.tokenId,
               x: vision.x, y: vision.y, elevationMeters: vision.elevationMeters,
               radiusMeters: vision.vagueGroundRangeMeters,
             },

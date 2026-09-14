@@ -6,6 +6,7 @@ import {
   deriveVisionOccluders,
   perceptionLevelAtPoint,
   sphereGroundRadiusMeters,
+  visionIgnoresOcclusion,
 } from '../spatial/kernel.js';
 
 const FOG_PANE = 'fogVisionPane';
@@ -140,7 +141,7 @@ export function createVisionFogSystem() {
           preciseGroundRangeMeters: sphereGroundRadiusMeters(preciseRangeMeters, token.elevationMeters) ?? 0,
           vagueGroundRangeMeters: sphereGroundRadiusMeters(vagueRangeMeters, token.elevationMeters) ?? 0,
           senses: structuredClone(description.senses || {}), lighting: scene?.settings?.lighting || 'normal',
-          lineOfSightEnabled: scene.settings?.lineOfSightEnabled === true,
+          lineOfSightEnabled: true,
           partyId: actor.partyId ? String(actor.partyId) : null,
         };
       }
@@ -172,12 +173,14 @@ export function createVisionFogSystem() {
         const payload = previous && previous.sceneId === subject.sceneId
           ? {
               sceneId: subject.sceneId, partyId: subject.partyId,
+              visionSourceTokenId: subject.tokenId,
               from: { x: previous.x, y: previous.y, elevationMeters: previous.elevationMeters },
               to: { x: subject.x, y: subject.y, elevationMeters: subject.elevationMeters },
               radiusMeters: subject.vagueGroundRangeMeters,
             }
           : {
               sceneId: subject.sceneId, partyId: subject.partyId,
+              visionSourceTokenId: subject.tokenId,
               x: subject.x, y: subject.y, elevationMeters: subject.elevationMeters,
               radiusMeters: subject.vagueGroundRangeMeters,
             };
@@ -330,7 +333,8 @@ export function createVisionFogSystem() {
           const lights = deriveSceneLightSources(api.mapPackage, scene);
           const needsLightingGrid = kind === 'precise'
             && (String(source.lighting || 'normal') !== 'normal' || lights.length > 0);
-          if (source.lineOfSightEnabled !== true && !needsLightingGrid) {
+          const ignoresOcclusion = visionIgnoresOcclusion(source);
+          if ((!source.lineOfSightEnabled || ignoresOcclusion) && !needsLightingGrid) {
             drawCurrentCircle(context, rangeMeters);
             return;
           }
@@ -341,6 +345,7 @@ export function createVisionFogSystem() {
             vague: source.vagueGroundRangeMeters,
             featureStates: scene.featureStates || {},
             sceneEvents: scene.sceneEvents || [],
+            xrayVision: ignoresOcclusion,
             lighting: source.lighting || 'normal',
             lights,
           });
@@ -350,7 +355,7 @@ export function createVisionFogSystem() {
               x: Number(source.x), y: Number(source.y), radiusMeters: Number(range) || 0,
             }, api.mapPackage, {
               sourceElevationMeters: Number(source.elevationMeters) || 0,
-              occluders: source.lineOfSightEnabled === true ? occluders : [],
+              occluders,
               predicate: targetKind === 'precise' ? target => perceptionLevelAtPoint({
                 vision: source,
                 target,
@@ -358,6 +363,7 @@ export function createVisionFogSystem() {
                 lights,
                 occluders,
                 metersPerUnit,
+                lineOfSightEnabled: source.lineOfSightEnabled === true && !ignoresOcclusion,
               }) === 'precise' : null,
             }));
             visibilityRowsCache = {

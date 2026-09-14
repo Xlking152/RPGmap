@@ -455,7 +455,6 @@ export function createEntityTokenController({
         </fieldset>` : ''}
         ${structureAllowed ? `<fieldset class="token-config-grid"><legend>Scene 空间规则</legend>
           <label>每回合移动预算（m）<input type="number" min="0" step="1" data-scene-movement-budget value="${movementBudget ?? ''}" placeholder="留空表示不限"></label>
-          <label class="token-config-check"><input type="checkbox" data-scene-los-enabled ${scene.settings?.lineOfSightEnabled === true ? 'checked' : ''}> 启用视线遮挡</label>
           <label>开门距离（m）<input type="number" min="0.1" step="0.1" data-scene-door-range value="${Number(scene.settings?.defaultDoorInteractionRangeMeters) || 2}"></label>
         </fieldset>` : ''}
         ${structureAllowed ? `<button type="button" class="small-button" data-sheet-action="reposition-token" data-token-id="${escapeHtml(token.id)}">重新放置</button>` : ''}
@@ -495,10 +494,6 @@ export function createEntityTokenController({
   async function handleChange(target) {
     if (target?.matches?.('[data-scene-movement-budget]')) {
       await changeSceneSettings({ movementBudgetMetersPerTurn: target.value === '' ? null : Number(target.value) });
-      return true;
-    }
-    if (target?.matches?.('[data-scene-los-enabled]')) {
-      await changeSceneSettings({ lineOfSightEnabled: target.checked });
       return true;
     }
     if (target?.matches?.('[data-scene-door-range]')) {
