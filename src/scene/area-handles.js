@@ -1,6 +1,7 @@
 import L from 'leaflet';
 import { attackAreaToPolygon, latLngToWorld, worldToLatLng } from '../engine/geometry.js';
 import { applyAreaHandleDrag, areaHandlePoints } from './area-handle-geometry.js';
+import { stateWithAreaDraft } from './area-state.js';
 
 const STYLE_ID = 'rpgmap-scene-area-handle-style';
 const MAX_AREA_SCALE = 4;
@@ -119,11 +120,9 @@ export function createSceneAreaHandleSystem() {
 
       async function commitDraft() {
         if (!draft || !selectedAreaId) return false;
-        const current = api.getState();
-        const index = (current.attackAreas || []).findIndex(area => String(area.id) === String(selectedAreaId));
-        if (index < 0) return false;
-        current.attackAreas[index] = clone(draft);
-        await Promise.resolve(api.commitState(current, { source: 'scene-area:drag', render: true }));
+        const next = stateWithAreaDraft(api.getState(), selectedAreaId, draft);
+        if (!next) return false;
+        await Promise.resolve(api.commitState(next, { source: 'scene-area:drag', render: true }));
         api.sceneAreas.select?.(selectedAreaId);
         return true;
       }
