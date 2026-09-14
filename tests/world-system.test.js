@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createWorldSystem } from '../src/world/system.js';
 import { WORLD_STATE_KEY, activeWorldScene } from '../src/world/model.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
+import { applyDocumentChanges } from '../src/documents/changes.js';
+import { stateWithAreaDraft } from '../src/scene/area-state.js';
 
 const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图', width: 100, height: 100, features: [], metersPerUnit: 1 };
 function actor() { return { id: 'actor-1', name: '角色', currentFormId: 'form-1', forms: [{ id: 'form-1', tokenAppearance: { color: '#3d9b63' }, avatarDataUrl: null }], runtime: {}, effects: [] }; }
@@ -103,4 +105,28 @@ test('a stale reducer projection cannot overwrite a newer canonical World', asyn
     error => error.code === 'world_state_stale',
   );
   assert.equal(fixture.api.world.listActors()[0].notes, 'new canonical value');
+});
+
+test('area handle saves after Document projection without modifying the canonical snapshot', () => {
+  const fixture = apiFixture();
+  createWorldSystem().register(fixture.api);
+  const initial = fixture.api.getState();
+  const scene = activeWorldScene(initial.preferences[WORLD_STATE_KEY]);
+  const area = { id: 'area-1', shape: 'circle', origin: { x: 1.5, y: 2.5 }, radius: 5,
+    anchor: { type: 'token', tokenId: 'token-1' }, visible: true };
+  scene.attackAreas = [area, { ...structuredClone(area), id: 'area-2' }];
+  // This is the same projection step used for authoritative vision/Token updates.
+  fixture.api.importState(applyDocumentChanges(initial, []));
+  const current = fixture.api.getState();
+  assert.equal(current.attackAreas, activeWorldScene(current.preferences[WORLD_STATE_KEY]).attackAreas);
+  const before = structuredClone(current);
+  const next = stateWithAreaDraft(current, area.id, { ...area, radius: 12 });
+  assert.deepEqual(current, before);
+  assert.equal(activeWorldScene(next.preferences[WORLD_STATE_KEY]).attackAreas[0].radius, 5);
+  assert.equal(next.attackAreas[0].radius, 12);
+  assert.deepEqual(next.attackAreas[1], before.attackAreas[1]);
+  assert.doesNotThrow(() => fixture.api.commitState(next, { source: 'scene-area:drag' }));
+  assert.equal(fixture.api.world.getActiveScene().attackAreas[0].radius, 12);
+  assert.deepEqual(fixture.api.world.getActiveScene().tokens, scene.tokens);
+  assert.equal(stateWithAreaDraft(current, 'removed-area', area), null);
 });
