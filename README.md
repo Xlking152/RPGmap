@@ -1,6 +1,6 @@
 # RPGmap
 
-RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.4.6**，提供 World/Scene 管理、Actor 模板与 Token 实例、米制空间移动、生命/伤势、Status V4、战斗、折叠聊天、四级权限投影、三维感知与光源、战争迷雾、模板资料库和 Journal，以及 Windows 本机/局域网多人运行包。
+RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.4.7**，提供 World/Scene 管理、Actor 模板与 Token 实例、米制空间移动、生命/伤势、Status V4、战斗、折叠聊天、四级权限投影、三维感知与光源、战争迷雾、模板资料库和 Journal，以及 Windows 本机/局域网多人运行包。
 
 内置的“北宋兰州城”是复杂 Reference MapPackage，用于验证建筑、城墙、城门、桥梁、水体、破坏、洪水、导航、有限高度 LOS 和 29 张 WebP 美术资源能够通过通用 Core 运行。v2.4.0 将旧英尺字段迁移到米制空间，并保持稳定 Feature、Actor、Token 与 Scene 引用。
 
@@ -9,7 +9,7 @@ RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前�
 正式 Windows Release：
 
 1. 安装 Node.js `20.19+` 或 `22.12+`。
-2. 下载并解压 `RPGmap-v2.4.6.zip`。
+2. 下载并解压 `RPGmap-v2.4.7.zip`。
 3. 双击 `start-rpgmap.bat`。
 4. GM 使用启动窗口中的 Local URL 与 GM Secret；同一局域网的 Player 使用 LAN URL 与 Join Code。
 
@@ -20,7 +20,7 @@ RPGmap 仅面向本机和可信局域网，不应直接暴露到公网。World�
 - GM 与玩家加入同一个 Radmin VPN 网络，并使用完全一致的 RPGmap 版本。
 - Player 连接启动窗口显示的 GM Radmin `26.x.x.x:30000` 地址；先用 Radmin 自带 Ping 检查 RTT。
 - 将 Radmin 虚拟网卡设置为专用/可信网络，仅放行 RPGmap/Node 和实际端口。不要为了联机关闭整个 Windows 防火墙。
-- Radmin 显示 Direct 时通常延迟最低；Relay/TCP 会增加权威确认时间，但拖动幽灵、WASD 预测和路径动画仍在本地逐帧运行。
+- Radmin 显示 Direct 时通常延迟最低；Relay/TCP 会增加权威确认时间，但拖动路径预览与服务器确认后的路径动画仍在本地逐帧运行。
 - 正式支持 Microsoft Edge 与 Google Chrome 当前稳定版。建议保持硬件加速开启；后台或最小化标签页会被浏览器节流，不作为帧率问题判断依据。
 
 完整步骤见 [操作指南](文档/操作指南.md)。
@@ -38,7 +38,7 @@ RPGmap 仅面向本机和可信局域网，不应直接暴露到公网。World�
 - Local/LAN：Document Operation Protocol 4 按 Actor、Token、Scene、Chat、Combat、Status、Feature 与 Fog 地址提交白名单 intent；普通操作只广播逐会话安全 Document changes。最近 256 次/5 分钟提交可供断线续传，WAL 在 ACK 前刷盘，revision、幂等和 AudienceProjection 继续由服务器裁决。
 - 资产与资料：图片和正文使用不可变内容哈希，浏览器离线存入 IndexedDB，LAN 通过鉴权 HTTP 按需读取；模板资料库支持搜索、标签、收藏、复制、归档和带依赖 ZIP，Journal 使用安全 Markdown 与图片引用。
 - 空间与交互：Token 支持步行、游泳、水上行走、飞行、起飞和降落；服务端按能力、路径、高度、地形成本和回合预算原子验证。门交互使用独立 intent，校验控制权、距离、锁、可见性和排除门自身后的 LOS。
-- 视野与迷雾：玩家选择自己控制的 Token 作为唯一实时视野来源；视野圆心可跟随本地移动预测，但探索只在服务器确认后写入。模糊范围使用保留地图原色的冷灰透明薄雾，未探索区仍接近纯黑，历史探索保持极暗。精确与模糊范围实际看过的 5 米网格区域按 Scene 与队伍持久化共享，GM 可重置或重新隐藏。显式导入或实例覆盖的侦测距离按 Ruleset 原值运行，不再被 Fog 的 120 m 实现上限截断。
+- 视野与迷雾：玩家选择自己控制的 Token 作为唯一实时视野来源；联机移动由服务器确认后播放权威路径动画，视野圆心与 Fog/LOS 在动画过程中逐帧跟随 Token，探索只按服务器确认结果写入。模糊范围使用保留地图原色的冷灰透明薄雾，未探索区仍接近纯黑，历史探索保持极暗。精确与模糊范围实际看过的 5 米网格区域按 Scene 与队伍持久化共享，GM 可重置或重新隐藏。显式导入或实例覆盖的侦测距离按 Ruleset 原值运行，不再被 Fog 的 120 m 实现上限截断。
 - 隐身与可见性：Token 支持公开、队伍、仅 GM 和指定用户；隐身 Token 仅向 GM、控制者、队友及明确授权用户以半透明形式投影。
 - 其他指示物：陷阱、目标点、区域和注释使用轻量 Marker；指示物库分别提供怪物、NPC 与其他模板区域，怪物/NPC 的首次 XLSX 导入不需要预先打开角色库。GM 可在模板卡 Edit 模式修改新实例的默认生命规则，但不改动已有 Unlinked Token；也可在危险区删除模板及所有 Scene 中的关联实例。当前 Scene 实例抽屉可检查 Ruleset 生命字段与状态，并执行批量状态、伤害和恢复。怪物、NPC 与召唤物状态写入各自 Synthetic Actor Token 的 `actorDelta.effects`，不会修改模板或其他实例。
 - 发布验证：audit、全量测试、500 Token/七会话基准、tracked syntax、bundle budget、严格包清单、SHA-256，以及 Windows Edge/Chrome 双浏览器 smoke。
