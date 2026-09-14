@@ -212,6 +212,23 @@ export function createMovementTokenRuntimeSystem() {
         return navigationGrid;
       }
 
+      function inspectTokenPlacement(tokenId, value, options = {}) {
+        const point = finitePoint(value);
+        if (!point) return movementFailure('invalid_destination', 'Token 放置位置无效');
+        const current = tokenId ? api.tokens.get(tokenId) : null;
+        const token = current || {
+          id: tokenId || 'placement', actorId: null,
+          diameterMeters: options.diameterMeters, elevationMeters: options.elevationMeters,
+        };
+        const inspected = inspectDirectNavigationPath(navigation(token), point, point, {
+          diameterMeters: tokenDiameterMeters(token), allowBlockedStartEscape: false,
+        });
+        if (inspected.valid) return { valid: true, code: 'ok' };
+        const outside = inspected.reason === 'outside-map';
+        return movementFailure(outside ? 'placement_outside_map' : 'placement_blocked',
+          outside ? 'Token 放置位置超出地图范围' : 'Token 放置位置与不可通行区域重叠');
+      }
+
       function invalidateNavigation() {
         navigationGrid = null;
         navigationRevision = null;
@@ -559,6 +576,7 @@ export function createMovementTokenRuntimeSystem() {
         return true;
       }
 
+      api.inspectTokenPlacement = inspectTokenPlacement;
       api.movement = Object.freeze({
         canonicalSceneTokens: true,
         inspectMovementAccess,

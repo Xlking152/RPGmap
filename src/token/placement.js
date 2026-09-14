@@ -25,10 +25,17 @@ export function snapActorTokenPlacementPoint(api, point = {}) {
   });
 }
 
-export function inspectActorTokenPlacement(api, point = {}, { tokenId = null } = {}) {
+export function inspectActorTokenPlacement(api, point = {}, {
+  tokenId = null,
+  diameterMeters = undefined,
+  elevationMeters = undefined,
+} = {}) {
   const snapped = snapActorTokenPlacementPoint(api, point);
   const placementTokenId = tokenId == null ? null : String(tokenId).trim() || null;
-  const inspection = api?.inspectTokenPlacement?.(placementTokenId, snapped) || { valid: true };
+  const inspection = api?.inspectTokenPlacement?.(placementTokenId, snapped, {
+    diameterMeters,
+    elevationMeters,
+  }) || { valid: true };
   return Object.freeze({
     point: snapped,
     valid: inspection?.valid !== false,
@@ -44,7 +51,10 @@ export async function createActorTokenAtPoint(api, actorId, point, options = {})
   const targetActorId = String(actorId || '').trim();
   if (!targetActorId) throw new Error('Actor Token placement requires actorId');
 
-  const placement = inspectActorTokenPlacement(api, point);
+  const placement = inspectActorTokenPlacement(api, point, {
+    diameterMeters: options.diameterMeters ?? 1,
+    elevationMeters: options.elevationMeters ?? 0,
+  });
   if (!placement.valid) return Object.freeze({ ok: false, token: null, ...placement });
 
   const token = await api.tokens.create({
@@ -68,7 +78,7 @@ export async function createActorTokenAtPoint(api, actorId, point, options = {})
 
 /**
  * Reposition an existing canonical Scene Token. The current Token id is supplied to the placement
- * inspector so navigation can ignore the mover's own occupied cell.
+ * inspector so navigation can validate the mover's actual footprint at the destination.
  */
 export async function relocateActorTokenAtPoint(api, tokenId, point) {
   if (!api?.tokens?.get || !api?.tokens?.reposition) {
@@ -76,9 +86,14 @@ export async function relocateActorTokenAtPoint(api, tokenId, point) {
   }
   const targetTokenId = String(tokenId || '').trim();
   if (!targetTokenId) throw new Error('Actor Token relocation requires tokenId');
-  if (!api.tokens.get(targetTokenId)) throw new Error(`Unknown Token: ${targetTokenId}`);
+  const current = api.tokens.get(targetTokenId);
+  if (!current) throw new Error(`Unknown Token: ${targetTokenId}`);
 
-  const placement = inspectActorTokenPlacement(api, point, { tokenId: targetTokenId });
+  const placement = inspectActorTokenPlacement(api, point, {
+    tokenId: targetTokenId,
+    diameterMeters: current.diameterMeters ?? current.size ?? 1,
+    elevationMeters: current.elevationMeters ?? 0,
+  });
   if (!placement.valid) return Object.freeze({ ok: false, token: null, ...placement });
 
   const token = await api.tokens.reposition(targetTokenId, placement.point);
