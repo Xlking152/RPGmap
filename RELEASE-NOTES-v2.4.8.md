@@ -1,0 +1,6 @@
+- 修复 Token 紧贴墙体或建筑边界时被误判为与阻挡区域重叠的问题：碰撞检测现在把“刚好接触 footprint 边界”视为合法接触，不再阻止 1 m Token 沿墙移动。
+- 修复旧存档、导入或历史版本中已经处于阻挡区域内的 Token 无法移动的问题：允许 Token 沿起点连续阻挡前缀向外脱困，但一旦离开阻挡区，后续再次进入阻挡区域仍会被正常拒绝，避免形成穿墙漏洞。
+- Token 新建与重定位现在统一通过生产环境 Movement navigation grid 校验，阻止新 Token 被放置到不可通行的 structure / blocking 区域中。
+- 新增 v2.4.8 导航回归覆盖，包括贴墙移动、blocked-start 脱困、离开后重新撞墙拒绝，以及通过真实 Movement runtime 执行的 Token placement 校验。
+- 保留 v2.4.7 的多人联机权威移动与实时 Fog/LOS 跟随机制；本次修复集中在移动提交之前的导航和放置校验阶段。
+- 应用版本升至 `2.4.8`；World、operation、Status 与 Access schema 均不变，现有存档无需迁移。
