@@ -52,21 +52,27 @@ function runtimeScene(api) {
   return world?.scenes?.find(scene => String(scene?.id ?? '') === String(world?.activeSceneId ?? '')) || null;
 }
 
-export function resolveLiveAudienceVision(audience, scene, sourceTokenId = undefined) {
+export function resolveLiveAudienceVision(audience, scene, sourceTokenId = undefined, visualPoint = null) {
   if (!audience || typeof audience !== 'object') return null;
   const requestedTokenId = sourceTokenId === undefined ? audience.source?.tokenId : sourceTokenId;
   const tokenId = String(requestedTokenId ?? '').trim();
   if (!tokenId) return { ...audience, source: null };
   const token = scene?.tokens?.find(item => String(item?.id ?? '') === tokenId);
   if (!token || token.placement !== 'map') return { ...audience, source: null };
+  const visualX = Number(visualPoint?.x);
+  const visualY = Number(visualPoint?.y);
+  const visualElevation = Number(visualPoint?.elevationMeters);
+  const hasVisualPoint = Number.isFinite(visualX) && Number.isFinite(visualY);
   return {
     ...audience,
     source: {
       ...(audience.source || {}),
       tokenId,
-      x: Number(token.x),
-      y: Number(token.y),
-      elevationMeters: Number(token.elevationMeters) || 0,
+      x: hasVisualPoint ? visualX : Number(token.x),
+      y: hasVisualPoint ? visualY : Number(token.y),
+      elevationMeters: Number.isFinite(visualElevation)
+        ? Math.max(0, visualElevation)
+        : Number(token.elevationMeters) || 0,
     },
   };
 }
@@ -200,7 +206,11 @@ export function createVisionFogSystem() {
       function liveVisionState() {
         const state = api.getState?.() || {};
         const audience = state.preferences?.audienceVision || localVisionState();
-        return resolveLiveAudienceVision(audience, runtimeScene(api), confirmedSourceTokenId());
+        const sourceTokenId = confirmedSourceTokenId();
+        const visualPoint = sourceTokenId
+          ? api.renderer?.getVisualTokenPoint?.(sourceTokenId) || null
+          : null;
+        return resolveLiveAudienceVision(audience, runtimeScene(api), sourceTokenId, visualPoint);
       }
 
       function clearUnavailableConnectedSource() {
