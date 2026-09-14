@@ -2,7 +2,6 @@ import { MovementSettings } from './settings.js';
 import { createMovementController } from './controller.js';
 import { createMovementFastPathSystem } from './fast-path.js';
 import { createMovementGhostRenderer } from './ghost-renderer.js';
-import { createMovementPlacementInspector } from './placement.js';
 import { createMovementTokenRuntimeSystem } from './token-runtime.js';
 
 export { MovementSession } from './session.js';
@@ -15,7 +14,6 @@ export { applyMovementStatusMutations, createMovementTokenRuntimeSystem } from '
 export { createMovementController } from './controller.js';
 export { createMovementFastPathSystem } from './fast-path.js';
 export { createMovementGhostRenderer } from './ghost-renderer.js';
-export { createMovementPlacementInspector } from './placement.js';
 export { createMovementRouteInspector } from './route-inspector.js';
 export { createMovementAuthority, resolveMovementStatus } from './authority.js';
 export {
@@ -40,7 +38,6 @@ export function createMovementSystem(options = {}) {
       settings.attach(api);
       createMovementTokenRuntimeSystem().register(api);
       createMovementFastPathSystem().register(api);
-      api.inspectTokenPlacement = createMovementPlacementInspector(api);
       createMovementController({ settings }).register(api);
       createMovementGhostRenderer().register(api);
     },
