@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 const repoArgument = process.argv.find(value => value.startsWith('--repo='));
 const root = path.resolve(repoArgument ? repoArgument.slice('--repo='.length) : '.');
+const benchmarkTmpRoot = path.resolve(String(process.env.RPGMAP_BENCHMARK_TMPDIR || '').trim() || tmpdir());
 const WAIT_MS = 60_000;
 const ACTOR_COUNT = 100;
 const TOKEN_COUNT = 500;
@@ -70,7 +71,7 @@ function waitForMessage(socket, predicate, label = 'message') {
 }
 
 async function startServer() {
-  const mapDir = await mkdtemp(path.join(tmpdir(), 'rpgmap-lan-benchmark-'));
+  const mapDir = await mkdtemp(path.join(benchmarkTmpRoot, 'rpgmap-lan-benchmark-'));
   const serverPath = path.join(root, 'deployment', 'local-server', 'server.mjs');
   const child = spawn(process.execPath, [serverPath], {
     cwd: root,
@@ -278,7 +279,7 @@ try {
   };
   console.log(JSON.stringify({
     repo: root, version: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, schemas, fixture: { actors: ACTOR_COUNT, tokens: TOKEN_COUNT },
-    warmup: WARMUP_COUNT, measurement, moveBytes,
+    warmup: WARMUP_COUNT, measurement, moveBytes, benchmarkTmpRoot,
     scope: 'GM + 6 Player WebSocket fanout only. This does not measure browser DOM, Canvas, input preview or FPS; those require a separate foreground browser benchmark.',
   }, null, 2));
   if (process.argv.includes('--assert')) {
