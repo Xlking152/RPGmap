@@ -332,18 +332,35 @@ try {
     'Visible hostile private Actor data was not cropped');
 
   const moveCommitted = waitForMessage(playerSocket, message =>
-    message.type === 'world.operation.committed' && message.operationId === 'smoke-vision-move', 'Vision move commit');
+    message.type === 'document.batch.committed' && message.operationId === 'smoke-vision-move', 'Vision document move commit');
   const moveAck = waitForMessage(playerSocket, message =>
-    message.type === 'world.operation.ack' && message.operationId === 'smoke-vision-move', 'Vision move ACK');
+    message.type === 'document.batch.ack' && message.operationId === 'smoke-vision-move', 'Vision document move ACK');
   playerSocket.send(JSON.stringify({
-    type: 'world.operation', operationId: 'smoke-vision-move', baseRevision: ack.revision,
-    operations: [{ type: 'token.move', payload: {
-      sceneId: scene.id, tokenId: 'smoke-pc-token', placement: 'map', x: 2940, y: 2500,
-    } }],
+    type: 'document.batch', operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
+    operationId: 'smoke-vision-move', baseRevision: ack.revision,
+    writes: [{
+      action: 'move',
+      document: { type: 'Token', id: 'smoke-pc-token', parent: { type: 'Scene', id: scene.id } },
+      intent: 'token.movePath',
+      data: {
+        tokenIds: ['smoke-pc-token'],
+        waypoints: [{ x: 2940, y: 2500, elevationMeters: 0 }],
+        method: 'drag',
+      },
+      precondition: {
+        expectedOrigins: { 'smoke-pc-token': { x: 2900, y: 2500, elevationMeters: 0 } },
+      },
+    }],
   }));
   const [move, moved] = await Promise.all([moveCommitted, moveAck]);
+  const movedTokenChange = move.changes.find(change => change.document.type === 'Token'
+    && change.document.id === 'smoke-pc-token');
   assert(move.revision === moved.revision && move.changes.some(change => change.document.type === 'Fog'),
-    'Token move did not atomically persist its fog sweep');
+    'Token document move did not atomically persist its fog sweep');
+  assert(movedTokenChange?.changed?.x === 2940,
+    `Player document move did not project the authoritative Token coordinate: ${JSON.stringify(move)}`);
+  assert(Array.isArray(move.motion) && move.motion.some(motion => motion.tokenId === 'smoke-pc-token'
+    && motion.to?.x === 2940), 'Player document move did not publish an authoritative visual route');
 
   const deniedPromise = waitForMessage(playerSocket, message =>
     message.type === 'world.operation.denied' && message.operationId === 'smoke-hidden-forge', 'Hidden target rejection');
@@ -369,7 +386,7 @@ try {
     'Authoritative Token movement was not persisted');
 
   console.log(JSON.stringify({
-    identity: true, audienceProjection: true, visionSource: true,
+    identity: true, audienceProjection: true, visionSource: true, documentMovePath: true,
     fogRevision: canonical.revision, worldSchema: world.schemaVersion,
     importedRevision: importedSnapshot.revision,
   }));
