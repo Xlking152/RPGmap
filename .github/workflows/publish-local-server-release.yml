@@ -50,12 +50,17 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.meta.outputs.version }}"
           NOTES="artifact/RELEASE-NOTES-v${VERSION}.md"
+          EXPLICIT_NOTES="RELEASE-NOTES-v${VERSION}.md"
           mkdir -p artifact
-          awk -v heading="## v${VERSION}" '
-            $0 == heading { found=1; next }
-            found && /^## / { exit }
-            found { print }
-          ' CHANGELOG.md > "${NOTES}"
+          if [[ -s "${EXPLICIT_NOTES}" ]]; then
+            cp "${EXPLICIT_NOTES}" "${NOTES}"
+          else
+            awk -v heading="## v${VERSION}" '
+              $0 == heading { found=1; next }
+              found && /^## / { exit }
+              found { print }
+            ' CHANGELOG.md > "${NOTES}"
+          fi
           test -s "${NOTES}"
           printf '\nSource Commit: `%s`\n' "${{ steps.meta.outputs.commit }}" >> "${NOTES}"
       - run: npm run package:local-server
