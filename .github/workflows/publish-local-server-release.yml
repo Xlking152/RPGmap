@@ -44,23 +44,18 @@ jobs:
           node -e "const v='${VERSION}'.split('.').map(Number); if (v.length !== 3 || v.some(n => !Number.isInteger(n)) || v[0] < 1 || (v[0] === 1 && (v[1] < 5 || (v[1] === 5 && v[2] < 6)))) process.exit(1)"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Prepare release notes
+      - name: Prepare release notes from changelog
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ steps.meta.outputs.version }}"
           NOTES="artifact/RELEASE-NOTES-v${VERSION}.md"
-          EXPLICIT_NOTES="RELEASE-NOTES-v${VERSION}.md"
           mkdir -p artifact
-          if [[ -s "${EXPLICIT_NOTES}" ]]; then
-            cp "${EXPLICIT_NOTES}" "${NOTES}"
-          else
-            awk -v heading="## v${VERSION}" '
-              $0 == heading { found=1; next }
-              found && /^## / { exit }
-              found { print }
-            ' CHANGELOG.md > "${NOTES}"
-          fi
+          awk -v heading="## v${VERSION}" '
+            $0 == heading { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > "${NOTES}"
           test -s "${NOTES}"
           printf '\nSource Commit: `%s`\n' "${{ steps.meta.outputs.commit }}" >> "${NOTES}"
       - run: npm run package:local-server
