@@ -1,0 +1,6 @@
+- 修复多人联机中 Token 移动后视觉上回弹到原位置的问题：联机移动不再在服务器确认前播放未授权的本地预测位移，而是在 `document.batch.committed` 后按服务器返回的权威 `motion` 路线平滑播放。
+- 修复视野来源 Token 移动时 Fog/LOS 圆心停留在旧坐标的问题：动态视野现在优先跟随 Renderer 的实时视觉坐标，并在权威移动动画过程中逐帧同步。
+- 离线模式仍保留即时本地移动动画；服务器拒绝或并发冲突不会再造成联机 Token 先移动再回滚的视觉跳变。
+- Windows packaged LAN vision smoke 改为覆盖真实 Player `document.batch -> token.movePath` 路径，并验证 Token 新坐标、Fog 探索更新和权威移动路线同时下发。
+- 保留 v2.4.6 的结构遮挡规则：路径不可穿透的 `structure` 默认同时作为 LOS occluder，开门、摧毁与显式 `vision.occluder=false` 语义不变。
+- 应用版本升至 `2.4.7`；World、operation、Status 与 Access schema 均不变，现有存档无需迁移。
