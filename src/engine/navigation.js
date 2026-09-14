@@ -30,6 +30,7 @@ const { blocked: CELL_BLOCKED, destructible: CELL_DESTRUCTIBLE, water: CELL_WATE
 const CHUNK_CELLS = NAVIGATION_CHUNK_SIZE_METERS * NAVIGATION_CHUNK_SIZE_METERS;
 const EMPTY_CHUNK = new Uint8Array(CHUNK_CELLS);
 const FOOTPRINT_OFFSETS = new Map();
+const FOOTPRINT_TOUCH_EPSILON = 1e-9;
 
 function pointTuple(point) {
   return Array.isArray(point) ? [Number(point[0]), Number(point[1])] : [Number(point.x), Number(point.y)];
@@ -427,7 +428,9 @@ function footprintOffsets(diameterMeters, cellSize = NAVIGATION_CELL_SIZE_METERS
   const offsets = [];
   for (let y = -limit; y <= limit; y += 1) {
     for (let x = -limit; x <= limit; x += 1) {
-      if (Math.hypot(x, y) <= radius + 0.5 + 1e-9) offsets.push({ x, y });
+      // Exact boundary contact is not overlap. In particular, a 1 m Token at
+      // one cell centre may sit flush against a blocked neighbouring cell.
+      if (Math.hypot(x, y) < radius + 0.5 - FOOTPRINT_TOUCH_EPSILON) offsets.push({ x, y });
     }
   }
   FOOTPRINT_OFFSETS.set(cacheKey, Object.freeze(offsets));
@@ -524,6 +527,10 @@ export function inspectDirectNavigationPath(navigation, startPoint, destinationP
   const inspectCachedOccupation = typeof navigation?.queryOccupation === 'function'
     ? navigation.queryOccupation(diameterMeters)
     : null;
+  const canEscapeBlockedStart = options.allowBlockedStartEscape !== false
+    && (startCell.x !== endCell.x || startCell.y !== endCell.y);
+  let escapingBlockedStart = false;
+  let escapedBlockedStart = false;
   let failure = null;
   let visitedCellCount = 0;
   let encounteredFlags = 0;
@@ -535,12 +542,38 @@ export function inspectDirectNavigationPath(navigation, startPoint, destinationP
     const difficult = Boolean(flags & CELL_CRATER);
     const water = Boolean(flags & CELL_WATER);
     terrainCellCounts[difficult && water ? 'difficultWater' : difficult ? 'difficult' : water ? 'water' : 'normal'] += 1;
-    failure = inspectOccupation(navigation, cell, diameterMeters, readCellFlags, inspectCachedOccupation);
+    const occupation = inspectOccupation(navigation, cell, diameterMeters, readCellFlags, inspectCachedOccupation);
+
+    if (visitedCellCount === 1 && occupation && canEscapeBlockedStart) {
+      // Recovery path for legacy/imported Tokens that already overlap a blocker.
+      // Only the initial continuous blocked prefix is tolerated. Once the Token
+      // reaches a clear footprint, any later collision fails normally.
+      escapingBlockedStart = true;
+      return true;
+    }
+    if (escapingBlockedStart) {
+      if (occupation) {
+        if (cell.x === endCell.x && cell.y === endCell.y) {
+          failure = occupation;
+          return false;
+        }
+        return true;
+      }
+      escapingBlockedStart = false;
+      escapedBlockedStart = true;
+      return true;
+    }
+
+    failure = occupation;
     return !failure;
   });
   if (failure) return { valid: false, reason: 'blocked', visitedCellCount, encounteredFlags, terrainCellCounts, ...failure };
   if (!traversal.completed) return { valid: false, reason: 'iteration-limit', visitedCellCount, blockedCell: null, blockingCell: null, blockingFlags: CELL_BOUNDARY };
-  return { valid: true, visitedCellCount, encounteredFlags, terrainCellCounts, blockedCell: null, blockingCell: null, blockingFlags: 0 };
+  if (escapingBlockedStart) {
+    return { valid: false, reason: 'blocked', visitedCellCount, encounteredFlags, terrainCellCounts,
+      blockedCell: endCell, blockingCell: endCell, blockingFlags: CELL_BLOCKED };
+  }
+  return { valid: true, visitedCellCount, encounteredFlags, terrainCellCounts, blockedCell: null, blockingCell: null, blockingFlags: 0, escapedBlockedStart };
 }
 
 export function isNavigationSegmentWalkable(navigation, startPoint, endPoint, options = {}) {
