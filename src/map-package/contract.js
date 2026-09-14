@@ -144,8 +144,11 @@ function normalizeNavigationCapability(feature, declared) {
 }
 
 function normalizeVisionCapability(feature, declared, navigation) {
-  const source = declared.vision ?? feature.vision;
-  if (!source || typeof source !== 'object' || source.occluder !== true) return null;
+  const requested = declared.vision ?? feature.vision;
+  const source = requested && typeof requested === 'object' ? requested : {};
+  const inheritedFromStructure = navigation?.blocks === true && navigation?.collisionGroup === 'structure';
+  if (source.occluder === false || (source.occluder !== true && !inheritedFromStructure)) return null;
+  const explicitOccluder = source.occluder === true;
   return Object.freeze({
     ...source,
     occluder: true,
@@ -157,8 +160,12 @@ function normalizeVisionCapability(feature, declared, navigation) {
       source.polygon ?? navigation?.blockingPolygon ?? feature.geometry?.points,
       'feature vision polygon',
     ),
-    passableWhenOpen: source.passableWhenOpen === true,
-    passableWhenDestroyed: source.passableWhenDestroyed !== false,
+    passableWhenOpen: source.passableWhenOpen == null
+      ? (!explicitOccluder && navigation?.passableWhenOpen === true)
+      : source.passableWhenOpen === true,
+    passableWhenDestroyed: source.passableWhenDestroyed == null
+      ? (explicitOccluder ? true : navigation?.passableWhenDestroyed === true)
+      : source.passableWhenDestroyed !== false,
   });
 }
 
