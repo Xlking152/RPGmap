@@ -9,6 +9,7 @@ const workflow = readFileSync(
 const packageSource = readFileSync(new URL('../scripts/package-local-server.mjs', import.meta.url), 'utf8');
 const verifierSource = readFileSync(new URL('../scripts/verify-package.mjs', import.meta.url), 'utf8');
 const lanSmokeSource = readFileSync(new URL('../scripts/lan-vision-smoke.mjs', import.meta.url), 'utf8');
+const lanBenchmarkSource = readFileSync(new URL('../scripts/lan-performance-benchmark.mjs', import.meta.url), 'utf8');
 
 test('release publishing declares the repository without requiring a checkout', () => {
   assert.match(
@@ -18,6 +19,16 @@ test('release publishing declares the repository without requiring a checkout', 
   assert.match(workflow, /Prepare release notes from changelog/);
   assert.match(workflow, /Source Commit/);
   assert.match(workflow, /--notes-file/);
+});
+
+test('release LAN benchmark isolates hosted-runner disk jitter without relaxing budgets', () => {
+  assert.match(
+    workflow,
+    /Assert LAN WebSocket performance budget[\s\S]*?RPGMAP_BENCHMARK_TMPDIR:\s*\/dev\/shm[\s\S]*?npm run benchmark:lan -- --assert/,
+  );
+  assert.match(lanBenchmarkSource, /process\.env\.RPGMAP_BENCHMARK_TMPDIR/);
+  assert.match(lanBenchmarkSource, /measurement\.aggregate\.p95Ms > 60/);
+  assert.match(lanBenchmarkSource, /moveBytes\.requestMax > 4096 \|\| moveBytes\.responseMax > 4096/);
 });
 
 test('release package closes every local server module inside the ZIP root', () => {
