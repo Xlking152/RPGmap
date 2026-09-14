@@ -6,6 +6,8 @@ import {
 } from '../src/engine/navigation.js';
 import { deriveFloodRegions } from '../src/engine/state.js';
 import { polygonArea } from '../src/engine/geometry.js';
+import { applyLanzhouCapabilities } from '../reference/maps/lanzhou/capabilities.js';
+import lanzhou from '../reference/maps/lanzhou/runtime.json' with { type: 'json' };
 
 const rectangle = (x, y, width, height) => [[x, y], [x + width, y], [x + width, y + height], [x, y + height]];
 const obstacle = (id, polygon, navigation = {}) => ({
@@ -15,6 +17,25 @@ const field = (features, { scene = {}, states = {}, mover = {}, ...map } = {}) =
   width: 150, height: 150, features, roadBuffers: [], liquidBodies: [], ...map,
 }, scene, null, { appState: { preferences: { featureStates: states } }, moverContext: mover });
 const at = (navigation, x = 55, y = 55) => navigation.cellFlags({ x, y });
+
+test('Lanzhou building damage opens footprint-sized passages and preserves other blockers', () => {
+  const [building] = applyLanzhouCapabilities([{
+    ...obstacle('house', rectangle(40, 20, 20, 100)), category: 'building',
+  }]);
+  const cross = grid => inspectDirectNavigationPath(grid, { x: 20.5, y: 55.5 }, { x: 80.5, y: 55.5 });
+  assert.equal(cross(field([building])).valid, false);
+  assert.equal(cross(field([building], { scene: { destroyedObjectIds: ['house'] } })).valid, true);
+  const scene = { clipHits: [{ featureId: 'house', polygon: rectangle(35, 53, 30, 5) }] };
+  const gap = field([building], { scene, mover: { diameterMeters: 1 } });
+  assert.equal(cross(gap).valid, true);
+  assert.ok(at(gap, 50, 65) & FLAGS.blocked);
+  assert.equal(cross(field([building], { scene, mover: { diameterMeters: 10 } })).valid, false);
+  assert.equal(cross(field([building, obstacle('other', rectangle(45, 50, 5, 10))], { scene })).valid, false);
+  for (const feature of lanzhou.features.filter(feature => feature.category === 'building')) {
+    assert.equal(feature.capabilities.navigation.passableWhenDestroyed, true, feature.id);
+    assert.equal(feature.capabilities.navigation.damageCreatesPassage, true, feature.id);
+  }
+});
 
 test('an open or destroyed door removes only its own obstacle regardless of Feature order', () => {
   const door = obstacle('door', rectangle(40, 40, 30, 30), { passableWhenOpen: true, passableWhenDestroyed: true });

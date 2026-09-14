@@ -1,3 +1,5 @@
+import { polygonDifference } from '../engine/geometry.js';
+
 const EPSILON = 1e-9;
 const NORMALIZED_VISION_OCCLUDERS = new WeakSet();
 
@@ -79,10 +81,20 @@ export function normalizeVisionOccluder(value) {
   const polygon = occluderPolygon(value);
   const height = Number(value?.blockingHeightMeters ?? value?.heightMeters);
   if (!polygon || !Number.isFinite(height) || height < 0) return null;
+  const polygons = value.polygons ?? [[polygon]];
+  if (!Array.isArray(polygons)) return null;
+  const regions = [];
+  for (const rings of polygons) {
+    if (!Array.isArray(rings) || !rings.length) return null;
+    const region = rings.map(ring => occluderPolygon({ polygon: ring }));
+    if (region.some(ring => !ring)) return null;
+    regions.push(Object.freeze(region.map(ring => Object.freeze(ring.map(point => Object.freeze(point))))));
+  }
   const normalized = Object.freeze({
     id: String(value?.id ?? value?.featureId ?? ''),
     featureId: value?.featureId == null ? null : String(value.featureId),
     polygon: Object.freeze(polygon.map(point => Object.freeze(point))),
+    polygons: Object.freeze(regions),
     blockingHeightMeters: height,
     passableWhenOpen: value?.passableWhenOpen === true,
     passableWhenDestroyed: value?.passableWhenDestroyed !== false,
@@ -112,6 +124,13 @@ export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = n
     const featureId = String(occluder.featureId || occluder.id);
     if (occluder.passableWhenOpen && states[featureId]?.open === true) return [];
     if (occluder.passableWhenDestroyed && destroyed.has(featureId)) return [];
+    const hits = occluder.passableWhenDestroyed
+      ? (derivedScene?.clipHits || []).filter(hit => String(hit.featureId) === featureId) : [];
+    if (hits.length) {
+      let polygons = occluder.polygons;
+      for (const hit of hits) polygons = polygonDifference(polygons, hit.polygon);
+      return polygons.length ? [normalizeVisionOccluder({ ...occluder, polygons })] : [];
+    }
     return [occluder];
   });
 }
@@ -140,17 +159,31 @@ export function inspectLineOfSight({
       || polygon.every(point => point[0] > rayBounds[2])
       || polygon.every(point => point[1] < rayBounds[1])
       || polygon.every(point => point[1] > rayBounds[3])) continue;
-    const intersections = [];
-    for (let index = 0; index < polygon.length; index += 1) {
-      const t = segmentIntersectionT(start, end, polygon[index], polygon[(index + 1) % polygon.length]);
-      if (t != null && t > EPSILON && t < 1 - EPSILON) intersections.push(t);
+    // Ring crossings partition the ray into intervals wholly inside or outside
+    // the remaining solid. Hole boundaries alone must not block a clear ray.
+    const intersections = [0, 1];
+    for (const rings of occluder.polygons) for (const ring of rings) {
+      for (let index = 0; index < ring.length; index += 1) {
+        const t = segmentIntersectionT(start, end, ring[index], ring[(index + 1) % ring.length]);
+        if (t != null && t > 0 && t < 1) intersections.push(t);
+      }
     }
-    if (pointInPolygon(start, polygon)) intersections.push(EPSILON);
-    if (pointInPolygon(end, polygon)) intersections.push(1 - EPSILON);
-    const blockedAt = intersections.sort((left, right) => left - right).find(t => {
-      const elevation = start.elevationMeters + (end.elevationMeters - start.elevationMeters) * t;
-      return elevation <= occluder.blockingHeightMeters + EPSILON;
-    });
+    intersections.sort((left, right) => left - right);
+    let blockedAt;
+    const slope = end.elevationMeters - start.elevationMeters;
+    for (let index = 1; index < intersections.length; index += 1) {
+      const first = intersections[index - 1], last = intersections[index];
+      if (last - first <= EPSILON) continue;
+      const middle = (first + last) / 2;
+      const point = { x: start.x + (end.x - start.x) * middle, y: start.y + (end.y - start.y) * middle };
+      if (!occluder.polygons.some(([outer, ...holes]) => pointInPolygon(point, outer)
+        && !holes.some(hole => pointInPolygon(point, hole)))) continue;
+      if (start.elevationMeters + slope * first <= occluder.blockingHeightMeters + EPSILON) blockedAt = first;
+      else if (slope < 0 && start.elevationMeters + slope * last <= occluder.blockingHeightMeters + EPSILON) {
+        blockedAt = (occluder.blockingHeightMeters - start.elevationMeters) / slope;
+      }
+      if (blockedAt !== undefined) break;
+    }
     if (blockedAt !== undefined) {
       return Object.freeze({
         clear: false,
