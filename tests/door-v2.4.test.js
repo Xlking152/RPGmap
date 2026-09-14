@@ -61,10 +61,43 @@ test('door intent validates distance and excludes the target door from LOS', () 
     type: 'scene.door.use', payload: { sceneId: 'scene', featureId: 'door', tokenId: 'token', action: 'open' },
   }], { source: { role: 'player' }, mapPackage: value.mapPackage, mapMetrics: value.mapPackage });
   assert.equal(result.state.preferences.worldV2.scenes[0].featureStates.door.open, true);
-  assert.equal(result.results[0].distanceMeters, 2);
+  assert.equal(result.results[0].distanceMeters, 1);
   assert.deepEqual(documentChangeSet(createDocumentChanges(value.state, result.state)).featureStates, [{
     sceneId: 'scene', featureIds: ['door'],
   }]);
+});
+
+test('door LOS target follows the nearest blocking contour point', () => {
+  const value = fixture({ tokenX: 0.25 });
+  const result = validateDoorInteraction({
+    scene: value.scene,
+    token: value.token,
+    feature: value.mapPackage.features[0],
+    mapPackage: value.mapPackage,
+    action: 'open',
+    source: { role: 'player' },
+  });
+  assert.equal(result.valid, true);
+  assert.equal(result.target.x, 1.5);
+  assert.equal(result.target.y, 0);
+});
+
+test('GM can open and close a door without selecting a Token, while players must provide one', () => {
+  const value = fixture({ tokenX: 8, featureStates: { door: { locked: true } } });
+  const opened = applyWorldOperations(value.state, [{
+    type: 'scene.door.use', payload: { sceneId: 'scene', featureId: 'door', action: 'open' },
+  }], { source: { role: 'gm' }, mapPackage: value.mapPackage, mapMetrics: value.mapPackage });
+  assert.equal(opened.state.preferences.worldV2.scenes[0].featureStates.door.open, true);
+  const missing = fixture({ tokenX: 8 });
+  assert.throws(() => applyWorldOperations(missing.state, [{
+    type: 'scene.door.use', payload: { sceneId: 'scene', featureId: 'door', action: 'open' },
+  }], { source: { role: 'player' }, mapPackage: missing.mapPackage, mapMetrics: missing.mapPackage }), { code: 'door_actor_required' });
+  assert.deepEqual(missing.state.preferences.worldV2.scenes[0].featureStates, {});
+  const destroyed = fixture();
+  destroyed.scene.sceneEvents = [{ id: 'damage-door', type: 'damage', objectIds: ['door'] }];
+  assert.throws(() => applyWorldOperations(destroyed.state, [{
+    type: 'scene.door.use', payload: { sceneId: 'scene', featureId: 'door', action: 'open' },
+  }], { source: { role: 'gm' }, mapPackage: destroyed.mapPackage, mapMetrics: destroyed.mapPackage }), { code: 'door_destroyed' });
 });
 
 test('door intent rejects locked, distant, hidden and separately occluded targets', () => {

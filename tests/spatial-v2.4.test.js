@@ -199,13 +199,21 @@ test('Audience projection applies sphere range and LOS to airborne hostile Token
   assert.deepEqual(visible.preferences.worldV2.scenes[0].tokens.map(token => token.id), ['source', 'target']);
 });
 
-test('GM-managed audience LOS override takes precedence over the Scene default', () => {
+test('Scene and player LOS overrides cannot bypass character visual occlusion', () => {
   const bypassed = projectStateForAudience(audienceState(0), { ...audienceContext, lineOfSightOverride: false });
-  assert.deepEqual(bypassed.preferences.worldV2.scenes[0].tokens.map(token => token.id), ['source', 'target']);
+  assert.deepEqual(bypassed.preferences.worldV2.scenes[0].tokens.map(token => token.id), ['source']);
   const state = audienceState(0);
   state.preferences.worldV2.scenes[0].settings.lineOfSightEnabled = false;
   const forced = projectStateForAudience(state, { ...audienceContext, lineOfSightOverride: true });
   assert.deepEqual(forced.preferences.worldV2.scenes[0].tokens.map(token => token.id), ['source']);
+});
+
+test('X-ray character sees the complete precise and vague circular area through Features', () => {
+  const xray = { ...audienceContext, ruleset: {
+    vision: { describe: () => ({ preciseRangeMeters: 100, vagueRangeMeters: 100, senses: { xrayVision: true } }) },
+  } };
+  const projected = projectStateForAudience(audienceState(0), xray);
+  assert.deepEqual(projected.preferences.worldV2.scenes[0].tokens.map(token => token.id), ['source', 'target']);
 });
 
 test('Lanzhou declares bounded LOS only for walls and openable gates', () => {
@@ -214,7 +222,7 @@ test('Lanzhou declares bounded LOS only for walls and openable gates', () => {
   const featureById = new Map(lanzhou.features.map(feature => [feature.id, feature]));
   assert.ok(occluders.every(entry => {
     const feature = featureById.get(entry.featureId);
-    return feature?.category === 'wall' || feature?.capabilities?.openable === true;
+    return feature?.category === 'building' || feature?.category === 'wall' || feature?.capabilities?.openable === true;
   }));
   assert.ok(occluders.every(entry => Number.isFinite(entry.blockingHeightMeters)));
 });

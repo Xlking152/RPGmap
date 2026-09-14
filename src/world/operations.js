@@ -28,7 +28,7 @@ import {
   resetFogParty,
 } from '../vision/fog.js';
 import { deriveSceneState } from '../engine/state.js';
-import { deriveVisionOccluders } from '../spatial/kernel.js';
+import { deriveVisionOccluders, visionIgnoresOcclusion } from '../spatial/kernel.js';
 import { migrateWorldSchema3State } from './migration.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { advanceStatusDurations, STATUS_SCHEMA_VERSION } from '../status/model.js';
@@ -981,10 +981,12 @@ function applyCanonicalOperation(state, operation, context = {}) {
   if (type === 'scene.door.use') {
     const scene = sceneById(world, payload.sceneId);
     const featureId = identifier(payload.featureId, 'featureId');
-    const tokenId = identifier(payload.tokenId, 'tokenId');
+    const isGm = ['gm', 'offline'].includes(String(context.source?.role || '').toLowerCase());
+    const tokenId = payload.tokenId == null || payload.tokenId === '' ? null : identifier(payload.tokenId, 'tokenId');
     const action = String(payload.action || '');
     if (!['open', 'close'].includes(action)) fail('Door action must be open or close', 'door_action_invalid');
-    const { token } = tokenById(scene, tokenId);
+    const token = tokenId ? tokenById(scene, tokenId).token : null;
+    if (!isGm && !token) fail('Door interaction requires a controlled Token', 'door_actor_required');
     const mapPackage = plainObject(context.mapPackage)
       ? context.mapPackage
       : plainObject(context.mapMetrics) ? context.mapMetrics : null;
@@ -1028,7 +1030,16 @@ function applyCanonicalOperation(state, operation, context = {}) {
         maxX: Math.max(bounds.maxX, finite(point.x, 'x') + radiusUnits),
         maxY: Math.max(bounds.maxY, finite(point.y, 'y') + radiusUnits),
       }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
-    const lineOfSightEnabled = scene.settings?.lineOfSightEnabled === true;
+    const sourceId = payload.visionSourceTokenId == null ? '' : String(payload.visionSourceTokenId);
+    const sourceToken = sourceId ? scene.tokens?.find(token => String(token?.id || '') === sourceId) : null;
+    const sourceActor = sourceToken && world.actors?.find(actor => String(actor?.id || '') === String(sourceToken.actorId || ''));
+    const sourceResolvedActor = sourceToken && sourceActor && sourceToken.actorLink === false
+      ? mergeActorDelta(sourceActor, sourceToken.actorDelta)
+      : sourceActor;
+    const sourceVision = sourceToken && sourceResolvedActor
+      ? context.ruleset?.vision?.describe?.(sourceResolvedActor, { token: sourceToken, scene, world })
+      : null;
+    const lineOfSightEnabled = !visionIgnoresOcclusion(sourceVision);
     const occluders = lineOfSightEnabled
       ? deriveVisionOccluders(map, scene, deriveSceneState(scene.sceneEvents || []))
       : [];
