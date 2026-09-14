@@ -7,7 +7,7 @@ import {
   inspectDirectNavigationPath,
 } from '../src/engine/navigation.js';
 import { deriveSceneState } from '../src/engine/state.js';
-import { createMovementPlacementInspector } from '../src/movement/placement.js';
+import { createMovementTokenRuntimeSystem } from '../src/movement/token-runtime.js';
 
 function wallFeature(id, minX, maxX) {
   return {
@@ -41,6 +41,25 @@ function navigation(options = {}) {
     appState: { preferences: { featureStates: {} }, sceneEvents: [] },
     moverContext: { tokenId: 'token-a', elevationMeters: 0, diameterMeters: 1, collisionBypassGroups: [] },
   });
+}
+
+function productionPlacementInspector(map) {
+  const scene = { id: 'scene-a', tokens: [], markers: [], attackAreas: [], sceneEvents: [], settings: {} };
+  const world = { id: 'world-a', activeSceneId: scene.id, actors: [], statusDefinitions: [], scenes: [scene] };
+  const api = {
+    mapPackage: map,
+    getState: () => ({ preferences: { featureStates: {} }, sceneEvents: [] }),
+    tokens: { get: () => null },
+    world: {
+      get: () => world,
+      getActiveScene: () => scene,
+      commit: async () => world,
+    },
+    on: () => () => {},
+    emit: () => {},
+  };
+  createMovementTokenRuntimeSystem().register(api);
+  return api.inspectTokenPlacement;
 }
 
 test('1 m Token may sit flush against a blocked neighbouring cell without false footprint collision', () => {
@@ -84,19 +103,9 @@ test('blocked-start recovery cannot re-enter another blocker after reaching clea
   assert.deepEqual(result.blockingCell, { x: 8, y: 10 });
 });
 
-test('canonical placement inspector rejects blocked structure cells and accepts adjacent clear cells', () => {
-  const map = mapPackage();
-  const scene = { id: 'scene-a', sceneEvents: [] };
-  const inspectPlacement = createMovementPlacementInspector({
-    mapPackage: map,
-    tokens: { get: () => null },
-    world: { getActiveScene: () => scene },
-    getState: () => ({ preferences: { featureStates: {} }, sceneEvents: [] }),
-  });
-
-  const adjacent = inspectPlacement(null, { x: 4.5, y: 10.5 }, { diameterMeters: 1 });
-  assert.equal(adjacent.valid, true);
-
+test('production Movement runtime rejects blocked placement and accepts an adjacent clear cell', () => {
+  const inspectPlacement = productionPlacementInspector(mapPackage());
+  assert.equal(inspectPlacement(null, { x: 4.5, y: 10.5 }, { diameterMeters: 1 }).valid, true);
   const blocked = inspectPlacement(null, { x: 5.5, y: 10.5 }, { diameterMeters: 1 });
   assert.equal(blocked.valid, false);
   assert.equal(blocked.code, 'placement_blocked');
