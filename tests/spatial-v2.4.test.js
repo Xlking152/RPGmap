@@ -13,6 +13,7 @@ import {
 } from '../src/spatial/kernel.js';
 import { projectStateForAudience } from '../src/vision/audience.js';
 import { exploreFogVisibleCircle, isFogCellExplored } from '../src/vision/fog.js';
+import { createInitialState, createDamagePreview, commitDamageEvent, deriveSceneState, undoLastSceneEvent, commitRestoreEvent, commitResetSceneEvent } from '../src/engine/state.js';
 
 const wall = {
   id: 'wall-a', featureId: 'wall-a',
@@ -53,6 +54,56 @@ test('open and destroyed features remove only their own vision blocker', () => {
   const scene = { featureStates: { 'wall-a': { open: true } } };
   const values = deriveVisionOccluders(mapPackage, scene, { destroyedObjectIds: ['wall-b'] });
   assert.deepEqual(values, []);
+});
+
+const rect = (x, y, w, h) => [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+const damagedOccluders = (polygons, others = []) => deriveVisionOccluders(
+  { visionOccluders: [wall, ...others] }, {},
+  { clipHits: polygons.map(polygon => ({ featureId: wall.featureId, polygon })) },
+);
+const sight = (occluders, y = 0, elevationMeters = 0) => inspectLineOfSight({
+  occluders, from: { x: 0, y, elevationMeters }, to: { x: 10, y, elevationMeters },
+});
+
+test('localized damage opens only its own LOS gap and light path, preserving separate remnants', () => {
+  const values = damagedOccluders([rect(3, -0.5, 2, 1), rect(4.5, -0.5, 3, 1)]);
+  assert.equal(values[0].polygons.length, 2);
+  assert.equal(sight(values).clear, true);
+  assert.equal(sight(values, 1).clear, false);
+  assert.equal(sight(values, -1, 6).clear, true);
+  assert.equal(sight(values, 1, 5).clear, false);
+  assert.equal(lightContributionAtPoint({ x: 10, y: 0 }, [{ x: 0, y: 0, rangeMeters: 20 }], { occluders: values }), 0.5);
+  const overlap = { ...wall, id: 'other', featureId: 'other' };
+  assert.equal(sight(damagedOccluders([rect(3, -1, 4, 2)], [overlap])).featureId, 'other');
+  assert.equal(sight(damagedOccluders([rect(3, -3, 4, 6)])).clear, true);
+});
+
+test('interior damage holes stay empty but surrounding walls still obstruct and retain height checks', () => {
+  const values = damagedOccluders([rect(4.5, -1, 1, 2)]);
+  assert.equal(values[0].polygons[0].length, 2);
+  assert.equal(inspectLineOfSight({ occluders: values, from: { x: 5, y: -0.5 }, to: { x: 5, y: 0.5 } }).clear, true);
+  assert.equal(sight(values).clear, false);
+  assert.equal(inspectLineOfSight({ occluders: values,
+    from: { x: 5, y: 0 }, to: { x: 10, y: 0 } }).clear, false);
+  assert.equal(inspectLineOfSight({ occluders: [wall],
+    from: { x: 0, y: 0, elevationMeters: 10 }, to: { x: 10, y: 0 } }).clear, false);
+});
+
+test('damage reload and undo update authoritative player visibility without stale occluders', () => {
+  const map = { id: 'test-map', version: '1', features: [{ id: wall.featureId, category: 'wall',
+    mode: 'clip', geometry: { type: 'polygon', points: wall.polygon } }], width: 30, height: 30 };
+  const initial = createInitialState(map);
+  const area = { id: 'blast', shape: 'circle', origin: { x: 5, y: 0 }, radius: 3 };
+  const damaged = commitDamageEvent(initial, area, createDamagePreview(area, map.features, ['wall']));
+  for (const [state, visible] of [[initial, false], [JSON.parse(JSON.stringify(damaged)), true],
+    [undoLastSceneEvent(damaged), false], [commitRestoreEvent(damaged, [wall.featureId]), false],
+    [commitResetSceneEvent(damaged), false]]) {
+    const audience = audienceState(0);
+    audience.preferences.worldV2.scenes[0].sceneEvents = state.sceneEvents;
+    const projected = projectStateForAudience(audience, audienceContext);
+    assert.equal(projected.preferences.worldV2.scenes[0].tokens.some(token => token.id === 'target'), visible);
+    assert.equal(sight(deriveVisionOccluders(audienceContext.mapPackage, {}, deriveSceneState(state.sceneEvents))).clear, visible);
+  }
 });
 
 test('light contribution respects 3D range and configured occlusion', () => {
