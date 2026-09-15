@@ -79,6 +79,32 @@ function movementFixture() {
   return { api, getWorld: () => structuredClone(currentWorld), getInspectCount: () => inspectCount };
 }
 
+test('offline movement never predicts or rolls back before document confirmation', async () => {
+  const { api } = movementFixture();
+  const visuals = [];
+  api.renderer = {
+    predictTokenVisualRoute: () => visuals.push('prediction'),
+    rollbackTokenVisual: () => visuals.push('rollback'),
+  };
+  const dispatch = api.documents.dispatch;
+  let release;
+  api.documents.dispatch = async write => {
+    await new Promise(resolve => { release = resolve; });
+    return dispatch(write);
+  };
+  const move = api.movementFast.moveTokenTo('a', { x: 5.5, y: 1.5 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(api.tokens.get('a').x, 1.5);
+  assert.deepEqual(visuals, []);
+  release();
+  assert.equal((await move).valid, true);
+  assert.equal(api.tokens.get('a').x, 5.5);
+  api.documents.dispatch = async () => { throw new Error('rejected'); };
+  assert.equal((await api.movementFast.moveTokenTo('a', { x: 6.5, y: 1.5 })).valid, false);
+  assert.equal(api.tokens.get('a').x, 5.5);
+  assert.deepEqual(visuals, [], 'a failed older request cannot cancel a committed animation');
+});
+
 test('v2.2.5 preserves token-first control for NPC and monster instances', () => {
   const state = {
     preferences: {

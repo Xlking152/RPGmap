@@ -35,9 +35,7 @@ test('live audience vision falls back to authoritative coordinates without a usa
   assert.equal(resolved.source.elevationMeters, 2);
 });
 
-test('LAN movement waits for authoritative commit before visual animation', async () => {
+test('offline and LAN movement wait for authoritative commit before visual animation', async () => {
   const source = await readFile(new URL('../src/movement/fast-path.js', import.meta.url), 'utf8');
-  assert.match(source, /const connected = api\.multiplayer\?\.getStatus\?\.\(\)\?\.connected === true;/);
-  assert.match(source, /if \(!connected\) \{[\s\S]*predictTokenVisualRoute/);
-  assert.match(source, /if \(predictedLocally\) \{[\s\S]*rollbackTokenVisual/);
+  assert.doesNotMatch(source, /predictTokenVisualRoute|rollbackTokenVisual/);
 });

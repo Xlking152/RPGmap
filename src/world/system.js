@@ -172,6 +172,11 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           motion: applied.results.flatMap(result => result.motion || []),
           fog: applied.results.filter(result => Object.hasOwn(result, 'dirtyBounds')),
         });
+        for (const result of applied.results) {
+          for (const motion of result.motion || []) {
+            api.renderer?.prepareTokenVisualRoute?.(motion.tokenId, motion.waypoints || []);
+          }
+        }
         if (typeof api.applyAuthoritativeDocumentChanges === 'function') {
           api.applyAuthoritativeDocumentChanges(changes, {
             source: `document.${source}`, operationId: requestedOperationId,

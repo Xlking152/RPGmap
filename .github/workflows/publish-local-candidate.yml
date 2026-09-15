@@ -1,0 +1,49 @@
+name: Publish locally validated RPGmap candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing draft release tag (vX.Y.Z)
+        required: true
+      commit:
+        description: Full locally validated main commit
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.12.0'
+      - name: Verify local candidate and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.tag }}
+          CANDIDATE_COMMIT: ${{ inputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          test "$CANDIDATE_TAG" = "v$VERSION"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT"
+          test "$(gh release view "$CANDIDATE_TAG" --json isDraft --jq .isDraft)" = true
+          test "$(gh release view "$CANDIDATE_TAG" --json targetCommitish --jq .targetCommitish)" = "$CANDIDATE_COMMIT"
+          if [[ -n "$(git ls-remote --tags origin "refs/tags/$CANDIDATE_TAG")" ]]; then
+            git fetch origin "refs/tags/$CANDIDATE_TAG:refs/tags/$CANDIDATE_TAG"
+            test "$(git rev-list -n 1 "$CANDIDATE_TAG")" = "$CANDIDATE_COMMIT"
+          fi
+          gh release download "$CANDIDATE_TAG" --dir candidate
+          node scripts/verify-local-validation.mjs candidate "$VERSION" "$CANDIDATE_COMMIT"
+          unzip -q "candidate/RPGmap-v$VERSION.zip" -d candidate/unpacked
+          node scripts/verify-package.mjs "--root=candidate/unpacked/RPGmap-v$VERSION" "--archive=candidate/RPGmap-v$VERSION.zip" "--commit=$CANDIDATE_COMMIT"
+          gh release edit "$CANDIDATE_TAG" --draft=false --latest
+          git fetch origin "refs/tags/$CANDIDATE_TAG:refs/tags/$CANDIDATE_TAG"
+          test "$(git rev-list -n 1 "$CANDIDATE_TAG")" = "$CANDIDATE_COMMIT"

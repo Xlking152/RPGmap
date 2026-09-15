@@ -17,7 +17,7 @@ test('V2 movement system restores endpoint Token ghost without legacy Character 
 
 test('committed Token movement is a queued render animation, not intermediate World mutation', () => {
   assert.match(tokenRenderer, /const animations = new Map\(\)/);
-  assert.match(tokenRenderer, /active\.queue\.push\(target\)/);
+  assert.match(tokenRenderer, /if \(active\) cancelMotion\(id\)/);
   assert.match(tokenRenderer, /beginSegment\(motion, next\)/);
   assert.match(tokenRenderer, /view\.setLatLng\(worldToLatLng\(point/);
   assert.match(tokenRenderer, /tokenMoveDuration/);

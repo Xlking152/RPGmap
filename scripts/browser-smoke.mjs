@@ -241,6 +241,41 @@ try {
         return maxAlpha > 200 && minAlpha < 200 ? { width: canvas.width, height: canvas.height, minAlpha, maxAlpha } : null;
       })()`), 'Fog Canvas with opaque and realtime-visible pixels', deadline);
   }
+  let movementAudit = null;
+  if (mode === 'fog') {
+    movementAudit = await evaluate(`(async () => {
+      const api = document.querySelector('#app').rpgMapApp;
+      const id = 'smoke-pc-token';
+      const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+      const records = [];
+      for (const mode of ['lan', 'offline']) {
+        if (mode === 'offline') {
+          api.multiplayer.disconnect();
+          await api.vision.setSource(id);
+        }
+        const origin = api.tokens.get(id);
+        const mid = { x: origin.x + 2, y: origin.y };
+        const end = { x: origin.x + 4, y: origin.y };
+        const result = await api.movementFast.moveTokenPath([id], id, [mid, end]);
+        if (!result.valid) throw new Error(mode + ' move rejected: ' + result.reason);
+        api.renderer.renderTokens();
+        await wait(50);
+        // Returning to a waypoint of an active animation must supersede its old endpoint.
+        const back = await api.movementFast.moveTokenTo(id, mid);
+        if (!back.valid) throw new Error(mode + ' return rejected: ' + back.reason);
+        api.renderer.renderTokens();
+        await wait(1500);
+        const canonical = api.tokens.get(id);
+        const visual = api.renderer.getVisualTokenPoint(id);
+        if (canonical.x !== mid.x || canonical.y !== mid.y
+          || Math.abs(visual.x - canonical.x) > 0.001 || Math.abs(visual.y - canonical.y) > 0.001) {
+          throw new Error(mode + ' Token snapped back: ' + JSON.stringify({ mid, canonical, visual }));
+        }
+        records.push({ mode, origin: { x: origin.x, y: origin.y }, canonical: { x: canonical.x, y: canonical.y }, visual });
+      }
+      return records;
+    })()`);
+  }
   const assetAudit = await evaluate(`(async () => {
     const response = await fetch('./.vite/manifest.json', { cache: 'no-store' });
     if (!response.ok) throw new Error('manifest request failed: ' + response.status);
@@ -331,7 +366,7 @@ try {
       throw new Error(`Browser did not load required Runtime asset: ${pattern}; visual=${JSON.stringify(visualState)}; responses=${JSON.stringify(responses.slice(-20))}`);
     }
   }
-  console.log(JSON.stringify({ worldManager: mode === 'bootstrap', map: 'northern-song-lanzhou-1104', assets: assetAudit, fog: fogAudit, layout: layoutAudit, ...runtime }));
+  console.log(JSON.stringify({ worldManager: mode === 'bootstrap', map: 'northern-song-lanzhou-1104', assets: assetAudit, fog: fogAudit, movement: movementAudit, layout: layoutAudit, ...runtime }));
   await send('Browser.close');
   browserClosed = true;
 } catch (error) {

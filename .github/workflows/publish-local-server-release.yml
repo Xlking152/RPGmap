@@ -9,7 +9,24 @@ permissions:
   contents: write
 
 jobs:
+  route:
+    runs-on: ubuntu-latest
+    outputs:
+      local: ${{ steps.route.outputs.local }}
+    steps:
+      - id: route
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          local=false
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            body=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || true)
+            if [[ "$body" == *'<!-- locally-validated-candidate -->'* ]]; then local=true; fi
+          fi
+          echo "local=$local" >> "$GITHUB_OUTPUT"
   candidate:
+    needs: route
+    if: needs.route.outputs.local != 'true'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}

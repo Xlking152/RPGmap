@@ -103,6 +103,7 @@ export function createVisionFogSystem() {
       let localSourceTokenId = null;
       let lastLocalVision = null;
       let localExploreChain = Promise.resolve();
+      let explorationGeneration = 0;
       let connectedClearPending = false;
       let renderFrame = 0;
       let pendingDirtyBounds;
@@ -176,6 +177,7 @@ export function createVisionFogSystem() {
 
       function queueLocalExploration(subject, previous = null) {
         if (!subject?.partyId || subject.vagueGroundRangeMeters <= 0) return Promise.resolve(null);
+        const generation = explorationGeneration;
         const payload = previous && previous.sceneId === subject.sceneId
           ? {
               sceneId: subject.sceneId, partyId: subject.partyId,
@@ -190,9 +192,14 @@ export function createVisionFogSystem() {
               x: subject.x, y: subject.y, elevationMeters: subject.elevationMeters,
               radiusMeters: subject.vagueGroundRangeMeters,
             };
-        localExploreChain = localExploreChain.catch(() => null).then(() => api.world.performOperations([
-          { type: 'scene.fog.explore', payload },
-        ], { source: 'vision:explore' }));
+        localExploreChain = localExploreChain.catch(() => null).then(() => {
+          const current = localVisionSubject();
+          if (generation !== explorationGeneration || api.multiplayer?.getStatus?.()?.connected || !current
+            || current.sceneId !== subject.sceneId || current.tokenId !== subject.tokenId) return null;
+          return api.world.performOperations([
+            { type: 'scene.fog.explore', payload },
+          ], { source: 'vision:explore' });
+        });
         return localExploreChain;
       }
 
@@ -431,6 +438,7 @@ export function createVisionFogSystem() {
 
       api.vision = {
         async setSource(tokenId = null) {
+          explorationGeneration += 1;
           if (api.multiplayer?.getStatus?.()?.connected) return api.multiplayer.setVisionSource(tokenId);
           localSourceTokenId = tokenId == null ? null : String(tokenId);
           const subject = localVisionSubject();
@@ -485,6 +493,7 @@ export function createVisionFogSystem() {
       }));
       for (const eventName of ['state:import', 'scene:activate']) {
         retain(api.on?.(eventName, () => {
+          explorationGeneration += 1;
           synchronizeLocalVision();
           clearUnavailableConnectedSource();
           explorationDirty = true;
@@ -522,6 +531,7 @@ export function createVisionFogSystem() {
       api.map.on?.('move zoom resize viewreset', scheduleViewportRender);
       render();
       api.on?.('app:destroy', () => {
+        explorationGeneration += 1;
         off.forEach(dispose => dispose());
         api.map.off?.('move zoom resize viewreset', scheduleViewportRender);
         if (renderFrame) {

@@ -294,12 +294,13 @@ export function createTokenRendererSystem() {
           return;
         }
         const active = animations.get(id);
-        if (active) {
+        if (active && !preparedRoutes.has(id)) {
           active.view = view;
-          if (sameTokenPoint(active.target, target) || active.queue.some(point => sameTokenPoint(point, target))) return;
-          active.queue.push(target);
-          return;
+          if (sameTokenPoint(active.queue.at(-1) || active.target, target)) return;
         }
+        // A newer committed destination supersedes the unfinished route. In particular,
+        // returning to an earlier waypoint must not keep the old route's final endpoint.
+        if (active) cancelMotion(id);
         if (sameTokenPoint(current, target) || reducedMotion) {
           preparedRoutes.delete(id);
           visualPoints.set(id, target);
@@ -462,7 +463,12 @@ export function createTokenRendererSystem() {
       for (const eventName of ['document:create', 'document:update', 'document:delete', 'document:move']) {
         off.push(api.on(eventName, renderEventTokens));
       }
-      for (const eventName of ['state:import', 'scene:activate']) off.push(api.on(eventName, render));
+      for (const eventName of ['state:import', 'scene:activate']) off.push(api.on(eventName, () => {
+        for (const id of [...animations.keys()]) cancelMotion(id);
+        preparedRoutes.clear();
+        visualPoints.clear();
+        render();
+      }));
 
       api.map.on('zoomend', render);
       api.map.on('resize', render);

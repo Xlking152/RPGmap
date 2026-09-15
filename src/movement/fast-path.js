@@ -1,14 +1,6 @@
-import {
-  createNavigationBase,
-  createNavigationGrid,
-  inspectDirectNavigationPath,
-} from '../engine/navigation.js';
-import { deriveSceneState } from '../engine/state.js';
-import { tokenDiameterMeters, tokenElevationMeters } from '../elevation/model.js';
+import { tokenElevationMeters } from '../elevation/model.js';
 import { createMovementAuthority } from './authority.js';
 import { normalizeMovementMode } from './model.js';
-
-const MAX_GRID_CACHE = 8;
 
 const clone = structuredClone;
 
@@ -25,74 +17,25 @@ function tokenPoint(token) {
   return token?.placement === 'map' ? finitePoint(token) : null;
 }
 
-function statusContext(api, token) {
-  try { return api.status?.resolve?.({ tokenId: token.id, actorId: token.actorId }) || null; }
-  catch { return null; }
-}
-
-function moverContext(api, token, movementMode = null) {
-  const status = statusContext(api, token);
-  return {
-    elevationMeters: tokenElevationMeters(token),
-    diameterMeters: tokenDiameterMeters(token),
-    statusVersion: String(status?.statusVersion || 'none'),
-    collisionBypassGroups: [...(status?.capabilities?.collisionBypassGroups || [])].map(String).sort(),
-    movementMode,
-  };
-}
-
-function navigationStateKey(api, token) {
-  const state = api.getState?.() || {};
-  const scene = api.world?.getActiveScene?.() || null;
-  const context = moverContext(api, token);
-  return JSON.stringify({
-    sceneId: scene?.id || null,
-    sceneEvents: scene?.sceneEvents || state.sceneEvents || [],
-    clipHits: scene?.clipHits || [],
-    craterRegions: scene?.craterRegions || [],
-    destroyedObjectIds: scene?.destroyedObjectIds || [],
-    featureStates: state.preferences?.featureStates || {},
-    context,
-  });
-}
-
 function failure(code, reason, details = {}) {
-  return Object.freeze({ valid: false, code, reason, ...clone(details) });
+  const messages = {
+    path_blocked: '路径被建筑或其他障碍阻挡',
+    token_locked: '此 Token 已锁定，无法移动',
+    status_movement_forbidden: '当前状态禁止移动',
+    entity_conflict: 'Token 位置已更新，请重新拖动',
+    world_state_stale: '地图状态已更新，请重新拖动',
+  };
+  return Object.freeze({ ...clone(details), valid: false, code,
+    reason: /[\u3400-\u9fff]/.test(reason || '') ? reason : messages[code] || '移动未能完成，请重试' });
 }
 
 export function createMovementFastPathSystem() {
   return Object.freeze({
     register(api) {
       if (!api.movement?.canonicalSceneTokens) throw new Error('Movement fast path requires canonical Movement Runtime');
-      const staticBase = createNavigationBase(api.mapPackage);
+
       const authoritativeValidate = createMovementAuthority(() => api.mapPackage);
       const grids = new Map();
-
-      function cacheGrid(key, grid) {
-        if (grids.has(key)) grids.delete(key);
-        grids.set(key, grid);
-        while (grids.size > MAX_GRID_CACHE) grids.delete(grids.keys().next().value);
-        return grid;
-      }
-
-      function navigation(token, movementMode = null) {
-        const key = `${navigationStateKey(api, token)}:${movementMode || ''}`;
-        const cached = grids.get(key);
-        if (cached) {
-          grids.delete(key);
-          grids.set(key, cached);
-          return cached;
-        }
-        const state = api.getState?.() || {};
-        const scene = api.world?.getActiveScene?.() || null;
-        const context = moverContext(api, token, movementMode);
-        return cacheGrid(key, createNavigationGrid(
-          api.mapPackage,
-          deriveSceneState(scene?.sceneEvents || state.sceneEvents || []),
-          staticBase,
-          { appState: state, moverContext: { ...context, tokenId: String(token.id) } },
-        ));
-      }
 
       async function validateTokenMove(tokenId, destination, options = {}) {
         const access = api.movement.inspectMovementAccess?.(tokenId, destination, options);
@@ -102,17 +45,13 @@ export function createMovementFastPathSystem() {
         const scene = api.world?.getActiveScene?.() || null;
         const authoritative = authoritativeValidate({
           state, world: api.world.get(), scene, token: access.token,
-          origin: { ...access.from, elevationMeters: tokenElevationMeters(access.token) },
+          origin: { ...access.from, elevationMeters: access.from.elevationMeters ?? tokenElevationMeters(access.token) },
           waypoints: [{ ...access.destination, elevationMeters: destination.elevationMeters ?? tokenElevationMeters(access.token) }],
           ruleset: api.ruleset, movementMode, verticalAction: options.verticalAction,
-          status: statusContext(api, access.token),
         });
         if (authoritative.valid) return clone({ valid: true, code: 'ok', points: [access.from, access.destination],
           distance: authoritative.costMeters, destination: access.destination, ...authoritative });
-        const inspected = inspectDirectNavigationPath(navigation(access.token, movementMode), access.from, access.destination);
-        return inspected?.valid === false
-          ? failure('path_blocked', inspected.reason || '路径不可通行', inspected)
-          : failure('path_blocked', '路径不可通行');
+        return failure(authoritative.code || 'path_blocked', authoritative.reason, authoritative);
       }
 
       async function moveTokenTo(tokenId, destination) {
@@ -131,9 +70,6 @@ export function createMovementFastPathSystem() {
         if (!waypoints.length || waypoints.length > 64) return failure('invalid_move_path', '移动路径必须包含 1-64 个节点');
         const expectedOrigins = {};
         let distance = 0;
-        const predicted = [];
-        const connected = api.multiplayer?.getStatus?.()?.connected === true;
-        let predictedLocally = false;
         try {
           for (const tokenId of tokenIds) {
             const token = api.tokens.get(tokenId);
@@ -157,16 +93,9 @@ export function createMovementFastPathSystem() {
               from = destination;
             }
             expectedOrigins[tokenId] = origin;
-            predicted.push({ tokenId, route });
           }
-          // Offline movement can animate immediately because the same runtime is authoritative.
-          // LAN movement waits for document.batch.committed; the server-provided motion route is
-          // then animated by the renderer. This prevents a rejected/stale request from visibly
-          // moving a Token and snapping it back to the previous authoritative position.
-          if (!connected) {
-            for (const item of predicted) api.renderer?.predictTokenVisualRoute?.(item.tokenId, item.route);
-            predictedLocally = true;
-          }
+          // Both offline and LAN animation starts from committed document changes.
+          // A render during prediction could otherwise enqueue the old canonical origin.
           const sceneId = String(api.world.get()?.activeSceneId || '');
           const result = await api.documents.dispatch({
             action: 'move',
@@ -179,9 +108,6 @@ export function createMovementFastPathSystem() {
           api.movement.invalidateNavigation?.();
           return { valid: true, code: 'ok', committed: true, distance, destination: waypoints.at(-1), result };
         } catch (error) {
-          if (predictedLocally) {
-            for (const tokenId of tokenIds) api.renderer?.rollbackTokenVisual?.(tokenId);
-          }
           api.emit?.('token:move-cancelled', {
             id: String(leaderId), tokenId: String(leaderId), tokenIds,
             code: error?.code || 'movement_failed', reason: error?.message || String(error || 'movement cancelled'),
@@ -202,7 +128,6 @@ export function createMovementFastPathSystem() {
           waypoints: [{ ...access.destination,
             elevationMeters: access.destination.elevationMeters ?? tokenElevationMeters(access.token) }],
           ruleset: api.ruleset, movementMode, verticalAction: options.verticalAction,
-          status: statusContext(api, access.token),
         });
         return authoritative.valid
           ? clone({ valid: true, code: 'ok', ...authoritative })
