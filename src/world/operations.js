@@ -190,13 +190,21 @@ function worldFromState(state) {
 export function markMovementAdjudicationRequired(state, ruleset) {
   if (!ruleset?.movement?.describe) return false;
   const world = worldFromState(state);
+  const linkedActors = new Map();
   let changed = false;
   for (const scene of world.scenes || []) {
     for (let index = 0; index < (scene.tokens || []).length; index += 1) {
       const token = scene.tokens[index];
       const movement = token?.movement || {};
       let actor;
-      try { actor = resolveTokenActor({ ...world, activeSceneId: scene.id }, token.id, { ruleset })?.actor; }
+      try {
+        const key = String(token.actorId);
+        actor = token.actorLink !== false ? linkedActors.get(key) : null;
+        if (!actor) {
+          actor = resolveTokenActor({ ...world, activeSceneId: scene.id }, token.id, { ruleset })?.actor;
+          if (token.actorLink !== false) linkedActors.set(key, actor);
+        }
+      }
       catch { continue; }
       const descriptor = ruleset.movement.describe(actor, { token, scene, world }) || {};
       const unavailable = Boolean(movementCapabilityFailure(descriptor, movement.mode || 'walk'))
@@ -1043,7 +1051,12 @@ function applyCanonicalOperation(state, operation, context = {}) {
     const occluders = lineOfSightEnabled
       ? deriveVisionOccluders(map, scene, deriveSceneState(scene.sceneEvents || []))
       : [];
-    if (type === 'scene.fog.reset') scene.fog = resetFogParty(scene.fog, partyId);
+    if (type === 'scene.fog.explore' && typeof context.computeFogExploration === 'function') {
+      scene.fog = context.computeFogExploration({ partyId, payload: { ...payload, radiusMeters,
+        ...(payload.from && payload.to ? {} : { elevationMeters: Math.max(0, finite(payload.elevationMeters ?? 0, 'elevationMeters')) }) }, lineOfSightEnabled, occluders,
+        map: { width: map.width, height: map.height, metersPerUnit: map.metersPerUnit } }, scene.fog);
+    }
+    else if (type === 'scene.fog.reset') scene.fog = resetFogParty(scene.fog, partyId);
     else if (type === 'scene.fog.hide') {
       scene.fog = hideFogCircle(scene.fog, partyId, {
         x: finite(payload.x, 'x'), y: finite(payload.y, 'y'),

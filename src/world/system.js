@@ -12,6 +12,8 @@ import { reduceStatusOperation, STATUS_SCHEMA_VERSION } from '../status/model.js
 import { applyWorldOperations, deriveWorldOperations } from './operations.js';
 import { createDocumentChanges } from '../documents/changes.js';
 import { createMovementAuthority } from '../movement/authority.js';
+import { createVisionBackground } from '../vision/background.js';
+import { mergeExploration } from '../vision/fog.js';
 
 const clone = structuredClone;
 
@@ -125,6 +127,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         const projected = pruneProjectedWorldReferences(
           projectWorldV2ToRuntimeState(api.getState?.() || {}, normalized, { mapPackage, ruleset }),
         );
+        explorationEpoch += 1;
         if (typeof coreCommitAuthoritativeState === 'function') {
           return coreCommitAuthoritativeState(projected, { source, reason, render });
         }
@@ -132,12 +135,18 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         return { offline: true };
       }
 
-      function reduceOperations(state, operations, { source = 'world.operation', now = new Date().toISOString() } = {}) {
+      const background = createVisionBackground();
+      let explorationEpoch = 0;
+      for (const event of ['state:import', 'scene:activate', 'vision:source-change']) api.on?.(event, () => { explorationEpoch += 1; });
+      api.on?.('app:destroy', () => { explorationEpoch += 1; background?.dispose(); });
+
+      function reduceOperations(state, operations, { source = 'world.operation', now = new Date().toISOString(), computeFogExploration } = {}) {
         return applyWorldOperations(state, operations, {
           now,
           ruleset: runtimeRuleset,
           source: { role: 'offline', source },
           mapMetrics: mapPackage,
+          computeFogExploration,
           validateTokenMovePath: args => movementAuthority({ ...args, ruleset: runtimeRuleset }),
           applyStatus(statusState, message, context) {
             const next = clone(statusState);
@@ -166,8 +175,34 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           }
           return api.multiplayer.performOperations(operations, { kind, requestedOperationId });
         }
+        let computeFogExploration;
+        if (operations.some(operation => ['scene.fog.hide', 'scene.fog.reset'].includes(operation.type))) explorationEpoch += 1;
+        if (background && operations.length === 1 && operations[0].type === 'scene.fog.explore') {
+          operations = [{ ...operations[0], payload: { ...operations[0].payload,
+            sceneId: operations[0].payload.sceneId ?? snapshot().activeSceneId,
+          } }];
+          const epoch = explorationEpoch;
+          let request;
+          reduceOperations(api.getState(), operations, { source, computeFogExploration(input, fog) {
+            request = input; return fog;
+          } });
+          const signature = JSON.stringify(request);
+          const added = await background.run(request);
+          if (epoch !== explorationEpoch || api.multiplayer?.getStatus?.()?.connected) return { unchanged: true };
+          const active = api.world.getActiveScene();
+          if (String(active?.id) !== String(operations[0].payload.sceneId)
+            || (source === 'vision:explore' && api.vision?.getSource?.() !== request.payload.visionSourceTokenId)) return { unchanged: true };
+          let currentRequest;
+          reduceOperations(api.getState(), operations, { source, computeFogExploration(input, fog) {
+            currentRequest = input; return fog;
+          } });
+          // Exploration is additive: merge concurrent results into the latest fog.
+          // Resets, hides and full World replacements invalidate the epoch instead.
+          if (JSON.stringify(currentRequest) !== signature) return { unchanged: true };
+          computeFogExploration = (_input, fog) => mergeExploration(fog, added, mapPackage);
+        }
         const before = api.getState?.() || {};
-        const applied = reduceOperations(before, operations, { source });
+        const applied = reduceOperations(before, operations, { source, computeFogExploration });
         const changes = createDocumentChanges(before, applied.state, null, {
           motion: applied.results.flatMap(result => result.motion || []),
           fog: applied.results.filter(result => Object.hasOwn(result, 'dirtyBounds')),

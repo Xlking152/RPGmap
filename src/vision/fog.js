@@ -1,4 +1,5 @@
 import { inspectLineOfSight } from '../spatial/kernel.js';
+import { groundShadowRows } from './ground-shadow.js';
 
 export const FOG_SCHEMA_VERSION = 1;
 export const FOG_CELL_SIZE_METERS = 5;
@@ -225,10 +226,9 @@ export function exploreFogVisibleCircle(rawFog, partyId, circle, map = {}, {
   occluders = [],
 } = {}) {
   const fog = normalizeFogState(rawFog, map);
-  const source = { x: finite(circle?.x), y: finite(circle?.y), elevationMeters: finite(sourceElevationMeters) };
-  rasterCircle(partyRows(fog, partyId), circle, 'add', map, target => inspectLineOfSight({
-    from: source, to: target, occluders, metersPerUnit: mapScale(map),
-  }).clear);
+  const rows = partyRows(fog, partyId);
+  const visible = visibleFogRowsForCircle(circle, map, { sourceElevationMeters, occluders });
+  for (const [row, spans] of Object.entries(visible)) rows[row] = mergeSpans([...(rows[row] || []), ...spans]);
   return fog;
 }
 
@@ -239,10 +239,30 @@ export function visibleFogRowsForCircle(circle, map = {}, {
 } = {}) {
   const rows = {};
   const source = { x: finite(circle?.x), y: finite(circle?.y), elevationMeters: finite(sourceElevationMeters) };
-  rasterCircle(rows, circle, 'add', map, target => inspectLineOfSight({
-    from: source, to: target, occluders, metersPerUnit: mapScale(map),
-  }).clear && (typeof predicate !== 'function' || predicate(target)));
-  return rows;
+  rasterCircle(rows, circle, 'add', map);
+  const grid = mapGrid(map);
+  const visible = groundShadowRows(source, effectiveRadiusMeters(circle?.radiusMeters, map, circle) / grid.metersPerUnit,
+    occluders, grid.cellUnits, rows);
+  if (!visible) {
+    const fallback = {};
+    rasterCircle(fallback, circle, 'add', map, target => inspectLineOfSight({
+      from: source, to: target, occluders, metersPerUnit: mapScale(map),
+    }).clear && (typeof predicate !== 'function' || predicate(target)));
+    return fallback;
+  }
+  if (typeof predicate !== 'function') return visible;
+  const filtered = {};
+  for (const [row, spans] of Object.entries(visible)) for (const [start, end] of spans) {
+    let run = null;
+    for (let column = start; column <= end; column++) {
+      const clear = predicate({ x: (column + 0.5) * grid.cellUnits, y: (Number(row) + 0.5) * grid.cellUnits, elevationMeters: 0 });
+      if (clear && run === null) run = column;
+      if (run !== null && (!clear || column === end)) {
+        (filtered[row] ||= []).push([run, clear ? column : column - 1]); run = null;
+      }
+    }
+  }
+  return filtered;
 }
 
 export function exploreFogSweep(rawFog, partyId, from, to, radiusMeters, map = {}) {
@@ -279,7 +299,8 @@ export function exploreFogSweep(rawFog, partyId, from, to, radiusMeters, map = {
 export function exploreFogVisibleSweep(rawFog, partyId, from, to, radiusMeters, map = {}, {
   occluders = [],
 } = {}) {
-  let fog = normalizeFogState(rawFog, map);
+  const fog = normalizeFogState(rawFog, map);
+  const rows = partyRows(fog, partyId);
   const grid = mapGrid(map);
   const distanceMeters = Math.hypot(finite(to?.x) - finite(from?.x), finite(to?.y) - finite(from?.y)) * grid.metersPerUnit;
   const steps = Math.max(1, Math.ceil(distanceMeters / (FOG_CELL_SIZE_METERS / 2)));
@@ -291,10 +312,11 @@ export function exploreFogVisibleSweep(rawFog, partyId, from, to, radiusMeters, 
       elevationMeters: finite(from?.elevationMeters)
         + (finite(to?.elevationMeters) - finite(from?.elevationMeters)) * ratio,
     };
-    fog = exploreFogVisibleCircle(fog, partyId, { ...source, radiusMeters }, map, {
+    const visible = visibleFogRowsForCircle({ ...source, radiusMeters }, map, {
       sourceElevationMeters: source.elevationMeters,
       occluders,
     });
+    for (const [row, spans] of Object.entries(visible)) rows[row] = mergeSpans([...(rows[row] || []), ...spans]);
   }
   return fog;
 }
@@ -302,6 +324,15 @@ export function exploreFogVisibleSweep(rawFog, partyId, from, to, radiusMeters, 
 export function hideFogCircle(rawFog, partyId, circle, map = {}) {
   const fog = normalizeFogState(rawFog, map);
   rasterCircle(partyRows(fog, partyId), circle, 'remove', map);
+  return fog;
+}
+
+export function mergeExploration(rawFog, added, map = {}) {
+  const fog = normalizeFogState(rawFog, map);
+  for (const [partyId, value] of Object.entries(added.exploredByParty || {})) {
+    const rows = partyRows(fog, partyId);
+    for (const [row, spans] of Object.entries(value.rows || {})) rows[row] = mergeSpans([...(rows[row] || []), ...spans]);
+  }
   return fog;
 }
 
