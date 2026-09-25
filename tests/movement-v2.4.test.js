@@ -154,3 +154,16 @@ test('losing flight preserves position and marks the Token for GM adjudication',
   assert.equal(markMovementAdjudicationRequired(value.state, ruleset({ fly: true })), false);
   assert.equal(token.movement.adjudicationRequired, true);
 });
+
+test('shared Actor resolution preserves per-Token flight rules and independent Actor overrides', () => {
+  const value = fixture();
+  value.token.elevationMeters = 12;
+  value.token.movement.mode = 'fly';
+  value.scene.tokens.push({ ...structuredClone(value.token), id: 'token-b' },
+    { ...structuredClone(value.token), id: 'token-c', actorLink: false, actorDelta: { name: 'Synthetic' } });
+  const policy = prepareRuleset({ id: 'movement-test', title: 'Movement Test', version: '1', movement: {
+    describe: (actor, { token }) => ({ walk: true, fly: token.id === 'token-a' || actor.name === 'Synthetic' }),
+  } });
+  assert.equal(markMovementAdjudicationRequired(value.state, policy), true);
+  assert.deepEqual(value.scene.tokens.map(token => token.movement.adjudicationRequired), [false, true, false]);
+});

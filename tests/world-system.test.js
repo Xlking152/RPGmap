@@ -5,6 +5,7 @@ import { WORLD_STATE_KEY, activeWorldScene } from '../src/world/model.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { applyDocumentChanges } from '../src/documents/changes.js';
 import { stateWithAreaDraft } from '../src/scene/area-state.js';
+import { exploreFogVisibleCircle } from '../src/vision/fog.js';
 
 const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图', width: 100, height: 100, features: [], metersPerUnit: 1 };
 function actor() { return { id: 'actor-1', name: '角色', currentFormId: 'form-1', forms: [{ id: 'form-1', tokenAppearance: { color: '#3d9b63' }, avatarDataUrl: null }], runtime: {}, effects: [] }; }
@@ -30,6 +31,34 @@ function apiFixture() {
 function assertNoCharacters(value) {
   assert.equal(Object.hasOwn(value, 'characters'), false);
 }
+
+test('background exploration neither blocks movement nor restores pre-move coordinates; fog reset cancels pending work', async () => {
+  const previous = globalThis.Worker;
+  let finish;
+  globalThis.Worker = class {
+    postMessage({ id, input }) {
+      finish = () => this.onmessage({ data: { id, result: exploreFogVisibleCircle({}, input.partyId, input.payload, input.map, { occluders: input.occluders }) } });
+    }
+    terminate() {}
+  };
+  try {
+    const { api } = apiFixture();
+    createWorldSystem().register(api);
+    const sceneId = api.world.getActiveScene().id;
+    const operation = { type: 'scene.fog.explore', payload: { sceneId, partyId: 'party', x: 10, y: 10, radiusMeters: 50 } };
+    const exploration = api.world.performOperations([operation]);
+    await api.world.performOperations([{ type: 'token.move', payload: { sceneId, tokenId: 'token-1', placement: 'map', x: 20, y: 20 } }]);
+    assert.equal(api.world.getActiveScene().tokens[0].x, 20);
+    finish(); await exploration;
+    assert.equal(api.world.getActiveScene().tokens[0].x, 20);
+    assert.ok(Object.keys(api.world.getActiveScene().fog.exploredByParty.party.rows).length);
+    const pending = api.world.performOperations([operation]);
+    await api.world.performOperations([{ type: 'scene.fog.reset', payload: { sceneId, partyId: 'party' } }]);
+    finish();
+    assert.equal((await pending).unchanged, true);
+    assert.equal(api.world.getActiveScene().fog.exploredByParty.party, undefined);
+  } finally { globalThis.Worker = previous; }
+});
 
 test('WorldSystem hydrates modern Token placement once and later flat commits cannot move Scene Tokens', () => {
   const fixture = apiFixture();

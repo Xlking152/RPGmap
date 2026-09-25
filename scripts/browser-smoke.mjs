@@ -132,17 +132,17 @@ try {
       exceptions.push(message.params.entry.text || 'browser log error');
     }
   });
-  const send = (method, params = {}) => new Promise((resolve, reject) => {
+  const send = (method, params = {}, commandTimeoutMs = 5000) => new Promise((resolve, reject) => {
     const id = nextId++;
     const timeout = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`Edge CDP command timed out: ${method}`));
-    }, 5_000);
+    }, commandTimeoutMs);
     pending.set(id, { resolve, reject, timeout });
     socket.send(JSON.stringify({ id, method, params }));
   });
-  const evaluate = async expression => {
-    const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+  const evaluate = async (expression, commandTimeoutMs) => {
+    const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, commandTimeoutMs);
     if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || 'evaluation failed');
     return result.result?.value;
   };
@@ -273,8 +273,48 @@ try {
         }
         records.push({ mode, origin: { x: origin.x, y: origin.y }, canonical: { x: canonical.x, y: canonical.y }, visual });
       }
+      await api.vision.setSource(null);
+      let largeOrigin, largeDestination;
+      for (const start of [{ x: 500.5, y: 500.5 }, { x: 1000.5, y: 500.5 }, { x: 500.5, y: 4000.5 }]) {
+        const end = { x: start.x + 425, y: start.y };
+        if (api.inspectTokenPlacement(id, start).valid && api.movementFast.inspectTokenMove(id, end, { from: start }).valid) {
+          largeOrigin = start; largeDestination = end; break;
+        }
+      }
+      if (!largeOrigin) throw new Error('No clear 425 m route in smoke fixture');
+      await api.tokens.reposition(id, largeOrigin);
+      await wait(1000);
+      await api.tokens.update(id, { vision: { ...api.tokens.get(id).vision,
+        preciseRangeOverrideMeters: 1000, vagueRangeOverrideMeters: 1000 } });
+      await api.vision.setSource(id);
+      const frameGaps = [];
+      let previousFrame = performance.now(), frame;
+      const tick = time => { frameGaps.push(time - previousFrame); previousFrame = time; frame = requestAnimationFrame(tick); };
+      frame = requestAnimationFrame(tick);
+      try {
+        const original = api.tokens.get(id);
+        const start = performance.now();
+        const placed = await api.tokens.create({ actorId: original.actorId, x: original.x, y: original.y,
+          actorLink: true, diameterMeters: 1, elevationMeters: 0 });
+        while (!api.renderer.getVisualTokenPoint(placed.id) && performance.now() - start < 2000) await wait(16);
+        const placementMs = performance.now() - start;
+        if (!api.renderer.getVisualTokenPoint(placed.id) || placementMs > 500) throw new Error('Large-vision placement stalled: ' + placementMs);
+        const destination = largeDestination;
+        const moveStart = performance.now();
+        const result = await api.movementFast.moveTokenTo(id, destination);
+        const commitMs = performance.now() - moveStart;
+        if (!result.valid || commitMs > 500) throw new Error('Large-vision movement stalled: ' + JSON.stringify({ result, commitMs }));
+        await wait(4000);
+        const visual = api.renderer.getVisualTokenPoint(id);
+        const canonical = api.tokens.get(id);
+        if (Math.hypot(visual.x - destination.x, visual.y - destination.y) > 0.001
+          || canonical.x !== destination.x || canonical.y !== destination.y) throw new Error('425 m route did not settle');
+        const maxFrameGapMs = Math.max(...frameGaps);
+        if (maxFrameGapMs > 250) throw new Error('Large-vision main thread blocked: ' + maxFrameGapMs);
+        records.push({ mode: 'offline-large-range', rangeMeters: 1000, distanceMeters: 425, placementMs, commitMs, maxFrameGapMs });
+      } finally { cancelAnimationFrame(frame); }
       return records;
-    })()`);
+    })()`, 20000);
   }
   const assetAudit = await evaluate(`(async () => {
     const response = await fetch('./.vite/manifest.json', { cache: 'no-store' });

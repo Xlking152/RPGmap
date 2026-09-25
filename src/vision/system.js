@@ -1,6 +1,7 @@
 import { worldToLatLng } from '../engine/geometry.js';
 import { FOG_CELL_SIZE_METERS, normalizeFogState, visibleFogRowsForCircle } from './fog.js';
 import { deriveSceneState } from '../engine/state.js';
+import { createVisionBackground } from './background.js';
 import {
   deriveSceneLightSources,
   deriveVisionOccluders,
@@ -110,6 +111,31 @@ export function createVisionFogSystem() {
       let lastVisionSignature = '';
       let explorationDirty = true;
       let visibilityRowsCache = null;
+      const visibilityBackground = createVisionBackground();
+      let visibilityPending = false;
+      let latestVisibilityRequest = null;
+      let visibilityGeneration = 0;
+      let visibilityContext = '';
+      let destroyed = false;
+
+      function requestVisibility(request) {
+        latestVisibilityRequest = request;
+        if (visibilityPending) return;
+        const next = latestVisibilityRequest;
+        latestVisibilityRequest = null;
+        visibilityPending = true;
+        const generation = visibilityGeneration;
+        visibilityBackground.run(next.input).then(result => {
+          if (destroyed || generation !== visibilityGeneration) return;
+          visibilityRowsCache = { signature: next.signature, ...result };
+          scheduleRender();
+        }).catch(error => { if (!destroyed) api.showToast?.(error.message, 'error'); }).finally(() => {
+          visibilityPending = false;
+          if (!destroyed && latestVisibilityRequest && latestVisibilityRequest.signature !== visibilityRowsCache?.signature) {
+            requestVisibility(latestVisibilityRequest);
+          }
+        });
+      }
       const off = [];
       const retain = dispose => { if (typeof dispose === 'function') off.push(dispose); };
 
@@ -366,13 +392,27 @@ export function createVisionFogSystem() {
             lighting: source.lighting || 'normal',
             lights,
           });
+          const contextKey = JSON.stringify({ sceneId: scene.id, tokenId: confirmedSourceTokenId(),
+            elevation: source.elevationMeters, senses: source.senses, precise: source.preciseGroundRangeMeters,
+            vague: source.vagueGroundRangeMeters, lighting: source.lighting, lights,
+            featureStates: scene.featureStates, sceneEvents: scene.sceneEvents });
+          if (contextKey !== visibilityContext) {
+            visibilityContext = contextKey;
+            visibilityGeneration += 1;
+            visibilityRowsCache = null;
+            latestVisibilityRequest = null;
+          }
           if (!visibilityRowsCache || visibilityRowsCache.signature !== signature) {
             const occluders = deriveVisionOccluders(api.mapPackage, scene, deriveSceneState(scene.sceneEvents || []));
+            if (visibilityBackground) {
+              requestVisibility({ signature, input: { kind: 'visibility', source, occluders, lights, ignoresOcclusion,
+                map: { width: api.mapPackage.width, height: api.mapPackage.height, metersPerUnit } } });
+            } else {
             const values = (range, targetKind) => Object.entries(visibleFogRowsForCircle({
               x: Number(source.x), y: Number(source.y), radiusMeters: Number(range) || 0,
             }, api.mapPackage, {
               sourceElevationMeters: Number(source.elevationMeters) || 0,
-              occluders,
+              occluders: ignoresOcclusion ? [] : occluders,
               predicate: targetKind === 'precise' ? target => perceptionLevelAtPoint({
                 vision: source,
                 target,
@@ -380,7 +420,7 @@ export function createVisionFogSystem() {
                 lights,
                 occluders,
                 metersPerUnit,
-                lineOfSightEnabled: source.lineOfSightEnabled === true && !ignoresOcclusion,
+                lineOfSightEnabled: false,
               }) === 'precise' : null,
             }));
             visibilityRowsCache = {
@@ -388,7 +428,9 @@ export function createVisionFogSystem() {
               precise: values(source.preciseGroundRangeMeters ?? source.preciseRangeMeters ?? source.rangeMeters, 'precise'),
               vague: values(source.vagueGroundRangeMeters ?? source.vagueRangeMeters ?? source.rangeMeters, 'vague'),
             };
+            }
           }
+          if (!visibilityRowsCache) return;
           drawRows(context, visibilityRowsCache[kind] || []);
         };
 
@@ -439,6 +481,8 @@ export function createVisionFogSystem() {
       api.vision = {
         async setSource(tokenId = null) {
           explorationGeneration += 1;
+          visibilityGeneration += 1;
+          visibilityRowsCache = null;
           if (api.multiplayer?.getStatus?.()?.connected) return api.multiplayer.setVisionSource(tokenId);
           localSourceTokenId = tokenId == null ? null : String(tokenId);
           const subject = localVisionSubject();
@@ -450,7 +494,7 @@ export function createVisionFogSystem() {
             throw error;
           }
           lastLocalVision = subject;
-          if (subject) await queueLocalExploration(subject);
+          if (subject) queueLocalExploration(subject).catch(error => { if (!destroyed) api.showToast?.(error.message, 'error'); });
           render();
           api.emit?.('vision:source-change', { tokenId: localSourceTokenId });
           return { tokenId: localSourceTokenId };
@@ -494,6 +538,8 @@ export function createVisionFogSystem() {
       for (const eventName of ['state:import', 'scene:activate']) {
         retain(api.on?.(eventName, () => {
           explorationGeneration += 1;
+          visibilityGeneration += 1;
+          visibilityRowsCache = null;
           synchronizeLocalVision();
           clearUnavailableConnectedSource();
           explorationDirty = true;
@@ -531,6 +577,8 @@ export function createVisionFogSystem() {
       api.map.on?.('move zoom resize viewreset', scheduleViewportRender);
       render();
       api.on?.('app:destroy', () => {
+        destroyed = true;
+        visibilityBackground?.dispose();
         explorationGeneration += 1;
         off.forEach(dispose => dispose());
         api.map.off?.('move zoom resize viewreset', scheduleViewportRender);

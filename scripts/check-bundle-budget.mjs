@@ -50,8 +50,9 @@ const baseline = Object.freeze({
 });
 const limits = Object.freeze({
   initialJsGzip: 11726,
-  // Allow the v2.4.5 gate/vision authority flow to add up to another 1 KiB.
-  totalJsGzip: 312048,
+  // v2.5.1 adds isolated visibility/exploration worker code and scanline shadows.
+  // Permit 16 KiB for that code; initial load, CSS and ZIP limits stay fixed.
+  totalJsGzip: 312048 + 16 * 1024,
   totalCssGzip: Math.floor(baseline.totalCssGzip * 1.05),
 });
 const measured = {
