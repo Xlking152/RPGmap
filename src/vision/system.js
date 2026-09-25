@@ -1,11 +1,11 @@
 import { worldToLatLng } from '../engine/geometry.js';
-import { FOG_CELL_SIZE_METERS, normalizeFogState, visibleFogRowsForCircle } from './fog.js';
+import { FOG_CELL_SIZE_METERS, normalizeFogState } from './fog.js';
+import { computeVisibilityRows } from './visibility.js';
 import { deriveSceneState } from '../engine/state.js';
 import { createVisionBackground } from './background.js';
 import {
   deriveSceneLightSources,
   deriveVisionOccluders,
-  perceptionLevelAtPoint,
   sphereGroundRadiusMeters,
   visionIgnoresOcclusion,
 } from '../spatial/kernel.js';
@@ -408,26 +408,9 @@ export function createVisionFogSystem() {
               requestVisibility({ signature, input: { kind: 'visibility', source, occluders, lights, ignoresOcclusion,
                 map: { width: api.mapPackage.width, height: api.mapPackage.height, metersPerUnit } } });
             } else {
-            const values = (range, targetKind) => Object.entries(visibleFogRowsForCircle({
-              x: Number(source.x), y: Number(source.y), radiusMeters: Number(range) || 0,
-            }, api.mapPackage, {
-              sourceElevationMeters: Number(source.elevationMeters) || 0,
-              occluders: ignoresOcclusion ? [] : occluders,
-              predicate: targetKind === 'precise' ? target => perceptionLevelAtPoint({
-                vision: source,
-                target,
-                ambient: source.lighting || 'normal',
-                lights,
-                occluders,
-                metersPerUnit,
-                lineOfSightEnabled: false,
-              }) === 'precise' : null,
-            }));
-            visibilityRowsCache = {
-              signature,
-              precise: values(source.preciseGroundRangeMeters ?? source.preciseRangeMeters ?? source.rangeMeters, 'precise'),
-              vague: values(source.vagueGroundRangeMeters ?? source.vagueRangeMeters ?? source.rangeMeters, 'vague'),
-            };
+              visibilityRowsCache = { signature, ...computeVisibilityRows({
+                source, map: api.mapPackage, occluders, lights, ignoresOcclusion,
+              }) };
             }
           }
           if (!visibilityRowsCache) return;

@@ -2,6 +2,7 @@ export function createVisionBackground() {
   if (typeof Worker === 'undefined') return null;
   let worker;
   let sequence = 0;
+  let disposed = false;
   const pending = new Map();
   function stop(error = new Error('视觉后台计算已取消')) {
     worker?.terminate(); worker = null;
@@ -9,7 +10,8 @@ export function createVisionBackground() {
     pending.clear();
   }
   return {
-    run(input) {
+    async run(input) {
+      if (disposed) throw new Error('视觉后台计算已取消');
       if (!worker) {
         worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
         worker.onmessage = ({ data }) => {
@@ -20,13 +22,15 @@ export function createVisionBackground() {
           else request.resolve(data.result);
         };
         worker.onerror = () => stop(new Error('视觉后台计算失败，请重试'));
+        worker.onmessageerror = () => stop(new Error('视觉后台结果读取失败，请重试'));
       }
       return new Promise((resolve, reject) => {
         const id = ++sequence;
         pending.set(id, { resolve, reject });
-        worker.postMessage({ id, input });
+        try { worker.postMessage({ id, input }); }
+        catch (error) { pending.delete(id); reject(error); }
       });
     },
-    dispose: stop,
+    dispose() { disposed = true; stop(); },
   };
 }

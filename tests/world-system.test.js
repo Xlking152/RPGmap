@@ -60,6 +60,40 @@ test('background exploration neither blocks movement nor restores pre-move coord
   } finally { globalThis.Worker = previous; }
 });
 
+test('concurrent background exploration preserves both explored regions', async () => {
+  const original = globalThis.Worker;
+  const completions = [];
+  globalThis.Worker = class {
+    postMessage({ id, input }) {
+      completions.push(() => this.onmessage({ data: { id, result: exploreFogVisibleCircle({}, input.partyId, input.payload, input.map) } }));
+    }
+    terminate() {}
+  };
+  try {
+    const { api } = apiFixture();
+    createWorldSystem().register(api);
+    const sceneId = api.world.getActiveScene().id;
+    const payloads = [10, 80].map(x => ({ sceneId, partyId: 'party', x, y: x, radiusMeters: 8 }));
+    // The operation API defaults omitted sceneId to the active Scene.
+    delete payloads[1].sceneId;
+    const pending = payloads.map(payload => api.world.performOperations([{ type: 'scene.fog.explore', payload }]));
+    completions[0]();
+    await pending[0];
+    completions[1]();
+    await pending[1];
+    let expected = {};
+    for (const payload of payloads) expected = exploreFogVisibleCircle(expected, 'party', payload, mapPackage);
+    assert.deepEqual(api.world.getActiveScene().fog, expected);
+    const stale = api.world.performOperations([{ type: 'scene.fog.explore', payload: payloads[0] }]);
+    const replacement = api.world.get();
+    replacement.scenes.find(scene => scene.id === sceneId).fog = {};
+    await api.world.commit(replacement);
+    completions[2]();
+    assert.equal((await stale).unchanged, true);
+    assert.deepEqual(api.world.getActiveScene().fog.exploredByParty, {});
+  } finally { globalThis.Worker = original; }
+});
+
 test('WorldSystem hydrates modern Token placement once and later flat commits cannot move Scene Tokens', () => {
   const fixture = apiFixture();
   createWorldSystem().register(fixture.api);
