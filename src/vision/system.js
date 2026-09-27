@@ -1,29 +1,14 @@
 import { worldToLatLng } from '../engine/geometry.js';
-import { FOG_CELL_SIZE_METERS, normalizeFogState } from './fog.js';
-import { computeVisibilityRows } from './visibility.js';
-import { deriveSceneState } from '../engine/state.js';
+import { FOG_CELL_SIZE_METERS, normalizeFogState, mergeSpans } from './fog.js';
+import { computeVisibilityRowsAsync } from './visibility.js';
+import { sceneVisionContext, releaseVisionContexts } from './context.js';
 import { createVisionBackground } from './background.js';
 import {
-  deriveSceneLightSources,
-  deriveVisionOccluders,
   sphereGroundRadiusMeters,
   visionIgnoresOcclusion,
 } from '../spatial/kernel.js';
 
 const FOG_PANE = 'fogVisionPane';
-
-function mergeSpans(values) {
-  const ordered = values.map(span => [Number(span[0]), Number(span[1])])
-    .filter(span => Number.isSafeInteger(span[0]) && Number.isSafeInteger(span[1]) && span[1] >= span[0])
-    .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
-  const result = [];
-  for (const span of ordered) {
-    const previous = result.at(-1);
-    if (!previous || span[0] > previous[1] + 1) result.push(span);
-    else previous[1] = Math.max(previous[1], span[1]);
-  }
-  return result;
-}
 
 function exploredRows(fog, partyIds) {
   const byRow = new Map();
@@ -48,8 +33,8 @@ function mergeDirtyBounds(left, right) {
   };
 }
 
-function runtimeScene(api) {
-  const world = api.getState?.()?.preferences?.worldV2;
+function runtimeScene(state) {
+  const world = state?.preferences?.worldV2;
   return world?.scenes?.find(scene => String(scene?.id ?? '') === String(world?.activeSceneId ?? '')) || null;
 }
 
@@ -82,6 +67,15 @@ export function createVisionFogSystem() {
   return Object.freeze({
     register(api) {
       if (!api?.map || api.vision) return;
+      let snapshotRevision = -1, cachedState = null, cachedSubject = null, spatial = null;
+      function visionState() {
+        const revision = api.getStateRevision?.();
+        if (!cachedState || revision === undefined || revision !== snapshotRevision) {
+          cachedState = api.getState?.() || {}; snapshotRevision = revision;
+          cachedSubject = null; spatial = null;
+        }
+        return cachedState;
+      }
       const documentNode = api.map.getContainer().ownerDocument || document;
       const pane = api.map.getPane?.(FOG_PANE) || api.map.createPane(FOG_PANE);
       pane.style.zIndex = '510';
@@ -110,13 +104,26 @@ export function createVisionFogSystem() {
       let pendingDirtyBounds;
       let lastVisionSignature = '';
       let explorationDirty = true;
+      let exploredDirty = true, exploredCache = [], exploredParties = '';
       let visibilityRowsCache = null;
-      const visibilityBackground = createVisionBackground();
+      let visibilityBackground = createVisionBackground({ diagnostics: api.diagnostics });
       let visibilityPending = false;
       let latestVisibilityRequest = null;
       let visibilityGeneration = 0;
       let visibilityContext = '';
+      let visibilitySignature = '';
+      let visibilityAbort = null;
       let destroyed = false;
+
+      function cancelVisibility() {
+        visibilityGeneration += 1;
+        visibilityRowsCache = null;
+        latestVisibilityRequest = null;
+        visibilitySignature = '';
+        visibilityAbort?.abort();
+        visibilityAbort = null;
+        visibilityBackground?.cancel();
+      }
 
       function requestVisibility(request) {
         latestVisibilityRequest = request;
@@ -125,11 +132,29 @@ export function createVisionFogSystem() {
         latestVisibilityRequest = null;
         visibilityPending = true;
         const generation = visibilityGeneration;
-        visibilityBackground.run(next.input).then(result => {
-          if (destroyed || generation !== visibilityGeneration) return;
+        const controller = new AbortController();
+        visibilityAbort = controller;
+        const run = async () => {
+          if (!visibilityBackground) return computeVisibilityRowsAsync(next.input, { signal: controller.signal });
+          const background = visibilityBackground;
+          try { return await background.run(next.input); }
+          catch (error) {
+            if (destroyed || generation !== visibilityGeneration || controller.signal.aborted) throw error;
+            background.dispose();
+            if (visibilityBackground === background) visibilityBackground = null;
+            return computeVisibilityRowsAsync(next.input, { signal: controller.signal });
+          }
+        };
+        run().then(result => {
+          if (destroyed || generation !== visibilityGeneration || controller.signal.aborted
+            || next.signature !== visibilitySignature) return;
           visibilityRowsCache = { signature: next.signature, ...result };
           scheduleRender();
-        }).catch(error => { if (!destroyed) api.showToast?.(error.message, 'error'); }).finally(() => {
+        }).catch(error => {
+          if (!destroyed && generation === visibilityGeneration && !controller.signal.aborted)
+            api.showToast?.(error.message, 'error');
+        }).finally(() => {
+          if (visibilityAbort === controller) visibilityAbort = null;
           visibilityPending = false;
           if (!destroyed && latestVisibilityRequest && latestVisibilityRequest.signature !== visibilityRowsCache?.signature) {
             requestVisibility(latestVisibilityRequest);
@@ -141,7 +166,8 @@ export function createVisionFogSystem() {
 
       function localVisionSubject() {
         if (!localSourceTokenId) return null;
-        const world = api.world?.get?.();
+        const world = visionState().preferences?.worldV2;
+        if (cachedSubject?.tokenId === localSourceTokenId) return cachedSubject;
         const scene = world?.scenes?.find(item => String(item.id) === String(world.activeSceneId));
         const token = scene?.tokens?.find(item => String(item.id) === String(localSourceTokenId));
         const actor = token && world?.actors?.find(item => String(item.id) === String(token.actorId));
@@ -164,10 +190,10 @@ export function createVisionFogSystem() {
           vagueRangeMeters = Math.max(vagueRangeMeters, preciseRangeMeters);
           preciseRangeMeters = 0;
         }
-        return {
+        return cachedSubject = {
           sceneId: String(scene.id), tokenId: String(token.id),
-          x: Number(api.renderer?.getVisualTokenPoint?.(token.id)?.x ?? token.x),
-          y: Number(api.renderer?.getVisualTokenPoint?.(token.id)?.y ?? token.y),
+          x: Number(token.x),
+          y: Number(token.y),
           elevationMeters: Number(token.elevationMeters) || 0,
           rangeMeters: preciseRangeMeters,
           preciseRangeMeters, vagueRangeMeters,
@@ -237,20 +263,20 @@ export function createVisionFogSystem() {
       }
 
       function liveVisionState() {
-        const state = api.getState?.() || {};
+        const state = visionState();
         const audience = state.preferences?.audienceVision || localVisionState();
         const sourceTokenId = confirmedSourceTokenId();
         const visualPoint = sourceTokenId
           ? api.renderer?.getVisualTokenPoint?.(sourceTokenId) || null
           : null;
-        return resolveLiveAudienceVision(audience, runtimeScene(api), sourceTokenId, visualPoint);
+        return resolveLiveAudienceVision(audience, runtimeScene(visionState()), sourceTokenId, visualPoint);
       }
 
       function clearUnavailableConnectedSource() {
         if (!api.multiplayer?.getStatus?.()?.connected || connectedClearPending) return;
         const tokenId = api.multiplayer?.getVisionSource?.();
         if (!tokenId) return;
-        const scene = runtimeScene(api);
+        const scene = runtimeScene(visionState());
         const token = scene?.tokens?.find(item => String(item?.id ?? '') === String(tokenId));
         const canControl = token && token.placement === 'map'
           && api.multiplayer?.canControlToken?.(tokenId) === true;
@@ -288,13 +314,14 @@ export function createVisionFogSystem() {
       }
 
       function render(dirtyBounds = null) {
+        const renderStarted = performance.now();
         const audience = liveVisionState();
         if (!audience) {
           canvases.forEach(canvas => { canvas.hidden = true; });
           lastVisionSignature = '';
           return;
         }
-        const scene = runtimeScene(api);
+        const scene = runtimeScene(visionState());
         if (!scene) return;
         canvases.forEach(canvas => { canvas.hidden = false; });
         const size = api.map.getSize();
@@ -316,18 +343,26 @@ export function createVisionFogSystem() {
         for (const context of [exploration, perception]) {
           context.setTransform(dpr, 0, 0, dpr, 0, 0);
         }
-        const fog = normalizeFogState(scene.fog);
         const metersPerUnit = Math.max(0.000001, Number(api.mapPackage?.metersPerUnit) || 1);
         const cellUnits = FOG_CELL_SIZE_METERS / metersPerUnit;
-        const rows = exploredRows(fog, Array.isArray(audience.partyIds) ? audience.partyIds : []);
-        const worldRect = (x, y, width, height) => {
-          const first = api.map.latLngToContainerPoint(worldToLatLng({ x, y }, api.mapPackage.height));
-          const second = api.map.latLngToContainerPoint(worldToLatLng({ x: x + width, y: y + height }, api.mapPackage.height));
-          return {
-            x: Math.min(first.x, second.x), y: Math.min(first.y, second.y),
-            width: Math.abs(second.x - first.x), height: Math.abs(second.y - first.y),
-          };
-        };
+        const partyKey = JSON.stringify(audience.partyIds || []);
+        if (exploredDirty || partyKey !== exploredParties) {
+          exploredCache = [...exploredRows(normalizeFogState(scene.fog), audience.partyIds || [])];
+          exploredParties = partyKey; exploredDirty = false; explorationDirty = true;
+        }
+        const rows = exploredCache;
+        const zero = api.map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, api.mapPackage.height));
+        const unit = api.map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 1 }, api.mapPackage.height));
+        const scaleX = unit.x - zero.x, scaleY = unit.y - zero.y;
+        const worldRect = (x, y, width, height) => ({
+          x: zero.x + (scaleX < 0 ? x + width : x) * scaleX,
+          y: zero.y + (scaleY < 0 ? y + height : y) * scaleY,
+          width: Math.abs(width * scaleX), height: Math.abs(height * scaleY),
+        });
+        const rowMin = Math.floor(Math.min(-zero.y / scaleY, (size.y - zero.y) / scaleY) / cellUnits) - 1;
+        const rowMax = Math.ceil(Math.max(-zero.y / scaleY, (size.y - zero.y) / scaleY) / cellUnits) + 1;
+        const colMin = Math.floor(Math.min(-zero.x / scaleX, (size.x - zero.x) / scaleX) / cellUnits) - 1;
+        const colMax = Math.ceil(Math.max(-zero.x / scaleX, (size.x - zero.x) / scaleX) / cellUnits) + 1;
         const clip = dirtyBounds && !resized
           ? worldRect(
               Number(dirtyBounds.minX), Number(dirtyBounds.minY),
@@ -350,7 +385,10 @@ export function createVisionFogSystem() {
         }
         const drawRows = (context, rowEntries) => {
           for (const [row, spans] of rowEntries) {
-            for (const [start, end] of spans) {
+            if (Number(row) < rowMin || Number(row) > rowMax) continue;
+            for (const [rawStart, rawEnd] of spans) {
+              const start = Math.max(rawStart, colMin), end = Math.min(rawEnd, colMax);
+              if (end < start) continue;
               const rect = worldRect(start * cellUnits, Number(row) * cellUnits, (end - start + 1) * cellUnits, cellUnits);
               context.fillRect(rect.x, rect.y, rect.width + 1, rect.height + 1);
             }
@@ -370,51 +408,38 @@ export function createVisionFogSystem() {
           context.arc(center.x, center.y, Math.abs(edge.x - center.x), 0, Math.PI * 2);
           context.fill();
         };
+        let currentPrepared = false;
         const drawCurrent = (context, rawRange, kind) => {
           const rangeMeters = Number(rawRange) || 0;
           if (!source || rangeMeters <= 0) return;
-          const lights = deriveSceneLightSources(api.mapPackage, scene);
-          const needsLightingGrid = kind === 'precise'
-            && (String(source.lighting || 'normal') !== 'normal' || lights.length > 0);
+          spatial ||= sceneVisionContext(api.mapPackage, scene);
+          const { lights, occluders, geometryVersion, lightVersion } = spatial;
           const ignoresOcclusion = visionIgnoresOcclusion(source);
-          if ((!source.lineOfSightEnabled || ignoresOcclusion) && !needsLightingGrid) {
-            drawCurrentCircle(context, rangeMeters);
-            return;
+          if ((!source.lineOfSightEnabled || ignoresOcclusion) && (kind !== 'precise'
+            || ((source.lighting || 'normal') === 'normal' && !lights.length))) {
+            drawCurrentCircle(context, rangeMeters); return;
           }
-          const signature = JSON.stringify({
-            sceneId: scene.id,
-            source: { x: source.x, y: source.y, elevationMeters: source.elevationMeters },
-            precise: source.preciseGroundRangeMeters,
-            vague: source.vagueGroundRangeMeters,
-            featureStates: scene.featureStates || {},
-            sceneEvents: scene.sceneEvents || [],
-            xrayVision: ignoresOcclusion,
-            lighting: source.lighting || 'normal',
-            lights,
-          });
-          const contextKey = JSON.stringify({ sceneId: scene.id, tokenId: confirmedSourceTokenId(),
-            elevation: source.elevationMeters, senses: source.senses, precise: source.preciseGroundRangeMeters,
-            vague: source.vagueGroundRangeMeters, lighting: source.lighting, lights,
-            featureStates: scene.featureStates, sceneEvents: scene.sceneEvents });
-          if (contextKey !== visibilityContext) {
-            visibilityContext = contextKey;
-            visibilityGeneration += 1;
-            visibilityRowsCache = null;
-            latestVisibilityRequest = null;
-          }
-          if (!visibilityRowsCache || visibilityRowsCache.signature !== signature) {
-            const occluders = deriveVisionOccluders(api.mapPackage, scene, deriveSceneState(scene.sceneEvents || []));
-            if (visibilityBackground) {
-              requestVisibility({ signature, input: { kind: 'visibility', source, occluders, lights, ignoresOcclusion,
-                map: { width: api.mapPackage.width, height: api.mapPackage.height, metersPerUnit } } });
-            } else {
-              visibilityRowsCache = { signature, ...computeVisibilityRows({
-                source, map: api.mapPackage, occluders, lights, ignoresOcclusion,
-              }) };
+          if (!currentPrepared) {
+            currentPrepared = true;
+            const contextKey = JSON.stringify({ geometryVersion, lightVersion, tokenId: confirmedSourceTokenId(),
+              ...source, x: undefined, y: undefined });
+            if (contextKey !== visibilityContext) {
+              visibilityContext = contextKey;
+              cancelVisibility();
             }
+            const signature = contextKey + ':' + source.x + ':' + source.y;
+            visibilitySignature = signature;
+            if (!visibilityRowsCache || visibilityRowsCache.signature !== signature) {
+              const input = { kind: 'visibility', source, occluders, lights, ignoresOcclusion,
+                contextVersion: geometryVersion, lightVersion,
+                map: { width: api.mapPackage.width, height: api.mapPackage.height, metersPerUnit } };
+              requestVisibility({ signature, input });
+            }
+            api.diagnostics?.record('vision.cacheHit', spatial.cacheHit ? 1 : 0);
+            api.diagnostics?.record('vision.cacheSize', spatial.cacheSize);
           }
-          if (!visibilityRowsCache) return;
-          drawRows(context, visibilityRowsCache[kind] || []);
+          if (visibilityRowsCache?.signature === visibilitySignature)
+            drawRows(context, visibilityRowsCache[kind] || []);
         };
 
         if (explorationDirty || resized) {
@@ -445,6 +470,7 @@ export function createVisionFogSystem() {
         perception.globalCompositeOperation = 'source-over';
         lastVisionSignature = visionSignature();
         perception.restore();
+        api.diagnostics?.record('vision.draw', performance.now() - renderStarted);
       }
 
       function scheduleRender(dirtyBounds = null) {
@@ -463,9 +489,10 @@ export function createVisionFogSystem() {
 
       api.vision = {
         async setSource(tokenId = null) {
+          cachedSubject = null;
+          exploredDirty = true;
           explorationGeneration += 1;
-          visibilityGeneration += 1;
-          visibilityRowsCache = null;
+          cancelVisibility();
           if (api.multiplayer?.getStatus?.()?.connected) return api.multiplayer.setVisionSource(tokenId);
           localSourceTokenId = tokenId == null ? null : String(tokenId);
           const subject = localVisionSubject();
@@ -476,10 +503,10 @@ export function createVisionFogSystem() {
             error.code = 'vision_source_unavailable';
             throw error;
           }
+          api.emit?.('vision:source-change', { tokenId: localSourceTokenId });
           lastLocalVision = subject;
           if (subject) queueLocalExploration(subject).catch(error => { if (!destroyed) api.showToast?.(error.message, 'error'); });
-          render();
-          api.emit?.('vision:source-change', { tokenId: localSourceTokenId });
+          scheduleRender();
           return { tokenId: localSourceTokenId };
         },
         getSource() {
@@ -489,7 +516,7 @@ export function createVisionFogSystem() {
           return structuredClone(liveVisionState()?.source || null);
         },
         getExplored(partyId) {
-          return structuredClone(normalizeFogState(runtimeScene(api)?.fog).exploredByParty[String(partyId)] || { rows: {} });
+          return structuredClone(normalizeFogState(runtimeScene(visionState())?.fog).exploredByParty[String(partyId)] || { rows: {} });
         },
         resetExplored(partyId, { sceneId = null } = {}) {
           return api.world.performOperations([{ type: 'scene.fog.reset', payload: {
@@ -514,6 +541,7 @@ export function createVisionFogSystem() {
         api.vision.setSource(tokenId).catch(error => api.showToast?.(error.message, 'error'));
       }));
       retain(api.on?.('state:commit', detail => {
+        exploredDirty = true;
         const changed = synchronizeLocalVision();
         clearUnavailableConnectedSource();
         if (changed || /fog|vision|scene|import/i.test(String(detail?.source || ''))) scheduleRender();
@@ -521,8 +549,7 @@ export function createVisionFogSystem() {
       for (const eventName of ['state:import', 'scene:activate']) {
         retain(api.on?.(eventName, () => {
           explorationGeneration += 1;
-          visibilityGeneration += 1;
-          visibilityRowsCache = null;
+          cancelVisibility();
           synchronizeLocalVision();
           clearUnavailableConnectedSource();
           explorationDirty = true;
@@ -530,11 +557,22 @@ export function createVisionFogSystem() {
         }));
       }
       retain(api.on?.('vision:source-change', () => scheduleRender(null)));
+      retain(api.on?.('vision:exploration-cancel', () => { explorationGeneration += 1; }));
+      retain(api.on?.('state:patch', event => {
+        const changes = event?.detail?.changeSet;
+        const changed = synchronizeLocalVision();
+        if (!changes) { exploredDirty = true; spatial = null; }
+        if (changed || !changes || changes.tokens?.length || changes.actors?.length
+          || changes.featureStates?.length || changes.sceneContent?.length || changes.fog?.length
+          || changes.scenes?.activeSceneChanged || changes.scenes?.upsertIds?.length
+          || changes.statusDefinitionsChanged) scheduleRender(null);
+      }));
       retain(api.on?.('token:delete', () => {
         synchronizeLocalVision();
         clearUnavailableConnectedSource();
         scheduleRender(null);
       }));
+      retain(api.on?.('feature:state-change', () => scheduleRender(null)));
       retain(api.on?.('scene:content-change', event => {
         if (event.detail?.types?.includes('SceneEvent')) scheduleRender(null);
       }));
@@ -546,6 +584,7 @@ export function createVisionFogSystem() {
         if (visionSignature() !== lastVisionSignature) scheduleRender();
       }));
       retain(api.on?.('fog:change', event => {
+        exploredDirty = true;
         explorationDirty = true;
         scheduleRender(event?.detail?.dirtyBounds ?? null);
       }));
@@ -561,6 +600,9 @@ export function createVisionFogSystem() {
       render();
       api.on?.('app:destroy', () => {
         destroyed = true;
+        cachedState = null; cachedSubject = null; spatial = null; exploredCache = [];
+        releaseVisionContexts(api.mapPackage);
+        visibilityAbort?.abort();
         visibilityBackground?.dispose();
         explorationGeneration += 1;
         off.forEach(dispose => dispose());

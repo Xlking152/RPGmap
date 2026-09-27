@@ -1,5 +1,5 @@
 const STORAGE_KEY = 'rpgmap.diagnostics.enabled';
-const METRICS = new Set(['frame', 'input.frame', 'longtask', 'network.confirm', 'network.requestBytes', 'network.responseBytes', 'documents.apply', 'sheet.dom', 'sheet.queue']);
+const METRICS = new Set(['frame', 'input.frame', 'longtask', 'network.confirm', 'network.requestBytes', 'network.responseBytes', 'documents.apply', 'sheet.dom', 'sheet.queue', 'vision.worker', 'vision.transferBytes', 'vision.queue', 'vision.draw', 'vision.cacheHit', 'vision.cacheSize', 'world.fogPrepare', 'world.reduce', 'world.changes', 'world.commit', 'world.persist']);
 
 export function createRuntimeDiagnostics({ clock = performance, windowNode = globalThis, documentNode = globalThis.document, storage = null, limit = 8192 } = {}) {
   let enabled = false;

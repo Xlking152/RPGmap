@@ -11,6 +11,7 @@ import { persistPreparedWorldContent, prepareWorldContentState } from '../app/wo
 import {
   exportRuntimeState,
   prepareRuntimeState,
+  stringifyTrustedRuntimeState,
   validateRuntimeState,
 } from './runtime-state.js';
 import { createMapPresentation } from '../render/map-presentation.js';
@@ -101,6 +102,7 @@ export function createRpgMapRuntime({
 
   const bus = new EventTarget();
   let state = null;
+  let stateRevision = 0;
   let currentTool = 'pan';
   let activePanel = 'actors';
   let selectedFeatureId = null;
@@ -121,12 +123,14 @@ export function createRpgMapRuntime({
     ruleset,
     storageAdapter,
     getState: () => state,
+    stringifyTrustedState: current => stringifyTrustedRuntimeState(current, { mapPackage }),
     onSaved: () => bus.dispatchEvent(new CustomEvent('state:saved')),
     onError: error => showToast(`自动保存失败，已暂停后续写入：${error.message}`, 'error'),
     initialLoad,
   });
   const loaded = persistence.load();
   state = loaded.state;
+    stateRevision += 1;
 
   const map = L.map(elements.map, {
     crs: L.CRS.Simple,
@@ -276,6 +280,7 @@ export function createRpgMapRuntime({
   function commitState(nextState, { source = 'local', render = true } = {}) {
     assertWritable();
     state = normalizeState(nextState);
+    stateRevision += 1;
     if (render) renderScene();
     persistence.schedule();
     emit('state:commit', { source, state: clone(state) });
@@ -340,6 +345,7 @@ export function createRpgMapRuntime({
   } = {}) {
     assertWritable();
     state = normalizeState(nextState);
+    stateRevision += 1;
     return emitAuthoritativeChanges({ source, changeSet, revision });
   }
 
@@ -348,6 +354,7 @@ export function createRpgMapRuntime({
   } = {}) {
     assertWritable();
     state = applyDocumentChanges(state, changes, { updatedAt });
+    stateRevision += 1;
     const changeSet = documentChangeSet(changes);
     api.documents?.applyCommitted?.(changes, { revision, operationId });
     return emitAuthoritativeChanges({ source, changeSet, revision });
@@ -404,6 +411,7 @@ export function createRpgMapRuntime({
         worldId, mapPackage, ruleset, storageAdapter, indexedDB: documentNode.defaultView.indexedDB });
     } else if (persist) persistence.replace(normalized);
     state = normalized;
+    stateRevision += 1;
     selectedFeatureId = null;
     renderScene();
     emit('state:import', { source, state: clone(state), migrated: prepared.migrated === true, persist });
@@ -507,9 +515,11 @@ export function createRpgMapRuntime({
     return true;
   }
 
-  function persistNow() {
+  function persistNow({ trustedWorldRevision = null } = {}) {
     if (importPending || recoveryBlocked) return false;
-    return persistence.persistNow();
+    return trustedWorldRevision !== null && trustedWorldRevision === stateRevision
+      ? persistence.persistTrustedNow()
+      : persistence.persistNow();
   }
 
   const uiPanels = Object.freeze({
@@ -525,6 +535,7 @@ export function createRpgMapRuntime({
     ruleset,
     uiPanels,
     getState: () => clone(state),
+    getStateRevision: () => stateRevision,
     getTool,
     setTool,
     setActivePanel,

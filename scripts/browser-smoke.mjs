@@ -242,6 +242,10 @@ try {
       })()`), 'Fog Canvas with opaque and realtime-visible pixels', deadline);
   }
   let movementAudit = null;
+  if (mode === 'fog' && process.env.RPGMAP_SMOKE_CPU_PROFILE) {
+    await send('Profiler.enable');
+    await send('Profiler.start');
+  }
   if (mode === 'fog') {
     movementAudit = await evaluate(`(async () => {
       const api = document.querySelector('#app').rpgMapApp;
@@ -287,7 +291,45 @@ try {
       await api.tokens.update(id, { vision: { ...api.tokens.get(id).vision,
         preciseRangeOverrideMeters: 1000, vagueRangeOverrideMeters: 1000 } });
       await api.vision.setSource(id);
+      const diagnosticsInitiallyEnabled = api.diagnostics?.enabled === true;
+      if (${process.env.RPGMAP_SMOKE_PROFILE_API ? 'true' : 'false'}) {
+        api.diagnostics?.setEnabled?.(true);
+        api.diagnostics?.reset?.();
+      }
       const frameGaps = [];
+      const longTasks = [];
+      const apiTimings = {};
+      const restoreApi = [];
+      if (${process.env.RPGMAP_SMOKE_PROFILE_API ? 'true' : 'false'}) {
+        for (const [object, name, label] of [
+          [api, 'getState', 'state.read'], [api.world, 'get', 'world.read'],
+          [api.world, 'getActiveScene', 'scene.read'], [api.world, 'performOperations', 'world.operation'],
+          [api.tokens, 'get', 'token.read'], [api.tokens, 'create', 'token.create'],
+          [api, 'applyAuthoritativeDocumentChanges', 'document.apply'], [api, 'persistNow', 'state.persist'],
+        ]) {
+          if (typeof object?.[name] !== 'function') continue;
+          const original = object[name];
+          object[name] = function(...args) {
+            const begin = performance.now();
+            const record = () => {
+              const timing = apiTimings[label] ||= { calls: 0, totalMs: 0, maxMs: 0, events: [] };
+              const elapsed = performance.now() - begin;
+              timing.calls += 1; timing.totalMs += elapsed; timing.maxMs = Math.max(timing.maxMs, elapsed);
+              timing.events.push({ offsetMs: Math.round(begin - measuredFrom), durationMs: Math.round(elapsed) });
+            };
+            try {
+              const result = original.apply(this, args);
+              if (result && typeof result.then === 'function') return result.finally(record);
+              record(); return result;
+            } catch (error) { record(); throw error; }
+          };
+          restoreApi.push(() => { object[name] = original; });
+        }
+      }
+      const observer = new PerformanceObserver(list => longTasks.push(...list.getEntries().map(entry => ({ startTime: entry.startTime, duration: entry.duration }))));
+      observer.observe({ type: 'longtask', buffered: false });
+      const measuredFrom = performance.now();
+      const phases = [];
       let previousFrame = performance.now(), frame;
       const tick = time => { frameGaps.push(time - previousFrame); previousFrame = time; frame = requestAnimationFrame(tick); };
       frame = requestAnimationFrame(tick);
@@ -298,11 +340,13 @@ try {
           actorLink: true, diameterMeters: 1, elevationMeters: 0 });
         while (!api.renderer.getVisualTokenPoint(placed.id) && performance.now() - start < 2000) await wait(16);
         const placementMs = performance.now() - start;
+        phases.push({ name: 'placement', start, end: performance.now() });
         if (!api.renderer.getVisualTokenPoint(placed.id) || placementMs > 500) throw new Error('Large-vision placement stalled: ' + placementMs);
         const destination = largeDestination;
         const moveStart = performance.now();
         const result = await api.movementFast.moveTokenTo(id, destination);
         const commitMs = performance.now() - moveStart;
+        phases.push({ name: 'movement-commit', start: moveStart, end: performance.now() });
         if (!result.valid || commitMs > 500) throw new Error('Large-vision movement stalled: ' + JSON.stringify({ result, commitMs }));
         await wait(4000);
         const visual = api.renderer.getVisualTokenPoint(id);
@@ -311,10 +355,38 @@ try {
           || canonical.x !== destination.x || canonical.y !== destination.y) throw new Error('425 m route did not settle');
         const maxFrameGapMs = Math.max(...frameGaps);
         if (maxFrameGapMs > 250) throw new Error('Large-vision main thread blocked: ' + maxFrameGapMs);
-        records.push({ mode: 'offline-large-range', rangeMeters: 1000, distanceMeters: 425, placementMs, commitMs, maxFrameGapMs });
-      } finally { cancelAnimationFrame(frame); }
+        longTasks.push(...observer.takeRecords().map(entry => ({ startTime: entry.startTime, duration: entry.duration })));
+        const measuredTasks = longTasks.filter(entry => entry.startTime >= measuredFrom);
+        records.push({ mode: 'offline-large-range', rangeMeters: 1000, distanceMeters: 425, placementMs, commitMs, maxFrameGapMs,
+          longTaskMs: measuredTasks.reduce((sum, entry) => sum + entry.duration, 0), longTaskCount: measuredTasks.length,
+          longTaskDetails: measuredTasks.map(entry => ({ offsetMs: Math.round(entry.startTime - measuredFrom),
+            durationMs: Math.round(entry.duration), phase: phases.find(phase => entry.startTime >= phase.start && entry.startTime < phase.end)?.name || 'settle' })),
+          preWindowLongTasks: longTasks.filter(entry => entry.startTime < measuredFrom).map(entry => ({
+            offsetMs: Math.round(entry.startTime - measuredFrom), durationMs: Math.round(entry.duration) })),
+          heapBytes: performance.memory?.usedJSHeapSize || null, diagnostics: api.diagnostics?.snapshot?.(),
+          ...(restoreApi.length ? { apiTimings } : {}) });
+      } finally { cancelAnimationFrame(frame); observer.disconnect(); for (const restore of restoreApi) restore();
+        if (${process.env.RPGMAP_SMOKE_PROFILE_API ? 'true' : 'false'}) {
+          api.diagnostics?.setEnabled?.(diagnosticsInitiallyEnabled);
+          const runtimeState = api.getState(), exportedState = api.exportState();
+          const different = [];
+          const compare = (a, b, path = '') => {
+            if (different.length >= 12 || Object.is(a, b)) return;
+            if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) {
+              different.push(path || '(root)'); return;
+            }
+            for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) compare(a[key], b[key], path + '/' + key);
+          };
+          compare(runtimeState, exportedState);
+          records.at(-1).saveCompare = { different,
+            runtimeBytes: JSON.stringify(runtimeState).length, exportBytes: JSON.stringify(exportedState).length };
+        } }
       return records;
     })()`, 20000);
+  }
+  if (mode === 'fog' && process.env.RPGMAP_SMOKE_CPU_PROFILE) {
+    const { profile: cpuProfile } = await send('Profiler.stop');
+    await writeFile(process.env.RPGMAP_SMOKE_CPU_PROFILE, JSON.stringify(cpuProfile));
   }
   const assetAudit = await evaluate(`(async () => {
     const response = await fetch('./.vite/manifest.json', { cache: 'no-store' });

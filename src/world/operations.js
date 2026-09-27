@@ -19,16 +19,14 @@ import {
 import { normalizeTokenAccess } from '../token/access.js';
 import { normalizeSceneToken } from '../token/model.js';
 import {
-  exploreFogCircle,
-  exploreFogSweep,
-  exploreFogVisibleCircle,
-  exploreFogVisibleSweep,
+  computeFogExploration,
+  computeFogExplorationAsync,
   hideFogCircle,
   normalizeFogState,
   resetFogParty,
 } from '../vision/fog.js';
-import { deriveSceneState } from '../engine/state.js';
-import { deriveVisionOccluders, visionIgnoresOcclusion } from '../spatial/kernel.js';
+import { sceneVisionContext } from '../vision/context.js';
+import { visionIgnoresOcclusion } from '../spatial/kernel.js';
 import { migrateWorldSchema3State } from './migration.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { advanceStatusDurations, STATUS_SCHEMA_VERSION } from '../status/model.js';
@@ -1024,60 +1022,10 @@ function applyCanonicalOperation(state, operation, context = {}) {
   }
 
   if (type.startsWith('scene.fog.')) {
-    const scene = sceneById(world, payload.sceneId);
-    const partyId = identifier(payload.partyId, 'partyId');
-    const map = plainObject(context.mapPackage)
-      ? context.mapPackage
-      : plainObject(context.mapMetrics) ? context.mapMetrics : {};
-    const radiusMeters = type === 'scene.fog.reset' ? 0 : Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
-    const radiusUnits = radiusMeters / Math.max(0.000001, Number(map.metersPerUnit) || 1);
-    const dirtyBounds = type === 'scene.fog.reset' ? null : (payload.from && payload.to ? [payload.from, payload.to] : [payload])
-      .reduce((bounds, point) => ({
-        minX: Math.min(bounds.minX, finite(point.x, 'x') - radiusUnits),
-        minY: Math.min(bounds.minY, finite(point.y, 'y') - radiusUnits),
-        maxX: Math.max(bounds.maxX, finite(point.x, 'x') + radiusUnits),
-        maxY: Math.max(bounds.maxY, finite(point.y, 'y') + radiusUnits),
-      }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
-    const sourceId = payload.visionSourceTokenId == null ? '' : String(payload.visionSourceTokenId);
-    const sourceToken = sourceId ? scene.tokens?.find(token => String(token?.id || '') === sourceId) : null;
-    const sourceActor = sourceToken && world.actors?.find(actor => String(actor?.id || '') === String(sourceToken.actorId || ''));
-    const sourceResolvedActor = sourceToken && sourceActor && sourceToken.actorLink === false
-      ? mergeActorDelta(sourceActor, sourceToken.actorDelta)
-      : sourceActor;
-    const sourceVision = sourceToken && sourceResolvedActor
-      ? context.ruleset?.vision?.describe?.(sourceResolvedActor, { token: sourceToken, scene, world })
-      : null;
-    const lineOfSightEnabled = !visionIgnoresOcclusion(sourceVision);
-    const occluders = lineOfSightEnabled
-      ? deriveVisionOccluders(map, scene, deriveSceneState(scene.sceneEvents || []))
-      : [];
-    if (type === 'scene.fog.explore' && typeof context.computeFogExploration === 'function') {
-      scene.fog = context.computeFogExploration({ partyId, payload: { ...payload, radiusMeters,
-        ...(payload.from && payload.to ? {} : { elevationMeters: Math.max(0, finite(payload.elevationMeters ?? 0, 'elevationMeters')) }) }, lineOfSightEnabled, occluders,
-        map: { width: map.width, height: map.height, metersPerUnit: map.metersPerUnit } }, scene.fog);
-    }
-    else if (type === 'scene.fog.reset') scene.fog = resetFogParty(scene.fog, partyId);
-    else if (type === 'scene.fog.hide') {
-      scene.fog = hideFogCircle(scene.fog, partyId, {
-        x: finite(payload.x, 'x'), y: finite(payload.y, 'y'),
-        radiusMeters,
-      }, map);
-    } else if (payload.from && payload.to) {
-      scene.fog = lineOfSightEnabled
-        ? exploreFogVisibleSweep(scene.fog, partyId, payload.from, payload.to, radiusMeters, map, { occluders })
-        : exploreFogSweep(scene.fog, partyId, payload.from, payload.to, radiusMeters, map);
-    } else {
-      const circle = {
-        x: finite(payload.x, 'x'), y: finite(payload.y, 'y'),
-        elevationMeters: Math.max(0, finite(payload.elevationMeters ?? 0, 'elevationMeters')),
-        radiusMeters,
-      };
-      scene.fog = lineOfSightEnabled
-        ? exploreFogVisibleCircle(scene.fog, partyId, circle, map, {
-            sourceElevationMeters: circle.elevationMeters, occluders,
-          })
-        : exploreFogCircle(scene.fog, partyId, circle, map);
-    }
+    const { scene, partyId, dirtyBounds, input } = context.preparedFog || prepareFogOperation(state, operation, context);
+    if (type === 'scene.fog.reset') scene.fog = resetFogParty(scene.fog, partyId);
+    else if (type === 'scene.fog.hide') scene.fog = hideFogCircle(scene.fog, partyId, input.payload, input.map);
+    else scene.fog = (context.computeFogExploration || computeFogExploration)(input, scene.fog);
     return { action: type, sceneId: String(scene.id), partyId, dirtyBounds };
   }
 
@@ -1163,7 +1111,44 @@ function applyCanonicalOperation(state, operation, context = {}) {
   fail(`Unsupported World operation: ${type}`, 'unknown_world_operation');
 }
 
-export function applyWorldOperations(rawState, rawOperations, context = {}) {
+export function prepareFogOperation(state, rawOperation, context = {}) {
+  const { type, payload } = normalizeWorldOperation(rawOperation);
+  const world = worldFromState(state);
+  const scene = sceneById(world, payload.sceneId);
+  const partyId = identifier(payload.partyId, 'partyId');
+  const map = plainObject(context.mapPackage)
+    ? context.mapPackage
+    : plainObject(context.mapMetrics) ? context.mapMetrics : {};
+  const radiusMeters = type === 'scene.fog.reset' ? 0 : Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
+  const radiusUnits = radiusMeters / Math.max(0.000001, Number(map.metersPerUnit) || 1);
+  const dirtyBounds = type === 'scene.fog.reset' ? null : (payload.from && payload.to ? [payload.from, payload.to] : [payload])
+    .reduce((bounds, point) => ({
+      minX: Math.min(bounds.minX, finite(point.x, 'x') - radiusUnits),
+      minY: Math.min(bounds.minY, finite(point.y, 'y') - radiusUnits),
+      maxX: Math.max(bounds.maxX, finite(point.x, 'x') + radiusUnits),
+      maxY: Math.max(bounds.maxY, finite(point.y, 'y') + radiusUnits),
+    }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+  const sourceId = payload.visionSourceTokenId == null ? '' : String(payload.visionSourceTokenId);
+  const sourceToken = sourceId ? scene.tokens?.find(token => String(token?.id || '') === sourceId) : null;
+  const sourceActor = sourceToken && world.actors?.find(actor => String(actor?.id || '') === String(sourceToken.actorId || ''));
+  const sourceResolvedActor = sourceToken && sourceActor && sourceToken.actorLink === false
+    ? mergeActorDelta(sourceActor, sourceToken.actorDelta)
+    : sourceActor;
+  const sourceVision = sourceToken && sourceResolvedActor
+    ? context.ruleset?.vision?.describe?.(sourceResolvedActor, { token: sourceToken, scene, world })
+    : null;
+  const lineOfSightEnabled = !visionIgnoresOcclusion(sourceVision);
+  const spatial = type === 'scene.fog.explore' ? sceneVisionContext(map, scene) : null;
+  const occluders = lineOfSightEnabled ? spatial?.occluders || [] : [];
+
+  return { scene, partyId, dirtyBounds, input: { partyId,
+    payload: { ...payload, radiusMeters,
+      ...(payload.from && payload.to ? {} : { elevationMeters: Math.max(0, finite(payload.elevationMeters ?? 0, 'elevationMeters')) }) },
+    lineOfSightEnabled, occluders, contextVersion: spatial?.geometryVersion,
+    map: { width: map.width, height: map.height, metersPerUnit: map.metersPerUnit } } };
+}
+
+function* worldOperationSteps(rawState, rawOperations, context = {}) {
   const operations = array(rawOperations, 'operations').map((operation, index) =>
     normalizeWorldOperation(operation, `operations[${index}]`));
   if (!operations.length || operations.length > WORLD_OPERATION_BATCH_LIMIT) {
@@ -1186,7 +1171,13 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
       results.push(...(Array.isArray(applied.results) ? clone(applied.results) : []));
     } else {
       const generated = [];
-      results.push(applyCanonicalOperation(state, operation, { ...context, enqueueStatusOperation(value) {
+      let fogContext = {};
+      if (operation.type === 'scene.fog.explore' && !context.computeFogExploration) {
+        const preparedFog = prepareFogOperation(state, operation, context);
+        const computed = yield { input: preparedFog.input, fog: preparedFog.scene.fog };
+        fogContext = { preparedFog, computeFogExploration: () => computed };
+      }
+      results.push(applyCanonicalOperation(state, operation, { ...context, ...fogContext, enqueueStatusOperation(value) {
         const status = normalizeWorldOperation(value);
         if (!STATUS_TYPES.has(status.type)) fail('Movement may only generate status operations', 'invalid_world_operation');
         generated.push(status);
@@ -1217,6 +1208,20 @@ export function applyWorldOperations(rawState, rawOperations, context = {}) {
     operations,
     results,
   };
+}
+
+export function applyWorldOperations(...args) {
+  const iterator = worldOperationSteps(...args);
+  let step = iterator.next();
+  while (!step.done) step = iterator.next(computeFogExploration(step.value.input, step.value.fog));
+  return step.value;
+}
+
+export async function applyWorldOperationsAsync(...args) {
+  const iterator = worldOperationSteps(...args);
+  let step = iterator.next();
+  while (!step.done) step = iterator.next(await computeFogExplorationAsync(step.value.input, step.value.fog));
+  return step.value;
 }
 
 function diffById(beforeItems = [], afterItems = []) {

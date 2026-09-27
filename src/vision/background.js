@@ -1,11 +1,13 @@
-export function createVisionBackground() {
+export function createVisionBackground({ diagnostics = null } = {}) {
   if (typeof Worker === 'undefined') return null;
   let worker;
   let sequence = 0;
   let disposed = false;
+  let contextKey = null;
   const pending = new Map();
   function stop(error = new Error('视觉后台计算已取消')) {
     worker?.terminate(); worker = null;
+    contextKey = null;
     for (const request of pending.values()) request.reject(error);
     pending.clear();
   }
@@ -18,6 +20,7 @@ export function createVisionBackground() {
           const request = pending.get(data.id);
           if (!request) return;
           pending.delete(data.id);
+          diagnostics?.record('vision.worker', performance.now() - request.started);
           if (data.error) request.reject(new Error(data.error));
           else request.resolve(data.result);
         };
@@ -26,11 +29,24 @@ export function createVisionBackground() {
       }
       return new Promise((resolve, reject) => {
         const id = ++sequence;
-        pending.set(id, { resolve, reject });
-        try { worker.postMessage({ id, input }); }
+        pending.set(id, { resolve, reject, started: performance.now() });
+        const nextKey = input.contextVersion == null ? null : `${input.contextVersion}:${input.lightVersion || 0}:${input.lineOfSightEnabled}:${input.ignoresOcclusion}`;
+        const message = { id, input };
+        if (nextKey !== null && contextKey === nextKey) {
+          const { occluders, lights, map, ...job } = input;
+          message.input = job;
+        }
+        try {
+          if (diagnostics?.enabled) {
+            diagnostics.record('vision.transferBytes', new TextEncoder().encode(JSON.stringify(message)).length);
+            diagnostics.record('vision.queue', pending.size);
+          }
+          worker.postMessage(message); contextKey = nextKey;
+        }
         catch (error) { pending.delete(id); reject(error); }
       });
     },
+    cancel: stop,
     dispose() { disposed = true; stop(); },
   };
 }

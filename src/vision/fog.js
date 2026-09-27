@@ -1,5 +1,6 @@
 import { inspectLineOfSight } from '../spatial/kernel.js';
-import { groundShadowRows } from './ground-shadow.js';
+import { groundShadowRowsSteps } from './ground-shadow.js';
+import { finishWorkSync, finishWorkAsync } from './work.js';
 
 export const FOG_SCHEMA_VERSION = 1;
 export const FOG_CELL_SIZE_METERS = 5;
@@ -80,7 +81,7 @@ function normalizeSpan(raw) {
   return [rawStart, rawEnd];
 }
 
-function mergeSpans(spans = []) {
+export function mergeSpans(spans = []) {
   const ordered = spans.map(normalizeSpan).filter(Boolean).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const merged = [];
   for (const span of ordered) {
@@ -171,7 +172,7 @@ function circleCoversMap(circle, grid) {
   return radiusUnits >= farthestMapCornerUnits(circle, grid);
 }
 
-function rasterCircle(rows, circle, mode, map = {}, predicate = null) {
+function* rasterCircleSteps(rows, circle, mode, map = {}, predicate = null) {
   const grid = mapGrid(map);
   if (grid.bounded && (grid.maxRow < 0 || grid.maxColumn < 0)) return;
   if (typeof predicate !== 'function' && circleCoversMap(circle, grid)) {
@@ -187,14 +188,15 @@ function rasterCircle(rows, circle, mode, map = {}, predicate = null) {
   for (let row = minRow; row <= maxRow; row += 1) {
     const y = (row + 0.5) * grid.cellUnits;
     const remaining = radiusUnits ** 2 - (y - cy) ** 2;
-    if (remaining < 0) continue;
+    if (remaining < 0) { yield; continue; }
     const dx = Math.sqrt(remaining);
     const start = Math.max(0, Math.floor((cx - dx) / grid.cellUnits));
     const end = Math.min(grid.maxColumn, Math.floor((cx + dx) / grid.cellUnits));
-    if (end < start) continue;
+    if (end < start) { yield; continue; }
     if (typeof predicate !== 'function') {
       if (mode === 'remove') removeSpan(rows, row, start, end);
       else addSpan(rows, row, start, end);
+      yield;
       continue;
     }
     let runStart = null;
@@ -212,7 +214,12 @@ function rasterCircle(rows, circle, mode, map = {}, predicate = null) {
         runStart = null;
       }
     }
+    yield;
   }
+}
+
+function rasterCircle(...args) {
+  return finishWorkSync(rasterCircleSteps(...args));
 }
 
 export function exploreFogCircle(rawFog, partyId, circle, map = {}) {
@@ -232,40 +239,56 @@ export function exploreFogVisibleCircle(rawFog, partyId, circle, map = {}, {
   return fog;
 }
 
-export function visibleFogRowsForCircle(circle, map = {}, {
+export function* visibleFogRowsForCircleSteps(circle, map = {}, {
   sourceElevationMeters = 0,
   occluders = [],
   predicate = null,
+  exploredRows = null,
 } = {}) {
   const rows = {};
   const source = { x: finite(circle?.x), y: finite(circle?.y), elevationMeters: finite(sourceElevationMeters) };
-  rasterCircle(rows, circle, 'add', map);
+  yield* rasterCircleSteps(rows, circle, 'add', map);
+  if (exploredRows) for (const row of Object.keys(rows)) {
+    for (const [start, end] of exploredRows[row] || []) removeSpan(rows, row, start, end);
+    yield;
+  }
+  if (!Object.keys(rows).length) return rows;
   const grid = mapGrid(map);
-  const visible = groundShadowRows(source, effectiveRadiusMeters(circle?.radiusMeters, map, circle) / grid.metersPerUnit,
+  const visible = yield* groundShadowRowsSteps(source, effectiveRadiusMeters(circle?.radiusMeters, map, circle) / grid.metersPerUnit,
     occluders, grid.cellUnits, rows);
   if (!visible) {
     const fallback = {};
-    rasterCircle(fallback, circle, 'add', map, target => inspectLineOfSight({
+    yield* rasterCircleSteps(fallback, circle, 'add', map, target => (!exploredRows
+      || !(exploredRows[Math.floor(target.y / grid.cellUnits)] || []).some(([a, b]) => {
+        const column = Math.floor(target.x / grid.cellUnits); return column >= a && column <= b;
+      })) && inspectLineOfSight({
       from: source, to: target, occluders, metersPerUnit: mapScale(map),
     }).clear && (typeof predicate !== 'function' || predicate(target)));
     return fallback;
   }
   if (typeof predicate !== 'function') return visible;
   const filtered = {};
-  for (const [row, spans] of Object.entries(visible)) for (const [start, end] of spans) {
-    let run = null;
-    for (let column = start; column <= end; column++) {
-      const clear = predicate({ x: (column + 0.5) * grid.cellUnits, y: (Number(row) + 0.5) * grid.cellUnits, elevationMeters: 0 });
-      if (clear && run === null) run = column;
-      if (run !== null && (!clear || column === end)) {
-        (filtered[row] ||= []).push([run, clear ? column : column - 1]); run = null;
+  for (const [row, spans] of Object.entries(visible)) {
+    for (const [start, end] of spans) {
+      let run = null;
+      for (let column = start; column <= end; column++) {
+        const clear = predicate({ x: (column + 0.5) * grid.cellUnits, y: (Number(row) + 0.5) * grid.cellUnits, elevationMeters: 0 });
+        if (clear && run === null) run = column;
+        if (run !== null && (!clear || column === end)) {
+          (filtered[row] ||= []).push([run, clear ? column : column - 1]); run = null;
+        }
       }
     }
+    yield;
   }
   return filtered;
 }
 
-export function exploreFogSweep(rawFog, partyId, from, to, radiusMeters, map = {}) {
+export function visibleFogRowsForCircle(...args) {
+  return finishWorkSync(visibleFogRowsForCircleSteps(...args));
+}
+
+function* exploreFogSweepSteps(rawFog, partyId, from, to, radiusMeters, map = {}) {
   const fog = normalizeFogState(rawFog, map);
   const rows = partyRows(fog, partyId);
   const grid = mapGrid(map);
@@ -292,11 +315,19 @@ export function exploreFogSweep(rawFog, partyId, from, to, radiusMeters, map = {
       y: finite(from?.y) + (finite(to?.y) - finite(from?.y)) * ratio,
       radiusMeters,
     }, 'add', map);
+    yield;
   }
   return fog;
 }
 
-export function exploreFogVisibleSweep(rawFog, partyId, from, to, radiusMeters, map = {}, {
+export function exploreFogSweep(...args) {
+  const iterator = exploreFogSweepSteps(...args);
+  let step;
+  do { step = iterator.next(); } while (!step.done);
+  return step.value;
+}
+
+export function* exploreFogVisibleSweepSteps(rawFog, partyId, from, to, radiusMeters, map = {}, {
   occluders = [],
 } = {}) {
   const fog = normalizeFogState(rawFog, map);
@@ -315,10 +346,56 @@ export function exploreFogVisibleSweep(rawFog, partyId, from, to, radiusMeters, 
     const visible = visibleFogRowsForCircle({ ...source, radiusMeters }, map, {
       sourceElevationMeters: source.elevationMeters,
       occluders,
+      exploredRows: rows,
     });
     for (const [row, spans] of Object.entries(visible)) rows[row] = mergeSpans([...(rows[row] || []), ...spans]);
+    yield;
   }
   return fog;
+}
+
+export function exploreFogVisibleSweep(...args) {
+  const iterator = exploreFogVisibleSweepSteps(...args);
+  let step;
+  do { step = iterator.next(); } while (!step.done);
+  return step.value;
+}
+
+export const finishFogWork = finishWorkAsync;
+
+export function computeFogExploration(input, fog = {}) {
+  const { partyId, payload, map, occluders, lineOfSightEnabled } = input;
+  return payload.from && payload.to
+    ? (lineOfSightEnabled ? exploreFogVisibleSweep : exploreFogSweep)(fog, partyId, payload.from, payload.to, payload.radiusMeters, map, { occluders })
+    : (lineOfSightEnabled ? exploreFogVisibleCircle : exploreFogCircle)(fog, partyId, payload, map, { occluders, sourceElevationMeters: payload.elevationMeters || 0 });
+}
+
+export async function computeFogExplorationAsync(input, fog = {}, options = {}) {
+  const { partyId, payload, map, occluders, lineOfSightEnabled } = input;
+  if (payload.from && payload.to) return finishFogWork(
+    (lineOfSightEnabled ? exploreFogVisibleSweepSteps : exploreFogSweepSteps)(
+      fog, partyId, payload.from, payload.to, payload.radiusMeters, map, { occluders }), options);
+  options.signal?.throwIfAborted();
+  return computeFogExploration(input, fog);
+}
+
+export function circleFogRows(circle, map) {
+  const rows = {};
+  rasterCircle(rows, circle, 'add', map);
+  return rows;
+}
+
+export function intersectFogRows(rows, mask) {
+  const result = {};
+  for (const [row, spans] of Object.entries(rows)) {
+    const next = [];
+    for (const [a, b] of spans) for (const [c, d] of mask[row] || []) {
+      const left = Math.max(a, c), right = Math.min(b, d);
+      if (right >= left) next.push([left, right]);
+    }
+    if (next.length) result[row] = next;
+  }
+  return result;
 }
 
 export function hideFogCircle(rawFog, partyId, circle, map = {}) {

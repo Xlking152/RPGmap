@@ -32,7 +32,7 @@ import {
   assertStatusOperationId,
 } from './status-operations.mjs';
 import {
-  applyWorldOperations,
+  applyWorldOperationsAsync,
   applyWorldOperationPatch,
   assertDocumentBatchMessage,
   assertWorldOperationMessage,
@@ -1826,7 +1826,7 @@ server.on('upgrade', (req, socket) => {
       if (vision?.partyId) {
         let applied;
         try {
-          applied = applyWorldOperations(world.state, [{
+          applied = await applyWorldOperationsAsync(world.state, [{
             type: 'scene.fog.explore',
             payload: {
               sceneId: vision.sceneId, partyId: vision.partyId,
@@ -1921,7 +1921,7 @@ server.on('upgrade', (req, socket) => {
         await contentStorage.validateReferences(authorizedOperations, session);
         const operations = appendVisionExplorationOperations(authorizedOperations);
         committedOperations = operations;
-        applied = applyWorldOperations(world.state, operations, {
+        applied = await applyWorldOperationsAsync(world.state, operations, {
           now,
           ruleset: serverRuleset,
           mapMetrics: mapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)) || { metersPerUnit: 1 },

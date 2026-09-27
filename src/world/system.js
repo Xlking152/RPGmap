@@ -9,13 +9,14 @@ import {
 import { pruneProjectedWorldReferences } from './references.js';
 import { assertWorldRuleset } from './validation.js';
 import { reduceStatusOperation, STATUS_SCHEMA_VERSION } from '../status/model.js';
-import { applyWorldOperations, deriveWorldOperations } from './operations.js';
+import { applyWorldOperations, deriveWorldOperations, prepareFogOperation } from './operations.js';
 import { createDocumentChanges } from '../documents/changes.js';
 import { createMovementAuthority } from '../movement/authority.js';
 import { createVisionBackground } from '../vision/background.js';
-import { mergeExploration } from '../vision/fog.js';
+import { mergeExploration, computeFogExplorationAsync } from '../vision/fog.js';
 
 const clone = structuredClone;
+const TRUSTED_SAVE_TYPES = new Set(['token.create', 'token.movePath', 'scene.fog.explore']);
 
 function currentWorldFromState(state) {
   return state?.preferences?.[WORLD_STATE_KEY] || null;
@@ -127,7 +128,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         const projected = pruneProjectedWorldReferences(
           projectWorldV2ToRuntimeState(api.getState?.() || {}, normalized, { mapPackage, ruleset }),
         );
-        explorationEpoch += 1;
+        invalidateExploration();
         if (typeof coreCommitAuthoritativeState === 'function') {
           return coreCommitAuthoritativeState(projected, { source, reason, render });
         }
@@ -135,10 +136,18 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         return { offline: true };
       }
 
-      const background = createVisionBackground();
+      const background = createVisionBackground({ diagnostics: api.diagnostics });
+      const measure = api.diagnostics?.measure
+        ? (name, callback) => api.diagnostics.measure(name, callback)
+        : (_name, callback) => callback();
       let explorationEpoch = 0;
-      for (const event of ['state:import', 'scene:activate', 'vision:source-change']) api.on?.(event, () => { explorationEpoch += 1; });
-      api.on?.('app:destroy', () => { explorationEpoch += 1; background?.dispose(); });
+      let explorationAbort = new AbortController();
+      function invalidateExploration() {
+        explorationEpoch += 1; explorationAbort.abort(); explorationAbort = new AbortController(); background?.cancel();
+        api.emit?.('vision:exploration-cancel', null);
+      }
+      for (const event of ['state:import', 'scene:activate', 'vision:source-change']) api.on?.(event, () => { invalidateExploration(); });
+      api.on?.('app:destroy', () => { invalidateExploration(); background?.dispose(); });
 
       function reduceOperations(state, operations, { source = 'world.operation', now = new Date().toISOString(), computeFogExploration } = {}) {
         return applyWorldOperations(state, operations, {
@@ -176,52 +185,56 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           return api.multiplayer.performOperations(operations, { kind, requestedOperationId });
         }
         let computeFogExploration;
-        if (operations.some(operation => ['scene.fog.hide', 'scene.fog.reset'].includes(operation.type))) explorationEpoch += 1;
-        if (background && operations.length === 1 && operations[0].type === 'scene.fog.explore') {
+        if (operations.some(operation => ['scene.fog.hide', 'scene.fog.reset'].includes(operation.type))) invalidateExploration();
+        if (operations.length === 1 && operations[0].type === 'scene.fog.explore') {
           operations = [{ ...operations[0], payload: { ...operations[0].payload,
             sceneId: operations[0].payload.sceneId ?? snapshot().activeSceneId,
           } }];
           const epoch = explorationEpoch;
-          let request;
-          reduceOperations(api.getState(), operations, { source, computeFogExploration(input, fog) {
-            request = input; return fog;
-          } });
-          const signature = JSON.stringify(request);
-          const added = await background.run(request);
+          const options = { ruleset: runtimeRuleset, mapMetrics: mapPackage };
+          const request = measure('world.fogPrepare', () => prepareFogOperation(api.getState(), operations[0], options).input);
+          let added;
+          try { added = background ? await background.run(request)
+            : await computeFogExplorationAsync(request, {}, { signal: explorationAbort.signal }); }
+          catch (error) { if (epoch !== explorationEpoch) return { unchanged: true }; throw error; }
           if (epoch !== explorationEpoch || api.multiplayer?.getStatus?.()?.connected) return { unchanged: true };
-          const active = api.world.getActiveScene();
-          if (String(active?.id) !== String(operations[0].payload.sceneId)
+          const active = currentWorldFromState(api.getState());
+          if (String(active?.activeSceneId) !== String(operations[0].payload.sceneId)
             || (source === 'vision:explore' && api.vision?.getSource?.() !== request.payload.visionSourceTokenId)) return { unchanged: true };
-          let currentRequest;
-          reduceOperations(api.getState(), operations, { source, computeFogExploration(input, fog) {
-            currentRequest = input; return fog;
-          } });
+          const currentRequest = measure('world.fogPrepare', () => prepareFogOperation(api.getState(), operations[0], options).input);
           // Exploration is additive: merge concurrent results into the latest fog.
           // Resets, hides and full World replacements invalidate the epoch instead.
-          if (JSON.stringify(currentRequest) !== signature) return { unchanged: true };
+          if (currentRequest.contextVersion !== request.contextVersion || currentRequest.lineOfSightEnabled !== request.lineOfSightEnabled) return { unchanged: true };
           computeFogExploration = (_input, fog) => mergeExploration(fog, added, mapPackage);
         }
         const before = api.getState?.() || {};
-        const applied = reduceOperations(before, operations, { source, computeFogExploration });
-        const changes = createDocumentChanges(before, applied.state, null, {
+        const applied = measure('world.reduce', () => reduceOperations(before, operations, { source, computeFogExploration }));
+        const changes = measure('world.changes', () => createDocumentChanges(before, applied.state, null, {
           motion: applied.results.flatMap(result => result.motion || []),
           fog: applied.results.filter(result => Object.hasOwn(result, 'dirtyBounds')),
-        });
+        }));
         for (const result of applied.results) {
           for (const motion of result.motion || []) {
             api.renderer?.prepareTokenVisualRoute?.(motion.tokenId, motion.waypoints || []);
           }
         }
-        if (typeof api.applyAuthoritativeDocumentChanges === 'function') {
-          api.applyAuthoritativeDocumentChanges(changes, {
+        const authorityDocuments = typeof api.applyAuthoritativeDocumentChanges === 'function';
+        if (authorityDocuments) {
+          measure('world.commit', () => api.applyAuthoritativeDocumentChanges(changes, {
             source: `document.${source}`, operationId: requestedOperationId,
             updatedAt: applied.state.preferences.worldV2.updatedAt,
-          });
+          }));
         } else {
           coreCommitState(hydrateCanonical(applied.state), { source, render });
           api.documents?.applyCommitted?.(changes, { operationId: requestedOperationId });
         }
-        api.persistNow?.();
+        // Local storage serializes the entire World. Let the browser paint after
+        // applying the document before doing that synchronous write, while still
+        // completing the write before this operation resolves to its caller.
+        const trustedWorldRevision = authorityDocuments && applied.operations.length === 1
+          && TRUSTED_SAVE_TYPES.has(applied.operations[0].type) ? api.getStateRevision?.() : null;
+        await new Promise(resolve => setTimeout(resolve, 0));
+        measure('world.persist', () => api.persistNow?.({ trustedWorldRevision }));
         return { offline: true, operations: clone(applied.operations), results: clone(applied.results), changes };
       }
 
