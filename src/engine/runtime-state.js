@@ -189,3 +189,28 @@ export function exportRuntimeState(state, { mapPackage, ruleset } = {}) {
   for (const token of next.preferences?.entitySystem?.tokens || []) delete token.characterId;
   return next;
 }
+
+// Only for a state just committed from validated canonical Document changes.
+// Public exports, imports and migrations still run exportRuntimeState above.
+export function stringifyTrustedRuntimeState(state, { mapPackage } = {}) {
+  const source = object(state, 'state');
+  const preferences = object(source.preferences, 'state.preferences');
+  const metadata = mapMetadata(mapPackage);
+  if (source.mapId !== metadata.id || source.mapVersion !== metadata.version || !preferences[WORLD_STATE_KEY]) {
+    throw new TypeError('Trusted World state does not match the active MapPackage');
+  }
+  const savedPreferences = { ...preferences };
+  delete savedPreferences[FEATURE_STATE_KEY];
+  delete savedPreferences[LEGACY_FEATURE_INTERACTION_STATE_KEY];
+  const tokens = savedPreferences.entitySystem?.tokens;
+  if (Array.isArray(tokens) && tokens.some(token => Object.hasOwn(token, 'characterId'))) {
+    savedPreferences.entitySystem = { ...savedPreferences.entitySystem, tokens: tokens.map(token => {
+      const next = { ...token };
+      delete next.characterId;
+      return next;
+    }) };
+  }
+  const saved = { ...source, preferences: savedPreferences };
+  delete saved.characters;
+  return JSON.stringify(saved);
+}

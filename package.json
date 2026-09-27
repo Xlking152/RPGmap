@@ -1,6 +1,6 @@
 {
   "name": "rpgmap",
-  "version": "2.5.2",
+  "version": "2.5.3",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,6 +12,8 @@
     "check:bundle": "node scripts/check-bundle-budget.mjs",
     "check:package": "node scripts/verify-package.mjs",
     "benchmark": "node scripts/performance-benchmark.mjs",
+    "benchmark:vision": "node scripts/vision-performance-benchmark.mjs",
+    "check:vision-performance": "node scripts/compare-vision-performance.mjs",
     "benchmark:lan": "node scripts/lan-performance-benchmark.mjs",
     "benchmark:browser": "node scripts/browser-performance-benchmark.mjs",
     "generate:lanzhou-runtime": "node scripts/generate-lanzhou-runtime-svg.mjs",

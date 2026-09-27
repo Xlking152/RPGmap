@@ -1,16 +1,19 @@
-import { exploreFogVisibleCircle, exploreFogVisibleSweep, exploreFogCircle, exploreFogSweep } from './fog.js';
+import { computeFogExplorationAsync } from './fog.js';
 import { computeVisibilityRows } from './visibility.js';
+import { normalizeVisionOccluder } from '../spatial/kernel.js';
 
-self.onmessage = ({ data: { id, input } }) => {
+let context = {};
+self.onmessage = async ({ data: { id, input } }) => {
   try {
+    if (input.map) context = { map: input.map,
+      occluders: Object.freeze((input.occluders || []).map(normalizeVisionOccluder).filter(Boolean)),
+      lights: Object.freeze(input.lights || []) };
+    input = { ...context, ...input, occluders: context.occluders, lights: context.lights };
     if (input.kind === 'visibility') {
       self.postMessage({ id, result: computeVisibilityRows(input) });
       return;
     }
-    const { partyId, payload, map, occluders, lineOfSightEnabled } = input;
-    const result = payload.from && payload.to
-      ? (lineOfSightEnabled ? exploreFogVisibleSweep : exploreFogSweep)({}, partyId, payload.from, payload.to, payload.radiusMeters, map, { occluders })
-      : (lineOfSightEnabled ? exploreFogVisibleCircle : exploreFogCircle)({}, partyId, payload, map, { occluders, sourceElevationMeters: payload.elevationMeters || 0 });
+    const result = await computeFogExplorationAsync(input);
     self.postMessage({ id, result });
   } catch (error) { self.postMessage({ id, error: error.message }); }
 };

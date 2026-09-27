@@ -2,9 +2,8 @@ import { mergeActorDelta } from '../token/actor.js';
 import { normalizeFogState } from './fog.js';
 import { normalizeActorPublicProfile } from '../actor/public-profile.js';
 import { canPlaceActorTemplate } from '../permissions/model.js';
-import { deriveSceneState } from '../engine/state.js';
+import { sceneVisionContext } from './context.js';
 import {
-  deriveVisionOccluders,
   deriveSceneLightSources,
   perceptionLevelAtPoint,
   sphereGroundRadiusMeters,
@@ -373,10 +372,9 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const metersPerUnit = Math.max(0.000001, Number(context.mapMetrics?.metersPerUnit) || 1);
   const currentScene = activeScene(world);
   const lineOfSightEnabled = true;
-  const occluders = context.mapPackage
-    ? deriveVisionOccluders(context.mapPackage, currentScene, deriveSceneState(currentScene?.sceneEvents || []))
-    : [];
-  const lights = deriveSceneLightSources(context.mapPackage, currentScene);
+  const spatial = context.mapPackage ? sceneVisionContext(context.mapPackage, currentScene) : null;
+  const occluders = spatial?.occluders || [];
+  const lights = spatial?.lights || deriveSceneLightSources(context.mapPackage, currentScene);
   const visibleTokenIds = new Set();
   const privateActorIds = new Set();
   const referencedActorIds = new Set();

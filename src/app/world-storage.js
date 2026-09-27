@@ -41,6 +41,7 @@ export function createWorldStatePersistence({
   ruleset,
   storageAdapter,
   getState,
+  stringifyTrustedState = null,
   saveDelayMs = 180,
   onSaved = () => {},
   onError = () => {},
@@ -117,10 +118,14 @@ export function createWorldStatePersistence({
     }
   }
 
-  function writeCurrentState() {
+  function writeCurrentState(trusted = false) {
     if (blocked) return false;
     try {
-      storageAdapter.set(storageKey, JSON.stringify(exportRuntimeState(getState(), { mapPackage, ruleset })));
+      const current = getState();
+      const serialized = trusted && typeof stringifyTrustedState === 'function'
+        ? stringifyTrustedState(current)
+        : JSON.stringify(exportRuntimeState(current, { mapPackage, ruleset }));
+      storageAdapter.set(storageKey, serialized);
       onSaved();
       return true;
     } catch (error) {
@@ -148,6 +153,14 @@ export function createWorldStatePersistence({
     return writeCurrentState();
   }
 
+  function persistTrustedNow() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    return writeCurrentState(true);
+  }
+
   function replace(nextState) {
     if (saveTimer) {
       clearTimeout(saveTimer);
@@ -169,6 +182,7 @@ export function createWorldStatePersistence({
     load,
     schedule,
     persistNow,
+    persistTrustedNow,
     replace,
     cancel,
     get blocked() { return blocked; },

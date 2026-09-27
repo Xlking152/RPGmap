@@ -1,7 +1,18 @@
 import { polygonDifference } from '../engine/geometry.js';
+import { isIndexableOccluderCollection, queryOccluders } from './index.js';
 
 const EPSILON = 1e-9;
 const NORMALIZED_VISION_OCCLUDERS = new WeakSet();
+const LIGHTING_CACHE = new WeakMap();
+const IMMUTABLE_LIGHTS = new WeakSet();
+
+function immutableLights(lights) {
+  if (!Array.isArray(lights) || !Object.isFrozen(lights)) return false;
+  if (IMMUTABLE_LIGHTS.has(lights)) return true;
+  if (!lights.every(light => light && Object.isFrozen(light))) return false;
+  IMMUTABLE_LIGHTS.add(lights);
+  return true;
+}
 
 function number(value, fallback = 0) {
   const parsed = Number(value);
@@ -157,7 +168,7 @@ export function inspectLineOfSight({
     Math.min(start.x, end.x), Math.min(start.y, end.y),
     Math.max(start.x, end.x), Math.max(start.y, end.y),
   ];
-  for (const raw of occluders) {
+  for (const raw of queryOccluders(occluders, rayBounds)) {
     const occluder = normalizeVisionOccluder(raw);
     if (!occluder || excluded.has(String(occluder.featureId || occluder.id))) continue;
     const polygon = occluder.polygon;
@@ -264,10 +275,21 @@ export function deriveSceneLightSources(mapPackage, scene = null) {
 export function resolveLightingAtPoint(point, ambient = 'normal', lights = [], options = {}) {
   const base = ['normal', 'dim', 'dark'].includes(String(ambient)) ? String(ambient) : 'normal';
   if (base === 'normal') return Object.freeze({ level: 'normal', contribution: 1, source: 'ambient' });
+  let cache, key;
+  if (immutableLights(lights) && isIndexableOccluderCollection(options.occluders)) {
+    let byGeometry = LIGHTING_CACHE.get(lights);
+    if (!byGeometry) { byGeometry = new WeakMap(); LIGHTING_CACHE.set(lights, byGeometry); }
+    cache = byGeometry.get(options.occluders);
+    if (!cache) { cache = new Map(); byGeometry.set(options.occluders, cache); }
+    key = `${point.x}:${point.y}:${point.elevationMeters || 0}:${options.metersPerUnit || 1}:${base}`;
+    if (cache.has(key)) return cache.get(key);
+  }
   const contribution = lightContributionAtPoint(point, lights, options);
-  if (contribution >= 0.5) return Object.freeze({ level: 'normal', contribution, source: 'light' });
-  if (base === 'dim' || contribution > 0) return Object.freeze({ level: 'dim', contribution, source: contribution > 0 ? 'light' : 'ambient' });
-  return Object.freeze({ level: 'dark', contribution: 0, source: 'ambient' });
+  const result = Object.freeze(contribution >= 0.5 ? { level: 'normal', contribution, source: 'light' }
+    : base === 'dim' || contribution > 0 ? { level: 'dim', contribution, source: contribution > 0 ? 'light' : 'ambient' }
+    : { level: 'dark', contribution: 0, source: 'ambient' });
+  if (cache && cache.size < 32768) cache.set(key, result);
+  return result;
 }
 
 export function perceptionLevelAtPoint({

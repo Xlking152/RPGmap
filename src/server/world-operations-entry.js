@@ -1,5 +1,5 @@
 import { BUILT_IN_LANZHOU_MAP, BUILT_IN_LANZHOU_MAP_BOUNDS } from '../map-package/constants.js';
-import { applyWorldOperations as applyCoreWorldOperations } from '../world/operations.js';
+import { applyWorldOperations as applyCoreWorldOperations, applyWorldOperationsAsync as applyCoreWorldOperationsAsync } from '../world/operations.js';
 
 export * from '../world/operations.js';
 
@@ -51,12 +51,19 @@ function trustedMetricsForOperations(state, operations) {
   return first;
 }
 
-export function applyWorldOperations(state, operations, context = {}) {
+function trustedContext(state, operations, context) {
   const existing = object(context.mapMetrics);
   const hasTrustedBounds = positive(existing.width) && positive(existing.height);
   const inferred = hasTrustedBounds ? null : trustedMetricsForOperations(state, operations);
-  return applyCoreWorldOperations(state, operations, {
+  return {
     ...context,
     mapMetrics: inferred ? { ...existing, ...inferred } : existing,
-  });
+  };
+}
+
+export function applyWorldOperations(state, operations, context = {}) {
+  return applyCoreWorldOperations(state, operations, trustedContext(state, operations, context));
+}
+export function applyWorldOperationsAsync(state, operations, context = {}) {
+  return applyCoreWorldOperationsAsync(state, operations, trustedContext(state, operations, context));
 }

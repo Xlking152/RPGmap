@@ -16,6 +16,10 @@ function stripUnusedLeafletRasterCss() {
 export default defineConfig({
   base: './',
   plugins: [stripUnusedLeafletRasterCss()],
+  worker: {
+    format: 'es',
+    rollupOptions: { treeshake: { moduleSideEffects: false } },
+  },
   build: {
     manifest: true,
     target: 'esnext',
