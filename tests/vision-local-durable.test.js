@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createInitialRuntimeState, validateRuntimeState, exportRuntimeState } from '../src/engine/runtime-state.js';
 import { createWorldV2FromRuntimeState, projectWorldV2ToRuntimeState } from '../src/world/model.js';
-import { createWorldStatePersistence } from '../src/app/world-storage.js';
+import { createWorldStatePersistence, createRemoteWorldIsolation } from '../src/app/world-storage.js';
 import { createWorldSystem } from '../src/world/system.js';
 import { computeFogExploration } from '../src/vision/fog.js';
 import { createLocalExplorationQueue } from '../src/vision/local-exploration.js';
@@ -35,8 +35,15 @@ function runtime(storage) {
     vision: { getSource: () => 'scout', getVisibleRegion: () => ({ vagueRangeMeters: 20, rangeMeters: 20 }) },
     on(name, callback) { const list = handlers.get(name) || []; list.push(callback); handlers.set(name, list); },
     emit(name, detail) { for (const callback of handlers.get(name) || []) callback({ detail }); } };
+  const isolation = createRemoteWorldIsolation({ persistence, getState: () => state,
+    restoreState: value => { state = value; } });
+  api.isLocalWorldActive = () => !isolation.active;
+  api.on('multiplayer:capabilities', () => {
+    if (isolation.updateConnection(api.multiplayer?.getStatus?.()))
+      api.emit('state:import', { source: 'offline:resume', persist: false });
+  });
   createWorldSystem().register(api);
-  return { api, persistence, state: () => state };
+  return { api, persistence, state: () => state, replaceState(value) { state = structuredClone(value); } };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function until(predicate) {
@@ -74,6 +81,78 @@ test('offline confirmed route and durable queue share one save, and refresh resu
     assert.ok(Object.keys(second.api.world.getActiveScene().fog.exploredByParty.party.rows).length);
     assert.equal(JSON.parse(storage.get(second.persistence.storageKey))._localExploration.jobs.length, 0);
     second.api.emit('app:destroy');
+  } finally { globalThis.Worker = original; }
+});
+
+test('LAN snapshots and temporary disconnects retain offline paths until explicit exit restores their World', async () => {
+  const original = globalThis.Worker, requests = [];
+  globalThis.Worker = class { postMessage(message) { requests.push({ worker: this, message }); } terminate() {} };
+  try {
+    const storage = new Map(), local = runtime(storage), { api, persistence } = local;
+    const sceneId = api.world.getActiveScene().id;
+    await api.world.performOperations([{ type: 'token.move', payload: { sceneId, tokenId: 'scout', x: 20, y: 10 } }]);
+    await tick();
+    const before = storage.get(persistence.storageKey), offline = structuredClone(local.state());
+    let connection = { connected: true, retainsServerState: true };
+    api.multiplayer = { getStatus: () => connection };
+    api.emit('multiplayer:capabilities', connection);
+    const projection = seed();
+    projection.preferences.worldV2.name = 'Private LAN projection';
+    projection.preferences.worldV2.actors = [];
+    projection.preferences.worldV2.scenes[0].tokens = [];
+    local.replaceState(projection);
+    api.emit('state:import', { source: 'server', persist: false });
+    assert.equal(api.world.getExplorationStatus().queued, 1);
+    assert.equal(api.persistNow(), false);
+    assert.equal(storage.get(persistence.storageKey), before);
+    requests[0].worker.onmessage({ data: { id: requests[0].message.id,
+      result: computeFogExploration(requests[0].message.input) } });
+    await until(() => !api.world.getExplorationStatus().running);
+    connection = { connected: false, retainsServerState: true };
+    api.emit('multiplayer:capabilities', connection); await tick();
+    assert.deepEqual(local.state(), projection, 'a temporary disconnect discarded the delta-resume baseline');
+    assert.equal(requests.length, 1, 'temporary reconnect restarted offline exploration against a LAN projection');
+    await assert.rejects(api.world.performOperations([{ type: 'scene.fog.reset', payload: { sceneId, partyId: 'party' } }]),
+      { code: 'world_reconnect_pending' });
+    connection = { connected: true, retainsServerState: true };
+    api.emit('multiplayer:capabilities', connection);
+    api.emit('state:import', { source: 'server', persist: false });
+    assert.equal(api.world.getExplorationStatus().queued, 1);
+    connection = { connected: false, retainsServerState: false };
+    api.emit('multiplayer:capabilities', connection);
+    await until(() => requests.length === 2);
+    assert.deepEqual(local.state(), offline, 'offline World was not restored before its queue restarted');
+    requests[1].worker.onmessage({ data: { id: requests[1].message.id,
+      // The same Worker retains the original geometry when the retried input
+      // carries only its unchanged context version.
+      result: computeFogExploration(requests[0].message.input) } });
+    await until(() => !api.world.getExplorationStatus().running);
+    const saved = JSON.parse(storage.get(persistence.storageKey));
+    assert.equal(saved.preferences.worldV2.name, offline.preferences.worldV2.name);
+    assert.equal(saved.preferences.worldV2.scenes[0].tokens[0].x, 20);
+    assert.equal(saved._localExploration.jobs.length, 0);
+    assert.ok(Object.keys(saved.preferences.worldV2.scenes[0].fog.exploredByParty.party.rows).length);
+    api.emit('app:destroy');
+  } finally { globalThis.Worker = original; }
+});
+
+test('a real offline user import still cancels retained jobs and ignores late results', async () => {
+  const original = globalThis.Worker; let request;
+  globalThis.Worker = class { postMessage(message) { request = { worker: this, message }; } terminate() {} };
+  try {
+    const storage = new Map(), local = runtime(storage), { api, persistence } = local;
+    const sceneId = api.world.getActiveScene().id;
+    await api.world.performOperations([{ type: 'token.move', payload: { sceneId, tokenId: 'scout', x: 20, y: 10 } }]);
+    await tick(); const late = request;
+    const imported = seed(); local.replaceState(imported);
+    api.emit('state:import', { source: 'file-import', persist: true });
+    assert.equal(api.persistNow(), true);
+    late.worker.onmessage({ data: { id: late.message.id, result: computeFogExploration(late.message.input) } });
+    await tick();
+    assert.equal(api.world.getExplorationStatus().queued, 0);
+    assert.equal(JSON.parse(storage.get(persistence.storageKey))._localExploration.jobs.length, 0);
+    assert.deepEqual(local.state(), imported);
+    api.emit('app:destroy');
   } finally { globalThis.Worker = original; }
 });
 

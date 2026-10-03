@@ -1532,6 +1532,7 @@ export function createMultiplayerController() {
         getStatus: () => ({
           connected,
           joining,
+          retainsServerState: Boolean(lastConnectionOptions),
           resuming,
           revision,
           audienceRevision,

@@ -6,7 +6,7 @@ import {
   commitRestoreEvent,
   undoLastSceneEvent,
 } from './state.js';
-import { createWorldStatePersistence } from '../app/world-storage.js';
+import { createWorldStatePersistence, createRemoteWorldIsolation } from '../app/world-storage.js';
 import { persistPreparedWorldContent, prepareWorldContentState } from '../app/world-upgrade.js';
 import {
   exportRuntimeState,
@@ -112,8 +112,11 @@ export function createRpgMapRuntime({
   let gridFrame = null;
   let importPending = false;
   let recoveryBlocked = false;
+  let remoteWorldIsolation = null;
 
   function assertWritable() {
+    if (remoteWorldIsolation?.active && !api.multiplayer?.getStatus?.()?.connected)
+      throw Object.assign(new Error('正在恢复联机连接；请等待续传或主动退出后再编辑离线 World'), { code: 'world_reconnect_pending' });
     if (persistence.blocked) throw Object.assign(new Error('自动保存已暂停，请先恢复存储'), { code: 'world_persistence_blocked' });
     if (recoveryBlocked) throw Object.assign(new Error('storage_recovery_required'), { code: 'storage_recovery_required' });
     if (importPending) throw Object.assign(new Error('world_import_busy'), { code: 'world_import_busy' });
@@ -414,6 +417,7 @@ export function createRpgMapRuntime({
       await persistPreparedWorldContent({ state: normalized, records: [...records, ...(prepared.records || [])], inputRaw: raw, beforeRaw,
         worldId, mapPackage, ruleset, storageAdapter, indexedDB: documentNode.defaultView.indexedDB });
     } else if (persist) persistence.replace(normalized);
+    if (!persist && source === 'server') remoteWorldIsolation.enter();
     state = normalized;
     stateRevision += 1;
     selectedFeatureId = null;
@@ -557,6 +561,7 @@ export function createRpgMapRuntime({
     persistNow,
     getLocalExploration: () => persistence.getLocalExploration(),
     setLocalExploration: value => persistence.setLocalExploration(value),
+    isLocalWorldActive: () => !remoteWorldIsolation.active,
     exportState,
     importState,
     downloadState,
@@ -587,6 +592,13 @@ export function createRpgMapRuntime({
   };
 
   registerRuntimeStateReader(api, () => state);
+  remoteWorldIsolation = createRemoteWorldIsolation({ persistence, getState: () => state,
+    restoreState(localState) { state = localState; stateRevision += 1; trustedSaveRevision = null; } });
+  on('multiplayer:capabilities', () => {
+    if (!remoteWorldIsolation.updateConnection(api.multiplayer?.getStatus?.())) return;
+    renderScene();
+    emit('state:import', { source: 'offline:resume', persist: false, state: clone(state) });
+  });
   container.rpgMapApp = api;
   fitInitialView(false);
   for (const tool of tools) tool?.register?.(api);

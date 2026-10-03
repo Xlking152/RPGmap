@@ -141,9 +141,12 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       }
 
       const background = createVisionBackground({ diagnostics: api.diagnostics });
-      const localExploration = createLocalExplorationQueue(api, (job, added) => performOperations([
-        { type: 'scene.fog.explore', payload: { ...job.input.payload, sceneId: job.sceneId, partyId: job.input.partyId } },
-      ], { source: 'vision:exploration-commit', addedExploration: added }));
+      const localExploration = createLocalExplorationQueue(api, (job, added) => {
+        if (api.isLocalWorldActive?.() === false) throw new Error('联机续传期间保留离线探索任务');
+        return performOperations([
+          { type: 'scene.fog.explore', payload: { ...job.input.payload, sceneId: job.sceneId, partyId: job.input.partyId } },
+        ], { source: 'vision:exploration-commit', addedExploration: added });
+      });
       const measure = api.diagnostics?.measure
         ? (name, callback) => api.diagnostics.measure(name, callback)
         : (_name, callback) => callback();
@@ -154,8 +157,13 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         api.emit?.('vision:exploration-cancel', null);
       }
       for (const event of ['state:import', 'scene:activate', 'vision:source-change']) api.on?.(event, () => { invalidateExploration(); });
-      api.on?.('state:import', () => { localExploration.cancel(); });
-      api.on?.('multiplayer:capabilities', () => localExploration.start());
+      api.on?.('state:import', ({ detail } = {}) => {
+        if (detail?.persist === false && ['server', 'offline:resume'].includes(detail?.source)) return;
+        localExploration.cancel();
+      });
+      api.on?.('multiplayer:capabilities', () => {
+        if (api.isLocalWorldActive?.() !== false) localExploration.start();
+      });
       api.on?.('app:destroy', () => { invalidateExploration(); background?.dispose(); localExploration.dispose(); });
 
       function reduceOperations(state, operations, { source = 'world.operation', now = new Date().toISOString(), computeFogExploration,
@@ -198,6 +206,8 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           }
           return api.multiplayer.performOperations(operations, { kind, requestedOperationId });
         }
+        if (api.isLocalWorldActive?.() === false)
+          throw Object.assign(new Error('请等待联机续传或主动退出后再编辑离线 World'), { code: 'world_reconnect_pending' });
         let computeFogExploration;
         if (addedExploration) computeFogExploration = (_input, fog) => mergeExploration(fog, addedExploration, mapPackage);
         if (!addedExploration && operations.length === 1 && operations[0].type === 'scene.fog.explore' && source === 'vision:explore') {

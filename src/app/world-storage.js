@@ -54,6 +54,7 @@ export function createWorldStatePersistence({
 
   const storageKey = worldId ? canonicalWorldStorageKey(worldId) : worldStateStorageKey(mapPackage);
   let saveTimer = null;
+  let suspended = false;
   let blocked = initialLoad?.blocked === true;
   let pendingInitialLoad = initialLoad;
   let localExploration = null;
@@ -129,7 +130,7 @@ export function createWorldStatePersistence({
   }
 
   function writeCurrentState(trusted = false) {
-    if (blocked) return false;
+    if (blocked || suspended) return false;
     try {
       const current = getState();
       const serialized = trusted && typeof stringifyTrustedState === 'function'
@@ -146,7 +147,7 @@ export function createWorldStatePersistence({
   }
 
   function schedule() {
-    if (blocked) return false;
+    if (blocked || suspended) return false;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = null;
@@ -172,6 +173,7 @@ export function createWorldStatePersistence({
   }
 
   function replace(nextState) {
+    if (suspended) throw Object.assign(new Error('联机投影不能覆盖离线 World 存档'), { code: 'world_persistence_suspended' });
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;
@@ -196,9 +198,41 @@ export function createWorldStatePersistence({
     persistTrustedNow,
     replace,
     cancel,
+    suspend() { cancel(); suspended = true; },
+    resume() { suspended = false; },
     getLocalExploration() { return structuredClone(localExploration); },
     setLocalExploration(value) { localExploration = structuredClone(value); },
     get blocked() { return blocked; },
+    get suspended() { return suspended; },
+  };
+}
+
+// Server projections remain a temporary overlay, including during reconnect.
+// The detached local World and its private jobs keep one authoritative save.
+export function createRemoteWorldIsolation({ persistence, getState, restoreState } = {}) {
+  let localState = null, active = false;
+  return {
+    enter() {
+      if (active) return false;
+      persistence.cancel();
+      const saved = persistence.persistNow();
+      localState = structuredClone(getState());
+      active = true;
+      persistence.suspend();
+      return saved;
+    },
+    updateConnection({ connected = false, retainsServerState = false } = {}) {
+      if (connected || retainsServerState) { this.enter(); return false; }
+      if (!active) return false;
+      // Restore before resuming persistence or delivering events that can
+      // restart the saved exploration queue.
+      restoreState(localState);
+      localState = null;
+      active = false;
+      persistence.resume();
+      return true;
+    },
+    get active() { return active; },
   };
 }
 
