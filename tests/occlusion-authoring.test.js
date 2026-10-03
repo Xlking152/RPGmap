@@ -25,6 +25,16 @@ const state = () => ({ preferences: { worldV2: { id: 'w', schemaVersion: 2, name
 const sceneOf = value => value.preferences.worldV2.scenes[0];
 const upsert = shape => ({ type: 'scene.occlusionShape.upsert', payload: { sceneId: 's', shape } });
 
+test('Scene validation checks inherited map doors and respects disabled door overrides', () => {
+  const current = sceneOf(state());
+  assert.doesNotThrow(() => validateSceneOcclusion(current, { ...map, occlusionShapes: [building, door] }));
+  const decorativeHost = { ...map, occlusionShapes: [{ ...door, hostShapeId: 'house' }] };
+  assert.throws(() => validateSceneOcclusion(current, decorativeHost), { code: 'invalid_reference' });
+  assert.doesNotThrow(() => validateSceneOcclusion({ ...current, occlusionShapes: [
+    { ...decorativeHost.occlusionShapes[0], enabled: false },
+  ] }, decorativeHost));
+});
+
 test('old Worlds gain an empty authored shape collection and malformed shapes fail closed', () => {
   const value = state().preferences.worldV2;
   assert.deepEqual(normalizeWorldV2(value, { mapPackage: map }).scenes[0].occlusionShapes, []);

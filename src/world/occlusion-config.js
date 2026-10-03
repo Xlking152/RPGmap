@@ -56,15 +56,22 @@ export function availableOcclusionHostIds(map = {}, scene = {}, configuration = 
 }
 
 export function assertOcclusionReferences(shapes, map = {}, scene = {}, featureVision = null) {
-  if (Array.isArray(map.features)) resolveEffectiveOcclusionShapes(map, { occlusionShapes: shapes });
+  const effective = Array.isArray(map.features) ? resolveEffectiveOcclusionShapes(map, { occlusionShapes: shapes }) : shapes;
   const features = new Set((map.features || []).map(feature => String(feature.id)));
-  const availableHosts = availableOcclusionHostIds(map, { ...scene, occlusionShapes: shapes },
-    featureVision === null ? null : { occlusionShapes: shapes, featureVision });
   for (const shape of shapes) {
     if (shape.featureId && Array.isArray(map.features) && !features.has(shape.featureId)) {
       fail(`Occlusion shape binds a missing Feature: ${shape.featureId}`, 'invalid_reference');
     }
-    if (shape.hostShapeId && shape.enabled !== false && !availableHosts.has(shape.hostShapeId)) {
+  }
+  const doors = effective.filter(shape => shape.hostShapeId && shape.enabled !== false);
+  // Movement and Fog commits validate their Scene too. Maps without authored
+  // door hosts do not need to reconstruct every building to validate an empty
+  // collection; structural references above still run for every configuration.
+  if (!doors.length) return shapes;
+  const availableHosts = availableOcclusionHostIds(map, { ...scene, occlusionShapes: shapes },
+    featureVision === null ? null : { occlusionShapes: shapes, featureVision });
+  for (const shape of doors) {
+    if (!availableHosts.has(shape.hostShapeId)) {
       fail(`Occlusion door requires an enabled building or wall blocker: ${shape.hostShapeId}`, 'invalid_reference');
     }
   }
