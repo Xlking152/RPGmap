@@ -1,4 +1,4 @@
-import { inspectLineOfSight } from '../spatial/kernel.js';
+import { inspectLineOfSight, visionOccludersForSource, sphereGroundRadiusMeters } from '../spatial/kernel.js';
 import { groundShadowRowsSteps } from './ground-shadow.js';
 import { finishWorkSync, finishWorkAsync } from './work.js';
 
@@ -231,10 +231,11 @@ export function exploreFogCircle(rawFog, partyId, circle, map = {}) {
 export function exploreFogVisibleCircle(rawFog, partyId, circle, map = {}, {
   sourceElevationMeters = 0,
   occluders = [],
+  allowHostExemption = Boolean(circle?.visionSourceTokenId || circle?.tokenId || circle?.allowHostExemption),
 } = {}) {
   const fog = normalizeFogState(rawFog, map);
   const rows = partyRows(fog, partyId);
-  const visible = visibleFogRowsForCircle(circle, map, { sourceElevationMeters, occluders });
+  const visible = visibleFogRowsForCircle(circle, map, { sourceElevationMeters, occluders, allowHostExemption });
   for (const [row, spans] of Object.entries(visible)) rows[row] = mergeSpans([...(rows[row] || []), ...spans]);
   return fog;
 }
@@ -244,9 +245,10 @@ export function* visibleFogRowsForCircleSteps(circle, map = {}, {
   occluders = [],
   predicate = null,
   exploredRows = null,
+  allowHostExemption = Boolean(circle?.visionSourceTokenId || circle?.tokenId || circle?.allowHostExemption),
 } = {}) {
   const rows = {};
-  const source = { x: finite(circle?.x), y: finite(circle?.y), elevationMeters: finite(sourceElevationMeters) };
+  const source = { x: finite(circle?.x), y: finite(circle?.y), elevationMeters: finite(sourceElevationMeters), allowHostExemption };
   yield* rasterCircleSteps(rows, circle, 'add', map);
   if (exploredRows) for (const row of Object.keys(rows)) {
     for (const [start, end] of exploredRows[row] || []) removeSpan(rows, row, start, end);
@@ -255,14 +257,15 @@ export function* visibleFogRowsForCircleSteps(circle, map = {}, {
   if (!Object.keys(rows).length) return rows;
   const grid = mapGrid(map);
   const visible = yield* groundShadowRowsSteps(source, effectiveRadiusMeters(circle?.radiusMeters, map, circle) / grid.metersPerUnit,
-    occluders, grid.cellUnits, rows);
+    occluders, grid.cellUnits, rows, grid.metersPerUnit);
   if (!visible) {
     const fallback = {};
+    const visualOccluders = visionOccludersForSource(source, occluders, grid.metersPerUnit);
     yield* rasterCircleSteps(fallback, circle, 'add', map, target => (!exploredRows
       || !(exploredRows[Math.floor(target.y / grid.cellUnits)] || []).some(([a, b]) => {
         const column = Math.floor(target.x / grid.cellUnits); return column >= a && column <= b;
       })) && inspectLineOfSight({
-      from: source, to: target, occluders, metersPerUnit: mapScale(map),
+      from: source, to: target, occluders: visualOccluders, metersPerUnit: mapScale(map),
     }).clear && (typeof predicate !== 'function' || predicate(target)));
     return fallback;
   }
@@ -288,12 +291,19 @@ export function visibleFogRowsForCircle(...args) {
   return finishWorkSync(visibleFogRowsForCircleSteps(...args));
 }
 
-function* exploreFogSweepSteps(rawFog, partyId, from, to, radiusMeters, map = {}) {
+function sampleRadius(radiusMeters, sourceRangeMeters, elevationMeters) {
+  return sourceRangeMeters === null || sourceRangeMeters === undefined ? radiusMeters
+    : sphereGroundRadiusMeters(sourceRangeMeters, elevationMeters) ?? 0;
+}
+
+function* exploreFogSweepSteps(rawFog, partyId, from, to, radiusMeters, map = {}, { sourceRangeMeters = null } = {}) {
   const fog = normalizeFogState(rawFog, map);
   const rows = partyRows(fog, partyId);
   const grid = mapGrid(map);
-  const fromCircle = { x: finite(from?.x), y: finite(from?.y), radiusMeters };
-  const toCircle = { x: finite(to?.x), y: finite(to?.y), radiusMeters };
+  const fromCircle = { x: finite(from?.x), y: finite(from?.y),
+    radiusMeters: sampleRadius(radiusMeters, sourceRangeMeters, finite(from?.elevationMeters)) };
+  const toCircle = { x: finite(to?.x), y: finite(to?.y),
+    radiusMeters: sampleRadius(radiusMeters, sourceRangeMeters, finite(to?.elevationMeters)) };
 
   // If either endpoint already sees the whole map, the union of the sweep is
   // the whole map as well. Avoid thousands of redundant intermediate circles.
@@ -313,7 +323,8 @@ function* exploreFogSweepSteps(rawFog, partyId, from, to, radiusMeters, map = {}
     rasterCircle(rows, {
       x: finite(from?.x) + (finite(to?.x) - finite(from?.x)) * ratio,
       y: finite(from?.y) + (finite(to?.y) - finite(from?.y)) * ratio,
-      radiusMeters,
+      radiusMeters: sampleRadius(radiusMeters, sourceRangeMeters, finite(from?.elevationMeters)
+        + (finite(to?.elevationMeters) - finite(from?.elevationMeters)) * ratio),
     }, 'add', map);
     yield;
   }
@@ -329,6 +340,8 @@ export function exploreFogSweep(...args) {
 
 export function* exploreFogVisibleSweepSteps(rawFog, partyId, from, to, radiusMeters, map = {}, {
   occluders = [],
+  allowHostExemption = Boolean(from?.tokenId || to?.tokenId || from?.allowHostExemption || to?.allowHostExemption),
+  sourceRangeMeters = null,
 } = {}) {
   const fog = normalizeFogState(rawFog, map);
   const rows = partyRows(fog, partyId);
@@ -343,11 +356,21 @@ export function* exploreFogVisibleSweepSteps(rawFog, partyId, from, to, radiusMe
       elevationMeters: finite(from?.elevationMeters)
         + (finite(to?.elevationMeters) - finite(from?.elevationMeters)) * ratio,
     };
-    const visible = visibleFogRowsForCircle({ ...source, radiusMeters }, map, {
+    const work = visibleFogRowsForCircleSteps({ ...source,
+      radiusMeters: sampleRadius(radiusMeters, sourceRangeMeters, source.elevationMeters) }, map, {
       sourceElevationMeters: source.elevationMeters,
       occluders,
       exploredRows: rows,
+      allowHostExemption,
     });
+    // A sweep may contain hundreds of circles. Group cheap row steps while
+    // still yielding within a large circle rather than only between samples.
+    let step, rowSteps = 0;
+    do {
+      step = work.next();
+      if (!step.done && ++rowSteps % 32 === 0) yield;
+    } while (!step.done);
+    const visible = step.value;
     for (const [row, spans] of Object.entries(visible)) rows[row] = mergeSpans([...(rows[row] || []), ...spans]);
     yield;
   }
@@ -364,17 +387,21 @@ export function exploreFogVisibleSweep(...args) {
 export const finishFogWork = finishWorkAsync;
 
 export function computeFogExploration(input, fog = {}) {
-  const { partyId, payload, map, occluders, lineOfSightEnabled } = input;
+  const { partyId, payload, map, occluders, lineOfSightEnabled, sourceRangeMeters } = input;
   return payload.from && payload.to
-    ? (lineOfSightEnabled ? exploreFogVisibleSweep : exploreFogSweep)(fog, partyId, payload.from, payload.to, payload.radiusMeters, map, { occluders })
-    : (lineOfSightEnabled ? exploreFogVisibleCircle : exploreFogCircle)(fog, partyId, payload, map, { occluders, sourceElevationMeters: payload.elevationMeters || 0 });
+    ? (lineOfSightEnabled ? exploreFogVisibleSweep : exploreFogSweep)(fog, partyId, payload.from, payload.to, payload.radiusMeters, map,
+      { occluders, allowHostExemption: Boolean(payload.visionSourceTokenId), sourceRangeMeters })
+    : (lineOfSightEnabled ? exploreFogVisibleCircle : exploreFogCircle)(fog, partyId,
+      { ...payload, radiusMeters: sampleRadius(payload.radiusMeters, sourceRangeMeters, payload.elevationMeters || 0) }, map,
+      { occluders, sourceElevationMeters: payload.elevationMeters || 0 });
 }
 
 export async function computeFogExplorationAsync(input, fog = {}, options = {}) {
-  const { partyId, payload, map, occluders, lineOfSightEnabled } = input;
+  const { partyId, payload, map, occluders, lineOfSightEnabled, sourceRangeMeters } = input;
   if (payload.from && payload.to) return finishFogWork(
     (lineOfSightEnabled ? exploreFogVisibleSweepSteps : exploreFogSweepSteps)(
-      fog, partyId, payload.from, payload.to, payload.radiusMeters, map, { occluders }), options);
+      fog, partyId, payload.from, payload.to, payload.radiusMeters, map,
+      { occluders, allowHostExemption: Boolean(payload.visionSourceTokenId), sourceRangeMeters }), options);
   options.signal?.throwIfAborted();
   return computeFogExploration(input, fog);
 }

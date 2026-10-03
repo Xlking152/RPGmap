@@ -35,6 +35,7 @@ export function resolveMovementStatus(world, scene, token, ruleset) {
 /** Shared offline/LAN validator; only the host provides MapPackage and Ruleset data. */
 export function createMovementAuthority(resolveMapPackage) {
   const bases = new WeakMap();
+  const navigationCaches = new WeakMap();
   return ({ state, world = state?.preferences?.worldV2, scene, token, origin, waypoints = [], destination = null,
     operationType = 'token.movePath', ruleset, capabilities = null, status = null,
     movementMode = null, verticalAction = null } = {}) => {
@@ -55,13 +56,35 @@ export function createMovementAuthority(resolveMapPackage) {
     if (!mapPackage) return transition ? failure('movement_map_unavailable') : { valid: true, collisionValidation: 'bounds-only' };
     if (!bases.has(mapPackage)) bases.set(mapPackage, createNavigationBase(mapPackage));
     const derived = deriveSceneState(scene.sceneEvents || []);
-    const appState = { ...state, sceneEvents: scene.sceneEvents || [], preferences: { ...state?.preferences, featureStates: scene.featureStates || {} } };
+    const appState = { ...state, sceneEvents: scene.sceneEvents || [], preferences: { ...state?.preferences,
+      worldV2: { ...world, activeSceneId: scene.id, scenes: [scene] }, featureStates: scene.featureStates || {} } };
     const baseMoverContext = {
       tokenId: token.id, elevationMeters: tokenElevationMeters(token), diameterMeters: tokenDiameterMeters(token),
       statusVersion: snapshot.statusVersion || '', collisionBypassGroups: effective.collisionBypassGroups || [],
       movementMode: requestedMode,
     };
-    const navigation = createNavigationGrid(mapPackage, derived, bases.get(mapPackage), { appState, moverContext: baseMoverContext });
+    const geometryKey = JSON.stringify([scene.id, scene.sceneEvents || [], scene.featureStates || {}]);
+    const geometryState = { sceneEvents: scene.sceneEvents || [], preferences: { featureStates: scene.featureStates || {} } };
+    let cache = navigationCaches.get(mapPackage);
+    if (!cache || cache.geometryKey !== geometryKey) {
+      cache = { geometryKey, grids: new Map() }; navigationCaches.set(mapPackage, cache);
+    }
+    const navigationFor = moverContext => {
+      if (moverContext.elevationAtPoint) return createNavigationGrid(mapPackage, derived, bases.get(mapPackage), { appState, moverContext });
+      // Only derived collision geometry is shared. Token permissions and status
+      // are checked above, and their effective bypass groups enter this key.
+      const key = JSON.stringify([moverContext.elevationMeters, moverContext.diameterMeters,
+        moverContext.movementMode, [...new Set(moverContext.collisionBypassGroups)].sort()]);
+      let navigation = cache.grids.get(key);
+      if (!navigation || navigation.loadedChunkCount > 128) {
+        navigation = createNavigationGrid(mapPackage, derived, bases.get(mapPackage), { appState: geometryState,
+          moverContext: { ...moverContext, tokenId: null, statusVersion: '' } });
+        cache.grids.set(key, navigation);
+        if (cache.grids.size > 4) cache.grids.delete(cache.grids.keys().next().value);
+      }
+      return navigation;
+    };
+    const navigation = navigationFor(baseMoverContext);
     let from = spatialPoint(origin, tokenElevationMeters(token));
     let route = waypoints.map(value => spatialPoint(value, from?.elevationMeters ?? tokenElevationMeters(token)));
     let anchorPoint = null;
@@ -132,13 +155,17 @@ export function createMovementAuthority(resolveMapPackage) {
           : Math.max(0, Math.min(1, ((current.x - from.x) * dx + (current.y - from.y) * dy) / denominator));
         return from.elevationMeters + (waypoint.elevationMeters - from.elevationMeters) * ratio;
       };
-      const segmentNavigation = createNavigationGrid(mapPackage, derived, bases.get(mapPackage), { appState, moverContext: {
+      const level = from.elevationMeters === waypoint.elevationMeters;
+      const segmentNavigation = navigationFor({
         ...baseMoverContext,
         elevationMeters: Math.max(from.elevationMeters, waypoint.elevationMeters),
-        elevationAtPoint,
-        heightProfileKey: `${from.x},${from.y},${from.elevationMeters}:${waypoint.x},${waypoint.y},${waypoint.elevationMeters}`,
-      } });
+        ...(level ? {} : { elevationAtPoint,
+          heightProfileKey: `${from.x},${from.y},${from.elevationMeters}:${waypoint.x},${waypoint.y},${waypoint.elevationMeters}` }),
+      });
       const inspection = inspectDirectNavigationPath(segmentNavigation, from, waypoint, { diameterMeters: tokenDiameterMeters(token) });
+      if (segmentNavigation.loadedChunkCount > 128) {
+        for (const [key, value] of cache.grids) if (value === segmentNavigation) cache.grids.delete(key);
+      }
       if (!inspection.valid) return failure('path_blocked', 'Route is blocked', {
         segmentIndex: index, blockedCell: inspection.blockedCell || inspection.blockingCell || null, blockingFlags: inspection.blockingFlags || 0,
       });

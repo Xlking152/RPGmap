@@ -252,11 +252,10 @@ export function createTokenRendererSystem() {
       function beginSegment(motion, target) {
         motion.from = normalizeTokenPoint(visualPoints.get(motion.id) || motion.from || target);
         motion.target = normalizeTokenPoint(target);
-        motion.startedAt = null;
+        motion.startedAt = windowNode.performance?.now?.() ?? performance.now();
         motion.duration = tokenMoveDuration(motion.from, motion.target);
         const step = timestamp => {
           if (destroyed || animations.get(motion.id) !== motion) return;
-          if (motion.startedAt === null) motion.startedAt = Number(timestamp) || 0;
           const elapsed = Math.max(0, (Number(timestamp) || 0) - motion.startedAt);
           const progress = motion.duration > 0 ? Math.min(1, elapsed / motion.duration) : 1;
           const point = interpolateTokenPoint(motion.from, motion.target, progress) || motion.target;
@@ -379,9 +378,9 @@ export function createTokenRendererSystem() {
         if (updateSummary) renderSummary();
       }
 
-      function renderTokenPosition(tokenId) {
+      function renderTokenPosition(tokenId, knownToken = null) {
         const id = String(tokenId || '');
-        const token = api.tokens.get?.(id);
+        const token = knownToken || api.tokens.get?.(id);
         const view = views.get(id);
         const model = models.get(id);
         if (!token || token.placement !== 'map' || !view || !model) {
@@ -437,14 +436,22 @@ export function createTokenRendererSystem() {
           && fields.every(field => ['x', 'y'].includes(String(field)));
         if (!ids.size) pendingFullRender = true;
         else if (positionOnly) {
-          for (const id of ids) if (!pendingRenderIds.has(id)) pendingPositionIds.add(id);
+          for (const id of ids) {
+            if (pendingRenderIds.has(id)) continue;
+            const token = api.tokens.get?.(id), model = models.get(id);
+            if (token && model && sameTokenPoint(token, model)) continue;
+            // Begin from the current visual point as soon as the confirmed
+            // position arrives; a later batch RAF would let the old route run.
+            renderTokenPosition(id, token);
+          }
         } else {
           for (const id of ids) {
             pendingPositionIds.delete(id);
             pendingRenderIds.add(id);
           }
         }
-        if (eventRenderFrame === null) eventRenderFrame = requestFrame(flushEventRender);
+        if (eventRenderFrame === null && (pendingFullRender || pendingRenderIds.size || pendingPositionIds.size))
+          eventRenderFrame = requestFrame(flushEventRender);
       }
 
       const selectionOff = api.selection?.subscribe?.(snapshot => {

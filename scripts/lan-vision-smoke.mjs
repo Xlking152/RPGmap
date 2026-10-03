@@ -1,20 +1,27 @@
 import { createActorFromRulesetImport } from '../src/actor/index.js';
 import { randomBytes } from 'node:crypto';
 import net from 'node:net';
+import { spawn } from 'node:child_process';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 import { normalizeSceneToken } from '../src/token/model.js';
-import { WORLD_OPERATION_SCHEMA_VERSION } from '../src/world/operations.js';
+import { WORLD_OPERATION_SCHEMA_VERSION, applyWorldOperationPatch } from '../src/world/operations.js';
+import { isFogCellExplored } from '../src/vision/fog.js';
+import { applyExplorationDelta } from '../deployment/local-server/exploration-queue.mjs';
+import { worldWalChecksum } from '../deployment/local-server/world-wal.mjs';
 import { STATUS_SCHEMA_VERSION } from '../src/status/model.js';
 import { ACCESS_SCHEMA_VERSION } from '../deployment/local-server/access-control.mjs';
 
 const httpUrl = String(process.argv[2] || '').replace(/\/$/, '');
 const gmSecret = String(process.argv[3] || '');
 const joinCode = String(process.argv[4] || '');
+const mapDir = process.argv[5] ? path.resolve(process.argv[5]) : null;
 if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(httpUrl) || !gmSecret || !/^\d{6}$/.test(joinCode)) {
-  throw new Error('Usage: node scripts/lan-vision-smoke.mjs http://127.0.0.1:PORT GM_SECRET JOIN_CODE');
+  throw new Error('Usage: node scripts/lan-vision-smoke.mjs http://127.0.0.1:PORT GM_SECRET JOIN_CODE [PACKAGED_MAP_DIR]');
 }
-const socketUrl = httpUrl.replace(/^http:/, 'ws:') + '/ws';
 const WAIT_MS = 12_000;
 
 class OriginWebSocket {
@@ -180,17 +187,17 @@ function waitForMessage(socket, predicate, label = 'WebSocket message') {
   });
 }
 
-async function openSocket() {
-  const socket = new OriginWebSocket(socketUrl, httpUrl);
+async function openSocket(baseUrl = httpUrl) {
+  const socket = new OriginWebSocket(baseUrl.replace(/^http:/, 'ws:') + '/ws', baseUrl);
   await socket.open();
   return socket;
 }
 
-async function hello(message) {
-  const socket = await openSocket();
+async function hello(message, baseUrl = httpUrl) {
+  const socket = await openSocket(baseUrl);
   const welcome = waitForMessage(socket, value => value.type === 'welcome', 'welcome');
   socket.send(JSON.stringify({
-    type: 'hello',
+    type: 'hello', capabilities: { occlusion: 1 },
     operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
     statusSchema: STATUS_SCHEMA_VERSION,
     accessSchema: ACCESS_SCHEMA_VERSION,
@@ -228,6 +235,101 @@ function token({ id, actor: source, x, y, visibility }) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+async function canonicalSnapshot(socket) {
+  const response = waitForMessage(socket, message => message.type === 'world.snapshot'
+    && message.reason === 'request', 'Canonical snapshot');
+  socket.send(JSON.stringify({ type: 'world.snapshot.request' }));
+  return response;
+}
+
+// Read the exact durable prefix confirmed by an ACK, even if later Fog batches
+// have already reached the log. This is also the real on-disk restart fixture.
+async function durablePrefix(directory, revision = Infinity) {
+  const snapshotText = await readFile(path.join(directory, 'world.json'), 'utf8');
+  const snapshot = JSON.parse(snapshotText);
+  assert(snapshot.revision <= revision, 'Requested ACK was compacted before its restart fixture was captured');
+  let source = '';
+  try { source = await readFile(path.join(directory, 'world.operations.ndjson'), 'utf8'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const complete = source.endsWith('\n') ? source : source.slice(0, source.lastIndexOf('\n') + 1);
+  const records = complete.split(/\r?\n/).filter(Boolean).map(JSON.parse)
+    .filter(record => record.revision <= revision);
+  let world = snapshot;
+  for (const record of records) {
+    assert(record.checksum === worldWalChecksum(record), 'Durable World WAL checksum mismatch');
+    if (record.revision <= world.revision) continue;
+    assert(record.baseRevision === world.revision, 'Durable World WAL is not contiguous');
+    world = { ...world, revision: record.revision, updatedAt: record.timestamp,
+      state: applyWorldOperationPatch(world.state, record.patch, { project: false }),
+      ...(record.walVersion === 2 ? { exploration: applyExplorationDelta(world.exploration, record.explorationDelta) } : {}),
+      recentStatusOperations: record.results };
+  }
+  return { world, records, snapshotText, walText: records.map(record => JSON.stringify(record) + '\n').join('') };
+}
+
+async function waitForFog(socket, directory, sceneId, partyId, point) {
+  const deadline = Date.now() + WAIT_MS;
+  while (Date.now() < deadline) {
+    const durable = directory ? (await durablePrefix(directory)).world : null;
+    const canonical = await canonicalSnapshot(socket);
+    const scene = canonical.state.preferences.worldV2.scenes.find(item => item.id === sceneId);
+    const drained = !durable || (!Object.keys(durable.exploration?.jobs || {}).length && canonical.revision >= durable.revision);
+    if (drained && isFogCellExplored(scene?.fog, partyId, point)) return canonical;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error('Confirmed path did not finish its ordered background Fog exploration');
+}
+
+async function verifyPackagedRestart(prefix, sceneId, partyId, point) {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rpgmap-package-fog-recovery-'));
+  let child, gm;
+  try {
+    await mkdir(path.join(directory, 'map'));
+    const restoredMap = path.join(directory, 'map');
+    // A durable World can reference immutable content created by earlier UI
+    // checks. Restore those dependencies alongside its snapshot/WAL prefix.
+    await cp(path.join(mapDir, 'uploads'), path.join(restoredMap, 'uploads'), { recursive: true });
+    await writeFile(path.join(restoredMap, 'world.json'), prefix.snapshotText);
+    await writeFile(path.join(restoredMap, 'world.operations.ndjson'), prefix.walText);
+    const serverPath = path.join(path.dirname(mapDir), 'server.mjs');
+    child = spawn(process.execPath, [serverPath], {
+      env: { ...process.env, NODE_ENV: 'production', PORT: '0', RPGMAP_MAP_DIR: restoredMap,
+        RPGMAP_PUBLIC_DIR: directory, RPGMAP_GM_SECRET: gmSecret, RPGMAP_JOIN_CODE: joinCode,
+        RPGMAP_TEST_PAUSE_EXPLORATION: '0' },
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    let stderr = '';
+    child.stderr.on('data', value => { stderr += String(value); });
+    const port = await new Promise((resolve, reject) => {
+      let output = '';
+      const timer = setTimeout(() => reject(new Error('Packaged recovery server did not start: ' + stderr)), WAIT_MS);
+      child.stdout.on('data', value => {
+        output += String(value);
+        const match = output.match(/Local\s+: http:\/\/127\.0\.0\.1:(\d+)/);
+        if (match) { clearTimeout(timer); resolve(Number(match[1])); }
+      });
+      child.once('exit', code => { clearTimeout(timer); reject(new Error(`Packaged recovery server exited ${code}: ${stderr}`)); });
+    });
+    gm = await hello({ name: 'Packaged Recovery GM', requestedRole: 'gm', gmSecret }, `http://127.0.0.1:${port}`);
+    assert(!Object.hasOwn(gm.welcome.world, 'exploration'), 'Private exploration jobs leaked through restart welcome');
+    const recovered = await waitForFog(gm.socket, restoredMap, sceneId, partyId, point);
+    assert(recovered.state.preferences.worldV2.scenes.find(item => item.id === sceneId)
+      ?.tokens.find(item => item.id === 'smoke-pc-token')?.x === point.x, 'Restart lost its confirmed movement');
+    assert(!Object.keys((await durablePrefix(restoredMap)).world.exploration.contexts).length,
+      'Packaged recovery kept unused exploration contexts after draining');
+    return true;
+  } finally {
+    gm?.socket.close();
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const stopped = new Promise(resolve => child.once('exit', resolve));
+      if (child.connected) child.send('rpgmap.shutdown'); else child.kill();
+      const timer = setTimeout(() => { if (child.exitCode === null) child.kill('SIGKILL'); }, 3000);
+      await stopped; clearTimeout(timer);
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 const sockets = [];
@@ -306,7 +408,7 @@ try {
   const boundPromise = waitForMessage(playerSocket, message => message.type === 'identity.bound', 'Player identity');
   const playerWelcomePromise = waitForMessage(playerSocket, message => message.type === 'welcome', 'Player welcome');
   playerSocket.send(JSON.stringify({
-    type: 'hello', name: 'Packaged Smoke Player', requestedRole: 'player',
+    type: 'hello', capabilities: { occlusion: 1 }, name: 'Packaged Smoke Player', requestedRole: 'player',
     operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
     statusSchema: STATUS_SCHEMA_VERSION,
     accessSchema: ACCESS_SCHEMA_VERSION,
@@ -331,13 +433,17 @@ try {
   assert(restricted?.audienceRestricted === true && Object.keys(restricted.system || {}).length === 0,
     'Visible hostile private Actor data was not cropped');
 
+  // Source selection is durable immediately; its first circle may finish in a
+  // separate revision. Use the drained revision for this following edit.
+  const sourceReady = await waitForFog(gm.socket, mapDir, scene.id, 'smoke-party', { x: 2900, y: 2500 });
+
   const moveCommitted = waitForMessage(playerSocket, message =>
     message.type === 'document.batch.committed' && message.operationId === 'smoke-vision-move', 'Vision document move commit');
   const moveAck = waitForMessage(playerSocket, message =>
     message.type === 'document.batch.ack' && message.operationId === 'smoke-vision-move', 'Vision document move ACK');
   playerSocket.send(JSON.stringify({
     type: 'document.batch', operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
-    operationId: 'smoke-vision-move', baseRevision: ack.revision,
+    operationId: 'smoke-vision-move', baseRevision: sourceReady.revision,
     writes: [{
       action: 'move',
       document: { type: 'Token', id: 'smoke-pc-token', parent: { type: 'Scene', id: scene.id } },
@@ -353,40 +459,53 @@ try {
     }],
   }));
   const [move, moved] = await Promise.all([moveCommitted, moveAck]);
+  const confirmedPrefix = mapDir ? await durablePrefix(mapDir, moved.revision) : null;
   const movedTokenChange = move.changes.find(change => change.document.type === 'Token'
     && change.document.id === 'smoke-pc-token');
-  assert(move.revision === moved.revision && move.changes.some(change => change.document.type === 'Fog'),
-    'Token document move did not atomically persist its fog sweep');
+  assert(move.revision === moved.revision && !move.changes.some(change => change.document.type === 'Fog'),
+    'Movement ACK must confirm its durable path before background Fog completion');
+  if (confirmedPrefix) {
+    assert(confirmedPrefix.world.revision === moved.revision, 'Movement ACK preceded its durable WAL revision');
+    const job = confirmedPrefix.world.exploration.jobs['smoke-vision-move:0'];
+    assert(job?.path.length === 2 && job.path[0].x === 2900 && job.path[1].x === 2940
+      && job.totalSamples === 17 && job.cursor === 0, 'Movement and its complete 2.5-meter exploration path were not atomic');
+    assert(confirmedPrefix.records.some(record => record.operationId === 'smoke-vision-move'
+      && record.walVersion === 2 && record.explorationDelta?.jobs?.['smoke-vision-move:0']),
+    'Movement WAL record did not atomically include its private exploration job');
+  }
   assert(movedTokenChange?.changed?.x === 2940,
     `Player document move did not project the authoritative Token coordinate: ${JSON.stringify(move)}`);
   assert(Array.isArray(move.motion) && move.motion.some(motion => motion.tokenId === 'smoke-pc-token'
     && motion.to?.x === 2940), 'Player document move did not publish an authoritative visual route');
 
+  const canonical = await waitForFog(gm.socket, mapDir, scene.id, 'smoke-party', { x: 2940, y: 2500 });
+
   const deniedPromise = waitForMessage(playerSocket, message =>
     message.type === 'world.operation.denied' && message.operationId === 'smoke-hidden-forge', 'Hidden target rejection');
   playerSocket.send(JSON.stringify({
-    type: 'world.operation', operationId: 'smoke-hidden-forge', baseRevision: moved.revision,
+    type: 'world.operation', operationId: 'smoke-hidden-forge', baseRevision: canonical.revision,
     operations: [{ type: 'actor.runtime.perform', payload: {
       sceneId: scene.id, tokenId: 'smoke-secret-token',
       operation: { type: 'health.damage', amount: 1, damageType: 'L' },
     } }],
   }));
   const denied = await deniedPromise;
-  assert(denied.code === 'token_not_controlled', 'Hidden target did not receive stable permission rejection');
+  assert(denied.code === 'token_not_controlled', `Hidden target did not receive stable permission rejection: ${JSON.stringify(denied)}`);
   assert(!Object.hasOwn(denied, 'state'), 'Protocol V2 rejection must not include a World rollback');
 
-  const canonicalPromise = waitForMessage(gm.socket, message =>
-    message.type === 'world.snapshot' && message.reason === 'request', 'Canonical snapshot');
-  gm.socket.send(JSON.stringify({ type: 'world.snapshot.request' }));
-  const canonical = await canonicalPromise;
   const canonicalScene = canonical.state.preferences.worldV2.scenes.find(item => item.id === scene.id);
   assert(Object.keys(canonicalScene.fog.exploredByParty['smoke-party']?.rows || {}).length > 0,
     'Explored fog was not persisted in canonical World');
   assert(canonicalScene.tokens.find(item => item.id === 'smoke-pc-token')?.x === 2940,
     'Authoritative Token movement was not persisted');
+  assert(!JSON.stringify(canonical).includes('contextId') && !JSON.stringify(projected).includes('worldEpoch'),
+    'Private exploration queue leaked into a network snapshot');
+  const restartRecovery = confirmedPrefix ? await verifyPackagedRestart(confirmedPrefix,
+    scene.id, 'smoke-party', { x: 2940, y: 2500 }) : null;
 
   console.log(JSON.stringify({
     identity: true, audienceProjection: true, visionSource: true, documentMovePath: true,
+    durableMovementAndPath: Boolean(confirmedPrefix), backgroundFogDrained: true, restartRecovery,
     fogRevision: canonical.revision, worldSchema: world.schemaVersion,
     importedRevision: importedSnapshot.revision,
   }));

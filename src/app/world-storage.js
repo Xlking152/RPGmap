@@ -56,6 +56,14 @@ export function createWorldStatePersistence({
   let saveTimer = null;
   let blocked = initialLoad?.blocked === true;
   let pendingInitialLoad = initialLoad;
+  let localExploration = null;
+  function readLocalExploration(raw) {
+    const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    localExploration = value?._localExploration ? structuredClone(value._localExploration) : null;
+  }
+  function withLocalExploration(serialized) {
+    return localExploration ? `${serialized.slice(0, -1)},"_localExploration":${JSON.stringify(localExploration)}}` : serialized;
+  }
 
   function preserveRaw(raw, suffix) {
     const backupKey = `${storageKey}:backup:${suffix}`;
@@ -65,6 +73,7 @@ export function createWorldStatePersistence({
 
   function load(options = {}) {
     if (pendingInitialLoad && !Object.prototype.hasOwnProperty.call(options, 'raw')) {
+      try { readLocalExploration(storageAdapter.get(storageKey)); } catch { localExploration = null; }
       const loaded = pendingInitialLoad;
       pendingInitialLoad = null;
       return { state: loaded.state, notice: loaded.notice || null };
@@ -72,12 +81,13 @@ export function createWorldStatePersistence({
     let raw = null;
     try {
       raw = Object.prototype.hasOwnProperty.call(options, 'raw') ? options.raw : storageAdapter.get(storageKey);
+      readLocalExploration(raw);
       if (!raw) return { state: initialWorldState(mapPackage, ruleset, { worldId: worldId || 'world-default', worldName }), notice: null };
       const prepared = prepareRuntimeState(raw, { mapPackage, ruleset });
       if (!prepared.migrated) return { state: prepared.state, notice: null };
       try {
         preserveRaw(raw, `legacy-${prepared.fromVersion || 'save-v2'}`);
-        storageAdapter.set(storageKey, JSON.stringify(exportRuntimeState(prepared.state, { mapPackage, ruleset })));
+        storageAdapter.set(storageKey, withLocalExploration(JSON.stringify(exportRuntimeState(prepared.state, { mapPackage, ruleset }))));
         return {
           state: prepared.state,
           notice: {
@@ -125,7 +135,7 @@ export function createWorldStatePersistence({
       const serialized = trusted && typeof stringifyTrustedState === 'function'
         ? stringifyTrustedState(current)
         : JSON.stringify(exportRuntimeState(current, { mapPackage, ruleset }));
-      storageAdapter.set(storageKey, serialized);
+      storageAdapter.set(storageKey, withLocalExploration(serialized));
       onSaved();
       return true;
     } catch (error) {
@@ -167,6 +177,7 @@ export function createWorldStatePersistence({
       saveTimer = null;
     }
     storageAdapter.set(storageKey, JSON.stringify(exportRuntimeState(nextState, { mapPackage, ruleset })));
+    localExploration = null;
     blocked = false;
     return true;
   }
@@ -185,6 +196,8 @@ export function createWorldStatePersistence({
     persistTrustedNow,
     replace,
     cancel,
+    getLocalExploration() { return structuredClone(localExploration); },
+    setLocalExploration(value) { localExploration = structuredClone(value); },
     get blocked() { return blocked; },
   };
 }

@@ -59,7 +59,24 @@ function validateValue(value, path, depth, budget) {
 export function assertFeatureStatePatch(patch) {
   if (patch !== null && !isPlainObject(patch)) fail('Feature State patch must be an object or null');
   validateValue(patch, 'patch', 0, { nodes: 0 });
+  if (patch?.vision !== undefined && patch.vision !== null) assertFeatureVision(patch.vision);
   return patch;
+}
+
+export function assertFeatureVision(value) {
+  if (!isPlainObject(value)) fail('Feature vision must be an object or null');
+  for (const key of Object.keys(value)) {
+    if (!['occluder', 'blockingHeightMeters'].includes(key)) fail(`Unknown Feature vision field: ${key}`);
+  }
+  if (value.occluder !== undefined && value.occluder !== null && typeof value.occluder !== 'boolean') {
+    fail('Feature vision.occluder must be boolean or null');
+  }
+  const height = value.blockingHeightMeters;
+  if (height !== undefined && height !== null && height !== 'unbounded'
+    && (typeof height !== 'number' || !Number.isFinite(height) || height < 0)) {
+    fail('Feature vision.blockingHeightMeters must be non-negative metres, unbounded, or null');
+  }
+  return value;
 }
 
 export function applyFeatureStateMergePatch(current, patch) {

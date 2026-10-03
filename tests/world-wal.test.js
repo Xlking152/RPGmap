@@ -25,6 +25,33 @@ test('WAL replays contiguous durable operations after the baseline snapshot', as
   assert.deepEqual(replayed.state, { count: 2 });
 });
 
+test('WAL callers can skip the detached return record without changing durable bytes or replay', async t => {
+  const normal = await temporaryWal(t);
+  const noReturn = await temporaryWal(t);
+  const input = { baseRevision: 0, revision: 1, operationId: 'one',
+    patch: { nested: { count: 1 } }, results: [{ value: { count: 1 } }],
+    timestamp: '2026-10-03T00:00:00.000Z' };
+  const returned = await normal.wal.append(input);
+  assert.equal(await noReturn.wal.append(input, { returnRecord: false }), undefined);
+  assert.deepEqual(await readFile(noReturn.filePath), await readFile(normal.filePath));
+  assert.notEqual(returned.patch, input.patch);
+  returned.patch.nested.count = 99;
+  returned.results[0].value.count = 99;
+  assert.equal(input.patch.nested.count, 1);
+  assert.equal(input.results[0].value.count, 1);
+  const baseline = { revision: 0, state: {} };
+  assert.deepEqual(await noReturn.wal.replay(baseline), await normal.wal.replay(baseline));
+  assert.equal((await noReturn.wal.replay(baseline)).state.nested.count, 1);
+});
+
+test('WAL append without a return record still rejects a failed durable write', async t => {
+  const { filePath } = await temporaryWal(t);
+  const wal = createWorldWal({ filePath: path.join(filePath, 'missing.ndjson'), applyPatch });
+  await assert.rejects(() => wal.append({ baseRevision: 0, revision: 1,
+    operationId: 'one', patch: { count: 1 } }, { returnRecord: false }),
+  error => error.code === 'ENOENT');
+});
+
 test('WAL truncates an incomplete final line and preserves complete records', async t => {
   const { filePath, wal } = await temporaryWal(t);
   await wal.append({ baseRevision: 0, revision: 1, operationId: 'one', patch: { count: 1 } });

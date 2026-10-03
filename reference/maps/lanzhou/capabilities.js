@@ -17,6 +17,7 @@ const OPENABLE_FEATURE_IDS = new Set(LANZHOU_OPENABLE_FEATURE_IDS);
 const GATE_BARRIER_OVERLAP_METERS = 45;
 
 function finiteHeight(value) {
+  if (value === null || value === undefined || value === '') return null;
   const height = Number(value);
   return Number.isFinite(height) && height >= 0 ? height : null;
 }
@@ -142,13 +143,15 @@ export function applyLanzhouCapabilities(features = [], navigation = {}) {
 
     if (!openable && !navigationCapability) return feature;
 
-    const visionOccluder = feature.category === 'building' || feature.category === 'wall' || openable || declaredVision.occluder === true
+    const visionOccluder = declaredVision.occluder !== false
+      && (feature.category === 'building' || feature.category === 'wall' || openable || declaredVision.occluder === true)
       ? Object.freeze({
           ...declaredVision,
           occluder: true,
-          blockingHeightMeters: finiteHeight(declaredVision.blockingHeightMeters)
-            ?? navigationCapability?.blockingHeightMeters
-            ?? LANZHOU_DEFAULT_BLOCKING_HEIGHT_METERS.wall,
+          blockingHeightMeters: Object.hasOwn(declaredVision, 'blockingHeightMeters') && declaredVision.blockingHeightMeters === null
+            ? null : finiteHeight(declaredVision.blockingHeightMeters)
+              ?? navigationCapability?.blockingHeightMeters
+              ?? LANZHOU_DEFAULT_BLOCKING_HEIGHT_METERS.wall,
           polygon: declaredVision.polygon || navigationCapability?.blockingPolygon || feature.geometry?.points || null,
           passableWhenOpen: openable || declaredVision.passableWhenOpen === true,
           passableWhenDestroyed: declaredVision.passableWhenDestroyed !== false,

@@ -67,7 +67,7 @@ const edge = spawn(edgePath(), [
   '--no-default-browser-check',
   `--remote-debugging-port=${port}`,
   `--user-data-dir=${profile}`,
-  targetUrl,
+  'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
 let edgeError = '';
 edge.stderr.setEncoding('utf8');
@@ -93,6 +93,7 @@ try {
   const failures = [];
   const exceptions = [];
   const responses = [];
+  let resolveTraceCompletion = null;
   const rejectPending = message => {
     for (const { reject, timeout } of pending.values()) {
       clearTimeout(timeout);
@@ -131,6 +132,10 @@ try {
     if (message.method === 'Log.entryAdded' && message.params?.entry?.level === 'error') {
       exceptions.push(message.params.entry.text || 'browser log error');
     }
+    if (message.method === 'Tracing.tracingComplete') {
+      resolveTraceCompletion?.(message.params);
+      resolveTraceCompletion = null;
+    }
   });
   const send = (method, params = {}, commandTimeoutMs = 5000) => new Promise((resolve, reject) => {
     const id = nextId++;
@@ -152,8 +157,10 @@ try {
       width: Number(viewportMatch[1]), height: Number(viewportMatch[2]),
       deviceScaleFactor: 1, mobile: true,
     });
-    await send('Page.reload', { ignoreCache: true });
   }
+  // Attach observers before navigation so cached/fast dynamic imports cannot
+  // finish before Network.enable and disappear from the package asset audit.
+  await send('Page.navigate', { url: targetUrl });
 
   if (mode === 'bootstrap') {
     const entryState = await retry(
@@ -388,6 +395,254 @@ try {
     const { profile: cpuProfile } = await send('Profiler.stop');
     await writeFile(process.env.RPGMAP_SMOKE_CPU_PROFILE, JSON.stringify(cpuProfile));
   }
+  let occlusionAudit = null;
+  if (mode === 'fog' && await evaluate(`Boolean(document.querySelector('#app').rpgMapApp.occlusionEditor)`)) {
+    const zoomRecords = [];
+    for (const dpr of [1, 1.25, 1.5, 2]) {
+      await send('Emulation.setDeviceMetricsOverride', { width: 960, height: 720, deviceScaleFactor: dpr, mobile: false });
+      const result = await evaluate(`(async () => {
+        const api = document.querySelector('#app').rpgMapApp;
+        const source = api.vision.getVisibleRegion();
+        if (!source) throw new Error('occlusion audit needs a vision source');
+        api.map.invalidateSize({ animate: false });
+        const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
+        let maxProjectionError = 0, maxCenterAlpha = 0;
+        for (let zoom = -4; zoom <= 5; zoom += 0.25) {
+          api.map.setView([api.mapPackage.height - source.y, source.x], zoom, { animate: false });
+          await frame(); await frame(); api.vision.render(); await frame();
+          const canvas = document.querySelector('.rpgmap-vision-fog-perception');
+          const point = api.map.latLngToContainerPoint([api.mapPackage.height - source.y, source.x]);
+          const ratio = canvas.width / api.map.getSize().x;
+          const alpha = canvas.getContext('2d').getImageData(Math.round(point.x * ratio), Math.round(point.y * ratio), 1, 1).data[3];
+          maxCenterAlpha = Math.max(maxCenterAlpha, alpha);
+          if (alpha > 12) throw new Error('source becomes fog at zoom=' + zoom + ', alpha=' + alpha);
+          const pixel = api.map.project([api.mapPackage.height - source.y, source.x], zoom);
+          const origin = api.map.getPixelOrigin();
+          const exact = api.map.layerPointToContainerPoint([pixel.x - origin.x, pixel.y - origin.y]);
+          maxProjectionError = Math.max(maxProjectionError, Math.abs(exact.x - point.x), Math.abs(exact.y - point.y));
+        }
+        api.map.panBy([47, -31], { animate: false }); await frame(); api.vision.render(); await frame();
+        api.map.fitBounds([[api.mapPackage.height - source.y - 200, source.x - 200],
+          [api.mapPackage.height - source.y + 200, source.x + 200]], { animate: false });
+        await frame(); api.vision.render(); await frame();
+        if (maxProjectionError > 1) throw new Error('projection error exceeds one CSS pixel');
+        let animations = 0, maxAnimationError = 0;
+        const observed = () => { animations++; };
+        api.map.on('zoomanim', observed);
+        api.map.setZoom(api.map.getZoom()+0.5, { animate:true });
+        const started = performance.now();
+        while (performance.now()-started < 600) {
+          await frame();
+          const canvas = document.querySelector('.rpgmap-vision-fog-perception');
+          const matrix = new DOMMatrix(getComputedStyle(canvas).transform);
+          const pixel = api.map.project([api.mapPackage.height-source.y,source.x],api.map.getZoom());
+          const origin = api.map.getPixelOrigin();
+          const old = api.map.layerPointToContainerPoint([pixel.x-origin.x,pixel.y-origin.y]);
+          const container = api.map.getContainer().getBoundingClientRect();
+          const pane = canvas.parentElement.getBoundingClientRect();
+          const actual = { x:matrix.a*old.x+matrix.e+pane.left-container.left,
+            y:matrix.d*old.y+matrix.f+pane.top-container.top };
+          const image = document.querySelector('.leaflet-base-pane svg.leaflet-image-layer').getBoundingClientRect();
+          const expected = { x:image.left-container.left+source.x/api.mapPackage.width*image.width,
+            y:image.top-container.top+source.y/api.mapPackage.height*image.height };
+          maxAnimationError = Math.max(maxAnimationError,Math.abs(actual.x-expected.x),Math.abs(actual.y-expected.y));
+        }
+        api.map.off('zoomanim', observed);
+        if (maxAnimationError > 1) throw new Error('animated mask leaves map image by ' + maxAnimationError + ' CSS pixels');
+        return { dpr: devicePixelRatio, zoomLevels: 37, maxCenterAlpha, maxProjectionError, animations, maxAnimationError };
+      })()`, 15000);
+      zoomRecords.push(result);
+    }
+    const editor = await evaluate(`(async () => {
+      const api = document.querySelector('#app').rpgMapApp;
+      const original = structuredClone(api.world.getActiveScene().occlusionShapes || []);
+      await api.occlusionEditor.open();
+      document.querySelector('[data-occlusion-mode=wall]').click();
+      for (const [x,y] of [[1100,1100],[1110,1100],[1110,1170],[1100,1170]])
+        api.map.fire('click', { latlng: { lat: api.mapPackage.height-y, lng:x }, originalEvent: { target:api.map.getContainer() } });
+      const finish = [...document.querySelectorAll('button')].find(button => button.textContent === '完成多边形');
+      if (!finish) throw new Error('draw finish control missing'); finish.click();
+      const before = api.occlusionEditor.getPreviewScene(api.world.getActiveScene()).occlusionShapes.length;
+      document.querySelector('[data-occlusion-undo]').click();
+      const undone = api.occlusionEditor.getPreviewScene(api.world.getActiveScene()).occlusionShapes.length;
+      document.querySelector('[data-occlusion-redo]').click();
+      if (before !== original.length + 1 || undone !== original.length) throw new Error('editor undo/redo failed');
+      await api.occlusionEditor.commit(); api.occlusionEditor.close();
+      const shape = api.world.getActiveScene().occlusionShapes.find(item => !original.some(old => old.id === item.id));
+      if (!shape || shape.points.length !== 4) throw new Error('shape did not persist');
+      await api.occlusionEditor.open();
+      if (!document.querySelector('[data-occlusion-shape="' + shape.id + '"]')) throw new Error('shape did not reload in editor');
+      api.occlusionEditor.close();
+      await api.world.performOperations([{ type:'scene.occlusionShape.delete', payload:{sceneId:api.world.get().activeSceneId,shapeId:shape.id} }]);
+      return { drew:true, undoRedo:true, committed:true, reopened:true };
+    })()`, 10000);
+    const feedbackProfilePath = process.env.RPGMAP_SMOKE_FEEDBACK_CPU_PROFILE;
+    const feedbackTracePath = process.env.RPGMAP_SMOKE_FEEDBACK_TRACE;
+    const traceCompletion = feedbackTracePath
+      ? new Promise(resolve => { resolveTraceCompletion = resolve; }) : null;
+    if (feedbackTracePath) {
+      await send('Tracing.start', { categories: [
+        'devtools.timeline', 'disabled-by-default-devtools.timeline',
+        'blink.user_timing', 'toplevel', 'v8',
+      ].join(','), transferMode: 'ReturnAsStream' });
+    }
+    if (feedbackProfilePath) {
+      await send('Profiler.enable');
+      await send('Profiler.start');
+    }
+    let feedback;
+    let feedbackError;
+    try {
+      feedback = await evaluate(`(async () => {
+      const api = document.querySelector('#app').rpgMapApp;
+      const id = 'smoke-pc-token';
+      const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+      const traceMarks = ${Boolean(feedbackTracePath)};
+      const observeFeedback = ${Boolean(feedbackTracePath || process.env.RPGMAP_SMOKE_FEEDBACK_OBSERVE)};
+      const initialDiagnostics = api.diagnostics.enabled;
+      api.diagnostics.setEnabled(true);
+      const results = [];
+      try {
+        for (const range of [120, 500, 1000]) {
+          await api.tokens.update(id, { vision: { ...api.tokens.get(id).vision,
+            preciseRangeOverrideMeters: range, vagueRangeOverrideMeters: range } });
+          await api.vision.setSource(id); await wait(500);
+          const activeRegion = api.vision.getVisibleRegion();
+          if (Math.abs(Number(activeRegion?.preciseRangeMeters) - range) > 0.001
+            || Math.abs(Number(activeRegion?.vagueRangeMeters) - range) > 0.001) {
+            throw new Error('vision range override was not applied: ' + JSON.stringify({ range, activeRegion }));
+          }
+          api.diagnostics.reset();
+          const origin = api.tokens.get(id), totalMs = [], samples = [];
+          for (let index = 0; index < 20; index++) {
+            const previousVisual = api.renderer.getVisualTokenPoint(id) || api.tokens.get(id);
+            const target = { x: origin.x + (index % 2 ? 0.75 : 0.25), y: origin.y };
+            const started = performance.now();
+            if (traceMarks) performance.mark('feedback.' + range + '.' + index + '.start');
+            const queueBefore = api.world.getExplorationStatus();
+            await api.tokens.reposition(id, target);
+            const committedAt = performance.now();
+            const expectedRevision = api.getStateRevision();
+            if (traceMarks) performance.mark('feedback.' + range + '.' + index + '.commit');
+            const matchesMovement = state => state?.rendered && state.stateRevision >= expectedRevision
+              && state.requestedAt >= started
+              && Number(state.source?.x) >= Math.min(previousVisual.x, target.x) - 0.001
+              && Number(state.source?.x) <= Math.max(previousVisual.x, target.x) + 0.001
+              && Number(state.source?.y) >= Math.min(previousVisual.y, target.y) - 0.001
+              && Number(state.source?.y) <= Math.max(previousVisual.y, target.y) + 0.001;
+            const compactFeedback = state => state && ({ requestedAt: state.requestedAt,
+              stateRevision: state.stateRevision, rendered: state.rendered,
+              x: state.source?.x, y: state.source?.y });
+            let feedbackState = api.vision.getFeedbackState();
+            const observedFeedbackStates = [];
+            let previousFeedbackKey = null;
+            while (!matchesMovement(feedbackState)) {
+              if (observeFeedback && observedFeedbackStates.length < 16) {
+                const key = JSON.stringify(compactFeedback(feedbackState));
+                if (key !== previousFeedbackKey) {
+                  observedFeedbackStates.push({ offsetMs: performance.now() - started, state: compactFeedback(feedbackState) });
+                  previousFeedbackKey = key;
+                }
+              }
+              if (performance.now() - started > 2000) throw new Error('realtime mask did not complete: ' + JSON.stringify({
+                range, index, elapsedMs: performance.now() - started, expectedRevision,
+                previousVisual, target, feedbackState: compactFeedback(feedbackState), observedFeedbackStates,
+                token: api.tokens.get(id), visual: api.renderer.getVisualTokenPoint(id),
+                region: api.vision.getVisibleRegion(), exploration: api.world.getExplorationStatus(),
+                diagnostic: api.diagnostics.snapshot(), samples,
+              }));
+              await wait(1);
+              feedbackState = api.vision.getFeedbackState();
+            }
+            const completedAt = performance.now();
+            if (traceMarks) performance.mark('feedback.' + range + '.' + index + '.visible');
+            totalMs.push(completedAt - started);
+            samples.push({ index, totalMs: completedAt - started, commitMs: committedAt - started,
+              maskWaitMs: completedAt - committedAt,
+              previousVisual: { x: previousVisual.x, y: previousVisual.y }, target,
+              expectedRevision, feedbackState: compactFeedback(feedbackState),
+              ...(observeFeedback ? { observedFeedbackStates } : {}),
+              queueBefore, queueAfter: api.world.getExplorationStatus() });
+          }
+          totalMs.sort((a,b) => a-b);
+          const diagnostic = api.diagnostics.snapshot();
+          const queueSerializedBytesAtRangeEnd = new Blob([JSON.stringify(api.getLocalExploration())]).size;
+          const p95Ms = totalMs[18];
+          if (p95Ms > (range === 1000 ? 100 : 50)) throw new Error('realtime feedback latency failed: ' + JSON.stringify({range,p95Ms,totalMs,samples,diagnostic,queueSerializedBytesAtRangeEnd}));
+          results.push({rangeMeters:range, effectiveRangeMeters:activeRegion.preciseRangeMeters,
+            samplesMs:totalMs, phases:samples, p95Ms, queueSerializedBytesAtRangeEnd,
+            mask:diagnostic.metrics['vision.feedback'], worker:diagnostic.metrics['vision.worker'],
+            transferBytes:diagnostic.metrics['vision.transferBytes'], queue:diagnostic.metrics['vision.queue']});
+        }
+        // Inspect every animation frame on a separate short round trip. Canvas
+        // readback is a correctness check and must not alter feedback timing.
+        const blackFlashOrigin = api.tokens.get(id);
+        let maxCenterAlpha = 0, inspectedFrames = 0;
+        const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
+        for (const x of [blackFlashOrigin.x + 0.25, blackFlashOrigin.x - 0.25]) {
+          const until = performance.now() + 350;
+          const monitor = (async () => {
+            while (performance.now() < until) {
+              await frame();
+              const visual = api.renderer.getVisualTokenPoint(id) || api.tokens.get(id);
+              const point = api.map.latLngToContainerPoint([api.mapPackage.height - visual.y, visual.x]);
+              const canvas = document.querySelector('.rpgmap-vision-fog-perception');
+              const ratio = canvas.width / api.map.getSize().x;
+              const alpha = canvas.getContext('2d').getImageData(Math.round(point.x * ratio), Math.round(point.y * ratio), 1, 1).data[3];
+              maxCenterAlpha = Math.max(maxCenterAlpha, alpha);
+              inspectedFrames++;
+            }
+          })();
+          await api.tokens.reposition(id, { x, y: blackFlashOrigin.y });
+          await monitor;
+        }
+        if (maxCenterAlpha > 12) throw new Error('continuous movement replaced completed mask with fog: ' + maxCenterAlpha);
+        const started = performance.now();
+        while (api.world.getExplorationStatus().queued || api.world.getExplorationStatus().running) {
+          if (performance.now()-started > 60000) throw new Error('local exploration queue did not drain');
+          await wait(25);
+        }
+        return { ranges:results, blackFlash: { inspectedFrames, maxCenterAlpha },
+          queue:api.world.getExplorationStatus() };
+      } finally { api.diagnostics.setEnabled(initialDiagnostics); }
+    })()`, 90000);
+    } catch (error) {
+      feedbackError = error;
+    } finally {
+      if (feedbackProfilePath) {
+        const { profile: cpuProfile } = await send('Profiler.stop');
+        await mkdir(path.dirname(feedbackProfilePath), { recursive: true });
+        await writeFile(feedbackProfilePath, JSON.stringify(cpuProfile));
+      }
+      if (feedbackTracePath) {
+        await send('Tracing.end', {}, 30_000);
+        let traceTimeout;
+        const { stream } = await Promise.race([
+          traceCompletion,
+          new Promise((_, reject) => { traceTimeout = setTimeout(() => reject(new Error('Chrome feedback trace timed out')), 30_000); }),
+        ]).finally(() => clearTimeout(traceTimeout));
+        if (!stream) throw new Error('Chrome feedback trace did not return a stream');
+        const chunks = [];
+        for (;;) {
+          const part = await send('IO.read', { handle: stream, size: 1_048_576 }, 30_000);
+          chunks.push(part.base64Encoded ? Buffer.from(part.data, 'base64') : Buffer.from(part.data));
+          if (part.eof) break;
+        }
+        await send('IO.close', { handle: stream });
+        await mkdir(path.dirname(feedbackTracePath), { recursive: true });
+        await writeFile(feedbackTracePath, Buffer.concat(chunks));
+      }
+    }
+    // Measure serialized state only after feedback and profiling have ended.
+    const storageSizes = await evaluate(`(() => {
+      const api = document.querySelector('#app').rpgMapApp;
+      const bytes = value => new Blob([JSON.stringify(value)]).size;
+      return { runtimeBytes: bytes(api.getState()), exportBytes: bytes(api.exportState()),
+        queueSerializedBytes: bytes(api.getLocalExploration()) };
+    })()`);
+    if (feedbackError) throw new Error(`${feedbackError.message}; storageSizes=${JSON.stringify(storageSizes)}`);
+    occlusionAudit = { zoom: zoomRecords, editor, feedback, storageSizes };
+  }
   const assetAudit = await evaluate(`(async () => {
     const response = await fetch('./.vite/manifest.json', { cache: 'no-store' });
     if (!response.ok) throw new Error('manifest request failed: ' + response.status);
@@ -478,7 +733,7 @@ try {
       throw new Error(`Browser did not load required Runtime asset: ${pattern}; visual=${JSON.stringify(visualState)}; responses=${JSON.stringify(responses.slice(-20))}`);
     }
   }
-  console.log(JSON.stringify({ worldManager: mode === 'bootstrap', map: 'northern-song-lanzhou-1104', assets: assetAudit, fog: fogAudit, movement: movementAudit, layout: layoutAudit, ...runtime }));
+  console.log(JSON.stringify({ worldManager: mode === 'bootstrap', map: 'northern-song-lanzhou-1104', assets: assetAudit, fog: fogAudit, movement: movementAudit, occlusion: occlusionAudit, layout: layoutAudit, ...runtime }));
   await send('Browser.close');
   browserClosed = true;
 } catch (error) {

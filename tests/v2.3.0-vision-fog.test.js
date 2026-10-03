@@ -14,8 +14,10 @@ test('Fog renderer separates static exploration memory from the lightweight perc
   assert.match(visionSource, /const drawCurrent = \(context, rawRange, kind\) =>/);
   assert.match(visionSource, /computeVisibilityRows/);
   assert.match(visionSource, /drawCurrentCircle\(context, rangeMeters\)/);
-  assert.match(visionSource, /drawCurrent\(perception, source\?\.vagueGroundRangeMeters/);
-  assert.match(visionSource, /drawCurrent\(perception, source\?\.preciseGroundRangeMeters/);
+  assert.match(visionSource, /const vagueRange = Number\(source\?\.vagueGroundRangeMeters/);
+  assert.match(visionSource, /const preciseRange = Number\(source\?\.preciseGroundRangeMeters/);
+  assert.match(visionSource, /drawCurrent\(perception, vagueRange, 'vague'\)/);
+  assert.match(visionSource, /drawCurrent\(perception, preciseRange, 'precise'\)/);
   assert.doesNotMatch(visionSource, /grayscale|saturat/i);
 });
 

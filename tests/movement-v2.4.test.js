@@ -165,5 +165,6 @@ test('shared Actor resolution preserves per-Token flight rules and independent A
     describe: (actor, { token }) => ({ walk: true, fly: token.id === 'token-a' || actor.name === 'Synthetic' }),
   } });
   assert.equal(markMovementAdjudicationRequired(value.state, policy), true);
-  assert.deepEqual(value.scene.tokens.map(token => token.movement.adjudicationRequired), [false, true, false]);
+  assert.deepEqual(value.state.preferences.worldV2.scenes[0].tokens.map(token => token.movement.adjudicationRequired), [false, true, false]);
+  assert.deepEqual(value.scene.tokens.map(token => token.movement.adjudicationRequired), [false, false, false]);
 });

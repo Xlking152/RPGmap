@@ -1,18 +1,56 @@
 import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
-import { mergeActorDelta } from '../token/actor.js';
+import { describeExplorationSource } from '../vision/exploration-operations.js';
+import { sceneVisionContext } from '../vision/context.js';
 import { deriveSceneState } from '../engine/state.js';
+import { normalizeOcclusionShapes } from '../vision/occlusion-model.js';
+import { assertOcclusionReferences } from '../world/occlusion-config.js';
+import { assertFeatureVision } from '../world/feature-states.js';
 import {
   deriveVisionOccluders,
   deriveSceneLightSources,
   isPathPreciselyVisible,
-  sphereGroundRadiusMeters,
   visionIgnoresOcclusion,
 } from '../spatial/kernel.js';
 
 export { canUserControlToken, projectStateForAudience } from '../vision/audience.js';
 export { sphereGroundRadiusMeters } from '../spatial/kernel.js';
+export { sceneVisionContext };
+export { mergeExploration } from '../vision/fog.js';
+export { computeExplorationChunk, mergeExplorationChunkFog } from './exploration-compute.js';
+export { createExplorationOperationCapture } from '../vision/exploration-operations.js';
 
 export const serverRuleset = infiniteHorrorRuleset;
+const canonicalVisionDescriptions = new WeakMap();
+
+// The bundled ruleset's normal-light detection derives only from Actor data
+// and Actor effects. Permission decisions and Token status precision are still
+// evaluated independently for each audience. Mutable/reduced Actors are never
+// memoized, and independent Actor deltas keep their existing fresh resolution.
+export function describeServerVision(actor, context = {}) {
+  if (!actor || !Object.isFrozen(actor) || context.effects !== undefined || context.lighting !== 'normal') {
+    return serverRuleset.vision.describe(actor, context);
+  }
+  let description = canonicalVisionDescriptions.get(actor);
+  if (!description) {
+    description = serverRuleset.vision.describe(actor, { lighting: 'normal' });
+    canonicalVisionDescriptions.set(actor, description);
+  }
+  return description;
+}
+
+export function validateSceneOcclusion(scene, map = {}) {
+  const shapes = normalizeOcclusionShapes(scene.occlusionShapes, { map });
+  assertOcclusionReferences(shapes, map, scene);
+  const known = new Set([...(map.features || []).map(feature => String(feature.id)),
+    ...(map.occlusionShapes || []).map(shape => String(shape.featureId || shape.id)),
+    ...shapes.map(shape => String(shape.featureId || shape.id))]);
+  for (const [featureId, record] of Object.entries(scene.featureStates || {})) {
+    if (!record?.vision) continue;
+    assertFeatureVision(record.vision);
+    if (Array.isArray(map.features) && !known.has(featureId)) throw Object.assign(new Error('Vision override references a missing Feature'), { code: 'invalid_reference' });
+  }
+  return scene;
+}
 
 export function motionPathPreciselyVisible({ motion, vision, mapPackage, scene } = {}) {
   if (String(motion?.tokenId || '') === String(vision?.tokenId || '')) {
@@ -20,46 +58,18 @@ export function motionPathPreciselyVisible({ motion, vision, mapPackage, scene }
   }
   const points = [motion?.from, ...(motion?.waypoints || []), motion?.to].filter(Boolean);
   const lineOfSightEnabled = vision?.lineOfSightEnabled !== false && !visionIgnoresOcclusion(vision);
-  const occluders = lineOfSightEnabled
-    ? deriveVisionOccluders(mapPackage, scene, deriveSceneState(scene?.sceneEvents || []))
-    : [];
+  const spatial = mapPackage ? sceneVisionContext(mapPackage, scene) : null;
+  // Shared geometry still clips light when the observer has X-ray vision.
+  const occluders = spatial?.occluders || deriveVisionOccluders(mapPackage, scene, deriveSceneState(scene?.sceneEvents || []));
   return isPathPreciselyVisible(points, vision, {
     metersPerUnit: mapPackage?.metersPerUnit || 1,
     lineOfSightEnabled,
     occluders,
-    lights: deriveSceneLightSources(mapPackage, scene),
+    lights: spatial?.lights || deriveSceneLightSources(mapPackage, scene),
     ambient: scene?.settings?.lighting || 'normal',
   });
 }
 
 export function describeVisionForToken(state, tokenId) {
-  const world = state?.preferences?.worldV2;
-  const scene = world?.scenes?.find(item => String(item?.id ?? '') === String(world?.activeSceneId ?? ''));
-  const token = scene?.tokens?.find(item => String(item?.id ?? '') === String(tokenId));
-  const actor = token && world?.actors?.find(item => String(item?.id ?? '') === String(token.actorId));
-  if (!token || !actor || token.placement !== 'map' || token.vision?.enabled === false) return null;
-  const resolved = token.actorLink === false ? mergeActorDelta(actor, token.actorDelta) : actor;
-  const described = serverRuleset.vision.describe(resolved, {
-    token, scene, lighting: 'normal',
-  });
-  const legacyOverride = token.vision?.rangeOverrideMeters;
-  const preciseOverride = token.vision?.preciseRangeOverrideMeters ?? legacyOverride;
-  const vagueOverride = token.vision?.vagueRangeOverrideMeters ?? legacyOverride;
-  const rangeMeters = preciseOverride === null || preciseOverride === undefined
-    ? Number(described.rangeMeters) || 0
-    : Number(preciseOverride) || 0;
-  const vagueRangeMeters = vagueOverride === null || vagueOverride === undefined
-    ? Math.max(rangeMeters, Number(described.vagueRangeMeters ?? rangeMeters) || 0)
-    : Math.max(rangeMeters, Number(vagueOverride) || 0);
-  if (vagueRangeMeters <= 0) return null;
-  return {
-    sceneId: String(scene.id), tokenId: String(token.id), actorId: String(actor.id),
-    partyId: actor.partyId == null ? null : String(actor.partyId),
-    x: Number(token.x), y: Number(token.y), elevationMeters: Number(token.elevationMeters) || 0, rangeMeters,
-    preciseRangeMeters: rangeMeters, vagueRangeMeters,
-    preciseGroundRangeMeters: sphereGroundRadiusMeters(rangeMeters, token.elevationMeters) ?? 0,
-    vagueGroundRangeMeters: sphereGroundRadiusMeters(vagueRangeMeters, token.elevationMeters) ?? 0,
-    senses: structuredClone(described.senses || {}), lighting: scene?.settings?.lighting || 'normal',
-    lineOfSightEnabled: true,
-  };
+  return describeExplorationSource(state, tokenId, { ruleset: serverRuleset, describeVision: describeServerVision });
 }

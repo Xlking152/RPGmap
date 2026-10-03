@@ -6,6 +6,7 @@ import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js'
 import { applyDocumentChanges } from '../src/documents/changes.js';
 import { stateWithAreaDraft } from '../src/scene/area-state.js';
 import { exploreFogVisibleCircle } from '../src/vision/fog.js';
+import { registerRuntimeStateReader } from '../src/engine/state-access.js';
 
 const mapPackage = { id: 'test-map', version: '1.0.0', title: '测试地图', width: 100, height: 100, features: [], metersPerUnit: 1 };
 function actor() { return { id: 'actor-1', name: '角色', currentFormId: 'form-1', forms: [{ id: 'form-1', tokenAppearance: { color: '#3d9b63' }, avatarDataUrl: null }], runtime: {}, effects: [] }; }
@@ -25,12 +26,35 @@ function apiFixture() {
     importState(next) { current = structuredClone(next); events.push(['import']); return true; },
     emit(type, detail) { events.push([type, detail]); },
   };
-  return { api, events, current: () => structuredClone(current) };
+  return { api, events, current: () => structuredClone(current), reference: () => current };
 }
 
 function assertNoCharacters(value) {
   assert.equal(Object.hasOwn(value, 'characters'), false);
 }
+
+test('internal canonical reads avoid public snapshot copies and preserve immutable committed inputs', async () => {
+  const { api, reference } = apiFixture();
+  registerRuntimeStateReader(api, reference);
+  createWorldSystem().register(api);
+  api.applyAuthoritativeDocumentChanges = (changes, options) => {
+    // Fixture commits detach the new result as a runtime commit would.
+    const next = applyDocumentChanges(reference(), changes, { updatedAt: options.updatedAt });
+    api.importState(next);
+  };
+  const before = reference();
+  const original = structuredClone(before);
+  const snapshot = api.world.get();
+  snapshot.scenes[0].tokens[0].x = 90;
+  snapshot.actors[0].name = 'external mutation';
+  assert.deepEqual(reference(), original);
+  api.getState = () => { throw new Error('hot path must use its internal reader'); };
+  await api.world.performOperations([{ type: 'token.reposition', payload: {
+    sceneId: before.preferences.worldV2.activeSceneId, tokenId: 'token-1', x: 20, y: 25,
+  } }]);
+  assert.deepEqual(before, original);
+  assert.equal(api.world.getActiveScene().tokens[0].x, 20);
+});
 
 test('background exploration neither blocks movement nor restores pre-move coordinates; fog reset cancels pending work', async () => {
   const previous = globalThis.Worker;

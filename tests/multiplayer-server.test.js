@@ -9,12 +9,15 @@ import { createActorFromRulesetImport, createDefaultActor } from '../src/actor/i
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 import { isFogCellExplored } from '../src/vision/fog.js';
-import { WORLD_OPERATION_SCHEMA_VERSION } from '../src/world/operations.js';
+import { WORLD_OPERATION_SCHEMA_VERSION, applyWorldOperationPatch } from '../src/world/operations.js';
 import { applyDocumentChanges } from '../src/documents/changes.js';
 import { STATUS_SCHEMA_VERSION } from '../src/status/model.js';
 import { ACCESS_SCHEMA_VERSION } from '../src/permissions/model.js';
 import { createWorldWal } from '../deployment/local-server/world-wal.mjs';
 import { BUILT_IN_LANZHOU_MAP } from '../src/map-package/constants.js';
+import { minimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { createNavigationGrid, nearestWalkablePoint } from '../src/engine/navigation.js';
+import { deriveSceneState } from '../src/engine/state.js';
 
 const WEBSOCKET_WAIT_TIMEOUT_MS = 15_000;
 
@@ -87,7 +90,7 @@ async function openAndHello(url, hello) {
   const ws = await openSocket(url);
   const welcomePromise = waitForMessage(ws, message => message.type === 'welcome');
   ws.send(JSON.stringify({
-    type: 'hello',
+    type: 'hello', capabilities: { occlusion: 1 },
     operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
     statusSchema: STATUS_SCHEMA_VERSION,
     accessSchema: ACCESS_SCHEMA_VERSION,
@@ -102,7 +105,7 @@ async function openAndClaim(url, { name, claimCode, visionSourceTokenId = null }
   const boundPromise = waitForMessage(ws, message => message.type === 'identity.bound');
   const welcomePromise = waitForMessage(ws, message => message.type === 'welcome');
   ws.send(JSON.stringify({
-    type: 'hello', name, requestedRole: 'player', claimCode,
+    type: 'hello', capabilities: { occlusion: 1 }, name, requestedRole: 'player', claimCode,
     operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
     statusSchema: STATUS_SCHEMA_VERSION,
     accessSchema: ACCESS_SCHEMA_VERSION,
@@ -116,12 +119,12 @@ async function startServer(extraEnv = {}, existingMapDir = null) {
   const mapDir = existingMapDir || await mkdtemp(path.join(tmpdir(), 'rpgmap-map-'));
   const serverPath = fileURLToPath(new URL('../deployment/local-server/server.mjs', import.meta.url));
   const child = spawn(process.execPath, [serverPath], {
-    env: { ...process.env, NODE_ENV: 'test', RPGMAP_TEST_ALLOW_MISSING_ORIGIN: '1', RPGMAP_GM_SECRET: 'TEST-GM-SECRET', PORT: '0', RPGMAP_MAP_DIR: mapDir, RPGMAP_PUBLIC_DIR: mapDir, ...extraEnv },
+    env: { ...process.env, NODE_ENV: 'test', RPGMAP_TEST_ALLOW_MISSING_ORIGIN: '1', RPGMAP_VERIFY_PROJECTIONS: '1', RPGMAP_GM_SECRET: 'TEST-GM-SECRET', PORT: '0', RPGMAP_MAP_DIR: mapDir, RPGMAP_PUBLIC_DIR: mapDir, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   let stderr = '';
   child.stderr.setEncoding('utf8');
-  child.stderr.on('data', chunk => { stderr += chunk; });
+  child.stderr.on('data', chunk => { stderr += chunk; if (process.env.RPGMAP_TEST_DEBUG === '1') process.stderr.write(chunk); });
   const port = await new Promise((resolve, reject) => {
     let stdout = '';
     const timer = setTimeout(() => reject(new Error('server start timeout\n' + stderr)), 5000);
@@ -161,6 +164,381 @@ async function stopServer(runtime, { removeMap = true } = {}) {
   }
   if (removeMap) await rm(runtime.mapDir, { recursive: true, force: true });
 }
+
+async function durableWorld(mapDir) {
+  const snapshot = JSON.parse(await readFile(path.join(mapDir, 'world.json'), 'utf8'));
+  const wal = createWorldWal({ filePath: path.join(mapDir, 'world.operations.ndjson'),
+    applyPatch: (state, patch) => applyWorldOperationPatch(state, patch, { project: false }) });
+  return wal.replay(snapshot, { repairTail: false });
+}
+
+async function waitForExplorationDrained(runtime, timeout = 15_000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const value = await durableWorld(runtime.mapDir);
+    if (!Object.keys(value.exploration?.jobs || {}).length) return value;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error('Durable exploration queue did not drain');
+}
+
+test('old clients are refused before receiving an occlusion World', async () => {
+  const runtime = await startServer();
+  try {
+    const ws = await openSocket(runtime.url);
+    const denied = waitForMessage(ws, value => value.type === 'error');
+    ws.send(JSON.stringify({ type: 'hello', requestedRole: 'gm', gmSecret: 'TEST-GM-SECRET',
+      operationSchema: WORLD_OPERATION_SCHEMA_VERSION, statusSchema: STATUS_SCHEMA_VERSION, accessSchema: ACCESS_SCHEMA_VERSION }));
+    assert.equal((await denied).code, 'occlusion_capability_required');
+    ws.close();
+  } finally { await stopServer(runtime); }
+});
+
+test('confirmed large movement and private exploration survive an abrupt server crash without delaying other writes', async () => {
+  let runtime = await startServer({ RPGMAP_TEST_PAUSE_EXPLORATION: '1' });
+  const mapDir = runtime.mapDir;
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Queue GM', requestedRole: 'gm' });
+    const state = initialTokenVisionWorld(), scene = state.preferences.worldV2.scenes[0];
+    scene.mapPackage = { ...scene.mapPackage, width: 5000, height: 5000, metersPerUnit: 1 };
+    scene.tokens.find(item => item.id === 'token-a').vision.rangeOverrideMeters = 1000;
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' })); await initialized;
+    const claimPromise = waitForMessage(gm.ws, value => value.type === 'access.claim');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Queue Player', defaultActorId: 'actor-a', ownership: { 'actor-a': 'owner' } }));
+    const claim = await claimPromise;
+    const player = await openAndClaim(runtime.url, { name: 'Queue Player', claimCode: claim.claimCode });
+    const payloads = [];
+    player.ws.addEventListener('message', event => { try { payloads.push(JSON.parse(String(event.data))); } catch {} });
+    const sourceAck = waitForMessage(player.ws, value => value.type === 'vision.source.ack');
+    player.ws.send(JSON.stringify({ type: 'vision.source.set', tokenId: 'token-a' }));
+    assert.equal((await sourceAck).revision, 2);
+    const started = performance.now();
+    const moved = await sendWorldOperationsAndWait(player.ws, { type: 'world.operation', operationId: 'crash-large-move', baseRevision: 2,
+      operations: [{ type: 'token.move', payload: { sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 435, y: 10 } }] });
+    assert.equal(moved.ack.revision, 3);
+    assert.ok(performance.now() - started < 1000, 'Movement acknowledgement waited for long exploration');
+    assert.equal(moved.committed.changes.some(change => change.document.type === 'Fog'), false);
+    const chatStarted = performance.now();
+    const chat = await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'while-fog-pending', baseRevision: 3,
+      operations: [{ type: 'chat.append', payload: { text: 'Other clients can still act' } }] });
+    assert.equal(chat.ack.revision, 4);
+    assert.ok(performance.now() - chatStarted < 1000, 'Another write was blocked by exploration');
+    const durable = await durableWorld(mapDir);
+    assert.equal(durable.state.preferences.worldV2.scenes[0].tokens.find(token => token.id === 'token-a').x, 435);
+    assert.equal(Object.keys(durable.exploration.jobs).length, 2);
+    assert.equal(durable.exploration.jobs['crash-large-move:0'].totalSamples, 171);
+    assert.equal(JSON.stringify(payloads).includes('contextId'), false);
+    assert.equal(JSON.stringify(payloads).includes('worldEpoch'), false);
+    assert.equal(JSON.stringify(payloads).includes('crash-large-move:0'), false);
+    assert.equal(Object.hasOwn(player.welcome.world, 'exploration'), false);
+    const exited = new Promise(resolve => runtime.child.once('exit', resolve));
+    runtime.child.kill('SIGKILL'); await exited;
+    runtime = await startServer({}, mapDir);
+    const resumed = await openAndHello(runtime.url, { name: 'Queue Recovered GM', requestedRole: 'gm' });
+    const finished = await waitForExplorationDrained(runtime);
+    assert.equal(Object.keys(finished.exploration.contexts).length, 0);
+    const snapshot = await requestWorldSnapshot(resumed.ws);
+    assert.equal(isFogCellExplored(snapshot.state.preferences.worldV2.scenes[0].fog, 'party-a', { x: 435, y: 10 }), true);
+    assert.equal(snapshot.state.preferences.worldV2.scenes[0].tokens.find(token => token.id === 'token-a').x, 435);
+    resumed.ws.close();
+  } finally { await stopServer(runtime); }
+});
+
+test('an exploration Worker failure retains accepted jobs and does not block other clients before retrying', async () => {
+  const runtime = await startServer();
+  let gm;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Worker Recovery GM', requestedRole: 'gm' });
+    const state = initialTokenVisionWorld(), scene = state.preferences.worldV2.scenes[0];
+    scene.mapPackage = { ...scene.mapPackage, width: 5000, height: 5000, metersPerUnit: 1 };
+    scene.tokens.find(item => item.id === 'token-a').vision.rangeOverrideMeters = 1000;
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' })); await initialized;
+    const ack = waitForMessage(gm.ws, value => value.type === 'vision.source.ack');
+    gm.ws.send(JSON.stringify({ type: 'vision.source.set', tokenId: 'token-a' })); await ack;
+    const killed = new Promise(resolve => runtime.child.once('message', resolve));
+    runtime.child.send('rpgmap.test.kill-exploration-worker');
+    assert.equal((await killed).type, 'test.exploration-worker-killed');
+    const retained = await durableWorld(runtime.mapDir);
+    assert.ok(Object.keys(retained.exploration.jobs).length > 0, 'Worker exit removed uncommitted durable jobs');
+    const started = performance.now();
+    const chat = await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'during-worker-retry',
+      baseRevision: retained.revision, operations: [{ type: 'chat.append', payload: { text: 'Reliable while Worker restarts' } }] });
+    assert.ok(performance.now() - started < 1000, 'Worker retry blocked the authority transaction queue');
+    assert.equal(chat.ack.revision, retained.revision + 1);
+    const drained = await waitForExplorationDrained(runtime);
+    assert.equal(Object.keys(drained.exploration.contexts).length, 0);
+    assert.equal(isFogCellExplored(drained.state.preferences.worldV2.scenes[0].fog, 'party-a', { x: 10, y: 10 }), true);
+  } finally { gm?.ws.close(); await stopServer(runtime); }
+});
+
+test('occlusion editing is GM-only, validates shape and Feature references, and replays tags with their shapes', async () => {
+  let runtime = await startServer();
+  const mapDir = runtime.mapDir;
+  let gm, player;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Occlusion GM', requestedRole: 'gm' });
+    const state = initialTokenVisionWorld();
+    state.preferences.worldV2.scenes[0].mapPackage = { id: BUILT_IN_LANZHOU_MAP.id, version: BUILT_IN_LANZHOU_MAP.version,
+      width: 6000, height: 5000, metersPerUnit: 1 };
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' })); await initialized;
+    const claimPromise = waitForMessage(gm.ws, value => value.type === 'access.claim');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Occlusion Player', defaultActorId: 'actor-a', ownership: { 'actor-a': 'owner' } }));
+    const claim = await claimPromise;
+    player = await openAndClaim(runtime.url, { name: 'Occlusion Player', claimCode: claim.claimCode });
+    const beforePush = await durableWorld(mapDir);
+    const pushDenied = waitForMessage(player.ws, value => value.type === 'world.denied' && value.operationId === 'player-full-replace');
+    player.ws.send(JSON.stringify({ type: 'world.push', operationId: 'player-full-replace', baseRevision: 1,
+      state: { ...state, mapId: 'forged-map' }, reason: 'file-import:player' }));
+    const replaced = await pushDenied;
+    assert.equal(replaced.code, 'world_push_gm_only');
+    assert.equal(JSON.stringify(replaced).includes('token-b2'), false, 'Denied Player full replacement leaked a hidden Token');
+    assert.deepEqual(await durableWorld(mapDir), beforePush, 'Denied Player full replacement changed authoritative storage');
+    const shape = { id: 'test-building-shape', kind: 'building', points: [[100, 100], [120, 100], [120, 120], [100, 120]],
+      blockingHeightMeters: null, enabled: true };
+    const playerDenied = waitForMessage(player.ws, value => value.type === 'world.operation.denied' && value.operationId === 'player-occlusion');
+    player.ws.send(JSON.stringify({ type: 'world.operation', operationId: 'player-occlusion', baseRevision: 1,
+      operations: [{ type: 'scene.occlusionShape.upsert', payload: { sceneId: 'scene-test', shape } }] }));
+    assert.equal((await playerDenied).code, 'scene_occlusionShape_upsert_gm_only');
+    const changed = await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'gm-occlusion', baseRevision: 1,
+      operations: [{ type: 'scene.occlusionShape.upsert', payload: { sceneId: 'scene-test', shape } },
+        { type: 'scene.featureState.patch', payload: { sceneId: 'scene-test', featureId: shape.id, patch: { vision: { occluder: false } } } }] });
+    assert.equal(changed.ack.revision, 2);
+    for (const [operationId, operation] of [
+      ['missing-vision-feature', { type: 'scene.featureState.patch', payload: { sceneId: 'scene-test', featureId: 'unknown-feature', patch: { vision: { occluder: false } } } }],
+      ['missing-door-host', { type: 'scene.occlusionShape.upsert', payload: { sceneId: 'scene-test', shape: { ...shape, id: 'orphan-door', kind: 'door', hostShapeId: 'unknown-building' } } }],
+    ]) {
+      const denied = waitForMessage(gm.ws, value => value.type === 'world.operation.denied' && value.operationId === operationId);
+      gm.ws.send(JSON.stringify({ type: 'world.operation', operationId, baseRevision: 2, operations: [operation] }));
+      assert.equal((await denied).code, 'invalid_reference');
+    }
+    assert.equal((await requestWorldSnapshot(gm.ws)).revision, 2);
+    gm.ws.close(); gm = null; player.ws.close(); player = null;
+    await stopServer(runtime, { removeMap: false }); runtime = await startServer({}, mapDir);
+    const restored = await durableWorld(mapDir), scene = restored.state.preferences.worldV2.scenes[0];
+    assert.equal(restored.revision, 2);
+    assert.equal(scene.occlusionShapes[0].id, shape.id);
+    assert.equal(scene.featureStates[shape.id].vision.occluder, false);
+  } finally { gm?.ws.close(); player?.ws.close(); await stopServer(runtime); }
+});
+
+test('an observed hostile Actor becoming invisible removes its Tokens from incremental Player commits', async () => {
+  const runtime = await startServer({ RPGMAP_TEST_PAUSE_EXPLORATION: '1' });
+  let gm, player;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Visibility GM', requestedRole: 'gm' });
+    const state = initialTokenVisionWorld(), world = state.preferences.worldV2;
+    const hostile = world.actors.find(item => item.id === 'actor-b');
+    hostile.type = 'pc'; hostile.partyId = 'party-b';
+    for (const token of world.scenes[0].tokens.filter(item => item.actorId === 'actor-b')) { token.actorLink = true; token.actorDelta = null; }
+    state.preferences.entitySystem.actors = structuredClone(world.actors);
+    state.preferences.entitySystem.tokens = structuredClone(world.scenes[0].tokens);
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' })); await initialized;
+    const claimPromise = waitForMessage(gm.ws, value => value.type === 'access.claim');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Visibility Player', defaultActorId: 'actor-a',
+      ownership: { 'actor-a': 'owner', 'actor-b': 'observer' } }));
+    const claim = await claimPromise;
+    player = await openAndClaim(runtime.url, { name: 'Visibility Player', claimCode: claim.claimCode, visionSourceTokenId: 'token-a' });
+    const baseline = player.welcome.world.state;
+    assert.ok(baseline.preferences.worldV2.scenes[0].tokens.some(item => item.id === 'token-b'));
+    assert.equal(baseline.preferences.worldV2.actors.find(item => item.id === 'actor-b').audienceRestricted, undefined);
+    const broadcast = waitForMessage(player.ws, value => value.type === 'world.operation.committed' && value.operationId === 'hostile-template-invisible');
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'hostile-template-invisible', baseRevision: 1,
+      operations: [{ type: 'status.apply', payload: { scope: 'actor', targetId: 'actor-b', statusId: 'status-invisible' } }] });
+    const committed = await broadcast;
+    const projected = applyDocumentChanges(baseline, committed.changes);
+    const fresh = await requestWorldSnapshot(player.ws);
+    assert.equal(fresh.state.preferences.worldV2.scenes[0].tokens.some(item => item.id === 'token-b'), false);
+    assert.deepEqual(projected.preferences.worldV2.scenes[0].tokens, fresh.state.preferences.worldV2.scenes[0].tokens);
+  } finally { gm?.ws.close(); player?.ws.close(); await stopServer(runtime); }
+});
+
+test('batch Fog reset keeps only later movement, and feature exits and repositioning never explore a fabricated route', async () => {
+  let runtime = await startServer({ RPGMAP_TEST_PAUSE_EXPLORATION: '1' });
+  const mapDir = runtime.mapDir;
+  let gm;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Ordered Fog GM', requestedRole: 'gm' });
+    const state = initialTokenVisionWorld();
+    state.preferences.worldV2.scenes[0].mapPackage = { id: minimalReferencePackage.id, version: minimalReferencePackage.version,
+      width: 1000, height: 800, metersPerUnit: 1 };
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' })); await initialized;
+    const source = waitForMessage(gm.ws, value => value.type === 'vision.source.ack');
+    gm.ws.send(JSON.stringify({ type: 'vision.source.set', tokenId: 'token-a' })); await source;
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'ordered-reset', baseRevision: 2,
+      operations: [{ type: 'token.move', payload: { sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 40, y: 10 } },
+        { type: 'scene.fog.reset', payload: { sceneId: 'scene-test', partyId: 'party-a' } },
+        { type: 'token.move', payload: { sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 70, y: 10 } }] });
+    let durable = await durableWorld(mapDir);
+    assert.deepEqual(Object.keys(durable.exploration.jobs), ['ordered-reset:1']);
+    assert.deepEqual(durable.exploration.jobs['ordered-reset:1'].path.map(point => point.x), [40, 70]);
+    const stored = structuredClone((await requestWorldSnapshot(gm.ws)).state.preferences.worldV2.scenes[0].tokens.find(item => item.id === 'token-a'));
+    Object.assign(stored, { placement: 'feature', featureId: 'demo-house', x: null, y: null });
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'enter-feature', baseRevision: 3,
+      operations: [{ type: 'token.upsert', payload: { sceneId: 'scene-test', token: stored } }] });
+    const navigation = createNavigationGrid(minimalReferencePackage, deriveSceneState([]), null, {
+      appState: { preferences: { featureStates: {} } }, moverContext: { tokenId: 'token-a', elevationMeters: 0, diameterMeters: 1 } });
+    const exit = nearestWalkablePoint(navigation, { x: 500, y: 470 }, 120);
+    assert.ok(exit, 'Reference house has no safe exit');
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'feature-exit', baseRevision: 4,
+      operations: [{ type: 'token.move', payload: { sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', ...exit } }] });
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'teleport', baseRevision: 5,
+      operations: [{ type: 'token.reposition', payload: { sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 300, y: 10 } }] });
+    const edited = structuredClone((await requestWorldSnapshot(gm.ws)).state.preferences.worldV2.scenes[0].tokens.find(item => item.id === 'token-a'));
+    edited.x = 400;
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'gm-token-update', baseRevision: 6,
+      operations: [{ type: 'token.upsert', payload: { sceneId: 'scene-test', token: edited } }] });
+    durable = await durableWorld(mapDir);
+    for (const id of ['feature-exit:0', 'teleport:0', 'gm-token-update:0']) {
+      assert.equal(durable.exploration.jobs[id].path.length, 1);
+      assert.equal(durable.exploration.jobs[id].totalSamples, 1);
+    }
+    gm.ws.close(); gm = null; await stopServer(runtime, { removeMap: false }); runtime = await startServer({}, mapDir);
+    const drained = await waitForExplorationDrained(runtime), fog = drained.state.preferences.worldV2.scenes[0].fog;
+    for (const x of [40, 70, 300, 400]) assert.equal(isFogCellExplored(fog, 'party-a', { x, y: 10 }), true);
+    assert.equal(isFogCellExplored(fog, 'party-a', exit), true);
+    for (const x of [0, 150, 250, 350]) assert.equal(isFogCellExplored(fog, 'party-a', { x, y: 10 }), false);
+  } finally { gm?.ws.close(); await stopServer(runtime); }
+});
+
+test('mixed accepted paths retain their operation-time door geometry and perception statuses queue only needed circles', async () => {
+  const runtime = await startServer({ RPGMAP_TEST_PAUSE_EXPLORATION: '1' });
+  let gm;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Mixed Exploration GM', requestedRole: 'gm' });
+    const state = initialTokenVisionWorld(), scene = state.preferences.worldV2.scenes[0];
+    scene.occlusionShapes = [{ id: 'wall', kind: 'wall', points: [[100, 0], [110, 0], [110, 300], [100, 300]] },
+      { id: 'door', kind: 'door', hostShapeId: 'wall', points: [[99, 40], [111, 40], [111, 60], [99, 60]] }];
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' })); await initialized;
+    const source = waitForMessage(gm.ws, value => value.type === 'vision.source.ack');
+    gm.ws.send(JSON.stringify({ type: 'vision.source.set', tokenId: 'token-a' })); await source;
+    const mixed = await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'mixed-door-path', baseRevision: 2,
+      operations: [
+        { type: 'scene.featureState.patch', payload: { sceneId: scene.id, featureId: 'door', patch: { open: true } } },
+        { type: 'token.move', payload: { sceneId: scene.id, tokenId: 'token-a', x: 80, y: 50 } },
+        { type: 'scene.featureState.patch', payload: { sceneId: scene.id, featureId: 'door', patch: { open: false } } },
+      ] });
+    const durable = await durableWorld(runtime.mapDir);
+    const movement = durable.exploration.jobs['mixed-door-path:1'], closed = durable.exploration.jobs['mixed-door-path:2'];
+    assert.equal(movement.path.length, 2);
+    assert.equal(movement.path[0].x, 10); assert.equal(movement.path[1].x, 80);
+    assert.notEqual(movement.contextId, closed.contextId);
+    assert.notDeepEqual(durable.exploration.contexts[movement.contextId].occluders,
+      durable.exploration.contexts[closed.contextId].occluders);
+    assert.equal(durable.state.preferences.worldV2.scenes[0].featureStates.door.open, false);
+    const blinded = await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'blinded-circle', baseRevision: mixed.ack.revision,
+      operations: [{ type: 'status.apply', payload: { scope: 'token', targetId: 'token-a', statusId: 'status-blinded' } }] });
+    const statusQueue = await durableWorld(runtime.mapDir);
+    assert.equal(statusQueue.exploration.jobs['blinded-circle:0'].path.length, 1);
+    assert.equal(statusQueue.exploration.jobs['mixed-door-path:1'].contextId, movement.contextId);
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'burning-no-vision-circle', baseRevision: blinded.ack.revision,
+      operations: [{ type: 'status.apply', payload: { scope: 'token', targetId: 'token-a', statusId: 'status-burning' } }] });
+    assert.equal((await durableWorld(runtime.mapDir)).exploration.jobs['burning-no-vision-circle:0'], undefined);
+  } finally { gm?.ws.close(); await stopServer(runtime); }
+});
+
+test('source and Scene switches retain confirmed paths and recover them only into their original Scene', async () => {
+  let runtime = await startServer({ RPGMAP_TEST_PAUSE_EXPLORATION: '1' });
+  const mapDir = runtime.mapDir;
+  let gm;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Scene Queue GM', requestedRole: 'gm' });
+    const state = initialTokenVisionWorld();
+    const other = structuredClone(state.preferences.worldV2.scenes[0]);
+    other.id = 'scene-other'; other.tokens = []; state.preferences.worldV2.scenes.push(other);
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' })); await initialized;
+    let ack = waitForMessage(gm.ws, value => value.type === 'vision.source.ack');
+    gm.ws.send(JSON.stringify({ type: 'vision.source.set', tokenId: 'token-a' })); await ack;
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'before-scene-switch', baseRevision: 2,
+      operations: [{ type: 'token.move', payload: { sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 70, y: 10 } }] });
+    ack = waitForMessage(gm.ws, value => value.type === 'vision.source.ack');
+    gm.ws.send(JSON.stringify({ type: 'vision.source.set', tokenId: null })); await ack;
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'switch-active-scene', baseRevision: 3,
+      operations: [{ type: 'scene.activate', payload: { sceneId: 'scene-other' } }] });
+    const pending = await durableWorld(mapDir);
+    assert.equal(Object.keys(pending.exploration.jobs).length, 2);
+    assert.equal(pending.exploration.jobs['before-scene-switch:0'].sceneId, 'scene-test');
+    gm.ws.close(); gm = null; await stopServer(runtime, { removeMap: false });
+    runtime = await startServer({}, mapDir);
+    const drained = await waitForExplorationDrained(runtime);
+    assert.equal(drained.state.preferences.worldV2.activeSceneId, 'scene-other');
+    const scenes = drained.state.preferences.worldV2.scenes;
+    assert.equal(isFogCellExplored(scenes.find(item => item.id === 'scene-test').fog, 'party-a', { x: 70, y: 10 }), true);
+    assert.deepEqual(scenes.find(item => item.id === 'scene-other').fog.exploredByParty, {});
+  } finally { gm?.ws.close(); await stopServer(runtime); }
+});
+
+test('Fog reset during a running Worker discards its obsolete results and cannot restore hidden memory', async () => {
+  const runtime = await startServer();
+  let gm;
+  try {
+    gm = await openAndHello(runtime.url, { requestedRole: 'gm', name: 'Running Reset GM' });
+    const state = initialTokenVisionWorld();
+    state.preferences.worldV2.scenes[0].mapPackage = { ...state.preferences.worldV2.scenes[0].mapPackage,
+      width: 5000, height: 5000, metersPerUnit: 1 };
+    state.preferences.worldV2.scenes[0].tokens.find(item => item.id === 'token-a').vision.rangeOverrideMeters = 1000;
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state, reason: 'init' })); await initialized;
+    const ack = waitForMessage(gm.ws, value => value.type === 'vision.source.ack');
+    gm.ws.send(JSON.stringify({ type: 'vision.source.set', tokenId: 'token-a' })); await ack;
+    const baseline = await waitForExplorationDrained(runtime);
+    const moved = await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'move-before-running-reset',
+      baseRevision: baseline.revision, operations: [{ type: 'token.move', payload: { sceneId: 'scene-test',
+        tokenId: 'token-a', placement: 'map', x: 4260, y: 10 } }] });
+    assert.ok(Object.keys((await durableWorld(runtime.mapDir)).exploration.jobs).length > 0);
+    // Background Fog can advance a revision while the test process is reading
+    // the durable queue. Retry only this legitimate optimistic conflict; the
+    // reset must still commit and invalidate the active Worker generation.
+    let baseRevision = moved.ack.revision, reset;
+    for (let attempt = 0; attempt < 5 && !reset; attempt += 1) {
+      const operationId = `reset-running-worker-${attempt}`;
+      const response = waitForMessage(gm.ws, value => value.operationId === operationId
+        && ['world.operation.ack', 'world.operation.denied'].includes(value.type));
+      gm.ws.send(JSON.stringify({ type: 'world.operation', operationId, baseRevision,
+        operations: [{ type: 'scene.fog.reset', payload: { sceneId: 'scene-test', partyId: 'party-a' } }] }));
+      const reply = await response;
+      if (reply.type === 'world.operation.ack') reset = reply;
+      else { assert.equal(reply.code, 'revision_conflict'); baseRevision = reply.revision; }
+    }
+    assert.ok(reset, 'Fog reset never acquired the current authoritative revision');
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const durable = await durableWorld(runtime.mapDir);
+    assert.equal(durable.revision, reset.revision);
+    assert.deepEqual(durable.exploration.jobs, {});
+    assert.deepEqual(durable.state.preferences.worldV2.scenes[0].fog.exploredByParty, {});
+  } finally { gm?.ws.close(); await stopServer(runtime); }
+});
+
+test('Fog reset atomically cancels durable pending paths so a restart cannot restore hidden memory', async () => {
+  let runtime = await startServer({ RPGMAP_TEST_PAUSE_EXPLORATION: '1' });
+  const mapDir = runtime.mapDir;
+  try {
+    const gm = await openAndHello(runtime.url, { requestedRole: 'gm', name: 'Reset Queue GM' });
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialTokenVisionWorld(), reason: 'init' })); await initialized;
+    const ack = waitForMessage(gm.ws, value => value.type === 'vision.source.ack');
+    gm.ws.send(JSON.stringify({ type: 'vision.source.set', tokenId: 'token-a' })); await ack;
+    assert.equal(Object.keys((await durableWorld(mapDir)).exploration.jobs).length, 1);
+    await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation', operationId: 'reset-pending', baseRevision: 2,
+      operations: [{ type: 'scene.fog.reset', payload: { sceneId: 'scene-test', partyId: 'party-a' } }] });
+    const reset = await durableWorld(mapDir);
+    assert.equal(Object.keys(reset.exploration.jobs).length, 0);
+    assert.equal(Object.keys(reset.exploration.contexts).length, 0);
+    assert.equal(Object.values(reset.exploration.partyEpochs)[0], 1);
+    gm.ws.close(); await stopServer(runtime, { removeMap: false });
+    runtime = await startServer({}, mapDir);
+    const recovered = await openAndHello(runtime.url, { requestedRole: 'gm', name: 'Reset Recovered GM' });
+    assert.equal(recovered.welcome.world.state.preferences.worldV2.scenes[0].fog.exploredByParty['party-a'], undefined);
+    assert.equal(Object.keys((await durableWorld(mapDir)).exploration.jobs).length, 0);
+    recovered.ws.close();
+  } finally { await stopServer(runtime); }
+});
 
 test('Local server graceful shutdown closes active sessions for immediate reconnect', async () => {
   const runtime = await startServer();
@@ -1309,7 +1687,8 @@ test('LAN Status V4 import is atomic and returns every conflicting definition ID
 });
 
 test('failed status persistence does not advance revision, broadcast, or consume idempotency key', async () => {
-  const runtime = await startServer();
+  let runtime = await startServer();
+  const mapDir = runtime.mapDir;
   try {
     const gm = await openAndHello(runtime.url, { name: 'Status GM', requestedRole: 'gm' });
     const state = initialWorldV2();
@@ -1342,17 +1721,21 @@ test('failed status persistence does not advance revision, broadcast, or consume
     assert.equal(Object.hasOwn(denied, 'state'), false);
     await forbiddenSnapshot;
 
-    const canonicalPromise = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.reason === 'request');
-    gm.ws.send(JSON.stringify({ type: 'world.snapshot.request' }));
-    assert.equal((await canonicalPromise).revision, 1);
-
+    assert.equal((await fetch(`${runtime.httpUrl}/api/health`)).status, 503);
+    // An uncertain append failure pauses writes until validated replay. Once
+    // the filesystem is repaired, restart and retry the unconsumed key.
+    gm.ws.close();
+    await stopServer(runtime, { removeMap: false });
     await rm(walFile, { recursive: true, force: true });
-    const retried = await sendStatusAndWait(gm.ws, message);
+    runtime = await startServer({}, mapDir);
+    const recovered = await openAndHello(runtime.url, { name: 'Recovered GM', requestedRole: 'gm' });
+    assert.equal(recovered.welcome.world.revision, 1);
+    const retried = await sendStatusAndWait(recovered.ws, message);
     assert.equal(retried.ack.duplicate, false);
     assert.equal(retried.snapshot.revision, 2);
     assert.equal(retried.snapshot.state.preferences.entitySystem.actors[0].effects[0].definitionId, 'status-rooted');
 
-    gm.ws.close();
+    recovered.ws.close();
   } finally {
     await stopServer(runtime);
   }
@@ -1639,7 +2022,7 @@ test('disconnected Player resumes missed Document commits without a full World s
       message.type === 'document.batch.committed' && message.operationId === 'resume-chat-2');
     const completePromise = waitForMessage(socket, message => message.type === 'resume.complete');
     socket.send(JSON.stringify({
-      type: 'hello', name: 'Resume Player', requestedRole: 'player',
+      type: 'hello', capabilities: { occlusion: 1 }, name: 'Resume Player', requestedRole: 'player',
       userId: player.bound.userId, authToken: player.bound.authToken,
       visionSourceTokenId: 'token-a', resumeRevision, audienceFingerprint: resumeFingerprint,
       operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
@@ -1662,6 +2045,83 @@ test('disconnected Player resumes missed Document commits without a full World s
   } finally {
     await stopServer(runtime);
   }
+});
+
+test('resume history eviction advances only its detached base and preserves current Player projections', async () => {
+  const runtime = await startServer();
+  const sockets = [];
+  try {
+    const gm = await openAndHello(runtime.url, { name: 'Eviction GM', requestedRole: 'gm' }); sockets.push(gm.ws);
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0,
+      state: initialTokenVisionWorld(), reason: 'eviction-init' })); await initialized;
+    const claimed = waitForMessage(gm.ws, value => value.type === 'access.claim');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Eviction Player',
+      defaultActorId: 'actor-a', ownership: { 'actor-a': 'owner' } }));
+    const claim = await claimed;
+    const player = await openAndClaim(runtime.url, { name: 'Eviction Player',
+      claimCode: claim.claimCode, visionSourceTokenId: 'token-a' }); sockets.push(player.ws);
+    const credentials = { requestedRole: 'player', name: 'Eviction Player',
+      userId: player.bound.userId, authToken: player.bound.authToken, visionSourceTokenId: 'token-a' };
+    const live = await openAndHello(runtime.url, credentials); sockets.push(live.ws);
+    const fingerprint = player.welcome.audienceFingerprint;
+    const expiredRevision = player.welcome.world.revision;
+    let revision = expiredRevision;
+    async function commitChat(index) {
+      const operationId = `eviction-chat-${index}`;
+      const delivered = waitForMessage(live.ws, value => value.type === 'world.operation.committed'
+        && value.operationId === operationId);
+      const accepted = await sendWorldOperationsAndWait(gm.ws, { type: 'world.operation',
+        operationId, baseRevision: revision,
+        operations: [{ type: 'chat.append', payload: { text: `Eviction message ${index}` } }] });
+      assert.equal((await delivered).revision, accepted.ack.revision);
+      revision = accepted.ack.revision;
+    }
+    // Cross the actual 256-entry retention boundary; do not lower the limit for
+    // the test. The base now advances in place while canonical state is frozen.
+    for (let index = 0; index < 258; index++) await commitChat(index);
+    const retained = await requestWorldSnapshot(player.ws);
+    const closed = new Promise(resolve => player.ws.addEventListener('close', resolve, { once: true }));
+    player.ws.close(); await closed;
+    await commitChat(258); await commitChat(259);
+    const canonicalBefore = await requestWorldSnapshot(gm.ws);
+    const liveBefore = await requestWorldSnapshot(live.ws);
+    const socket = await openSocket(runtime.url); sockets.push(socket);
+    const replayed = [];
+    let snapshotReceived = false;
+    socket.addEventListener('message', event => {
+      const value = JSON.parse(String(event.data));
+      if (value.type === 'world.operation.committed') replayed.push(value);
+      if (value.type === 'world.snapshot') snapshotReceived = true;
+    });
+    const welcomePromise = waitForMessage(socket, value => value.type === 'welcome');
+    const completePromise = waitForMessage(socket, value => value.type === 'resume.complete');
+    socket.send(JSON.stringify({ type: 'hello', capabilities: { occlusion: 1 }, ...credentials,
+      resumeRevision: retained.revision, audienceFingerprint: fingerprint,
+      operationSchema: WORLD_OPERATION_SCHEMA_VERSION, statusSchema: STATUS_SCHEMA_VERSION,
+      accessSchema: ACCESS_SCHEMA_VERSION }));
+    const [welcome, complete] = await Promise.all([welcomePromise, completePromise]);
+    assert.equal(welcome.resumeAccepted, true);
+    assert.equal(welcome.world.state, null);
+    assert.equal(snapshotReceived, false);
+    assert.equal(complete.revision, revision);
+    assert.deepEqual(replayed.map(value => value.operationId), ['eviction-chat-258', 'eviction-chat-259']);
+    let recovered = retained.state;
+    for (const commit of replayed) recovered = applyDocumentChanges(recovered, commit.changes, { updatedAt: commit.updatedAt });
+    // Document application maintains legacy mirrors and uses the commit's
+    // timestamp; compare a fresh snapshot after the same client reconciliation.
+    const fresh = applyDocumentChanges(liveBefore.state, [], { updatedAt: replayed.at(-1).updatedAt });
+    assert.deepEqual(recovered, fresh, 'retained replay differs from a fresh projection after base eviction');
+    assert.equal(JSON.stringify(replayed).includes('token-b2'), false, 'replay disclosed a GM-only Token');
+    const expired = await openAndHello(runtime.url, { ...credentials,
+      resumeRevision: expiredRevision, audienceFingerprint: fingerprint }); sockets.push(expired.ws);
+    assert.equal(expired.welcome.resumeAccepted, false);
+    assert.deepEqual(expired.welcome.world.state, liveBefore.state);
+    assert.deepEqual((await requestWorldSnapshot(gm.ws)).state, canonicalBefore.state,
+      'replaying the detached history base mutated canonical state');
+    assert.deepEqual((await requestWorldSnapshot(live.ws)).state, liveBefore.state,
+      'replaying history mutated another live session projection');
+  } finally { sockets.forEach(socket => socket.close()); await stopServer(runtime); }
 });
 
 test('LAN placement grants expose a restricted template and server-initialize a controlled NPC instance', async () => {
@@ -1813,7 +2273,7 @@ test('hidden NPC commits advance Player revision without leaking canonical entit
 });
 
 test('LAN access changes rebuild only the affected audience projection without changing World revision', async () => {
-  const runtime = await startServer();
+  const runtime = await startServer({ RPGMAP_TEST_PAUSE_EXPLORATION: '1' });
   try {
     const gm = await openAndHello(runtime.url, { name: 'Projection GM', requestedRole: 'gm' });
     const initialized = waitForMessage(gm.ws, message => message.type === 'world.snapshot' && message.revision === 1);
@@ -1900,13 +2360,14 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     const sourceSnapshot = waitForMessage(playerA.ws, message =>
       message.type === 'audience.snapshot' && message.reason === 'vision.source.set');
     const teammateFogCommit = waitForMessage(playerB.ws, message =>
-      message.type === 'world.operation.committed' && message.revision === 2);
+      message.type === 'document.batch.committed' && message.changes.some(change => change.document.type === 'Fog'));
     playerA.ws.send(JSON.stringify({ type: 'vision.source.set', tokenId: 'token-a' }));
     const [ack, source, teammateCommit] = await Promise.all([sourceAck, sourceSnapshot, teammateFogCommit]);
     assert.equal(ack.revision, 2);
     assert.equal(source.state.preferences.audienceVision.source.tokenId, 'token-a');
     assert.ok(teammateCommit.changes.some(change => change.document.type === 'Fog'));
 
+    await waitForExplorationDrained(runtime);
     const teammateBeforeMove = await requestWorldSnapshot(playerB.ws);
     assert.equal(teammateBeforeMove.state.preferences.audienceVision.source, null);
     const sharedRows = teammateBeforeMove.state.preferences.worldV2.scenes[0]
@@ -1916,16 +2377,17 @@ test('LAN shares explored fog by party while keeping realtime vision per session
       'party-a', { x: 10, y: 35 }), true);
 
     const teammateMoveCommit = waitForMessage(playerB.ws, message =>
-      message.type === 'world.operation.committed' && message.revision === 3);
+      message.type === 'world.operation.committed' && message.operationId === 'fog-source-move');
     const move = await sendWorldOperationsAndWait(playerA.ws, {
-      type: 'world.operation', operationId: 'fog-source-move', baseRevision: 2,
+      type: 'world.operation', operationId: 'fog-source-move', baseRevision: teammateBeforeMove.revision,
       operations: [{ type: 'token.move', payload: {
         sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 45, y: 10,
       } }],
     });
     const teammateMove = await teammateMoveCommit;
     assert.equal(move.committed.revision, teammateMove.revision);
-    assert.ok(teammateMove.changes.some(change => change.document.type === 'Fog'));
+    assert.equal(teammateMove.changes.some(change => change.document.type === 'Fog'), false);
+    await waitForExplorationDrained(runtime);
     const sourceAfterMove = await requestWorldSnapshot(playerA.ws);
     assert.equal(sourceAfterMove.state.preferences.audienceVision.source.x, 45);
     assert.equal(sourceAfterMove.state.preferences.audienceVision.source.y, 10);
@@ -1939,6 +2401,7 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     assert.ok(Object.keys(teammateAfterMove.state.preferences.worldV2.scenes[0]
       .fog.exploredByParty['party-a'].rows).length >= Object.keys(sharedRows).length);
 
+    const concurrentRevision = (await requestWorldSnapshot(playerA.ws)).revision;
     const concurrentCommitA = waitForMessage(playerA.ws, message =>
       message.type === 'world.operation.committed'
       && ['fog-concurrent-a', 'fog-concurrent-b'].includes(message.operationId));
@@ -1952,13 +2415,13 @@ test('LAN shares explored fog by party while keeping realtime vision per session
       ['world.operation.ack', 'world.operation.denied'].includes(message.type)
       && message.operationId === 'fog-concurrent-b');
     const concurrentOperationA = {
-      type: 'world.operation', operationId: 'fog-concurrent-a', baseRevision: 3,
+      type: 'world.operation', operationId: 'fog-concurrent-a', baseRevision: concurrentRevision,
       operations: [{ type: 'token.move', payload: {
         sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 100, y: 10,
       } }],
     };
     const concurrentOperationB = {
-      type: 'world.operation', operationId: 'fog-concurrent-b', baseRevision: 3,
+      type: 'world.operation', operationId: 'fog-concurrent-b', baseRevision: concurrentRevision,
       operations: [{ type: 'token.move', payload: {
         sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 45, y: 100,
       } }],
@@ -1976,13 +2439,14 @@ test('LAN shares explored fog by party while keeping realtime vision per session
     assert.ok(acknowledged);
     assert.ok(denied);
     assert.notEqual(acknowledged.operationId, denied.operationId);
-    assert.equal(commitA.revision, 4);
-    assert.equal(commitB.revision, 4);
+    assert.equal(commitA.revision, concurrentRevision + 1);
+    assert.equal(commitB.revision, concurrentRevision + 1);
     assert.equal(commitA.operationId, acknowledged.operationId);
     assert.equal(commitB.operationId, acknowledged.operationId);
-    assert.equal(acknowledged.revision, 4);
-    assert.equal(denied.revision, 4);
-    assert.ok(commitB.changes.some(change => change.document.type === 'Fog'));
+    assert.equal(acknowledged.revision, concurrentRevision + 1);
+    assert.ok(denied.revision >= concurrentRevision + 1);
+    assert.equal(commitB.changes.some(change => change.document.type === 'Fog'), false);
+    const finalDurable = await waitForExplorationDrained(runtime);
     assert.equal(denied.code, 'revision_conflict');
     assert.equal(Object.hasOwn(denied, 'state'), false);
     const deniedSocket = denied.operationId === 'fog-concurrent-a' ? playerA.ws : playerB.ws;
@@ -2002,7 +2466,7 @@ test('LAN shares explored fog by party while keeping realtime vision per session
       userId: playerA.bound.userId, authToken: playerA.bound.authToken,
       visionSourceTokenId: 'token-a',
     });
-    assert.equal(reconnected.welcome.world.revision, 4);
+    assert.equal(reconnected.welcome.world.revision, finalDurable.revision);
     assert.equal(reconnected.welcome.world.state.preferences.audienceVision.source.tokenId, 'token-a');
     assert.ok(Object.keys(reconnected.welcome.world.state.preferences.worldV2.scenes[0]
       .fog.exploredByParty['party-a'].rows).length > 0);
@@ -2013,7 +2477,7 @@ test('LAN shares explored fog by party while keeping realtime vision per session
 });
 
 test('LAN movement and Fog fast path matches a fresh private Audience projection', async () => {
-  const runtime = await startServer();
+  const runtime = await startServer({ RPGMAP_TEST_PAUSE_EXPLORATION: '1' });
   try {
     const gm = await openAndHello(runtime.url, { name: 'Projection GM', requestedRole: 'gm' });
     const state = initialTokenVisionWorld();
@@ -2057,8 +2521,8 @@ test('LAN movement and Fog fast path matches a fresh private Audience projection
     );
     assert.deepEqual(projected.preferences.audienceVision, fresh.state.preferences.audienceVision);
     assert.equal(projected.preferences.audienceVision.source.x, 12);
-    assert.ok(Object.keys(projected.preferences.worldV2.scenes[0]
-      .fog.exploredByParty['party-a'].rows).length > 0);
+    assert.equal(projected.preferences.worldV2.scenes[0].fog.exploredByParty['party-a'], undefined);
+    assert.equal(Object.keys((await durableWorld(runtime.mapDir)).exploration.jobs).length, 1);
 
     player.ws.close();
     gm.ws.close();
@@ -2208,7 +2672,7 @@ test('GM Secret is mandatory; duplicate World IDs and client-forged system chat 
     const missingSecret = await openSocket(runtime.url);
     const missingSecretError = waitForMessage(missingSecret, message => message.type === 'error');
     missingSecret.send(JSON.stringify({
-      type: 'hello', name: 'No Secret', requestedRole: 'gm',
+      type: 'hello', capabilities: { occlusion: 1 }, name: 'No Secret', requestedRole: 'gm',
       operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
       statusSchema: STATUS_SCHEMA_VERSION,
       accessSchema: ACCESS_SCHEMA_VERSION,
@@ -2259,7 +2723,7 @@ test('GM Secret is mandatory; duplicate World IDs and client-forged system chat 
     const badPlayer = await openSocket(runtime.url);
     const errorPromise = waitForMessage(badPlayer, message => message.type === 'error');
     badPlayer.send(JSON.stringify({
-      type: 'hello', name: 'Bad Player', requestedRole: 'player', joinCode: '000000',
+      type: 'hello', capabilities: { occlusion: 1 }, name: 'Bad Player', requestedRole: 'player', joinCode: '000000',
       operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
       statusSchema: STATUS_SCHEMA_VERSION,
       accessSchema: ACCESS_SCHEMA_VERSION,

@@ -92,8 +92,7 @@ export function assertSafeJson(value, label = 'world') {
   return value;
 }
 
-export function assertWorldState(value) {
-  assertSafeJson(value, 'state');
+function assertWorldStateStructure(value) {
   const state = object(value, 'state');
   const preferences = state.preferences === undefined ? {} : object(state.preferences, 'state.preferences');
   const hasWorldV2 = preferences.worldV2 !== undefined && preferences.worldV2 !== null;
@@ -165,6 +164,78 @@ export function assertWorldState(value) {
     }
   }
   return value;
+}
+
+export function assertWorldState(value) {
+  assertSafeJson(value, 'state');
+  return assertWorldStateStructure(value);
+}
+
+// This validator belongs to one server's canonical state stream. It is never
+// used for client messages, imports, persisted JSON or replay patches. A branch
+// enters the cache only after the entire canonical candidate passes validation,
+// and is recursively frozen, so reference reuse is evidence of immutability.
+// Summaries still count every occurrence of a shared branch against the global
+// node/depth budgets, and are path-specific because Fog row dictionaries have
+// a different key limit. Structural/reference checks always run on the result.
+export function createCanonicalWorldValidator() {
+  const summaries = new WeakMap();
+  return value => {
+    const pending = [];
+    let nodes = 0;
+    const consume = (summary, path, depth) => {
+      nodes += summary.nodes;
+      if (nodes > WORLD_LIMITS.maxNodes) fail('state exceeds maximum node count', 'world_limit');
+      if (depth + summary.depth > WORLD_LIMITS.maxDepth) fail(`${path} exceeds maximum depth`, 'world_limit');
+    };
+    const visit = (current, path, depth) => {
+      if (current && typeof current === 'object') {
+        const cached = summaries.get(current)?.get(path);
+        if (cached) { consume(cached, path, depth); return cached; }
+      }
+      consume({ nodes: 1, depth: 0 }, path, depth);
+      const summary = { nodes: 1, depth: 0 };
+      if (current === null || ['boolean', 'number'].includes(typeof current)) {
+        if (typeof current === 'number' && !Number.isFinite(current)) fail(`${path} must contain finite numbers`);
+        return summary;
+      }
+      if (typeof current === 'string') {
+        if (current.length > WORLD_LIMITS.maxStringLength) fail(`${path} contains an oversized string`, 'world_limit');
+        return summary;
+      }
+      let entries;
+      if (Array.isArray(current)) {
+        if (current.length > WORLD_LIMITS.maxArrayLength) fail(`${path} exceeds maximum length`, 'world_limit');
+        entries = current.map((entry, index) => [index, entry]);
+      } else {
+        if (!current || typeof current !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(current))) fail(`${path} is not JSON-safe`);
+        entries = Object.entries(current);
+        if (entries.length > objectKeyLimit(path)) fail(`${path} has too many keys`, 'world_limit');
+      }
+      for (const [key, entry] of entries) {
+        if (!Array.isArray(current)) {
+          if (['__proto__', 'prototype', 'constructor'].includes(key)) fail(`${path} contains an unsafe key`);
+          if (key.length > 160) fail(`${path} has an oversized key`, 'world_limit');
+        }
+        const child = visit(entry, Array.isArray(current) ? `${path}[${key}]` : `${path}.${key}`, depth + 1);
+        summary.nodes += child.nodes;
+        summary.depth = Math.max(summary.depth, child.depth + 1);
+      }
+      pending.push({ value: current, path, summary });
+      return summary;
+    };
+    visit(value, 'state', 0);
+    assertWorldStateStructure(value);
+    // Children precede parents. No rejected candidate can seed trusted entries.
+    for (const entry of pending) {
+      Object.freeze(entry.value);
+      let byPath = summaries.get(entry.value);
+      if (!byPath) { byPath = new Map(); summaries.set(entry.value, byPath); }
+      if (byPath.size >= 8 && !byPath.has(entry.path)) byPath.delete(byPath.keys().next().value);
+      byPath.set(entry.path, entry.summary);
+    }
+    return value;
+  };
 }
 
 export function isSameChat(before, next) {

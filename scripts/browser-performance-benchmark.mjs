@@ -5,6 +5,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
 
 if (process.platform !== 'win32') throw new Error('Browser performance benchmark requires Windows');
 
@@ -180,7 +181,7 @@ class BrowserSession {
       '--disable-backgrounding-occluded-windows', '--disable-features=CalculateNativeWinOcclusion',
       '--window-size=1920,1080', `--window-position=${(this.index % 3) * 32},${Math.floor(this.index / 3) * 32}`,
       `--remote-debugging-port=${this.port}`, `--user-data-dir=${this.profile}`, this.url,
-    ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: false });
+    ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: headless });
     this.stderr = '';
     this.process.stderr.setEncoding('utf8');
     this.process.stderr.on('data', chunk => { this.stderr += chunk; });
@@ -299,11 +300,12 @@ function validatePhase(phase) {
 
 const port = await reservePort();
 const mapDir = await mkdtemp(path.join(os.tmpdir(), 'rpgmap-browser-performance-world-'));
-const outputRoot = path.join(root, 'output', 'playwright', 'v2.4.0-seven-session');
+const outputRoot = path.join(root, 'output', 'playwright', `v${packageJson.version}-seven-session`);
 await mkdir(outputRoot, { recursive: true });
 let server = null;
 let setupSocket = null;
 const sessions = [];
+const buildInfo = await benchmarkBuildInfo(root, packageRoot);
 
 try {
   server = await launchServer({ port, mapDir });
@@ -313,7 +315,7 @@ try {
   setupSocket = new JsonSocket(`ws://127.0.0.1:${port}/ws`);
   await setupSocket.open();
   const welcome = setupSocket.wait(message => message.type === 'welcome', 'GM welcome');
-  setupSocket.send({ type: 'hello', ...schemas, name: 'Benchmark Setup', requestedRole: 'gm', gmSecret: GM_SECRET, joinCode: JOIN_CODE });
+  setupSocket.send({ type: 'hello', capabilities: { occlusion: 1 }, ...schemas, name: 'Benchmark Setup', requestedRole: 'gm', gmSecret: GM_SECRET, joinCode: JOIN_CODE });
   await welcome;
   console.error('[browser-benchmark] setup GM connected');
   const { INFINITE_HORROR_STATUS_DEFINITIONS } = await import(pathToFileURL(
@@ -384,7 +386,7 @@ try {
       name: session.name, diagnostics: await session.snapshot(), failures: session.failures, exceptions: session.exceptions,
     })));
     const phase = { name, seconds: phaseSeconds, operations: step, sessions: measurements };
-    if (shouldAssert) validatePhase(phase);
+    await writeFile(path.join(outputRoot, `${name}.json`), `${JSON.stringify(phase, null, 2)}\n`, 'utf8');
     console.error(`[browser-benchmark] ${name} phase completed`);
     return phase;
   }
@@ -405,22 +407,29 @@ try {
   const recoveredMs = performance.now() - disconnectedAt;
   const revisionsAfter = await Promise.all(sessions.map(session => session.evaluate(`document.querySelector('#app').rpgMapApp.multiplayer.getStatus().revision`)));
   const recovery = { outageDelayMs: 3000, recoveredMs, revisionsBefore, revisionsAfter };
-  if (shouldAssert && recoveredMs > 13_000) throw new Error(`Reconnect gate failed: ${recoveredMs}ms including the 3 second outage`);
-  if (shouldAssert && revisionsBefore.some((value, index) => value !== revisionsAfter[index])) {
-    throw new Error(`Reconnect changed revision without an operation: ${JSON.stringify(recovery)}`);
+  const report = {
+    version: packageJson.version, browser: browserName, headless, browserExecutable: browserExecutable(),
+    packageRoot, build: buildInfo,
+    fixture: { sessions: SESSION_COUNT, actors: ACTOR_COUNT, tokens: TOKEN_COUNT, viewport: '1920x1080' },
+    phases, recovery, generatedAt: new Date().toISOString(),
+  };
+  await writeFile(path.join(outputRoot, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify(report, null, 2));
+  if (JSON.stringify(await benchmarkBuildInfo(root, packageRoot)) !== JSON.stringify(buildInfo)) {
+    throw new Error('Browser benchmark candidate changed during measurement');
+  }
+  if (shouldAssert) {
+    for (const phase of phases) validatePhase(phase);
+    if (recoveredMs > 13_000) throw new Error(`Reconnect gate failed: ${recoveredMs}ms including the 3 second outage`);
+    if (revisionsBefore.some((value, index) => value !== revisionsAfter[index])) {
+      throw new Error(`Reconnect changed revision without an operation: ${JSON.stringify(recovery)}`);
+    }
   }
   for (const session of sessions) {
     if (session.failures.length || session.exceptions.length) {
       throw new Error(`${session.name} browser errors: ${JSON.stringify({ failures: session.failures, exceptions: session.exceptions })}`);
     }
   }
-  const report = {
-    version: packageJson.version, browser: browserName, headless, browserExecutable: browserExecutable(),
-    fixture: { sessions: SESSION_COUNT, actors: ACTOR_COUNT, tokens: TOKEN_COUNT, viewport: '1920x1080' },
-    phases, recovery, generatedAt: new Date().toISOString(),
-  };
-  await writeFile(path.join(outputRoot, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  console.log(JSON.stringify(report, null, 2));
 } finally {
   setupSocket?.close();
   await Promise.allSettled(sessions.map(session => session.close()));

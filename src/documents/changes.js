@@ -1,4 +1,6 @@
-const SCENE_COLLECTIONS = Object.freeze({ Token: 'tokens', Marker: 'markers', AttackArea: 'attackAreas', SceneEvent: 'sceneEvents' });
+import { normalizeOcclusionShapes } from '../vision/occlusion-model.js';
+
+const SCENE_COLLECTIONS = Object.freeze({ Token: 'tokens', Marker: 'markers', AttackArea: 'attackAreas', SceneEvent: 'sceneEvents', OcclusionShape: 'occlusionShapes' });
 const WORLD_COLLECTIONS = Object.freeze({ Actor: 'actors', StatusDefinition: 'statusDefinitions', Journal: 'journals' });
 const OMIT_WORLD = new Set(['actors', 'scenes', 'statusDefinitions', 'journals', 'updatedAt']);
 const OMIT_SCENE = new Set([...Object.values(SCENE_COLLECTIONS), 'featureStates', 'fog']);
@@ -89,16 +91,15 @@ function collectionEntries(state) {
   const entries = [['Scene', world.scenes, null], ['ChatMessage', state.preferences.chatSystem?.messages || [], null]];
   for (const [type, field] of Object.entries(WORLD_COLLECTIONS)) entries.push([type, world[field] || [], null]);
   for (const scene of world.scenes) {
-    for (const [type, field] of Object.entries(SCENE_COLLECTIONS)) entries.push([type, scene[field] || [], { type: 'Scene', id: String(scene.id) }]);
+    for (const [type, field] of Object.entries(SCENE_COLLECTIONS)) {
+      if (type === 'OcclusionShape' && !Object.hasOwn(scene, field)) continue;
+      entries.push([type, scene[field] || [], { type: 'Scene', id: String(scene.id) }]);
+    }
   }
   return entries.map(([id, values, parent]) => [{ type: 'Collection', id, parent }, values.map(value => String(value.id))]);
 }
 
-// Changes are generated only from the recipient's before/after projections.
-// Arrays are atomic field values; object deletions have explicit path segments.
-export function createDocumentChanges(beforeState, afterState, _patch = null, { motion = [], fog = [] } = {}) {
-  const previous = new Map(documentEntries(beforeState).map(([address, value]) => [documentKey(address), { address, value }]));
-  const moved = new Set(motion.map(item => documentKey({ type: 'Token', id: String(item.tokenId), parent: { type: 'Scene', id: String(item.sceneId) } })));
+function fogBoundsByScene(fog) {
   const fogBounds = new Map();
   for (const item of fog) {
     const sceneId = String(item.sceneId), previousBounds = fogBounds.get(sceneId), next = item.dirtyBounds;
@@ -108,6 +109,116 @@ export function createDocumentChanges(beforeState, afterState, _patch = null, { 
       maxX: Math.max(previousBounds.maxX, next.maxX), maxY: Math.max(previousBounds.maxY, next.maxY),
     } : next);
   }
+  return fogBounds;
+}
+
+// Internal additive Fog commits cannot alter other documents or collection
+// order. Diff only the recipient's addressed Fog, keeping the public delta
+// format and deletion semantics identical to the full projection diff.
+export function createFogDocumentChanges(beforeState, afterState, { fog = [] } = {}) {
+  const bounds = fogBoundsByScene(fog), changes = [];
+  const beforeScenes = new Map((beforeState?.preferences?.worldV2?.scenes || []).map(scene => [String(scene.id), scene]));
+  const afterScenes = new Map((afterState?.preferences?.worldV2?.scenes || []).map(scene => [String(scene.id), scene]));
+  for (const [sceneId, dirtyBounds] of bounds) {
+    const before = beforeScenes.get(sceneId)?.fog, after = afterScenes.get(sceneId)?.fog;
+    if (equal(before, after)) continue;
+    const document = { type: 'Fog', id: sceneId, parent: { type: 'Scene', id: sceneId } };
+    if (after === undefined) { changes.push({ action: 'delete', document, changed: null }); continue; }
+    if (before === undefined) { changes.push({ action: 'create', document, changed: clone(after), dirtyBounds: dirtyBounds ?? null }); continue; }
+    const removed = [];
+    const changed = plain(before) && plain(after) ? diffFields(before, after, [], removed) : clone(after);
+    changes.push({ action: 'update', document, changed, ...(removed.length ? { removed } : {}), dirtyBounds: dirtyBounds ?? null });
+  }
+  return changes;
+}
+
+// Changes are generated only from the recipient's before/after projections.
+// Arrays are atomic field values; object deletions have explicit path segments.
+function createPairedDocumentChanges(beforeState, afterState, { motion = [], fog = [] } = {}) {
+  const beforeWorld = beforeState?.preferences?.worldV2;
+  const afterWorld = afterState?.preferences?.worldV2;
+  if (!beforeWorld || !afterWorld || !Array.isArray(beforeWorld.scenes) || !Array.isArray(afterWorld.scenes)
+    || String(beforeWorld.id) !== String(afterWorld.id)) return null;
+  const moved = new Set(motion.map(item => documentKey({ type: 'Token', id: String(item.tokenId), parent: { type: 'Scene', id: String(item.sceneId) } })));
+  const fogBounds = fogBoundsByScene(fog);
+  const changes = [];
+  const paired = (type, id, before, after, parent = null) => {
+    if (equal(before, after)) return;
+    const document = { type, id: String(id), parent };
+    const removed = [];
+    const changed = plain(before) && plain(after) ? diffFields(before, after, [], removed) : clone(after);
+    const moving = moved.has(documentKey(document)) || (type === 'Token'
+      && motion.some(item => !item.sceneId && String(item.tokenId) === document.id));
+    changes.push({
+      action: moving ? 'move' : 'update', document, changed,
+      ...(removed.length ? { removed } : {}),
+      ...(type === 'Fog' ? { dirtyBounds: fogBounds.get(parent.id) ?? null } : {}),
+    });
+  };
+  const sameCollection = (type, beforeItems, afterItems, parent = null, onPair = paired) => {
+    const before = beforeItems || [], after = afterItems || [];
+    if (!Array.isArray(before) || !Array.isArray(after) || before.length !== after.length) return false;
+    const seen = new Set();
+    for (let index = 0; index < before.length; index += 1) {
+      if (!before[index] || !after[index]) return false;
+      const id = String(before[index]?.id);
+      if (id !== String(after[index]?.id) || seen.has(id)) return false;
+      seen.add(id);
+      if (onPair(type, id, before[index], after[index], parent) === false) return false;
+    }
+    return true;
+  };
+  paired('World', beforeWorld.id, omit(beforeWorld, OMIT_WORLD), omit(afterWorld, OMIT_WORLD));
+  for (const [type, field] of Object.entries(WORLD_COLLECTIONS)) {
+    if (!sameCollection(type, beforeWorld[field], afterWorld[field])) return null;
+  }
+  if (!sameCollection('Scene', beforeWorld.scenes, afterWorld.scenes, null,
+    (_type, id, beforeScene, afterScene) => {
+      paired('Scene', id, omit(beforeScene, OMIT_SCENE), omit(afterScene, OMIT_SCENE));
+      const parent = { type: 'Scene', id };
+      for (const [type, field] of Object.entries(SCENE_COLLECTIONS)) {
+        if (type === 'OcclusionShape' && Object.hasOwn(beforeScene, field) !== Object.hasOwn(afterScene, field)) return false;
+        if (!sameCollection(type, beforeScene[field], afterScene[field], parent)) return false;
+      }
+      const beforeFeatures = Object.entries(beforeScene.featureStates || {});
+      const afterFeatures = Object.entries(afterScene.featureStates || {});
+      if (beforeFeatures.length !== afterFeatures.length) return false;
+      for (let index = 0; index < beforeFeatures.length; index += 1) {
+        const [featureId, beforeValue] = beforeFeatures[index];
+        const [afterId, afterValue] = afterFeatures[index];
+        if (featureId !== afterId || (beforeValue === undefined) !== (afterValue === undefined)) return false;
+        if (beforeValue !== undefined) paired('FeatureState', featureId, beforeValue, afterValue, parent);
+      }
+      if ((beforeScene.fog === undefined) !== (afterScene.fog === undefined)) return false;
+      if (beforeScene.fog !== undefined) paired('Fog', id, beforeScene.fog, afterScene.fog, parent);
+    })) return null;
+  const beforeChat = beforeState.preferences?.chatSystem;
+  const afterChat = afterState.preferences?.chatSystem;
+  if ((beforeChat === undefined) !== (afterChat === undefined)) return null;
+  if (beforeChat !== undefined) paired('ChatLog', 'active', omit(beforeChat, OMIT_CHAT), omit(afterChat, OMIT_CHAT));
+  if (!sameCollection('ChatMessage', beforeChat?.messages, afterChat?.messages)) return null;
+  for (const [type, id, before, after] of [
+    ['Combat', 'active', beforeState.preferences?.combatSystem, afterState.preferences?.combatSystem],
+    ['Audience', 'current', beforeState.preferences?.audienceVision, afterState.preferences?.audienceVision],
+  ]) {
+    if ((before === undefined) !== (after === undefined)) return null;
+    if (before !== undefined) paired(type, id, before, after);
+  }
+  return changes;
+}
+
+const OMIT_CHAT = new Set(['messages']);
+
+export function createDocumentChanges(beforeState, afterState, patch = null, options = {}) {
+  const paired = createPairedDocumentChanges(beforeState, afterState, options);
+  if (paired) return paired;
+  return createDocumentChangesFull(beforeState, afterState, patch, options);
+}
+
+export function createDocumentChangesFull(beforeState, afterState, _patch = null, { motion = [], fog = [] } = {}) {
+  const previous = new Map(documentEntries(beforeState).map(([address, value]) => [documentKey(address), { address, value }]));
+  const moved = new Set(motion.map(item => documentKey({ type: 'Token', id: String(item.tokenId), parent: { type: 'Scene', id: String(item.sceneId) } })));
+  const fogBounds = fogBoundsByScene(fog);
   const changes = [];
   for (const [document, value] of documentEntries(afterState)) {
     const key = documentKey(document);
@@ -137,7 +248,9 @@ export function createDocumentChanges(beforeState, afterState, _patch = null, { 
     const retained = new Set(ids);
     const existing = new Set(oldIds);
     const defaultOrder = [...oldIds.filter(id => retained.has(id)), ...ids.filter(id => !existing.has(id))];
-    if (!equal(defaultOrder, ids)) changes.push({ action: 'update', document, changed: { ids } });
+    if (!equal(defaultOrder, ids) || (document.id === 'OcclusionShape' && !beforeOrders.has(documentKey(document)))) {
+      changes.push({ action: 'update', document, changed: { ids } });
+    }
   }
   return changes;
 }
@@ -201,6 +314,7 @@ function assertReferences(world) {
   if (!scenes.has(String(world.activeSceneId))) fail('Active Scene is missing', 'invalid_reference');
   for (const scene of world.scenes) {
     unique(scene.tokens);
+    if (scene.occlusionShapes !== undefined) normalizeOcclusionShapes(scene.occlusionShapes);
     for (const token of scene.tokens) if (!actors.has(String(token.actorId))) fail('Token Actor is missing', 'invalid_reference');
   }
 }
@@ -269,7 +383,7 @@ export function applyDocumentChanges(rawState, changes, { updatedAt = null } = {
         const scene = { ...world.scenes[index] };
         world.scenes = world.scenes.slice();
         world.scenes[index] = scene;
-        scene[SCENE_COLLECTIONS[id]] = reordered(scene[SCENE_COLLECTIONS[id]], change);
+        scene[SCENE_COLLECTIONS[id]] = reordered(scene[SCENE_COLLECTIONS[id]] || [], change);
       } else if (id === 'Scene') world.scenes = reordered(world.scenes, change);
       else if (id === 'ChatMessage') preferences.chatSystem = { ...preferences.chatSystem, messages: reordered(preferences.chatSystem.messages, change) };
       else if (Object.hasOwn(WORLD_COLLECTIONS, id)) world[WORLD_COLLECTIONS[id]] = reordered(world[WORLD_COLLECTIONS[id]], change);
@@ -345,7 +459,7 @@ export function documentChangeSet(changes) {
     if (type === 'World' && changed?.activeSceneId !== undefined) result.scenes.activeSceneChanged = true;
     if (type === 'Actor') result.actors[deleted ? 'removeIds' : 'upsertIds'].push(id);
     if (type === 'Scene') result.scenes[deleted ? 'removeIds' : 'upsertIds'].push(id);
-    if (['Marker', 'AttackArea', 'SceneEvent'].includes(type)) group(result.sceneContent, parent.id, { types: [] }).types.push(type);
+    if (['Marker', 'AttackArea', 'SceneEvent', 'OcclusionShape'].includes(type)) group(result.sceneContent, parent.id, { types: [] }).types.push(type);
     if (type === 'Collection') result.collections.push({ type: id, sceneId: parent?.id || null });
     if (type === 'Token') {
       const entry = group(result.tokens, parent.id, { upsertIds: [], removeIds: [], fields: {} });

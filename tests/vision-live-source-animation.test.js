@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-import { resolveLiveAudienceVision } from '../src/vision/system.js';
+import { resolveLiveAudienceVision, resolveVisionAudience } from '../src/vision/system.js';
 
 const audience = {
   schemaVersion: 1,
@@ -15,6 +15,13 @@ const audience = {
 const scene = {
   tokens: [{ id: 'scout', placement: 'map', x: 40, y: 50, elevationMeters: 2 }],
 };
+
+test('disconnecting uses current offline vision instead of a retained server audience', () => {
+  const local = { ...audience, source: { ...audience.source, preciseRangeMeters: 1000, vagueRangeMeters: 1000 } };
+  assert.equal(resolveVisionAudience(false, audience, local), local);
+  assert.equal(resolveVisionAudience(true, audience, local), audience);
+  assert.equal(resolveVisionAudience(true, null, local), null);
+});
 
 test('live audience vision follows the rendered Token point during movement animation', () => {
   const resolved = resolveLiveAudienceVision(audience, scene, 'scout', {

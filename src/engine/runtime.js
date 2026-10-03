@@ -17,6 +17,7 @@ import {
 import { createMapPresentation } from '../render/map-presentation.js';
 import { createSceneRenderer } from '../render/scene-renderer.js';
 import { applyDocumentChanges, documentChangeSet } from '../documents/changes.js';
+import { registerRuntimeStateReader } from './state-access.js';
 
 const MAX_SAVE_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -103,6 +104,7 @@ export function createRpgMapRuntime({
   const bus = new EventTarget();
   let state = null;
   let stateRevision = 0;
+  let trustedSaveRevision = null;
   let currentTool = 'pan';
   let activePanel = 'actors';
   let selectedFeatureId = null;
@@ -112,6 +114,7 @@ export function createRpgMapRuntime({
   let recoveryBlocked = false;
 
   function assertWritable() {
+    if (persistence.blocked) throw Object.assign(new Error('自动保存已暂停，请先恢复存储'), { code: 'world_persistence_blocked' });
     if (recoveryBlocked) throw Object.assign(new Error('storage_recovery_required'), { code: 'storage_recovery_required' });
     if (importPending) throw Object.assign(new Error('world_import_busy'), { code: 'world_import_busy' });
   }
@@ -355,6 +358,7 @@ export function createRpgMapRuntime({
     assertWritable();
     state = applyDocumentChanges(state, changes, { updatedAt });
     stateRevision += 1;
+    trustedSaveRevision = stateRevision;
     const changeSet = documentChangeSet(changes);
     api.documents?.applyCommitted?.(changes, { revision, operationId });
     return emitAuthoritativeChanges({ source, changeSet, revision });
@@ -517,7 +521,12 @@ export function createRpgMapRuntime({
 
   function persistNow({ trustedWorldRevision = null } = {}) {
     if (importPending || recoveryBlocked) return false;
-    return trustedWorldRevision !== null && trustedWorldRevision === stateRevision
+    // A concurrent validated Fog commit may advance the revision while a move
+    // yields for paint. Its current Document state remains safe to serialize.
+    const trusted = Number.isSafeInteger(trustedWorldRevision) && (trustedWorldRevision === stateRevision
+      || (trustedWorldRevision < stateRevision && trustedSaveRevision === stateRevision));
+    api.diagnostics?.record('world.persistTrusted', trusted ? 1 : 0);
+    return trusted
       ? persistence.persistTrustedNow()
       : persistence.persistNow();
   }
@@ -546,6 +555,8 @@ export function createRpgMapRuntime({
     applyAuthoritativeDocumentChanges,
     commitAuthoritativeState,
     persistNow,
+    getLocalExploration: () => persistence.getLocalExploration(),
+    setLocalExploration: value => persistence.setLocalExploration(value),
     exportState,
     importState,
     downloadState,
@@ -575,6 +586,7 @@ export function createRpgMapRuntime({
     },
   };
 
+  registerRuntimeStateReader(api, () => state);
   container.rpgMapApp = api;
   fitInitialView(false);
   for (const tool of tools) tool?.register?.(api);

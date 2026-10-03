@@ -120,6 +120,33 @@ test('frozen outer arrays with mutable geometry or lights never reuse stale spat
   assert.deepEqual(inspectLineOfSight({ ...ray, occluders: Object.freeze([null]) }), { clear: true, code: 'ok' });
 });
 
+test('scene contexts reuse immutable inputs while replacement and shallow freezing invalidate correctly', () => {
+  const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
+  const packageMap = { ...map, visionOccluders: [wall] };
+  const scene = freeze({ id: 'immutable-context', featureStates: {}, sceneEvents: [], tokens: [
+    { id: 'lamp', placement: 'map', x: 10, y: 20, light: { enabled: true, rangeMeters: 50 } },
+  ] });
+  const first = sceneVisionContext(packageMap, scene);
+  const repeated = sceneVisionContext(packageMap, { ...scene });
+  assert.equal(repeated.occluders, first.occluders);
+  assert.equal(repeated.lights, first.lights);
+  const moved = sceneVisionContext(packageMap, freeze({ ...scene, tokens: [{ ...scene.tokens[0], x: 30 }] }));
+  assert.equal(moved.occluders, first.occluders);
+  assert.equal(moved.lights[0].x, 30);
+  assert.notEqual(moved.lightVersion, first.lightVersion);
+  const opened = sceneVisionContext(packageMap, freeze({ ...scene, featureStates: { wall: { open: true } } }));
+  assert.equal(opened.occluders.length, 0);
+  const shallow = Object.freeze({ ...scene, featureStates: Object.freeze({ wall: { open: false } }),
+    tokens: Object.freeze([{ ...scene.tokens[0] }]) });
+  assert.equal(sceneVisionContext(packageMap, shallow).occluders.length, 1);
+  shallow.featureStates.wall.open = true; shallow.tokens[0].x = 60;
+  const mutated = sceneVisionContext(packageMap, shallow);
+  assert.equal(mutated.occluders.length, 0);
+  assert.equal(mutated.lights[0].x, 60);
+  releaseVisionContexts(packageMap);
+  assert.equal(sceneVisionContext(packageMap, scene).cacheHit, false);
+});
+
 test('scene context invalidates for destruction, restoration and token light motion', () => {
   const packageMap = { ...map, visionOccluders: [wall] };
   const scene = { id: 'a', featureStates: {}, sceneEvents: [], tokens: [
@@ -331,9 +358,9 @@ test('missing or failing Worker uses asynchronous main-thread visibility and dis
       fixture.flushFrame();
       const before = fixture.rects;
       await new Promise(resolve => setImmediate(resolve));
-      assert.equal(fixture.frames.length, 2, mode);
-      fixture.flushFrame();
+      assert.equal(fixture.frames.length, 1, `${mode}: completed mask needs no extra RAF`);
       assert.ok(fixture.rects > before, mode);
+      assert.equal(fixture.api.vision.getFeedbackState()?.rendered, true, mode);
       assert.deepEqual(fixture.toasts, []);
       assert.equal(terminated, mode === 'failure' ? 1 : 0);
       fixture.dispose();

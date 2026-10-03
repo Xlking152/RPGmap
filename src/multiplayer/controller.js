@@ -748,6 +748,7 @@ export function createMultiplayerController() {
       }
 
       function queueCommittedOperations(nextState, source = 'state:commit') {
+        if (!connected) return false;
         const after = structuredClone(nextState);
         const before = lastObservedLocalState || lastServerState;
         lastObservedLocalState = structuredClone(after);
@@ -855,6 +856,11 @@ export function createMultiplayerController() {
         }
 
         if (message.type === 'welcome') {
+          if (Number(message.capabilities?.occlusion) !== 1) {
+            setMapStatus('联机失败：遮挡规则版本不兼容，请升级主机与客户端');
+            try { socket?.close(); } catch {}
+            return;
+          }
           if (Number(message.operationSchema) !== WORLD_OPERATION_SCHEMA_VERSION) {
             setMapStatus(`联机失败：Operation schema 需要 ${WORLD_OPERATION_SCHEMA_VERSION}`);
             try { socket?.close(); } catch {}
@@ -1258,6 +1264,7 @@ export function createMultiplayerController() {
           const isPlayer = normalizeRequestedRole(requestedRole) === 'player';
           send({
             type: 'hello',
+            capabilities: { occlusion: 1 },
             operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
             statusSchema: STATUS_SCHEMA_VERSION,
             accessSchema: ACCESS_SCHEMA_VERSION,
@@ -1429,10 +1436,12 @@ export function createMultiplayerController() {
       });
 
       api.on('state:commit', detail => {
+        if (!connected) return;
         localCommitSerial += 1;
         queueCommittedOperations(detail?.state || api.exportState(), detail?.source || 'state:commit');
       });
       api.on('state:saved', () => {
+        if (!connected) return;
         if (lastSavedCommitSerial < localCommitSerial) {
           lastSavedCommitSerial = localCommitSerial;
           return;

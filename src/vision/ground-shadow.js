@@ -1,33 +1,40 @@
-import { normalizeVisionOccluder, inspectLineOfSight } from '../spatial/kernel.js';
-import { queryOccluders } from '../spatial/index.js';
+import { normalizeVisionOccluder, inspectLineOfSight, visionOccludersForSource, resolveSourceHostOccluderId } from '../spatial/kernel.js';
+import { queryOccluders, boundsOf } from '../spatial/index.js';
+import { polygonDifference } from '../engine/geometry.js';
 import { finishWorkSync } from './work.js';
 
-// A ground target is hidden by a solid footprint or by the projection of one
-// of its edges away from the eye. Rasterize those shadows by row, not by ray
-// casting every cell against every building. Holes remain separate rings.
-export function* groundShadowRowsSteps(source, radiusUnits, occluders, cellUnits, circleRows) {
-  const insideSolid = !inspectLineOfSight({ from: source, to: source, occluders }).clear;
-  const shapes = [];
-  const add = rings => {
-    const edges = [];
-    for (const ring of rings) for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const a = ring[i], b = ring[j];
-      if (a[1] === b[1]) continue;
-      edges.push({ a, b, minY: Math.min(a[1], b[1]), maxY: Math.max(a[1], b[1]) });
-    }
-    shapes.push({ edges, minY: Math.min(...edges.map(e => e.minY)), maxY: Math.max(...edges.map(e => e.maxY)) });
-  };
-  const extent = radiusUnits + cellUnits;
-  for (const raw of queryOccluders(occluders, [source.x - extent, source.y - extent, source.x + extent, source.y + extent])) {
+/** Continuous shadows use the same edge projection as authoritative five-metre Fog. */
+export function projectVisionOcclusion({ source, radiusUnits, occluders = [], metersPerUnit = 1,
+  paddingUnits = 0, includeFacades = true } = {}) {
+  const hostOccluderId = resolveSourceHostOccluderId(source, occluders, metersPerUnit);
+  const visibleOccluders = visionOccludersForSource(source, occluders, metersPerUnit);
+  const shadows = [], facades = [], owners = [];
+  const result = { shadows, facades, fallback: false, blocked: false, hostOccluderId };
+  if (!source || !Number.isFinite(radiusUnits) || radiusUnits <= 0) return result;
+  if (!inspectLineOfSight({ from: source, to: source, occluders: visibleOccluders }).clear) {
+    const epsilon = 1e-7 / Math.max(1e-6, metersPerUnit);
+    const boundary = queryOccluders(visibleOccluders, [source.x, source.y, source.x, source.y]).some(raw => {
+      const obstacle = normalizeVisionOccluder(raw);
+      return obstacle?.polygons.some(rings => rings.some(ring => ring.some((a, i) => {
+        const b = ring[(i + 1) % ring.length], dx = b[0] - a[0], dy = b[1] - a[1];
+        const t = Math.max(0, Math.min(1, ((source.x - a[0]) * dx + (source.y - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+        return Math.hypot(a[0] + t * dx - source.x, a[1] + t * dy - source.y) <= epsilon;
+      })));
+    });
+    return { ...result, fallback: boundary, blocked: !boundary };
+  }
+  const extent = radiusUnits + paddingUnits;
+  const candidates = [];
+  const add = (rings, id) => { shadows.push(rings); owners.push(id); };
+  for (const raw of queryOccluders(visibleOccluders, [source.x - extent, source.y - extent, source.x + extent, source.y + extent])) {
     const obstacle = normalizeVisionOccluder(raw);
     if (!obstacle) continue;
+    candidates.push(obstacle);
     for (const rings of obstacle.polygons) {
       const outer = rings[0];
-      if (outer.every(p => p[0] < source.x - radiusUnits - cellUnits)
-        || outer.every(p => p[0] > source.x + radiusUnits + cellUnits)
-        || outer.every(p => p[1] < source.y - radiusUnits - cellUnits)
-        || outer.every(p => p[1] > source.y + radiusUnits + cellUnits)) continue;
-      add(rings);
+      if (outer.every(p => p[0] < source.x - extent) || outer.every(p => p[0] > source.x + extent)
+        || outer.every(p => p[1] < source.y - extent) || outer.every(p => p[1] > source.y + extent)) continue;
+      add(rings, obstacle.id);
       for (let ringIndex = 0; ringIndex < rings.length; ringIndex++) {
         const ring = rings[ringIndex];
         const area = ring.reduce((sum, p, i) => { const q = ring[(i + 1) % ring.length]; return sum + p[0] * q[1] - q[0] * p[1]; }, 0);
@@ -37,23 +44,67 @@ export function* groundShadowRowsSteps(source, radiusUnits, occluders, cellUnits
         const t = Math.max(0, Math.min(1, ((source.x - a[0]) * dx + (source.y - a[1]) * dy) / (dx * dx + dy * dy || 1)));
         const distance = Math.hypot(a[0] + t * dx - source.x, a[1] + t * dy - source.y);
         // Degenerate eye-on-wall cases use the reference kernel.
-        if (distance < 1e-7) return null;
+        if (distance < 1e-7 / Math.max(1e-6, metersPerUnit)) return { ...result, fallback: true };
         // Below a wall top, its entering edges alone cast the same unbounded
         // shadow. Exit edges duplicate it. Hole winding may be arbitrary.
         const side = dx * (source.y - a[1]) - dy * (source.x - a[0]);
         if (source.elevationMeters <= obstacle.blockingHeightMeters && area !== 0
           && (ringIndex === 0 ? side * area > 0 : side * area < 0)) continue;
-        const limit = 2 + (radiusUnits + cellUnits * 2) / distance;
+        const limit = 2 + (radiusUnits + paddingUnits * 2) / distance;
         const factor = source.elevationMeters > obstacle.blockingHeightMeters
           ? Math.min(limit, source.elevationMeters / (source.elevationMeters - obstacle.blockingHeightMeters)) : limit;
         if (factor <= 1) continue;
         const project = p => [source.x + (p[0] - source.x) * factor, source.y + (p[1] - source.y) * factor];
-        add([[a, b, project(b), project(a)]]);
+        add([[a, b, project(b), project(a)]], obstacle.id);
         }
       }
     }
   }
-  if (insideSolid) return {};
+  const shadowBounds = includeFacades ? shadows.map(rings => boundsOf(rings.flat())) : [];
+  if (includeFacades) for (const obstacle of candidates) {
+    if (obstacle.kind !== 'building') continue;
+    // A facade is presentation only. It cannot make a Token or Fog cell visible.
+    const visibleFront = obstacle.polygons.some(([ring]) => ring.some((a, i) => {
+      const b = ring[(i + 1) % ring.length];
+      return [0, 0.25, 0.5, 0.75, 1].some(t => {
+        const x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t;
+        const distance = Math.hypot(x - source.x, y - source.y);
+        if (distance > radiusUnits || distance < 1e-9) return false;
+        const inset = Math.min(0.5, 1e-6 / Math.max(1e-6, metersPerUnit) / distance);
+        return inspectLineOfSight({ from: source, to: {
+          x: x + (source.x - x) * inset, y: y + (source.y - y) * inset, elevationMeters: 0,
+        }, occluders: visibleOccluders }).clear;
+      });
+    }));
+    if (!visibleFront) continue;
+    const box = boundsOf(obstacle.polygons.flat(2));
+    const otherShadows = shadows.filter((_, index) => {
+      const bounds = shadowBounds[index];
+      return owners[index] !== obstacle.id && bounds[0] <= box[2] && bounds[2] >= box[0]
+        && bounds[1] <= box[3] && bounds[3] >= box[1];
+    });
+    const polygons = otherShadows.length ? polygonDifference(obstacle.polygons, otherShadows) : obstacle.polygons;
+    if (polygons.length) facades.push({ id: obstacle.id, featureId: obstacle.featureId, polygons });
+  }
+  return result;
+}
+
+// Rasterize projected regions by row, retaining precise boundary checks and
+// the historical exact-ray fallback for wall-adjacent or degenerate sources.
+export function* groundShadowRowsSteps(source, radiusUnits, occluders, cellUnits, circleRows, metersPerUnit = 1) {
+  const projection = projectVisionOcclusion({ source, radiusUnits, occluders, metersPerUnit,
+    paddingUnits: cellUnits, includeFacades: false });
+  const visibleOccluders = visionOccludersForSource(source, occluders, metersPerUnit);
+  if (projection.blocked) return {};
+  if (projection.fallback) return null;
+  const shapes = projection.shadows.map(rings => {
+    const edges = [];
+    for (const ring of rings) for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const a = ring[i], b = ring[j];
+      if (a[1] !== b[1]) edges.push({ a, b, minY: Math.min(a[1], b[1]), maxY: Math.max(a[1], b[1]) });
+    }
+    return { edges, minY: Math.min(...edges.map(e => e.minY)), maxY: Math.max(...edges.map(e => e.maxY)) };
+  });
   const result = {};
   shapes.sort((a, b) => a.minY - b.minY);
   let nextShape = 0;
@@ -106,7 +157,7 @@ export function* groundShadowRowsSteps(source, radiusUnits, occluders, cellUnits
         && ranges.some(([a, b]) => column >= a && column <= b)) boundary.add(column);
     }
     for (const column of boundary) {
-      const clear = inspectLineOfSight({ from: source, to: { x: (column + 0.5) * cellUnits, y, elevationMeters: 0 }, occluders }).clear;
+      const clear = inspectLineOfSight({ from: source, to: { x: (column + 0.5) * cellUnits, y, elevationMeters: 0 }, occluders: visibleOccluders }).clear;
       const index = visible.findIndex(([a, b]) => column >= a && column <= b);
       if (clear && index < 0) visible.push([column, column]);
       else if (!clear && index >= 0) {

@@ -164,7 +164,7 @@ try {
         Invoke-RpgMapSheetFinalBrowserSmoke -Url $hostUrl
         Write-Host '[smoke] Character/NPC card defaults, linked Health and resize persistence passed'
         Write-Host '[smoke] validating LAN identity, projection, vision and fog authority'
-        & node (Join-Path $PSScriptRoot 'lan-vision-smoke.mjs') "http://127.0.0.1:$port" $smokeGmSecret $smokeJoinCode
+        & node (Join-Path $PSScriptRoot 'lan-vision-smoke.mjs') "http://127.0.0.1:$port" $smokeGmSecret $smokeJoinCode (Join-Path $rootPath 'map')
         if ($LASTEXITCODE -ne 0) { throw 'Packaged LAN vision smoke failed.' }
         Invoke-RpgMapBrowserSmoke -Url $hostUrl -Mode fog
         Write-Host '[smoke] LAN projection and Fog Canvas passed'

@@ -1,8 +1,10 @@
-import { worldToLatLng } from '../engine/geometry.js';
 import { FOG_CELL_SIZE_METERS, normalizeFogState, mergeSpans } from './fog.js';
 import { computeVisibilityRowsAsync } from './visibility.js';
 import { sceneVisionContext, releaseVisionContexts } from './context.js';
 import { createVisionBackground } from './background.js';
+import { createVisionViewport, visionZoomTransform } from './viewport.js';
+import { createContinuousMaskRenderer } from './mask-renderer.js';
+import { readRuntimeState } from '../engine/state-access.js';
 import {
   sphereGroundRadiusMeters,
   visionIgnoresOcclusion,
@@ -38,6 +40,10 @@ function runtimeScene(state) {
   return world?.scenes?.find(scene => String(scene?.id ?? '') === String(world?.activeSceneId ?? '')) || null;
 }
 
+export function resolveVisionAudience(connected, serverAudience, localAudience) {
+  return connected ? serverAudience || null : localAudience;
+}
+
 export function resolveLiveAudienceVision(audience, scene, sourceTokenId = undefined, visualPoint = null) {
   if (!audience || typeof audience !== 'object') return null;
   const requestedTokenId = sourceTokenId === undefined ? audience.source?.tokenId : sourceTokenId;
@@ -71,21 +77,23 @@ export function createVisionFogSystem() {
       function visionState() {
         const revision = api.getStateRevision?.();
         if (!cachedState || revision === undefined || revision !== snapshotRevision) {
-          cachedState = api.getState?.() || {}; snapshotRevision = revision;
+          cachedState = readRuntimeState(api); snapshotRevision = revision;
           cachedSubject = null; spatial = null;
         }
         return cachedState;
       }
       const documentNode = api.map.getContainer().ownerDocument || document;
+      const continuousMasks = createContinuousMaskRenderer(documentNode);
       const pane = api.map.getPane?.(FOG_PANE) || api.map.createPane(FOG_PANE);
       pane.style.zIndex = '510';
       pane.style.pointerEvents = 'none';
       const createCanvas = (layer, blendMode = '') => {
         const canvas = documentNode.createElement('canvas');
-        canvas.className = `rpgmap-vision-fog-canvas rpgmap-vision-fog-${layer}`;
+        canvas.className = `rpgmap-vision-fog-canvas rpgmap-vision-fog-${layer} leaflet-zoom-animated`;
         canvas.dataset.fogLayer = layer;
         canvas.setAttribute('aria-hidden', 'true');
         canvas.style.position = 'absolute';
+        canvas.style.transformOrigin = '0 0';
         canvas.style.pointerEvents = 'none';
         if (blendMode) canvas.style.mixBlendMode = blendMode;
         pane.append(canvas);
@@ -104,7 +112,7 @@ export function createVisionFogSystem() {
       let pendingDirtyBounds;
       let lastVisionSignature = '';
       let explorationDirty = true;
-      let exploredDirty = true, exploredCache = [], exploredParties = '';
+      let exploredDirty = true, exploredCache = [], exploredParties = '', exploredFogReference = null;
       let visibilityRowsCache = null;
       let visibilityBackground = createVisionBackground({ diagnostics: api.diagnostics });
       let visibilityPending = false;
@@ -114,6 +122,11 @@ export function createVisionFogSystem() {
       let visibilitySignature = '';
       let visibilityAbort = null;
       let destroyed = false;
+      let animatedZoom = null;
+      const positionCanvases = () => {
+        const transform = visionZoomTransform(api.map, api.mapPackage.height, animatedZoom);
+        canvases.forEach(canvas => { canvas.style.transform = transform; });
+      };
 
       function cancelVisibility() {
         visibilityGeneration += 1;
@@ -146,10 +159,17 @@ export function createVisionFogSystem() {
           }
         };
         run().then(result => {
-          if (destroyed || generation !== visibilityGeneration || controller.signal.aborted
-            || next.signature !== visibilitySignature) return;
-          visibilityRowsCache = { signature: next.signature, ...result };
-          scheduleRender();
+          if (destroyed || generation !== visibilityGeneration || controller.signal.aborted) return;
+          // There is only one running task. Its completed frame is newer than
+          // the displayed frame even when movement has queued a later sample;
+          // source/geometry generations still reject invalidated results.
+          visibilityRowsCache = { signature: next.signature, source: next.input.source,
+            requestedAt: next.requestedAt, stateRevision: next.stateRevision, feedbackRecorded: false, ...result };
+          // A complete mask is ready. Paint it atomically now so the next
+          // browser frame can composite it without another RAF of latency.
+          // Consume queued Fog/viewport invalidations in the same full pass.
+          pendingDirtyBounds = null;
+          flushScheduledRender();
         }).catch(error => {
           if (!destroyed && generation === visibilityGeneration && !controller.signal.aborted)
             api.showToast?.(error.message, 'error');
@@ -228,6 +248,7 @@ export function createVisionFogSystem() {
       }
 
       function queueLocalExploration(subject, previous = null) {
+        if (previous && api.world?.queuesConfirmedExploration) return Promise.resolve(null);
         if (!subject?.partyId || subject.vagueGroundRangeMeters <= 0) return Promise.resolve(null);
         const generation = explorationGeneration;
         const payload = previous && previous.sceneId === subject.sceneId
@@ -264,7 +285,9 @@ export function createVisionFogSystem() {
 
       function liveVisionState() {
         const state = visionState();
-        const audience = state.preferences?.audienceVision || localVisionState();
+        const connected = api.multiplayer?.getStatus?.()?.connected === true;
+        const audience = resolveVisionAudience(connected, state.preferences?.audienceVision,
+          connected ? null : localVisionState());
         const sourceTokenId = confirmedSourceTokenId();
         const visualPoint = sourceTokenId
           ? api.renderer?.getVisualTokenPoint?.(sourceTokenId) || null
@@ -321,7 +344,8 @@ export function createVisionFogSystem() {
           lastVisionSignature = '';
           return;
         }
-        const scene = runtimeScene(visionState());
+        const authoritativeScene = runtimeScene(visionState());
+        const scene = api.occlusionEditor?.getPreviewScene?.(authoritativeScene) || authoritativeScene;
         if (!scene) return;
         canvases.forEach(canvas => { canvas.hidden = false; });
         const size = api.map.getSize();
@@ -336,8 +360,7 @@ export function createVisionFogSystem() {
             canvas.style.height = `${size.y}px`;
           }
         }
-        const origin = api.map.containerPointToLayerPoint([0, 0]);
-        canvases.forEach(canvas => { canvas.style.transform = `translate3d(${origin.x}px,${origin.y}px,0)`; });
+        positionCanvases();
         const exploration = explorationCanvas.getContext('2d');
         const perception = perceptionCanvas.getContext('2d');
         for (const context of [exploration, perception]) {
@@ -346,19 +369,14 @@ export function createVisionFogSystem() {
         const metersPerUnit = Math.max(0.000001, Number(api.mapPackage?.metersPerUnit) || 1);
         const cellUnits = FOG_CELL_SIZE_METERS / metersPerUnit;
         const partyKey = JSON.stringify(audience.partyIds || []);
-        if (exploredDirty || partyKey !== exploredParties) {
+        if (exploredDirty || scene.fog !== exploredFogReference || partyKey !== exploredParties) {
           exploredCache = [...exploredRows(normalizeFogState(scene.fog), audience.partyIds || [])];
-          exploredParties = partyKey; exploredDirty = false; explorationDirty = true;
+          exploredParties = partyKey; exploredFogReference = scene.fog; exploredDirty = false; explorationDirty = true;
         }
         const rows = exploredCache;
-        const zero = api.map.latLngToContainerPoint(worldToLatLng({ x: 0, y: 0 }, api.mapPackage.height));
-        const unit = api.map.latLngToContainerPoint(worldToLatLng({ x: 1, y: 1 }, api.mapPackage.height));
-        const scaleX = unit.x - zero.x, scaleY = unit.y - zero.y;
-        const worldRect = (x, y, width, height) => ({
-          x: zero.x + (scaleX < 0 ? x + width : x) * scaleX,
-          y: zero.y + (scaleY < 0 ? y + height : y) * scaleY,
-          width: Math.abs(width * scaleX), height: Math.abs(height * scaleY),
-        });
+        const viewport = createVisionViewport(api.map, api.mapPackage.height);
+        const { zero, scaleX, scaleY } = viewport;
+        const worldRect = viewport.rectangle;
         const rowMin = Math.floor(Math.min(-zero.y / scaleY, (size.y - zero.y) / scaleY) / cellUnits) - 1;
         const rowMax = Math.ceil(Math.max(-zero.y / scaleY, (size.y - zero.y) / scaleY) / cellUnits) + 1;
         const colMin = Math.floor(Math.min(-zero.x / scaleX, (size.x - zero.x) / scaleX) / cellUnits) - 1;
@@ -399,13 +417,9 @@ export function createVisionFogSystem() {
         const drawCurrentCircle = (context, rawRange) => {
           const range = Number(rawRange) || 0;
           if (!source || range <= 0) return;
-          const center = api.map.latLngToContainerPoint(worldToLatLng({ x: Number(source.x), y: Number(source.y) }, api.mapPackage.height));
-          const edge = api.map.latLngToContainerPoint(worldToLatLng({
-            x: Number(source.x) + range / metersPerUnit,
-            y: Number(source.y),
-          }, api.mapPackage.height));
+          const center = viewport.project(Number(source.x), Number(source.y));
           context.beginPath();
-          context.arc(center.x, center.y, Math.abs(edge.x - center.x), 0, Math.PI * 2);
+          context.arc(center.x, center.y, Math.abs(range / metersPerUnit * scaleX), 0, Math.PI * 2);
           context.fill();
         };
         let currentPrepared = false;
@@ -428,18 +442,28 @@ export function createVisionFogSystem() {
               cancelVisibility();
             }
             const signature = contextKey + ':' + source.x + ':' + source.y;
+            const signatureChanged = signature !== visibilitySignature;
             visibilitySignature = signature;
             if (!visibilityRowsCache || visibilityRowsCache.signature !== signature) {
-              const input = { kind: 'visibility', source, occluders, lights, ignoresOcclusion,
+              const input = { kind: 'visibility', source, occluders, lights, ignoresOcclusion, continuous: true,
                 contextVersion: geometryVersion, lightVersion,
                 map: { width: api.mapPackage.width, height: api.mapPackage.height, metersPerUnit } };
-              requestVisibility({ signature, input });
+              if (signatureChanged || (!visibilityPending && !latestVisibilityRequest))
+                requestVisibility({ signature, input, requestedAt: performance.now(), stateRevision: api.getStateRevision?.() ?? null });
             }
             api.diagnostics?.record('vision.cacheHit', spatial.cacheHit ? 1 : 0);
             api.diagnostics?.record('vision.cacheSize', spatial.cacheSize);
           }
-          if (visibilityRowsCache?.signature === visibilitySignature)
-            drawRows(context, visibilityRowsCache[kind] || []);
+          // While the next position is computing, keep the last complete mask
+          // for this context. Context/source changes already clear the cache.
+          // This avoids an all-fog frame between movement samples.
+          if (visibilityRowsCache) {
+            const geometry = visibilityRowsCache.continuous;
+            if (geometry && !geometry.fallback && !(kind === 'precise' && geometry.illumination.regions.some(region => region.fallback))) {
+              continuousMasks.draw(context, { key: `${kind}:${rangeMeters}:${visibilityRowsCache.signature}:${zero.x}:${zero.y}:${scaleX}:${scaleY}:${size.x}:${size.y}:${dpr}`, geometry, source: visibilityRowsCache.source,
+                radiusUnits: rangeMeters / metersPerUnit, kind, viewport, width: size.x, height: size.y, dpr });
+            } else drawRows(context, visibilityRowsCache[kind] || []);
+          }
         };
 
         if (explorationDirty || resized) {
@@ -458,18 +482,30 @@ export function createVisionFogSystem() {
 
         perception.globalCompositeOperation = 'source-over';
         perception.drawImage(explorationCanvas, 0, 0, size.x, size.y);
+        const preciseRange = Number(source?.preciseGroundRangeMeters ?? source?.preciseRangeMeters ?? source?.rangeMeters) || 0;
+        const vagueRange = Number(source?.vagueGroundRangeMeters ?? source?.vagueRangeMeters ?? source?.rangeMeters) || 0;
+        // With full ambient precision, the precise pass clears every vague
+        // pixel inside the same range. Avoid constructing and tinting that
+        // completely overwritten mask, without changing either sight range.
+        const preciseCoversVague = preciseRange >= vagueRange && source?.lighting === 'normal';
+        if (!preciseCoversVague) {
+          perception.globalCompositeOperation = 'destination-out';
+          perception.fillStyle = '#000';
+          drawCurrent(perception, vagueRange, 'vague');
+          perception.globalCompositeOperation = 'source-over';
+          perception.fillStyle = 'rgba(218,226,228,0.20)';
+          drawCurrent(perception, vagueRange, 'vague');
+        }
         perception.globalCompositeOperation = 'destination-out';
         perception.fillStyle = '#000';
-        drawCurrent(perception, source?.vagueGroundRangeMeters ?? source?.vagueRangeMeters ?? source?.rangeMeters, 'vague');
-        perception.globalCompositeOperation = 'source-over';
-        perception.fillStyle = 'rgba(218,226,228,0.20)';
-        drawCurrent(perception, source?.vagueGroundRangeMeters ?? source?.vagueRangeMeters ?? source?.rangeMeters, 'vague');
-        perception.globalCompositeOperation = 'destination-out';
-        perception.fillStyle = '#000';
-        drawCurrent(perception, source?.preciseGroundRangeMeters ?? source?.preciseRangeMeters ?? source?.rangeMeters, 'precise');
+        drawCurrent(perception, preciseRange, 'precise');
         perception.globalCompositeOperation = 'source-over';
         lastVisionSignature = visionSignature();
         perception.restore();
+        if (visibilityRowsCache && !visibilityRowsCache.feedbackRecorded) {
+          visibilityRowsCache.feedbackRecorded = true;
+          api.diagnostics?.record('vision.feedback', performance.now() - visibilityRowsCache.requestedAt);
+        }
         api.diagnostics?.record('vision.draw', performance.now() - renderStarted);
       }
 
@@ -479,12 +515,18 @@ export function createVisionFogSystem() {
           : mergeDirtyBounds(pendingDirtyBounds, dirtyBounds);
         if (renderFrame) return;
         const requestFrame = documentNode.defaultView?.requestAnimationFrame || (callback => setTimeout(callback, 16));
-        renderFrame = requestFrame(() => {
+        renderFrame = requestFrame(flushScheduledRender);
+      }
+
+      function flushScheduledRender() {
+        if (renderFrame) {
+          const cancelFrame = documentNode.defaultView?.cancelAnimationFrame || clearTimeout;
+          cancelFrame(renderFrame);
           renderFrame = 0;
-          const bounds = pendingDirtyBounds;
-          pendingDirtyBounds = undefined;
-          render(bounds);
-        });
+        }
+        const bounds = pendingDirtyBounds;
+        pendingDirtyBounds = undefined;
+        if (!destroyed) render(bounds);
       }
 
       api.vision = {
@@ -515,6 +557,11 @@ export function createVisionFogSystem() {
         getVisibleRegion() {
           return structuredClone(liveVisionState()?.source || null);
         },
+        getFeedbackState() {
+          if (!visibilityRowsCache) return null;
+          const { signature, source, requestedAt, stateRevision, feedbackRecorded } = visibilityRowsCache;
+          return { signature, source: structuredClone(source), requestedAt, stateRevision, rendered: feedbackRecorded === true };
+        },
         getExplored(partyId) {
           return structuredClone(normalizeFogState(runtimeScene(visionState())?.fog).exploredByParty[String(partyId)] || { rows: {} });
         },
@@ -541,7 +588,6 @@ export function createVisionFogSystem() {
         api.vision.setSource(tokenId).catch(error => api.showToast?.(error.message, 'error'));
       }));
       retain(api.on?.('state:commit', detail => {
-        exploredDirty = true;
         const changed = synchronizeLocalVision();
         clearUnavailableConnectedSource();
         if (changed || /fog|vision|scene|import/i.test(String(detail?.source || ''))) scheduleRender();
@@ -573,6 +619,7 @@ export function createVisionFogSystem() {
         scheduleRender(null);
       }));
       retain(api.on?.('feature:state-change', () => scheduleRender(null)));
+      retain(api.on?.('occlusion:preview', () => { spatial = null; cancelVisibility(); scheduleRender(null); }));
       retain(api.on?.('scene:content-change', event => {
         if (event.detail?.types?.includes('SceneEvent')) scheduleRender(null);
       }));
@@ -597,16 +644,23 @@ export function createVisionFogSystem() {
         scheduleRender(null);
       };
       api.map.on?.('move zoom resize viewreset', scheduleViewportRender);
+      const animateViewport = event => { animatedZoom = { center: event.center, zoom: event.zoom }; positionCanvases(); };
+      const finishViewport = () => { animatedZoom = null; scheduleViewportRender(); };
+      api.map.on?.('zoomanim', animateViewport);
+      api.map.on?.('zoomend', finishViewport);
       render();
       api.on?.('app:destroy', () => {
         destroyed = true;
-        cachedState = null; cachedSubject = null; spatial = null; exploredCache = [];
+        cachedState = null; cachedSubject = null; spatial = null; exploredCache = []; exploredFogReference = null;
         releaseVisionContexts(api.mapPackage);
         visibilityAbort?.abort();
         visibilityBackground?.dispose();
+        continuousMasks.dispose();
         explorationGeneration += 1;
         off.forEach(dispose => dispose());
         api.map.off?.('move zoom resize viewreset', scheduleViewportRender);
+        api.map.off?.('zoomanim', animateViewport);
+        api.map.off?.('zoomend', finishViewport);
         if (renderFrame) {
           const cancelFrame = documentNode.defaultView?.cancelAnimationFrame || clearTimeout;
           cancelFrame(renderFrame);

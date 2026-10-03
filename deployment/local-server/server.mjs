@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { readFile, stat, writeFile, rename, copyFile, readdir, rm } from 'node:fs/promises';
+import { readFile, stat, writeFile, rename, copyFile, readdir, rm, open } from 'node:fs/promises';
+import { Worker } from 'node:worker_threads';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -20,11 +21,10 @@ import {
   publicUser,
   resetUserClaim,
   updateUserRecord,
-  validatePlayerWorldPush,
   verifyUserCredential,
 } from './access-control.mjs';
 import { createPortableStorage, ensurePortableStorage, migrateLegacyStorage } from './portable-storage.mjs';
-import { assertSafeJson, assertWorldState, isSameChat } from './world-schema.mjs';
+import { assertSafeJson, assertWorldState, createCanonicalWorldValidator, isSameChat } from './world-schema.mjs';
 import {
   STATUS_OPERATION_CACHE_LIMIT,
   STATUS_SCHEMA_VERSION,
@@ -37,6 +37,7 @@ import {
   assertDocumentBatchMessage,
   assertWorldOperationMessage,
   createDocumentChanges,
+  createFogDocumentChanges,
   createWorldOperationPatch,
   documentWritesToWorldOperations,
   migrateLegacySceneFeatureStates,
@@ -47,10 +48,15 @@ import {
 import {
   canUserControlToken,
   describeVisionForToken,
+  describeServerVision,
   motionPathPreciselyVisible,
   projectStateForAudience,
   serverRuleset,
   sphereGroundRadiusMeters,
+  sceneVisionContext,
+  mergeExplorationChunkFog,
+  validateSceneOcclusion,
+  createExplorationOperationCapture,
 } from './ruleset-authority.mjs';
 import {
   networkUrls as listNetworkUrls,
@@ -70,6 +76,8 @@ import { mapForScene, validateAuthoritativeTokenMovePath } from './movement-auth
 import { createContentStorage, prepareContentUpgrade } from './content-storage.mjs';
 import { hasRetainedContentReference } from './content-history.mjs';
 import { commitStorageUpgrade, recoverStorageUpgrade } from './storage-upgrade.mjs';
+import { emptyExploration, validateExploration, enqueueExploration, explorationDelta,
+  invalidateExploration, finishExplorationChunk, selectExplorationJob } from './exploration-queue.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '0.0.0.0';
@@ -84,6 +92,7 @@ const ACCESS_FILE = STORAGE.usersFile;
 const PLAYER_JOIN_CODE = String(process.env.RPGMAP_JOIN_CODE || '').trim();
 const GM_SECRET = String(process.env.RPGMAP_GM_SECRET || randomBytes(4).toString('hex').toUpperCase());
 const MAX_WS_PAYLOAD = 8 * 1024 * 1024;
+const fallbackVisionMaps = new Map();
 const BACKUP_RETENTION = 10;
 const TEST_ALLOW_MISSING_ORIGIN = process.env.NODE_ENV === 'test' && process.env.RPGMAP_TEST_ALLOW_MISSING_ORIGIN === '1';
 
@@ -328,8 +337,12 @@ async function writeJsonWithBackup(filePath, label, value, { backup = true, seri
   }
   const temp = `${filePath}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temp, snapshot, 'utf8');
+    const handle = await open(temp, 'wx');
+    try { await handle.writeFile(snapshot, 'utf8'); await handle.sync(); }
+    finally { await handle.close(); }
     await renameAtomicWithRetry(temp, filePath);
+    const published = await open(filePath, 'r+');
+    try { await published.sync(); } finally { await published.close(); }
   } catch (error) {
     await rm(temp, { force: true }).catch(() => {});
     throw error;
@@ -350,6 +363,7 @@ let world = {
   updatedAt: null,
   state: null,
   recentStatusOperations: [],
+  exploration: emptyExploration(),
 };
 const loadedWorld = await loadRequiredJson(WORLD_FILE, 'world');
 if (loadedWorld !== undefined) {
@@ -360,6 +374,7 @@ if (loadedWorld !== undefined) {
     revision: Math.max(0, Number(loadedWorld.revision) || 0),
     updatedAt: loadedWorld.updatedAt || null,
     state: loadedWorld.state || null,
+    exploration: loadedWorld.exploration ? validateExploration(loadedWorld.exploration) : world.exploration,
     recentStatusOperations: Array.isArray(loadedWorld.recentStatusOperations)
       ? loadedWorld.recentStatusOperations.slice(-STATUS_OPERATION_CACHE_LIMIT).flatMap(record => {
         try {
@@ -399,6 +414,7 @@ if (world.state) {
     statusDefinitions: serverRuleset.statuses?.definitions,
   });
   assertWorldState(schemaMigration.state);
+  for (const scene of schemaMigration.state.preferences?.worldV2?.scenes || []) validateSceneOcclusion(scene, visionMapForScene(scene));
   world.state = schemaMigration.state;
   const schemaChanged = JSON.stringify(oldCanonical) !== JSON.stringify(schemaMigration.state.preferences?.worldV2)
     || oldStatusSchema !== schemaMigration.state.preferences?.entitySystem?.schemaVersion;
@@ -415,6 +431,8 @@ if (upgradeRequired) {
 // No upgrade is needed now. Only after validation may a torn WAL tail be trimmed.
 world = await worldWal.replay(world);
 if (world.state?.preferences?.worldV2) world.state = projectWorldOperationState(world.state);
+const assertCanonicalWorldState = createCanonicalWorldValidator();
+if (world.state) assertCanonicalWorldState(world.state);
 
 // Idempotency is intentionally bounded. A reconnect can safely retry a recent
 // GM status mutation without applying it twice, while unbounded client keys can
@@ -467,7 +485,7 @@ function durableWorld(snapshot) {
 function persistWorld(snapshot, { forceBackup = false } = {}) {
   const durable = durableWorld(snapshot);
   const serialized = JSON.stringify(durable);
-  if (Buffer.byteLength(serialized) > MAX_WS_PAYLOAD) {
+  if (Buffer.byteLength(JSON.stringify(durable.state)) > MAX_WS_PAYLOAD) {
     const error = new Error('World state is too large');
     error.code = 'state_too_large';
     return Promise.reject(error);
@@ -512,6 +530,7 @@ function persistAccess(snapshot = access) {
 
 const sessions = new Map();
 const resumeHistory = [];
+const committedPatches = new WeakMap();
 const RESUME_HISTORY_LIMIT = 256;
 const RESUME_HISTORY_MAX_AGE_MS = 5 * 60_000;
 let resumeBaseRevision = Number(world.revision) || 0;
@@ -531,7 +550,9 @@ function advanceResumeBase(entry) {
     resumeBaseRevision = Number(entry.revision);
     return;
   }
-  resumeBaseState = applyWorldOperationPatch(resumeBaseState, entry.patch);
+  // This base is a private detached replay copy; resume responses clone it.
+  // Advancing it cannot mutate canonical state or a recipient projection.
+  resumeBaseState = applyWorldOperationPatch(resumeBaseState, entry.patch, { mutate: true });
   resumeBaseRevision = Number(entry.revision);
 }
 function resetResumeHistory() {
@@ -541,7 +562,7 @@ function resetResumeHistory() {
 }
 function rememberResumeCommit({
   beforeState, afterState, operationId, baseRevision, revision, updatedAt,
-  results, originSessionId, documentBatch, fog,
+  results, originSessionId, documentBatch, fog, patch,
 }) {
   const now = Date.now();
   if (!resumeHistory.length) {
@@ -552,7 +573,7 @@ function rememberResumeCommit({
     baseRevision: Number(baseRevision),
     revision: Number(revision),
     at: now,
-    patch: createWorldOperationPatch(beforeState, afterState),
+    patch: patch || createWorldOperationPatch(beforeState, afterState),
     operationId: String(operationId),
     updatedAt: String(updatedAt),
     results: structuredClone(results || []),
@@ -680,22 +701,28 @@ function broadcastWorld(message, exceptSocket = null) {
     sendSocket(socket, projected);
   }
 }
-function audienceStateFor(session, state = world.state) {
+function audienceStateFor(session, state = world.state, projectionOptions = {}) {
   if (!state) return null;
   if (session.role === 'gm' && !session.visionSourceTokenId) {
-    assertWorldState(state);
+    // Canonical state is validated at import/startup and before every commit.
     return state;
   }
-  if (!session.audienceOpaqueIds) session.audienceOpaqueIds = new Map();
+  const opaqueScope = JSON.stringify([session.role, session.userId || '', session.visionSourceTokenId || '']);
+  if (!session.audienceOpaqueIds || session.audienceOpaqueScope !== opaqueScope) {
+    session.audienceOpaqueIds = new Map();
+    session.audienceOpaqueScope = opaqueScope;
+  }
   const opaqueIdFor = (kind, rawId) => {
     const key = `${String(kind)}:${String(rawId)}`;
-    if (!session.audienceOpaqueIds.has(key)) {
-      const opaque = createHash('sha256').update([
-        GM_SECRET, WORLD_ID, session.role, session.userId || '', session.visionSourceTokenId || '', key,
-      ].join('|')).digest('base64url').slice(0, 24);
-      session.audienceOpaqueIds.set(key, `audience-${String(kind)}-${opaque}`);
-    }
-    return session.audienceOpaqueIds.get(key);
+    const cached = session.audienceOpaqueIds.get(key);
+    if (cached) return cached;
+    const opaque = createHash('sha256').update([
+      GM_SECRET, WORLD_ID, session.role, session.userId || '', session.visionSourceTokenId || '', key,
+    ].join('|')).digest('base64url').slice(0, 24);
+    if (session.audienceOpaqueIds.size >= 4096) session.audienceOpaqueIds.delete(session.audienceOpaqueIds.keys().next().value);
+    const value = `audience-${String(kind)}-${opaque}`;
+    session.audienceOpaqueIds.set(key, value);
+    return value;
   };
   const worldValue = state?.preferences?.worldV2;
   const activeScene = worldValue?.scenes?.find(scene => String(scene?.id ?? '') === String(worldValue?.activeSceneId ?? ''));
@@ -705,12 +732,20 @@ function audienceStateFor(session, state = world.state) {
     user: session.userId ? findUser(session.userId) : null,
     visionSourceTokenId: session.visionSourceTokenId,
     ruleset: serverRuleset,
-    mapMetrics: { metersPerUnit: 1 },
-    mapPackage: mapForScene(activeScene),
+    describeVision: describeServerVision,
+    mapMetrics: { metersPerUnit: visionMapForScene(activeScene)?.metersPerUnit || 1 },
+    mapPackage: visionMapForScene(activeScene),
     lineOfSightOverride: session.userId ? findUser(session.userId)?.lineOfSightOverride : null,
     opaqueIdFor,
+    lookupOpaqueId: (kind, rawId) => session.audienceOpaqueIds.get(`${String(kind)}:${String(rawId)}`),
+    trustedProjection: true,
+    ...projectionOptions,
   });
-  assertWorldState(projected);
+  const projectedWorld = projected.preferences?.worldV2;
+  if ((projectedWorld?.actors || []).length > 1000 || (projectedWorld?.scenes || []).some(scene => (scene.tokens || []).length > 1000)) {
+    throw Object.assign(new Error('Audience projection exceeds document count limits'), { code: 'world_limit' });
+  }
+  if (process.env.RPGMAP_VERIFY_PROJECTIONS === '1') assertWorldState(projected);
   return projected;
 }
 function sendWorldOperationDenied(socket, message, code, description, extra = {}) {
@@ -738,6 +773,8 @@ function projectResultsForSession(results, projectedState, session) {
   if (session.role === 'gm') return structuredClone(results || []);
   const visible = visibleResultIds(projectedState);
   return (results || []).filter(result => {
+    if (result?.partyId && String(result?.action || '').startsWith('scene.fog.')
+      && !(projectedState?.preferences?.audienceVision?.partyIds || []).includes(String(result.partyId))) return false;
     if (result?.tokenId && !visible.tokens.has(String(result.tokenId))) return false;
     if (result?.actorId && !visible.actors.has(String(result.actorId))) return false;
     if (result?.markerId && !visible.markers.has(String(result.markerId))) return false;
@@ -755,18 +792,25 @@ function visiblePreciseToken(state, tokenId) {
 }
 
 async function persistWorldCommit(snapshot, beforeState, operationId) {
-  const patch = createWorldOperationPatch(beforeState, snapshot.state);
-  await worldWal.append({
+  const patch = createWorldOperationPatch(beforeState, snapshot.state, { trustedCanonical: true });
+  try { await worldWal.append({
     baseRevision: Number(snapshot.revision) - 1,
     revision: Number(snapshot.revision),
     operationId,
     patch,
     results: snapshot.recentStatusOperations || [],
     timestamp: snapshot.updatedAt,
-  });
+    explorationDelta: explorationDelta(world.exploration, snapshot.exploration),
+  }, { returnRecord: false }); } catch (error) {
+    // A failed fsync may have written a complete record. Do not append another
+    // mutation against the old in-memory revision until validated recovery.
+    storageBlocked = true;
+    throw error;
+  }
+  committedPatches.set(snapshot.state, patch);
   if (worldWal.shouldCompact(snapshot.revision)) {
-    await persistWorld(snapshot);
-    await worldWal.reset();
+    try { await persistWorld(snapshot); await worldWal.reset(); }
+    catch (error) { console.error('[RPGmap] checkpoint failed; durable WAL retained:', error); }
   }
 }
 function projectMotionForSession(results, beforeProjection, afterProjection, session = null) {
@@ -776,7 +820,7 @@ function projectMotionForSession(results, beforeProjection, afterProjection, ses
   const worldValue = beforeProjection?.preferences?.worldV2;
   const scene = worldValue?.scenes?.find(item => String(item?.id ?? '') === String(worldValue?.activeSceneId ?? '')) || null;
   const vision = beforeProjection?.preferences?.audienceVision?.source || null;
-  const mapPackage = mapForScene(scene);
+  const mapPackage = visionMapForScene(scene);
   return (results || []).flatMap(result => result?.motion || []).filter(motion =>
     visiblePreciseToken(beforeProjection, motion.tokenId)
       && visiblePreciseToken(afterProjection, motion.tokenId)
@@ -826,17 +870,25 @@ function projectedFogAfterMovement(previous, canonical, partyIds = []) {
   ])];
   const exploredByParty = Object.fromEntries(visiblePartyIds.flatMap(partyId => {
     const value = canonical?.exploredByParty?.[partyId];
-    return value ? [[partyId, structuredClone(value)]] : [];
+    return value ? [[partyId, value]] : [];
   }));
   return { ...(previous || {}), exploredByParty };
 }
 
-function tryIncrementalAudienceProjection(session, beforeProjection, afterState, operations, results) {
+function tryIncrementalAudienceProjection(session, beforeProjection, afterState, operations, results, beforeState = null) {
   if (!beforeProjection || session.role === 'gm' || !Array.isArray(operations) || !operations.length) return null;
   const types = new Set(operations.map(operation => String(operation?.type || '')));
   const next = lightweightProjectionShell(beforeProjection);
   const projectedWorld = next.preferences.worldV2;
   projectedWorld.updatedAt = String(afterState?.preferences?.worldV2?.updatedAt || projectedWorld.updatedAt || '');
+  if ([...types].every(type => type === 'scene.fog.explore')) {
+    const partyIds = next.preferences.audienceVision?.partyIds || [];
+    projectedWorld.scenes = projectedWorld.scenes.map(scene => {
+      const canonical = canonicalWorldScene(afterState, scene.id);
+      return canonical ? { ...scene, fog: projectedFogAfterMovement(scene.fog, canonical.fog, partyIds) } : scene;
+    });
+    return next;
+  }
 
   if ([...types].every(type => type === 'chat.append')) {
     const chatIds = new Set((results || []).map(result => String(result?.chatId || '')).filter(Boolean));
@@ -887,12 +939,9 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
         changed = true;
         return structuredClone(authoritative);
       });
-      const fog = projectedFogAfterMovement(
-        scene.fog,
-        canonical.fog,
-        next.preferences.audienceVision?.partyIds || [],
-      );
-      if (!changed && JSON.stringify(fog) === JSON.stringify(scene.fog)) continue;
+      const fog = canonicalWorldScene(beforeState, scene.id)?.fog === canonical.fog ? scene.fog
+        : projectedFogAfterMovement(scene.fog, canonical.fog, next.preferences.audienceVision?.partyIds || []);
+      if (!changed && (fog === scene.fog || JSON.stringify(fog) === JSON.stringify(scene.fog))) continue;
       const attackAreas = (scene.attackAreas || []).map(area => {
         if (!movedIds.has(String(area?.anchor?.tokenId || ''))) return area;
         return structuredClone((canonical.attackAreas || []).find(item => String(item?.id || '') === String(area?.id || '')) || area);
@@ -941,11 +990,26 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
       else return null;
     }
     const canonicalWorld = afterState?.preferences?.worldV2;
+    const definitions = new Map((canonicalWorld?.statusDefinitions || []).map(definition => [String(definition.id), definition]));
+    if (operations.some(operation => {
+      const definition = definitions.get(String(operation.payload?.statusId || operation.payload?.definitionId || ''));
+      return definition?.capabilities?.visibility !== undefined || definition?.capabilities?.visionPrecision !== undefined;
+    })) return null;
     for (const actorId of actorIds) {
       if (session.visionSourceTokenId) {
         const source = canonicalWorldScene(afterState, canonicalWorld?.activeSceneId)?.tokens
           ?.find(token => String(token?.id || '') === String(session.visionSourceTokenId));
         if (String(source?.actorId || '') === actorId) return null;
+      }
+      // An Observer can read an Actor template while its hostile Tokens are
+      // still cropped by perception. A template status may hide, reveal or
+      // change public badges on those linked Tokens, not just the Actor body.
+      for (const scene of canonicalWorld?.scenes || []) {
+        const prior = new Map((canonicalWorldScene(beforeProjection, scene.id)?.tokens || [])
+          .map(token => [String(token.id), token]));
+        if ((scene.tokens || []).some(token => String(token.actorId) === actorId && token.actorLink !== false
+          && (!prior.has(String(token.id)) || prior.get(String(token.id)).audienceRestricted === true
+            || prior.get(String(token.id)).audienceVisibility === 'vague'))) return null;
       }
       const index = projectedWorld.actors.findIndex(actor => String(actor?.id || '') === actorId);
       const current = projectedWorld.actors[index];
@@ -988,6 +1052,7 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
 
 function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, operations = [], documentBatch = false, onOriginProjection = null }) {
   const fog = results.filter(result => Object.hasOwn(result, 'dirtyBounds'));
+  const fogOnly = operations.length && operations.every(operation => operation.type === 'scene.fog.explore');
   const recipients = [...sessions];
   const originIndex = recipients.findIndex(([, session]) => session.id === originSessionId);
   if (originIndex > 0) recipients.unshift(...recipients.splice(originIndex, 1));
@@ -995,16 +1060,22 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
     if (session.role !== 'gm' && session.identityStatus !== 'active') continue;
     const beforeProjection = session.audienceProjection || audienceStateFor(session, beforeState);
     const incrementalProjection = tryIncrementalAudienceProjection(
-      session, beforeProjection, afterState, operations, results,
+      session, beforeProjection, afterState, operations, results, beforeState,
     );
-    const afterProjection = incrementalProjection || audienceStateFor(session, afterState);
+    const pureMovement = operations.length && operations.every(operation => ['token.move', 'token.movePath', 'token.reposition'].includes(operation.type))
+      && results.every(result => ['token.move', 'token.movePath', 'token.reposition'].includes(result.action));
+    const afterProjection = incrementalProjection || audienceStateFor(session, afterState, pureMovement ? {
+      movementCache: { beforeState, previousProjection: beforeProjection,
+        tokenIds: new Set(results.flatMap(result => result.tokenIds || [result.tokenId]).map(String)) },
+    } : {});
     session.audienceProjection = afterProjection;
     const motion = documentBatch
       ? projectMotionForSession(results, beforeProjection, afterProjection, session)
       : [];
     const response = {
       type: documentBatch ? 'document.batch.committed' : 'world.operation.committed', operationId, baseRevision, revision, updatedAt,
-      changes: createDocumentChanges(beforeProjection, afterProjection, null, { motion, fog }),
+      changes: fogOnly ? createFogDocumentChanges(beforeProjection, afterProjection, { fog })
+        : createDocumentChanges(beforeProjection, afterProjection, null, { motion, fog }),
       ...(motion.length ? { motion } : {}),
       originSessionId,
       audienceRevision: session.audienceRevision,
@@ -1014,7 +1085,7 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
   }
   rememberResumeCommit({
     beforeState, afterState, operationId, baseRevision, revision, updatedAt,
-    results, originSessionId, documentBatch, fog,
+    results, originSessionId, documentBatch, fog, patch: committedPatches.get(afterState),
   });
 }
 function sendAudienceSnapshot(socket, session, reason = 'audience.changed') {
@@ -1081,6 +1152,33 @@ function operationDenied(code, message) {
 function authorizeOperations(session, operations) {
   if (operations.some(operation => operation.type === 'scene.fog.explore')) {
     operationDenied('fog_explore_server_only', 'Fog exploration is derived from the authoritative vision source');
+  }
+  const shapesByScene = new Map();
+  for (const operation of operations) {
+    if (!operation.type.startsWith('scene.occlusion')
+      && !(operation.type === 'scene.featureState.patch' && operation.payload?.patch?.vision !== undefined)) continue;
+    const sceneId = String(operation.payload?.sceneId || world.state?.preferences?.worldV2?.activeSceneId || '');
+    const scene = canonicalScene(sceneId);
+    const map = visionMapForScene(scene);
+    let shapes = shapesByScene.get(sceneId);
+    if (!shapes) {
+      shapes = new Map([...(map?.occlusionShapes || []), ...(scene?.occlusionShapes || [])].map(shape => [String(shape.id), shape]));
+      shapesByScene.set(sceneId, shapes);
+    }
+    if (operation.type === 'scene.occlusionShape.upsert' && operation.payload?.shape) {
+      shapes.set(String(operation.payload.shape.id), operation.payload.shape);
+    }
+    if (operation.type === 'scene.occlusionShape.delete') shapes.delete(String(operation.payload?.shapeId || ''));
+    if (operation.type === 'scene.occlusion.configure') {
+      shapes = new Map([...(map?.occlusionShapes || []), ...(operation.payload?.configuration?.occlusionShapes || [])]
+        .map(shape => [String(shape.id), shape]));
+      shapesByScene.set(sceneId, shapes);
+    }
+    if (operation.type !== 'scene.featureState.patch' || operation.payload?.patch?.vision === undefined) continue;
+    const featureId = String(operation.payload.featureId || '');
+    const known = (map?.features || []).some(feature => String(feature.id) === featureId)
+      || [...shapes.values()].some(shape => String(shape.featureId || shape.id) === featureId);
+    if (!known) operationDenied('invalid_reference', 'Vision override references a missing Feature or occlusion shape');
   }
   if (session.role === 'gm') return operations;
   const user = findUser(session.userId);
@@ -1285,58 +1383,52 @@ function authorizeOperations(session, operations) {
     operationDenied(`${value.type.replaceAll('.', '_')}_gm_only`, `Only the GM can perform ${value.type}`);
   });
 }
-function appendVisionExplorationOperations(operations) {
-  const next = operations.map(operation => structuredClone(operation));
-  const seen = new Set();
-  for (const operation of operations) {
-    if (!['token.move', 'token.movePath', 'token.reposition'].includes(operation.type) || operation.payload?.placement === 'feature') continue;
-    if (String(operation.payload?.sceneId || world.state?.preferences?.worldV2?.activeSceneId) !== String(world.state?.preferences?.worldV2?.activeSceneId)) continue;
-    const movedIds = operation.type === 'token.movePath'
-      ? (operation.payload.tokenIds || []).map(String)
-      : [String(operation.payload?.tokenId || '')];
-    for (const tokenId of movedIds) for (const session of sessions.values()) {
-        if (String(session.visionSourceTokenId || '') !== tokenId) continue;
-        const vision = describeVisionForToken(world.state, tokenId);
-        if (!vision?.partyId) continue;
-        const key = `${vision.sceneId}:${vision.partyId}:${tokenId}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const canonical = canonicalRecord(tokenId).token;
-        const leader = canonicalRecord(operation.payload?.tokenId).token;
-        const offset = operation.type === 'token.movePath' && canonical && leader
-          ? {
-              x: Number(canonical.x) - Number(leader.x),
-              y: Number(canonical.y) - Number(leader.y),
-              elevationMeters: Number(canonical.elevationMeters || 0) - Number(leader.elevationMeters || 0),
-            }
-          : { x: 0, y: 0, elevationMeters: 0 };
-        const route = operation.type === 'token.movePath'
-          ? (operation.payload.waypoints || []).map(point => ({
-              x: Number(point.x) + offset.x,
-              y: Number(point.y) + offset.y,
-              elevationMeters: Math.max(0, Number(point.elevationMeters ?? leader?.elevationMeters ?? 0) + offset.elevationMeters),
-            }))
-          : [{
-              x: Number(operation.payload.x), y: Number(operation.payload.y),
-              elevationMeters: Number(operation.payload.elevationMeters ?? canonical?.elevationMeters ?? 0),
-            }];
-        const to = route.at(-1);
-        if (to) next.push({
-          type: 'scene.fog.explore',
-          payload: {
-            sceneId: vision.sceneId,
-            partyId: vision.partyId,
-            visionSourceTokenId: vision.tokenId,
-            from: operation.type === 'token.reposition' ? to : {
-              x: vision.x, y: vision.y, elevationMeters: vision.elevationMeters,
-            },
-            to,
-            radiusMeters: sphereGroundRadiusMeters(vision.vagueRangeMeters, to.elevationMeters) ?? 0,
-          },
-        });
-      }
+function visionMapForScene(scene) {
+  const registered = mapForScene(scene);
+  if (registered || !scene) return registered;
+  const ref = scene.mapPackage || {};
+  const key = JSON.stringify(ref);
+  let map = fallbackVisionMaps.get(key);
+  if (!map) {
+    map = { id: ref.id || 'unknown-map', version: ref.version || '1',
+      metersPerUnit: Number(ref.metersPerUnit) > 0 ? Number(ref.metersPerUnit) : 1,
+      ...(Number(ref.width) > 0 ? { width: Number(ref.width) } : {}),
+      ...(Number(ref.height) > 0 ? { height: Number(ref.height) } : {}) };
+    fallbackVisionMaps.set(key, map);
+    if (fallbackVisionMaps.size > 2) fallbackVisionMaps.delete(fallbackVisionMaps.keys().next().value);
   }
-  return next;
+  return map;
+}
+function explorationContextFor(state, sceneId) {
+  const scene = canonicalWorldScene(state, sceneId);
+  const map = visionMapForScene(scene);
+  if (!scene || !map) throw Object.assign(new Error('Exploration Scene map is unavailable'), { code: 'map_package_not_found' });
+  const spatial = sceneVisionContext(map, scene);
+  return { map: { id: map.id, version: map.version, width: map.width, height: map.height, metersPerUnit: map.metersPerUnit || 1 },
+    occluders: spatial.occluders.map(occluder => ({ ...occluder,
+      blockingHeightMeters: Number.isFinite(occluder.blockingHeightMeters) ? occluder.blockingHeightMeters : null })),
+    lights: spatial.lights, ambient: scene.settings?.lighting || 'normal' };
+}
+function queueSourceCircle(metadata, state, vision, id, revision) {
+  if (!vision?.partyId) return metadata;
+  return enqueueExploration(metadata, explorationContextFor(state, vision.sceneId), {
+    id, createdRevision: revision, sceneId: vision.sceneId, partyId: vision.partyId, tokenId: vision.tokenId,
+    vagueRangeMeters: vision.vagueRangeMeters, senses: vision.senses,
+    path: [{ x: vision.x, y: vision.y, elevationMeters: vision.elevationMeters }],
+  });
+}
+function explorationAfterOperations(events, operationId, revision) {
+  let metadata = world.exploration;
+  let sequence = 0;
+  for (const event of events) {
+    if (event.type === 'cancel') metadata = invalidateExploration(metadata, event.sceneId, event.partyId);
+    else metadata = enqueueExploration(metadata, event.context, {
+      id: `${operationId}:${sequence++}`, createdRevision: revision, sceneId: event.sceneId,
+      partyId: event.partyId, tokenId: event.tokenId, vagueRangeMeters: event.vision.vagueRangeMeters,
+      senses: event.vision.senses, path: event.path,
+    });
+  }
+  return metadata;
 }
 function accessSnapshotFor(session) {
   const gm = session.role === 'gm';
@@ -1379,6 +1471,7 @@ function multiplayerInfo() {
     joinCodeRequired: Boolean(PLAYER_JOIN_CODE),
     playerWriteEnabled: true,
     operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
+    capabilities: { occlusion: 1 },
     statusSchema: STATUS_SCHEMA_VERSION,
     accessSchema: ACCESS_SCHEMA_VERSION,
   };
@@ -1420,6 +1513,7 @@ function sendWelcome(socket, session, { includeWorld = true, pendingApproval = f
   session.audienceProjection = projectedState || null;
   sendSocket(socket, {
     type: 'welcome',
+    capabilities: { occlusion: 1 },
     contentToken: session.identityStatus === 'active' ? session.contentToken : null,
     operationSchema: WORLD_OPERATION_SCHEMA_VERSION,
     statusSchema: STATUS_SCHEMA_VERSION,
@@ -1516,6 +1610,136 @@ const server = http.createServer(async (req, res) => {
 // every World mutation clones the latest durable revision before it writes.
 let messageChain = Promise.resolve();
 let storageBlocked = false;
+let explorationWorker = null;
+let explorationWorkerContextId = null;
+let explorationRequest = null;
+let explorationSequence = 0;
+let explorationRunning = false;
+let explorationClosed = false;
+let explorationLane = null;
+let explorationRetryTimer = null;
+let pendingExploration = [];
+let lastExplorationCommitAt = 0;
+
+function workerExploration(job, context, exploredRows) {
+  if (!explorationWorker) {
+    explorationWorker = new Worker(new URL('./exploration-worker.mjs', import.meta.url), { type: 'module' });
+    explorationWorker.on('message', message => {
+      if (message.requestId !== explorationRequest?.id) return;
+      const request = explorationRequest; explorationRequest = null;
+      if (message.error) request.reject(new Error(message.error)); else request.resolve(message.result);
+    });
+    const instance = explorationWorker;
+    const failed = error => {
+      if (explorationWorker !== instance) return;
+      explorationRequest?.reject(error); explorationRequest = null;
+      explorationWorker = null; explorationWorkerContextId = null;
+      instance.terminate();
+    };
+    instance.on('error', failed);
+    instance.on('exit', code => {
+      if (explorationWorker !== instance) return;
+      explorationWorker = null; explorationWorkerContextId = null;
+      if (explorationRequest) {
+        explorationRequest.reject(new Error(`Exploration Worker stopped (${code})`)); explorationRequest = null;
+      }
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const id = ++explorationSequence;
+    explorationRequest = { id, resolve, reject };
+    explorationWorker.postMessage({ requestId: id, job, contextId: job.contextId,
+      ...(explorationWorkerContextId === job.contextId ? {} : { context }), exploredRows, budgetMs: 8 });
+    explorationWorkerContextId = job.contextId;
+  });
+}
+
+async function commitExplorationResults(results) {
+  if (storageBlocked || explorationClosed || !world.state) return;
+  let metadata = world.exploration, state = world.state;
+  const fogResults = [], operations = [];
+  for (const result of results) {
+    const job = metadata.jobs[result.id];
+    const advanced = finishExplorationChunk(metadata, result);
+    if (!advanced || !job) continue;
+    metadata = advanced;
+    const canonical = state.preferences.worldV2;
+    const scene = canonical.scenes.find(item => String(item.id) === job.sceneId);
+    if (!scene) continue;
+    const fog = mergeExplorationChunkFog(scene.fog, job.partyId, result.rows, world.exploration.contexts[job.contextId]?.map || {});
+    state = { ...state, preferences: { ...state.preferences, worldV2: { ...canonical,
+      scenes: canonical.scenes.map(item => item === scene ? { ...item, fog } : item) } } };
+    operations.push({ type: 'scene.fog.explore', payload: { sceneId: job.sceneId, partyId: job.partyId } });
+    fogResults.push({ action: 'scene.fog.explore', sceneId: job.sceneId, partyId: job.partyId, dirtyBounds: null });
+  }
+  if (!operations.length) return;
+  const beforeState = world.state, baseRevision = world.revision, now = new Date().toISOString();
+  state = { ...state, preferences: { ...state.preferences, worldV2: { ...state.preferences.worldV2, updatedAt: now } } };
+  const nextWorld = { ...world, revision: baseRevision + 1, updatedAt: now, state, exploration: metadata };
+  assertCanonicalWorldState(state);
+  const operationId = `fog-${randomUUID()}`;
+  await persistWorldCommit(nextWorld, beforeState, operationId);
+  world = nextWorld;
+  broadcastOperationCommit({ beforeState, afterState: state, operationId, baseRevision,
+    revision: world.revision, updatedAt: now, results: fogResults, operations, originSessionId: null, documentBatch: true });
+}
+
+async function flushExploration() {
+  const results = pendingExploration; pendingExploration = [];
+  if (!results.length) return;
+  const transaction = messageChain.catch(() => {}).then(() => commitExplorationResults(results));
+  messageChain = transaction.catch(error => console.error('[RPGmap] exploration commit failed; durable jobs retained:', error));
+  await transaction;
+  lastExplorationCommitAt = performance.now();
+}
+
+function explorationView() {
+  const jobs = { ...world.exploration.jobs };
+  for (const result of pendingExploration) {
+    const job = jobs[result.id];
+    if (!job || result.worldEpoch !== job.worldEpoch || result.epoch !== job.epoch || result.fromCursor !== job.cursor) continue;
+    if (result.cursor === job.totalSamples) delete jobs[job.id];
+    else jobs[job.id] = { ...job, cursor: result.cursor };
+  }
+  return { ...world.exploration, jobs };
+}
+
+function kickExploration() {
+  if (explorationRunning || storageBlocked || explorationClosed || !world.state
+    || (process.env.NODE_ENV === 'test' && process.env.RPGMAP_TEST_PAUSE_EXPLORATION === '1')) return;
+  explorationRunning = true;
+  (async () => {
+    while (!storageBlocked && !explorationClosed) {
+      const selected = selectExplorationJob(explorationView(), explorationLane);
+      if (!selected) { await flushExploration(); break; }
+      explorationLane = selected.lane;
+      const { job } = selected;
+      const context = world.exploration.contexts[job.contextId];
+      const scene = canonicalWorldScene(world.state, job.sceneId);
+      if (!context || !scene) throw new Error('Durable exploration references a missing context or Scene');
+      let explored = scene.fog;
+      for (const pending of pendingExploration) {
+        const queued = world.exploration.jobs[pending.id];
+        if (queued?.sceneId === job.sceneId && queued.partyId === job.partyId
+          && queued.epoch === pending.epoch && queued.worldEpoch === pending.worldEpoch) {
+          explored = mergeExplorationChunkFog(explored, job.partyId, pending.rows, context.map);
+        }
+      }
+      const result = await workerExploration(job, context, explored?.exploredByParty?.[job.partyId]?.rows || {});
+      pendingExploration.push(result);
+      if (performance.now() - lastExplorationCommitAt >= 100) await flushExploration();
+    }
+  })().catch(error => {
+    pendingExploration = [];
+    console.error('[RPGmap] exploration paused; confirmed jobs remain durable:', error);
+    if (!storageBlocked && !explorationClosed) {
+      explorationRetryTimer = setTimeout(() => { explorationRetryTimer = null; kickExploration(); }, 1000); explorationRetryTimer.unref();
+    }
+  }).finally(() => {
+    explorationRunning = false;
+    if (!explorationClosed && !storageBlocked && !explorationRetryTimer && Object.keys(world.exploration.jobs).length) queueMicrotask(kickExploration);
+  });
+}
 server.on('upgrade', (req, socket) => {
   if (storageBlocked) return socket.destroy();
   let pathname = '/';
@@ -1557,6 +1781,10 @@ server.on('upgrade', (req, socket) => {
 
     if (!joined) {
       if (message?.type !== 'hello') return closeSocket(socket, 1008, 'hello required');
+      if (message.capabilities?.occlusion !== 1) {
+        sendSocket(socket, { type: 'error', code: 'occlusion_capability_required', message: '此服务器需要支持新版视野遮挡的客户端', capabilities: { occlusion: 1 } });
+        return closeSocket(socket, 1008, 'occlusion capability required');
+      }
       if (Number(message.operationSchema) !== WORLD_OPERATION_SCHEMA_VERSION) {
         sendSocket(socket, {
           type: 'error', code: 'operation_schema_incompatible',
@@ -1821,54 +2049,36 @@ server.on('upgrade', (req, socket) => {
         return sendSocket(socket, { type: 'vision.source.denied', code: 'vision_source_not_controlled', message: 'Vision source is not controlled by this user' });
       }
       const beforeState = world.state;
+      const previousSource = session.visionSourceTokenId;
       session.visionSourceTokenId = tokenId || null;
       const vision = tokenId ? describeVisionForToken(world.state, tokenId) : null;
       if (vision?.partyId) {
-        let applied;
+        const operationId = `vision-${randomUUID()}`;
+        let nextWorld;
         try {
-          applied = await applyWorldOperationsAsync(world.state, [{
-            type: 'scene.fog.explore',
-            payload: {
-              sceneId: vision.sceneId, partyId: vision.partyId,
-              visionSourceTokenId: vision.tokenId,
-              x: vision.x, y: vision.y, elevationMeters: vision.elevationMeters,
-              radiusMeters: vision.vagueGroundRangeMeters,
-            },
-          }], {
-            ruleset: serverRuleset,
-            now: new Date().toISOString(),
-            mapMetrics: mapForScene(canonicalScene(vision.sceneId)) || { metersPerUnit: 1 },
-            mapPackage: mapForScene(canonicalScene(vision.sceneId)),
-          });
-          assertWorldState(applied.state);
+          const now = new Date().toISOString();
+          const state = { ...world.state, preferences: { ...world.state.preferences,
+            worldV2: { ...world.state.preferences.worldV2, updatedAt: now } } };
+          nextWorld = { ...world, revision: world.revision + 1, updatedAt: now, state,
+            exploration: queueSourceCircle(world.exploration, state, vision, `${operationId}:0`, world.revision + 1) };
+          assertCanonicalWorldState(state);
+          await persistWorldCommit(nextWorld, beforeState, operationId);
         } catch (error) {
-          session.visionSourceTokenId = null;
-          return sendSocket(socket, { type: 'vision.source.denied', code: error.code || 'vision_source_invalid', message: error.message });
-        }
-        const nextWorld = {
-          schemaVersion: 1, worldId: WORLD_ID, revision: world.revision + 1,
-          updatedAt: new Date().toISOString(), state: applied.state,
-          recentStatusOperations: world.recentStatusOperations || [],
-        };
-        const visionOperationId = `vision-${randomUUID()}`;
-        try { await persistWorldCommit(nextWorld, beforeState, visionOperationId); }
-        catch (error) {
-          session.visionSourceTokenId = null;
-          return sendSocket(socket, { type: 'vision.source.denied', code: 'persist_failed', message: error.message });
+          session.visionSourceTokenId = previousSource;
+          return sendSocket(socket, { type: 'vision.source.denied', code: error.code || 'persist_failed', message: error.message });
         }
         const baseRevision = world.revision;
         world = nextWorld;
-        broadcastOperationCommit({
-          beforeState, afterState: world.state, operationId: visionOperationId,
+        broadcastOperationCommit({ beforeState, afterState: world.state, operationId,
           baseRevision, revision: world.revision, updatedAt: world.updatedAt,
-          results: applied.results, originSessionId: session.id,
-        });
+          results: [], originSessionId: session.id });
       }
       sendSocket(socket, {
         type: 'vision.source.ack', tokenId: session.visionSourceTokenId,
         revision: world.revision, audienceRevision: session.audienceRevision,
       });
       sendAudienceSnapshot(socket, session, 'vision.source.set');
+      kickExploration();
       return;
     }
 
@@ -1915,20 +2125,29 @@ server.on('upgrade', (req, socket) => {
 
       let applied;
       let committedOperations = [];
+      let nextExploration;
       try {
         const now = new Date().toISOString();
         const authorizedOperations = authorizeOperations(session, envelope.operations);
         await contentStorage.validateReferences(authorizedOperations, session);
-        const operations = appendVisionExplorationOperations(authorizedOperations);
+        const operations = authorizedOperations;
         committedOperations = operations;
+        const explorationCapture = createExplorationOperationCapture({
+          sourceIds: [...sessions.values()].filter(viewer => viewer.visionSourceTokenId
+            && sessionControlsToken(viewer, viewer.visionSourceTokenId)).map(viewer => viewer.visionSourceTokenId),
+          ruleset: serverRuleset, mapForScene: visionMapForScene, describeVision: describeServerVision,
+        });
         applied = await applyWorldOperationsAsync(world.state, operations, {
           now,
           ruleset: serverRuleset,
-          mapMetrics: mapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)) || { metersPerUnit: 1 },
-          mapPackage: mapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)),
+          mapMetrics: visionMapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)) || { metersPerUnit: 1 },
+          mapPackage: visionMapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)),
+          mapForScene: visionMapForScene,
           userId: session.userId,
           sessionId: session.id,
           source: { role: session.role, userId: session.userId },
+          prepareOperation: explorationCapture.prepareOperation,
+          onOperationApplied: explorationCapture.onOperationApplied,
           validateTokenMovePath: args => validateAuthoritativeTokenMovePath({ ...args, ruleset: serverRuleset }),
           applyStatus(state, statusMessage) {
             return applyStatusMessage(state, statusMessage, {
@@ -1961,7 +2180,8 @@ server.on('upgrade', (req, socket) => {
             };
           },
         });
-        assertWorldState(applied.state);
+        assertCanonicalWorldState(applied.state);
+        nextExploration = explorationAfterOperations(explorationCapture.events, envelope.operationId, world.revision + 1);
       } catch (error) {
         return sendWorldOperationDenied(socket, message, error?.code || 'invalid_world_operation', error?.message, {
           ...(Array.isArray(error?.conflictIds) ? { conflictIds: error.conflictIds.map(String) } : {}),
@@ -1975,6 +2195,7 @@ server.on('upgrade', (req, socket) => {
         revision: nextRevision,
         updatedAt: new Date().toISOString(),
         state: applied.state,
+        exploration: nextExploration,
         recentStatusOperations: recentStatusOperationsWith(
           envelope.operationId,
           nextRevision,
@@ -2010,6 +2231,18 @@ server.on('upgrade', (req, socket) => {
           duplicate: false,
         });
       };
+      // Movement has already passed authority checks and its accepted path is
+      // durable in the same WAL record. Controlled Tokens that were visible to
+      // the sender retain their identity/access during a pure coordinate move;
+      // acknowledge that durable result before constructing other audiences.
+      // Mixed operations or perception-only targets still use the fresh view.
+      const pureMovement = committedOperations.length && committedOperations.every(operation =>
+        ['token.move', 'token.movePath', 'token.reposition'].includes(operation.type))
+        && applied.results.every(result => ['token.move', 'token.movePath', 'token.reposition'].includes(result.action));
+      const priorAudience = session.audienceProjection;
+      if (pureMovement && (session.role === 'gm' || (priorAudience && applied.results.every(result =>
+        (result.tokenIds || [result.tokenId]).every(tokenId => visiblePreciseToken(priorAudience, tokenId)
+          && sessionControlsToken(session, tokenId)))))) acknowledge(priorAudience);
       broadcastOperationCommit({
         beforeState,
         afterState: world.state,
@@ -2024,6 +2257,7 @@ server.on('upgrade', (req, socket) => {
         onOriginProjection: acknowledge,
       });
       if (!acknowledged) acknowledge(session.audienceProjection || audienceStateFor(session));
+      kickExploration();
       if (actorCatalogChanged) {
         broadcastAccessSnapshots();
       }
@@ -2057,29 +2291,13 @@ server.on('upgrade', (req, socket) => {
           statusDefinitions: serverRuleset.statuses?.definitions,
         }).state;
         assertWorldState(incomingState);
+        for (const scene of incomingState.preferences?.worldV2?.scenes || []) validateSceneOcclusion(scene, visionMapForScene(scene));
         await contentStorage.validateReferences(incomingState, session, { staged: new Set(contentUpgrade.records.map(record => `asset:${record.id}`)) });
       } catch (error) {
         return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: error?.code || 'invalid_state', message: error?.message || 'World state 无效' });
       }
       if (world.state && !isSameChat(world.state, incomingState)) {
-        return sendSocket(socket, { type: 'world.denied', operationId: worldOperationId, code: 'chat_server_only', message: '聊天记录只能通过服务器提交', revision: world.revision, updatedAt: world.updatedAt, state: world.state });
-      }
-      if (session.role !== 'gm') {
-        if (session.identityStatus !== 'active') return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'identity_pending', message: '等待 GM 批准身份后才能操作 World' });
-        const user = findUser(session.userId);
-        const authorization = validatePlayerWorldPush({ before: world.state, next: incomingState, user });
-        if (!authorization.ok) {
-          return sendSocket(socket, {
-            type: 'world.denied',
-            operationId: worldOperationId,
-            code: authorization.code,
-            message: authorization.message,
-            revision: world.revision,
-            updatedAt: world.updatedAt,
-            state: world.state,
-            activeActorId: authorization.activeActorId || null,
-          });
-        }
+        return sendSocket(socket, { type: 'world.denied', operationId: worldOperationId, code: 'chat_server_only', message: '聊天记录只能通过服务器提交', revision: world.revision, updatedAt: world.updatedAt, state: audienceStateFor(session), audienceRevision: session.audienceRevision });
       }
       const baseRevision = Math.max(0, Number(message.baseRevision) || 0);
       if (baseRevision !== world.revision) {
@@ -2088,11 +2306,12 @@ server.on('upgrade', (req, socket) => {
           operationId: worldOperationId,
           revision: world.revision,
           updatedAt: world.updatedAt,
-          state: world.state,
+          state: audienceStateFor(session), audienceRevision: session.audienceRevision,
         });
       }
       const encoded = JSON.stringify(incomingState);
       if (Buffer.byteLength(encoded) > MAX_WS_PAYLOAD) return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'state_too_large', message: 'World state is too large' });
+      assertCanonicalWorldState(incomingState);
       const nextWorld = {
         schemaVersion: 1,
         worldId: WORLD_ID,
@@ -2100,6 +2319,7 @@ server.on('upgrade', (req, socket) => {
         updatedAt: new Date().toISOString(),
         state: incomingState,
         recentStatusOperations: world.recentStatusOperations || [],
+        exploration: emptyExploration(),
       };
       try {
         await commitStorageUpgrade(STORAGE, { ...contentUpgrade.replacements,
@@ -2116,14 +2336,6 @@ server.on('upgrade', (req, socket) => {
           return;
         }
         return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'persist_failed', message: `World 未保存：${error.message}` });
-      }
-      if (session.role !== 'gm' && envelope.operations.some(operation => operation.type === 'scene.settings.patch')) {
-        return sendWorldOperationDenied(
-          socket,
-          message,
-          'scene_settings_gm_only',
-          'Only the GM can modify Scene settings',
-        );
       }
       worldWal.adoptCheckpoint();
       world = nextWorld;
@@ -2181,6 +2393,7 @@ server.listen(PORT, HOST, () => {
   console.log(` Build     : ${version.commit || 'unknown'}`);
   if (legacyMigrations.length) console.log(` Migrated  : ${legacyMigrations.map(item => item.type).join(', ')} from legacy data/`);
   console.log(' Status    : READY');
+  kickExploration();
   console.log('============================================================');
   console.log(' Press Ctrl+C to stop the server.');
   console.log('');
@@ -2190,6 +2403,9 @@ let shuttingDown = false;
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  explorationClosed = true;
+  clearTimeout(explorationRetryTimer);
+  explorationWorker?.terminate();
   const connections = [...sessions.keys()];
   for (const socket of connections) closeSocket(socket, 1012, 'server restart');
   server.close();
@@ -2200,4 +2416,10 @@ function shutdown() {
 }
 process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
-process.on('message', message => { if (message === 'rpgmap.shutdown') shutdown(); });
+process.on('message', message => {
+  if (message === 'rpgmap.shutdown') shutdown();
+  if (process.env.NODE_ENV === 'test' && message === 'rpgmap.test.kill-exploration-worker') {
+    explorationWorker?.terminate();
+    process.send?.({ type: 'test.exploration-worker-killed' });
+  }
+});

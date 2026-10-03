@@ -1,17 +1,21 @@
 import { createHash } from 'node:crypto';
-import { open, readFile, stat, truncate } from 'node:fs/promises';
+import { open, readFile, stat } from 'node:fs/promises';
+import { applyExplorationDelta } from './exploration-queue.mjs';
 
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 
 function stableRecord(record) {
-  return JSON.stringify({
+  const value = {
     baseRevision: Number(record.baseRevision),
     revision: Number(record.revision),
     operationId: String(record.operationId || ''),
     patch: record.patch,
     results: Array.isArray(record.results) ? record.results : [],
     timestamp: String(record.timestamp || ''),
-  });
+  };
+  if (record.walVersion === 2) return JSON.stringify({ walVersion: 2, ...value, explorationDelta: record.explorationDelta });
+  if (record.walVersion !== undefined) fail('Unknown World WAL version');
+  return JSON.stringify(value);
 }
 
 function checksum(record) {
@@ -62,31 +66,35 @@ export function createWorldWal({ filePath, applyPatch, maxBytes = DEFAULT_MAX_BY
         revision: recordRevision,
         updatedAt: record.timestamp || current.updatedAt,
         state,
+        ...(record.walVersion === 2 ? { exploration: applyExplorationDelta(current.exploration, record.explorationDelta) } : {}),
         recentStatusOperations: Array.isArray(record.results) ? record.results : current.recentStatusOperations,
       };
     }
     // Validate all complete records before touching a torn tail. Upgrade reads
     // stay read-only so the checkpoint can preserve the original WAL bytes.
     if (repairTail && source !== complete) {
-      await truncate(filePath, Buffer.byteLength(complete));
+      const handle = await open(filePath, 'r+');
+      try { await handle.truncate(Buffer.byteLength(complete)); await handle.sync(); }
+      finally { await handle.close(); }
       bytes = Buffer.byteLength(complete);
     }
     return current;
   }
 
-  async function append({ baseRevision, revision, operationId, patch, results = [], timestamp = new Date().toISOString() } = {}) {
+  async function append({ baseRevision, revision, operationId, patch, results = [], timestamp = new Date().toISOString(), explorationDelta } = {}, { returnRecord = true } = {}) {
     const record = { baseRevision, revision, operationId, patch, results, timestamp };
+    if (explorationDelta) Object.assign(record, { walVersion: 2, explorationDelta });
     record.checksum = checksum(record);
     const line = `${JSON.stringify(record)}\n`;
     const handle = await open(filePath, 'a');
     try {
-      await handle.write(line, null, 'utf8');
+      await handle.writeFile(line, 'utf8');
       await handle.sync();
     } finally {
       await handle.close();
     }
     bytes += Buffer.byteLength(line);
-    return structuredClone(record);
+    return returnRecord ? structuredClone(record) : undefined;
   }
 
   function shouldCompact(revision, { revisionInterval = 100, timeIntervalMs = 60_000 } = {}) {
@@ -98,11 +106,12 @@ export function createWorldWal({ filePath, applyPatch, maxBytes = DEFAULT_MAX_BY
   }
 
   async function reset() {
-    await truncate(filePath, 0).catch(async error => {
+    const handle = await open(filePath, 'r+').catch(error => {
       if (error?.code !== 'ENOENT') throw error;
-      const handle = await open(filePath, 'a');
-      await handle.close();
+      return open(filePath, 'w+');
     });
+    try { await handle.truncate(0); await handle.sync(); }
+    finally { await handle.close(); }
     adoptCheckpoint();
   }
 

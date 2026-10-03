@@ -1,3 +1,5 @@
+import { normalizeOcclusionShapes, resolveEffectiveOcclusionShapes } from '../vision/occlusion-model.js';
+
 export const MAP_PACKAGE_API_VERSION = 1;
 export const MAP_PACKAGE_FORMAT = 'rpgmap-map-package-v1';
 
@@ -153,7 +155,7 @@ function normalizeVisionCapability(feature, declared, navigation) {
     ...source,
     occluder: true,
     blockingHeightMeters: asOptionalNonNegativeNumber(
-      source.blockingHeightMeters ?? navigation?.blockingHeightMeters,
+      Object.hasOwn(source, 'blockingHeightMeters') ? source.blockingHeightMeters : navigation?.blockingHeightMeters,
       'feature vision blockingHeightMeters',
     ),
     polygon: normalizeNavigationPolygon(
@@ -338,6 +340,8 @@ export function prepareMapPackage(rawPackage, { source = 'unknown' } = {}) {
   const featureTaxonomy = normalizeFeatureTaxonomy(rawPackage);
   const svg = typeof rawPackage.svg === 'string' ? rawPackage.svg : render();
   if (!String(svg).includes('<svg')) throw new TypeError('Invalid MapPackage: renderer did not return SVG markup');
+  const occlusionShapes = normalizeOcclusionShapes(rawPackage.occlusionShapes);
+  resolveEffectiveOcclusionShapes({ features, occlusionShapes });
 
   return Object.freeze({
     ...rawPackage,
@@ -352,6 +356,7 @@ export function prepareMapPackage(rawPackage, { source = 'unknown' } = {}) {
     logicalLayers: Object.freeze(layerPlan.map((entry) => entry.id)),
     featureTaxonomy,
     features,
+    occlusionShapes,
     lights: Object.freeze((Array.isArray(rawPackage.lights) ? rawPackage.lights : []).map(normalizeLightDescriptor)),
     featureCount: features.length,
     svg,

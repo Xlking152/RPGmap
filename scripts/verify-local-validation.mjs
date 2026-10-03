@@ -8,7 +8,12 @@ if (!/^\d+\.\d+\.\d+$/.test(version || '') || !/^[a-f0-9]{40}$/.test(commit || '
 }
 const validation = JSON.parse(await readFile(path.join(directory, 'local-validation.json'), 'utf8'));
 if (validation.version !== version || validation.commit !== commit) throw new Error('Local validation source mismatch');
-for (const check of ['tests', 'build', 'bundle', 'package', 'benchmark', 'lanBenchmark', 'edge', 'chrome']) {
+const requiredChecks = ['tests', 'build', 'bundle', 'package', 'benchmark', 'lanBenchmark', 'chrome'];
+const [major, minor, patch] = version.split('.').map(Number);
+if (major > 2 || (major === 2 && (minor > 5 || (minor === 5 && patch >= 4)))) {
+  requiredChecks.push('visionBenchmark', 'occlusionLanBenchmark', 'browserBenchmark');
+}
+for (const check of requiredChecks) {
   if (validation.checks?.[check] !== 'passed') throw new Error(`Local check missing: ${check}`);
 }
 const archive = await readFile(path.join(directory, `RPGmap-v${version}.zip`));

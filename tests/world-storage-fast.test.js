@@ -32,6 +32,8 @@ test('trusted World document commits save the same bytes as full validation', ()
       expectedOrigins: { 'token-1': { x: 1.5, y: 2.5, elevationMeters: 0 } },
     } },
     { type: 'scene.fog.explore', payload: { sceneId, partyId: 'party', x: 20, y: 30, radiusMeters: 12 } },
+    { type: 'token.move', payload: { sceneId, tokenId: 'token-1', x: 22, y: 31 } },
+    { type: 'token.reposition', payload: { sceneId, tokenId: 'token-1', x: 25, y: 33, elevationMeters: 3 } },
   ];
   for (const operation of operations) {
     const applied = applyWorldOperations(state, [operation], { ruleset, mapMetrics: mapPackage, source: { role: 'offline' } });

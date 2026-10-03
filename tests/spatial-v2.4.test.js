@@ -8,12 +8,35 @@ import {
   inspectLineOfSight,
   lightContributionAtPoint,
   normalizeVisionOccluder,
+  normalizeSpatialPoint,
   perceptionLevelAtPoint,
   sphereGroundRadiusMeters,
 } from '../src/spatial/kernel.js';
 import { projectStateForAudience } from '../src/vision/audience.js';
 import { exploreFogVisibleCircle, isFogCellExplored } from '../src/vision/fog.js';
 import { createInitialState, createDamagePreview, commitDamageEvent, deriveSceneState, undoLastSceneEvent, commitRestoreEvent, commitResetSceneEvent } from '../src/engine/state.js';
+
+test('spatial point reuse preserves coordinate-only shape and mutable/getter/height behavior', () => {
+  const raw = Object.freeze({ x: 3, y: 4, elevationMeters: 12, id: 'private-token', secret: 'hidden' });
+  const normalized = normalizeSpatialPoint(raw);
+  assert.deepEqual(normalized, { x: 3, y: 4, elevationMeters: 12 });
+  assert.equal(normalizeSpatialPoint(raw), normalized);
+  assert.equal(normalizeSpatialPoint(normalized), normalized);
+  assert.equal(distance3dMeters(normalized, { x: 0, y: 0, elevationMeters: 0 }), 13);
+  const mutable = { x: 3, y: 4, elevationMeters: 0 };
+  normalizeSpatialPoint(mutable); mutable.x = 8;
+  assert.equal(normalizeSpatialPoint(mutable).x, 8);
+  let x = 2;
+  const getter = Object.freeze({ get x() { return x; }, y: 0, elevationMeters: 0 });
+  assert.equal(normalizeSpatialPoint(getter).x, 2); x = 9;
+  assert.equal(normalizeSpatialPoint(getter).x, 9);
+  const noHeight = Object.freeze({ x: 3, y: 4 });
+  assert.equal(normalizeSpatialPoint(noHeight, 5).elevationMeters, 5);
+  assert.equal(normalizeSpatialPoint(noHeight, 15).elevationMeters, 15);
+  const nullHeight = Object.freeze({ x: 3, y: 4, elevationMeters: null });
+  assert.equal(normalizeSpatialPoint(nullHeight, 5).elevationMeters, 5);
+  assert.equal(normalizeSpatialPoint(nullHeight, 15).elevationMeters, 15);
+});
 
 const wall = {
   id: 'wall-a', featureId: 'wall-a',
