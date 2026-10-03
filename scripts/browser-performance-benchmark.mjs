@@ -5,6 +5,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
 import { browserBenchmarkMovementTarget, browserBenchmarkPhaseOperations } from './browser-benchmark-movement.mjs';
 
@@ -137,6 +138,7 @@ function fixture(definitions) {
 }
 
 async function launchServer({ port, mapDir }) {
+  const startedAt = performance.now();
   const child = spawn(process.execPath, [path.join(packageRoot, 'server.mjs')], {
     cwd: packageRoot,
     env: {
@@ -152,19 +154,26 @@ async function launchServer({ port, mapDir }) {
   child.stderr.on('data', chunk => { output += chunk; });
   await retry(async () => {
     if (child.exitCode !== null) throw new Error(`Server exited ${child.exitCode}: ${output.slice(-2000)}`);
+    // The listening line belongs to this child; an old process still shutting
+    // down on the same port must never satisfy the new server's health check.
+    if (!output.includes(`Local   : http://127.0.0.1:${port}`)
+      && !new RegExp(`Local\\s+: http://127\\.0\\.0\\.1:${port}(?:\\s|$)`).test(output)) return false;
     const response = await fetch(`http://127.0.0.1:${port}/api/health`).catch(() => null);
     return response?.ok;
   }, 'benchmark server');
-  return { child, output: () => output };
+  return { child, output: () => output, startupMs: performance.now() - startedAt };
 }
 
 async function stopServer(server) {
-  if (!server || server.child.exitCode !== null) return;
+  const startedAt = performance.now();
+  if (!server || server.child.exitCode !== null) return { shutdownMs: 0, forcedKill: false };
   const exited = new Promise(resolve => server.child.once('exit', resolve));
   if (server.child.connected) server.child.send('rpgmap.shutdown', () => {});
   else server.child.kill('SIGTERM');
   await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 3000))]);
-  if (server.child.exitCode === null) server.child.kill('SIGKILL');
+  const forcedKill = server.child.exitCode === null;
+  if (forcedKill) { server.child.kill('SIGKILL'); await exited; }
+  return { shutdownMs: performance.now() - startedAt, forcedKill };
 }
 
 class BrowserSession {
@@ -493,20 +502,36 @@ try {
   })()`;
   const statesBefore = await Promise.all(sessions.map(session => session.evaluate(recoveryStateExpression)));
   const disconnectedAt = performance.now();
-  await stopServer(server); server = null;
+  const shutdown = await stopServer(server); server = null;
   await new Promise(resolve => setTimeout(resolve, 3000));
   server = await launchServer({ port, mapDir });
-  await Promise.all(sessions.map(session => retry(
-    () => session.evaluate(`(() => { const status = document.querySelector('#app').rpgMapApp.multiplayer.getStatus();
+  const reconnectedAt = await Promise.all(sessions.map(async session => {
+    await retry(() => session.evaluate(`(() => { const status = document.querySelector('#app').rpgMapApp.multiplayer.getStatus();
       return status.connected === true && status.resuming === false && status.applyingRemote === false; })()`),
-    `${session.name} reconnect`, 10_000,
-  )));
+    `${session.name} reconnect`, 10_000);
+    return performance.now() - disconnectedAt;
+  }));
   const recoveredMs = performance.now() - disconnectedAt;
   const revisionsAfter = await Promise.all(sessions.map(session => session.evaluate(`document.querySelector('#app').rpgMapApp.multiplayer.getStatus().revision`)));
   const statesAfter = await Promise.all(sessions.map(session => session.evaluate(recoveryStateExpression)));
-  const projectionMatches = statesBefore.map((value, index) => JSON.stringify(value) === JSON.stringify(statesAfter[index]));
-  const recovery = { outageDelayMs: 3000, recoveredMs, revisionsBefore, revisionsAfter,
-    synchronizationComplete: true, projectionMatches };
+  const projectionMatches = statesBefore.map((value, index) => isDeepStrictEqual(value, statesAfter[index]));
+  const projectionDifferences = statesBefore.map((before, index) => {
+    const after = statesAfter[index];
+    const beforeTokens = new Map((before.tokens || []).map(token => [token.id, token]));
+    const afterTokens = new Map((after.tokens || []).map(token => [token.id, token]));
+    const changedTokens = [...new Set([...beforeTokens.keys(), ...afterTokens.keys()])].flatMap(id => {
+      const left = beforeTokens.get(id), right = afterTokens.get(id);
+      if (isDeepStrictEqual(left, right)) return [];
+      const fields = [...new Set([...Object.keys(left || {}), ...Object.keys(right || {})])]
+        .filter(field => !isDeepStrictEqual(left?.[field], right?.[field]));
+      return [{ id, fields }];
+    });
+    return { worldIdMatches: before.worldId === after.worldId, sceneIdMatches: before.sceneId === after.sceneId,
+      sourceBefore: before.sourceTokenId, sourceAfter: after.sourceTokenId,
+      fogMatches: isDeepStrictEqual(before.fog, after.fog), changedTokens };
+  });
+  const recovery = { outageDelayMs: 3000, recoveredMs, ...shutdown, startupMs: server.startupMs,
+    reconnectedAt, revisionsBefore, revisionsAfter, synchronizationComplete: true, projectionMatches, projectionDifferences };
   const report = {
     version: packageJson.version, browser: browserName, headless, browserExecutable: browserExecutable(),
     packageRoot, build: buildInfo,

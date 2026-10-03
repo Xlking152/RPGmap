@@ -7,6 +7,38 @@ const OMIT_SCENE = new Set([...Object.values(SCENE_COLLECTIONS), 'featureStates'
 const FORBIDDEN = new Set(['__proto__', 'prototype', 'constructor']);
 const plain = value => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 const clone = structuredClone;
+const immutableJsonDocuments = new WeakSet();
+const immutableCollections = new WeakSet();
+
+function immutableJson(value, visiting = new WeakSet(), depth = 0) {
+  if (value === null || ['string', 'boolean'].includes(typeof value)) return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (!value || typeof value !== 'object' || depth > 48 || visiting.has(value)) return false;
+  if (immutableJsonDocuments.has(value)) return true;
+  if (!Object.isFrozen(value) || (Array.isArray(value) ? Object.getPrototypeOf(value) !== Array.prototype
+    : ![Object.prototype, null].includes(Object.getPrototypeOf(value))) || Object.getOwnPropertySymbols(value).length) return false;
+  visiting.add(value);
+  const valid = Object.entries(Object.getOwnPropertyDescriptors(value)).every(([key, descriptor]) =>
+    Array.isArray(value) && key === 'length'
+      || descriptor.enumerable && Object.hasOwn(descriptor, 'value') && immutableJson(descriptor.value, visiting, depth + 1));
+  visiting.delete(value);
+  if (valid) immutableJsonDocuments.add(value);
+  return valid;
+}
+
+function immutableCollection(items) {
+  if (immutableCollections.has(items)) return true;
+  if (!immutableJson(items)) return false;
+  const ids = new Set();
+  for (const item of items) {
+    if (!plain(item) || !Object.hasOwn(item, 'id')) return false;
+    const id = String(item.id);
+    if (ids.has(id)) return false;
+    ids.add(id);
+  }
+  immutableCollections.add(items);
+  return true;
+}
 
 function fail(message, code = 'invalid_document_change') {
   throw Object.assign(new Error(message), { code });
@@ -158,6 +190,9 @@ function createPairedDocumentChanges(beforeState, afterState, { motion = [], fog
   const sameCollection = (type, beforeItems, afterItems, parent = null, onPair = paired) => {
     const before = beforeItems || [], after = afterItems || [];
     if (!Array.isArray(before) || !Array.isArray(after) || before.length !== after.length) return false;
+    // Scene pairs still descend into Fog, feature states and child collections.
+    // Only an unchanged qualified leaf collection can omit the ID scan.
+    if (onPair === paired && before === after && immutableCollection(before)) return true;
     const seen = new Set();
     for (let index = 0; index < before.length; index += 1) {
       if (!before[index] || !after[index]) return false;

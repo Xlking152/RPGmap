@@ -20,6 +20,38 @@ const MAX_EFFECTS_PER_TARGET = 64;
 const MAX_BATCH_OPERATIONS = 64;
 
 const clone = value => structuredClone(value);
+const immutableDefinitionSets = new WeakMap();
+const verifiedImmutableJson = new WeakSet();
+
+function immutableJson(value, visiting = new WeakSet()) {
+  if (value === null || ['string', 'boolean'].includes(typeof value)) return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (!value || typeof value !== 'object') return false;
+  if (verifiedImmutableJson.has(value)) return true;
+  if (!Object.isFrozen(value) || visiting.has(value)
+    || ![Object.prototype, Array.prototype, null].includes(Object.getPrototypeOf(value))) return false;
+  visiting.add(value);
+  const valid = Object.values(Object.getOwnPropertyDescriptors(value)).every(descriptor =>
+    Object.hasOwn(descriptor, 'value') && immutableJson(descriptor.value, visiting));
+  visiting.delete(value);
+  if (valid) verifiedImmutableJson.add(value);
+  return valid;
+}
+
+function freezeJson(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  Object.values(value).forEach(freezeJson);
+  return Object.freeze(value);
+}
+
+function uniqueDefinitions(definitions) {
+  const seen = new Set();
+  return definitions.filter(definition => {
+    if (!definition || seen.has(definition.id)) return false;
+    seen.add(definition.id);
+    return true;
+  });
+}
 function plainObject(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
 function finite(value, fallback = 0) { const number = Number(value); return Number.isFinite(number) ? number : fallback; }
 function integer(value, fallback = 1, minimum = 1, maximum = MAX_STACKS) {
@@ -112,7 +144,38 @@ function definitionView(definition) {
   return { ...clone(definition), label: cleanText(definition?.label || definition?.name, definition?.id || ''), builtIn: Boolean(definition?.builtIn) };
 }
 
+// Only the deeply immutable definition collection is shared. Effect instances,
+// Actor/Token resolution, capabilities and versions are never cached here.
+function immutableDefinitionSet(source) {
+  if (!Array.isArray(source)) return null;
+  const existing = immutableDefinitionSets.get(source);
+  if (existing) return existing;
+  if (!immutableJson(source)) return null;
+  const candidates = source.map(definition => normalizeStatusDefinition(definition));
+  const definitions = freezeJson(uniqueDefinitions(candidates));
+  const views = freezeJson(definitions.map(definitionView));
+  const limited = uniqueDefinitions(candidates.slice(0, MAX_DEFINITIONS));
+  const normalizerDefinitions = limited.length === definitions.length
+    && limited.every((value, index) => value === definitions[index]) ? definitions : freezeJson(limited);
+  const limitedViews = normalizerDefinitions === definitions ? views : freezeJson(normalizerDefinitions.map(definitionView));
+  // Array-based effect resolution historically keeps the last duplicate ID;
+  // entity-state normalization and getStatusDefinitions keep the first one.
+  const arrayViews = freezeJson(candidates.filter(Boolean).map(definitionView));
+  const value = { definitions, views, normalizerDefinitions,
+    byId: new Map(views.map(definition => [definition.id, definition])),
+    arrayById: new Map(arrayViews.map(definition => [definition.id, definition])) };
+  immutableDefinitionSets.set(source, value);
+  // The private resolver can retain this normalized baseline without running
+  // definition normalization again. Public APIs still detach their results.
+  immutableDefinitionSets.set(normalizerDefinitions, { definitions: normalizerDefinitions, views: limitedViews,
+    normalizerDefinitions, byId: new Map(limitedViews.map(definition => [definition.id, definition])),
+    arrayById: new Map(limitedViews.map(definition => [definition.id, definition])) });
+  return value;
+}
+
 export function getStatusDefinitions(entityState) {
+  const immutable = immutableDefinitionSet(entityState?.statusDefinitions);
+  if (immutable) return immutable.views.map(clone);
   const definitions = Array.isArray(entityState?.statusDefinitions)
     ? entityState.statusDefinitions.map(definition => normalizeStatusDefinition(definition)).filter(Boolean)
     : [];
@@ -192,17 +255,21 @@ function normalizeInstance(effect, { definition, targetId, index, usedIds }) {
   return instance;
 }
 
-export function normalizeEntityStatusState(raw) {
+function normalizeStatusState(raw, { retainImmutableDefinitions = false } = {}) {
   const source = plainObject(raw) ? raw : {};
   const definitions = [];
   const definitionsById = new Map();
-  for (const candidate of (Array.isArray(source.statusDefinitions) ? source.statusDefinitions : []).slice(0, MAX_DEFINITIONS)) {
-    const definition = normalizeStatusDefinition(candidate);
+  const immutable = retainImmutableDefinitions ? immutableDefinitionSet(source.statusDefinitions) : null;
+  const candidates = immutable?.normalizerDefinitions
+    || (Array.isArray(source.statusDefinitions) ? source.statusDefinitions : []).slice(0, MAX_DEFINITIONS);
+  for (const candidate of candidates) {
+    const definition = immutable ? candidate : normalizeStatusDefinition(candidate);
     if (!definition || definitionsById.has(definition.id)) continue;
     definitions.push(definition);
     definitionsById.set(definition.id, definition);
   }
   let migratedEffects = 0;
+  let definitionsChanged = false;
   const normalizeTargets = (targets, scope) => (Array.isArray(targets) ? targets : []).filter(Boolean).flatMap(target => {
     const targetId = cleanText(String(target?.id ?? ''), '', 160);
     if (!targetId) return [];
@@ -217,16 +284,20 @@ export function normalizeEntityStatusState(raw) {
         definitionId = definition.id;
         const existing = definitionsById.get(definitionId);
         if (existing) definition = existing;
-        else { definitions.push(definition); definitionsById.set(definition.id, definition); }
+        else { definitions.push(definition); definitionsById.set(definition.id, definition); definitionsChanged = true; }
         migratedEffects += 1;
       }
       if (!definition.scopes?.includes(scope)) {
         if (!definition.builtIn && (scope !== 'token' || !(definition.changes || []).length)) {
-          definition.scopes = [...new Set([...(definition.scopes || []), scope])];
+          const updated = { ...definition, scopes: [...new Set([...(definition.scopes || []), scope])] };
+          definitions[definitions.findIndex(item => item.id === definition.id)] = updated;
+          definitionsById.set(definition.id, updated);
+          definition = updated;
+          definitionsChanged = true;
         } else {
           const scoped = legacyDefinition(effect, scope);
           definition = definitionsById.get(scoped.id) || scoped;
-          if (!definitionsById.has(scoped.id)) { definitions.push(scoped); definitionsById.set(scoped.id, scoped); }
+          if (!definitionsById.has(scoped.id)) { definitions.push(scoped); definitionsById.set(scoped.id, scoped); definitionsChanged = true; }
           definitionId = definition.id;
           migratedEffects += 1;
         }
@@ -247,14 +318,19 @@ export function normalizeEntityStatusState(raw) {
   });
   const actors = normalizeTargets(source.actors, 'actor');
   const tokens = normalizeTargets(source.tokens, 'token');
+  const { statusDefinitions: _definitions, actors: _actors, tokens: _tokens, ...metadata } = source;
   return {
-    ...clone(source),
+    ...clone(metadata),
     schemaVersion: STATUS_SCHEMA_VERSION,
-    statusDefinitions: definitions.map(clone),
+    statusDefinitions: immutable && !definitionsChanged ? immutable.normalizerDefinitions : definitions.map(clone),
     actors,
     tokens,
     migratedEffects,
   };
+}
+
+export function normalizeEntityStatusState(raw) {
+  return normalizeStatusState(raw);
 }
 
 function targetContext(entityState, context = {}) {
@@ -284,6 +360,8 @@ function resolveTargetEffects(target, scope, definitionsById) {
 }
 
 function definitionsMap(source) {
+  const immutable = immutableDefinitionSet(Array.isArray(source) ? source : source?.statusDefinitions);
+  if (immutable) return Array.isArray(source) ? immutable.arrayById : immutable.byId;
   const definitions = Array.isArray(source)
     ? source.map(definition => normalizeStatusDefinition(definition)).filter(Boolean).map(definitionView)
     : getStatusDefinitions(source);
@@ -326,9 +404,10 @@ export function resolveStatusCapabilities(statuses = []) {
 export function resolveStatuses(rawEntityState, context = {}) {
   const entityState = context.assumeNormalized === true
     ? rawEntityState
-    : normalizeEntityStatusState(rawEntityState);
-  const definitions = getStatusDefinitions(entityState);
-  const definitionsById = new Map(definitions.map(definition => [definition.id, definition]));
+    : normalizeStatusState(rawEntityState, { retainImmutableDefinitions: true });
+  const immutable = immutableDefinitionSet(entityState?.statusDefinitions);
+  const definitions = immutable?.views || getStatusDefinitions(entityState);
+  const definitionsById = immutable?.byId || new Map(definitions.map(definition => [definition.id, definition]));
   const { actor, token } = targetContext(entityState, context);
   const actorStatuses = resolveTargetEffects(actor, 'actor', definitionsById);
   const tokenStatuses = resolveTargetEffects(token, 'token', definitionsById);

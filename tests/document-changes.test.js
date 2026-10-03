@@ -63,6 +63,56 @@ test('paired Document diff has byte-identical changes to the full diff for large
   }
 });
 
+test('unchanged immutable leaf collections skip repeated identity scans while Scene child changes remain complete', () => {
+  const freeze = value => {
+    if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+    Object.values(value).forEach(freeze); return Object.freeze(value);
+  };
+  const before = fixture();
+  before.preferences.worldV2.actors[0].id = 'immutable-leaf-actor';
+  before.preferences.worldV2.scenes.forEach(scene => { scene.tokens[0].actorId = 'immutable-leaf-actor'; });
+  freeze(before);
+  assert.deepEqual(createDocumentChanges(before, before), []); // Qualify shared immutable collections once.
+  const world = before.preferences.worldV2, scene = world.scenes[0];
+  const after = { ...before, preferences: { ...before.preferences, worldV2: { ...world,
+    scenes: [{ ...scene, tokens: [{ ...scene.tokens[0], x: 37 }],
+      fog: { ...scene.fog, exploredByParty: { party: { rows: { 3: [[4, 7]] } } } } }, world.scenes[1]],
+  } } };
+  const originalString = globalThis.String;
+  let idReads = 0;
+  globalThis.String = value => { if (value === 'immutable-leaf-actor') idReads++; return originalString(value); };
+  try {
+    const quick = createDocumentChanges(before, after), quickReads = idReads;
+    idReads = 0;
+    const full = createDocumentChangesFull(before, after);
+    assert.deepEqual(quick, full);
+    assert.equal(quickReads, 0);
+    assert.ok(idReads > 0, 'the full oracle still visits the shared Actor collection');
+    assert.deepEqual(quick.map(change => change.document.type), ['Token', 'Fog']);
+    assert.deepEqual(applyDocumentChanges(before, quick).preferences.worldV2, after.preferences.worldV2);
+  } finally { globalThis.String = originalString; }
+});
+
+test('mutable IDs, frozen accessors and duplicate collections retain the full diff fallback', () => {
+  for (const variant of ['mutable', 'shallow-frozen', 'accessor', 'duplicate']) {
+    const before = fixture(), actors = before.preferences.worldV2.actors;
+    actors.push({ ...structuredClone(actors[0]), id: 'second' });
+    let id = 'second';
+    if (variant === 'accessor') {
+      Object.defineProperty(actors[1], 'id', { enumerable: true, get: () => id });
+      Object.freeze(actors[1]); Object.freeze(actors);
+    } else if (variant === 'shallow-frozen') Object.freeze(actors);
+    else if (variant === 'duplicate') {
+      actors[1].id = 'a'; actors.forEach(Object.freeze); Object.freeze(actors);
+    }
+    createDocumentChanges(before, before);
+    if (variant === 'accessor') id = 'a';
+    else if (variant !== 'duplicate') actors[1].id = 'a';
+    const after = { ...before, preferences: { ...before.preferences, audienceVision: { source: null, partyIds: ['party'] } } };
+    assert.deepEqual(createDocumentChanges(before, after), createDocumentChangesFull(before, after), variant);
+  }
+});
+
 test('focused Fog updates match full recipient deltas through sparse rows, removals and missing documents', () => {
   for (const variant of ['update', 'create', 'delete', 'unchanged']) {
     const before = fixture();

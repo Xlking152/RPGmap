@@ -888,7 +888,12 @@ export function createMultiplayerController() {
           resuming = message.resumeAccepted === true;
           audienceFingerprint = String(message.audienceFingerprint || '');
           audienceRevision = Math.max(0, Number(message.audienceRevision) || 0);
-          setActiveVisionSource(message.world?.state?.preferences?.audienceVision?.source?.tokenId || null);
+          // An accepted resume omits the snapshot. Its audience fingerprint
+          // confirms the previous source; clearing it here would lose vision
+          // when there are no missed patches to apply.
+          if (message.resumeAccepted !== true) {
+            setActiveVisionSource(message.world?.state?.preferences?.audienceVision?.source?.tokenId || null);
+          }
           renderButton();
           startHeartbeat();
           save('role', session?.role || 'player');

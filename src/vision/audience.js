@@ -17,8 +17,34 @@ const projectionAudiences = new WeakMap();
 const projectionPolicies = new WeakMap();
 const immutablePolicyDocuments = new WeakSet();
 const vagueActorDocuments = new WeakSet();
+const canonicalActorMaps = new WeakMap();
 const audienceKey = context => JSON.stringify([context.role, context.userId,
   context.user?.ownership || {}, context.user?.placementGrants || {}, context.user?.disabled === true]);
+
+function jsonPermissionValue(value, visiting = new WeakSet()) {
+  if (value === null || ['string', 'boolean'].includes(typeof value)) return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (!value || typeof value !== 'object' || visiting.has(value)
+    || (Array.isArray(value) ? Object.getPrototypeOf(value) !== Array.prototype
+      : ![Object.prototype, null].includes(Object.getPrototypeOf(value)))) return false;
+  if (Object.getOwnPropertySymbols(value).length) return false;
+  visiting.add(value);
+  const valid = Object.entries(Object.getOwnPropertyDescriptors(value)).every(([key, descriptor]) =>
+    Array.isArray(value) && key === 'length'
+      || descriptor.enumerable && Object.hasOwn(descriptor, 'value') && jsonPermissionValue(descriptor.value, visiting));
+  visiting.delete(value);
+  return valid;
+}
+
+function permissionsCacheable(user) {
+  if (user == null) return true;
+  if (!plainObject(user) || ![Object.prototype, null].includes(Object.getPrototypeOf(user))) return false;
+  return ['ownership', 'placementGrants', 'disabled'].every(key => {
+    const descriptor = Object.getOwnPropertyDescriptor(user, key);
+    if (!descriptor) return !(key in user);
+    return descriptor.enumerable && Object.hasOwn(descriptor, 'value') && jsonPermissionValue(descriptor.value);
+  });
+}
 
 // Audience projection is executed once per connected session for every
 // authoritative commit. Cloning the complete World here made a one-Token
@@ -67,9 +93,18 @@ function plainObject(value) {
 }
 
 function immutablePolicyDocument(value) {
-  if (!value || typeof value !== 'object') return true;
+  if (value === null || !['object', 'function'].includes(typeof value)) return !['function', 'symbol', 'bigint'].includes(typeof value);
   if (immutablePolicyDocuments.has(value)) return true;
-  if (!Object.isFrozen(value) || !Object.values(value).every(immutablePolicyDocument)) return false;
+  if (typeof value !== 'object' || !Object.isFrozen(value)
+    || (Array.isArray(value) ? Object.getPrototypeOf(value) !== Array.prototype
+      : ![Object.prototype, null].includes(Object.getPrototypeOf(value)))) return false;
+  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
+    if (!Object.hasOwn(descriptor, 'value') || !immutablePolicyDocument(descriptor.value)) return false;
+  }
+  for (let prototype = Object.getPrototypeOf(value); prototype; prototype = Object.getPrototypeOf(prototype)) {
+    const toJSON = Object.getOwnPropertyDescriptor(prototype, 'toJSON');
+    if (toJSON && (!Object.hasOwn(toJSON, 'value') || typeof toJSON.value === 'function')) return false;
+  }
   immutablePolicyDocuments.add(value);
   return true;
 }
@@ -86,8 +121,22 @@ function activeScene(world) {
   return (world?.scenes || []).find(scene => String(scene?.id ?? '') === String(world?.activeSceneId ?? '')) || null;
 }
 
-function actorMap(world) {
-  return new Map((world?.actors || []).map(actor => [String(actor?.id ?? ''), actor]));
+function actorMap(world, cacheCanonical = false) {
+  const actors = world?.actors || [];
+  if (!cacheCanonical || !Array.isArray(actors)) {
+    return new Map(actors.map(actor => [String(actor?.id ?? ''), actor]));
+  }
+  const cached = canonicalActorMaps.get(actors);
+  if (cached) return cached;
+  const result = new Map(actors.map(actor => [String(actor?.id ?? ''), actor]));
+  // Only canonical input arrays use this map. Recipient projections always
+  // build their own map, even if a caller freezes the returned projection.
+  // Duplicate IDs retain the legacy last-entry precedence without being cached.
+  if (result.size === actors.length && jsonPermissionValue(actors) && immutablePolicyDocument(actors)
+    && actors.every(actor => typeof actor?.id === 'string' && actor.id.length > 0)) {
+    canonicalActorMaps.set(actors, result);
+  }
+  return result;
 }
 
 function tokenControlled(token, actor, context) {
@@ -116,6 +165,69 @@ function viewerParties(world, context, actors) {
     }
   }
   return parties;
+}
+
+function viewerPartyInputs(world) {
+  if (!Array.isArray(world.actors) || !Array.isArray(world.scenes)
+    || !immutablePolicyDocument(world.actors) || !immutablePolicyDocument(world.scenes)) return null;
+  const actorIds = new Set(), sceneIds = new Set();
+  for (const actor of world.actors) {
+    if (!actor || actorIds.has(String(actor.id))) return null;
+    actorIds.add(String(actor.id));
+  }
+  for (const scene of world.scenes) {
+    if (!scene || sceneIds.has(String(scene.id)) || !Array.isArray(scene.tokens)) return null;
+    sceneIds.add(String(scene.id));
+    const tokenIds = new Set();
+    for (const token of scene.tokens) {
+      if (!token || tokenIds.has(String(token.id))) return null;
+      tokenIds.add(String(token.id));
+    }
+  }
+  return { actors: world.actors, scenes: world.scenes };
+}
+
+function movementPartyInputs(world, previous) {
+  if (!previous || world.actors !== previous.actors || !Array.isArray(world.scenes)
+    || !Object.isFrozen(world.scenes) || world.scenes.length !== previous.scenes.length) return null;
+  const knownScenes = immutablePolicyDocuments.has(world.scenes);
+  if (!knownScenes && (Object.getPrototypeOf(world.scenes) !== Array.prototype
+    || Object.getOwnPropertyNames(world.scenes).length !== world.scenes.length + 1
+    || Object.getOwnPropertySymbols(world.scenes).length)) return null;
+  for (let sceneIndex = 0; sceneIndex < world.scenes.length; sceneIndex += 1) {
+    const descriptor = knownScenes ? null : Object.getOwnPropertyDescriptor(world.scenes, sceneIndex);
+    if (!knownScenes && !Object.hasOwn(descriptor || {}, 'value')) return null;
+    const scene = knownScenes ? world.scenes[sceneIndex] : descriptor.value, before = previous.scenes[sceneIndex];
+    if (scene === before) continue;
+    if (!scene || !Object.isFrozen(scene) || ![Object.prototype, null].includes(Object.getPrototypeOf(scene))) return null;
+    const fields = Object.getOwnPropertyDescriptors(scene);
+    if (Object.keys(fields).length !== Object.getOwnPropertyNames(before).length) return null;
+    // Accepted coordinate-only moves replace the Token array. Any other Scene
+    // change follows the full party derivation, including changed collection order.
+    for (const [key, descriptor] of Object.entries(fields)) {
+      if (!Object.hasOwn(descriptor, 'value') || !Object.hasOwn(before, key)
+        || (key !== 'tokens' && descriptor.value !== before[key])) return null;
+    }
+    const tokens = fields.tokens?.value;
+    if (!Array.isArray(tokens) || !Object.isFrozen(tokens) || tokens.length !== before.tokens.length) return null;
+    const knownTokens = immutablePolicyDocuments.has(tokens);
+    if (!knownTokens && (Object.getPrototypeOf(tokens) !== Array.prototype
+      || Object.getOwnPropertyNames(tokens).length !== tokens.length + 1 || Object.getOwnPropertySymbols(tokens).length)) return null;
+    for (let index = 0; index < tokens.length; index += 1) {
+      const descriptor = knownTokens ? null : Object.getOwnPropertyDescriptor(tokens, index);
+      if (!knownTokens && !Object.hasOwn(descriptor || {}, 'value')) return null;
+      const token = knownTokens ? tokens[index] : descriptor.value, oldToken = before.tokens[index];
+      if (token === oldToken) continue;
+      if (!immutablePolicyDocument(token) || token.id !== oldToken.id || token.actorId !== oldToken.actorId
+        || token.controllerUserIds !== oldToken.controllerUserIds) return null;
+    }
+    // All other fields are the same previously verified immutable documents;
+    // every new Token has also been checked, proving the replacement is immutable.
+    immutablePolicyDocuments.add(tokens);
+    immutablePolicyDocuments.add(scene);
+  }
+  immutablePolicyDocuments.add(world.scenes);
+  return { actors: world.actors, scenes: world.scenes };
 }
 
 function explicitVisibilityGranted(entity, context) {
@@ -371,7 +483,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   };
   const world = state?.preferences?.worldV2;
   if (!plainObject(world)) return state;
-  const actors = actorMap(world);
+  const actors = actorMap(world, true);
   if (context.role === 'gm') {
     const vision = currentVision(world, context, actors);
     if (vision) {
@@ -386,7 +498,19 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     return state;
   }
   delete world.templateLibrary;
-  const parties = viewerParties(world, context, actors);
+  const stamp = audienceKey(context);
+  const requestedCache = context.movementCache;
+  const movementCache = requestedCache && permissionsCacheable(context.user)
+    && projectionAudiences.get(requestedCache.previousProjection?.preferences?.audienceVision) === stamp
+    ? requestedCache : null;
+  const previousWorld = movementCache?.beforeState?.preferences?.worldV2;
+  const previousProjection = movementCache?.previousProjection;
+  const previousPolicies = movementCache && projectionPolicies.get(previousProjection?.preferences?.audienceVision);
+  const sourceIdentityUnchanged = previousPolicies
+    && previousPolicies.sourceTokenId === String(context.visionSourceTokenId || '');
+  const rawWorld = rawState.preferences.worldV2;
+  const partyInputs = sourceIdentityUnchanged ? movementPartyInputs(rawWorld, previousPolicies.partyInputs) : null;
+  const parties = partyInputs ? new Set(previousPolicies.partyIds) : viewerParties(world, context, actors);
   world.journals = (world.journals || [])
     .filter(entry => journalVisibleToAudience(entry, {
       role: context.role, userId: context.userId, partyIds: [...parties],
@@ -402,24 +526,15 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const sourceOccluders = vision && !visionIgnoresOcclusion(vision)
     ? visionOccludersForSource(vision, occluders, metersPerUnit) : occluders;
   const lights = spatial?.lights || deriveSceneLightSources(context.mapPackage, currentScene);
-  const stamp = audienceKey(context);
-  const requestedCache = context.movementCache;
-  const movementCache = requestedCache && projectionAudiences.get(requestedCache.previousProjection?.preferences?.audienceVision) === stamp
-    ? requestedCache : null;
-  const previousWorld = movementCache?.beforeState?.preferences?.worldV2;
-  const previousProjection = movementCache?.previousProjection;
-  const previousActors = actorMap(previousWorld);
+  const previousActors = actorMap(previousWorld, true);
   const projectedActors = actorMap(previousProjection?.preferences?.worldV2);
   const previousScenes = new Map((previousWorld?.scenes || []).map(scene => [String(scene.id), scene]));
   const projectedScenes = new Map((previousProjection?.preferences?.worldV2?.scenes || []).map(scene => [String(scene.id), scene]));
   const sourceUnchanged = movementCache && JSON.stringify(previousProjection?.preferences?.audienceVision?.source || null)
     === JSON.stringify(vision);
-  const partiesUnchanged = movementCache && JSON.stringify([...(previousProjection?.preferences?.audienceVision?.partyIds || [])].sort())
+  const partiesUnchanged = previousPolicies && JSON.stringify([...previousPolicies.partyIds].sort())
     === JSON.stringify([...parties].sort());
   const definitionsUnchanged = movementCache && previousWorld?.statusDefinitions === rawState.preferences.worldV2.statusDefinitions;
-  const previousPolicies = movementCache && projectionPolicies.get(previousProjection?.preferences?.audienceVision);
-  const sourceIdentityUnchanged = previousPolicies
-    && previousPolicies.sourceTokenId === String(context.visionSourceTokenId || '');
   const mapMetricsUnchanged = previousPolicies?.metersPerUnit === metersPerUnit;
   const mapPackageUnchanged = previousPolicies?.mapPackage === context.mapPackage;
   const reusePolicies = Boolean(sourceIdentityUnchanged && partiesUnchanged && definitionsUnchanged);
@@ -599,7 +714,8 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   projectionAudiences.set(state.preferences.audienceVision, stamp);
   projectionPolicies.set(state.preferences.audienceVision, {
     sourceTokenId: String(context.visionSourceTokenId || ''), metersPerUnit,
-    mapPackage: context.mapPackage, policies,
+    mapPackage: context.mapPackage, policies, partyIds: Object.freeze([...parties]),
+    partyInputs: partyInputs || viewerPartyInputs(rawWorld),
   });
   state.markers = clone(active?.markers || []);
   state.attackAreas = clone(active?.attackAreas || []);

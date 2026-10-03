@@ -39,6 +39,8 @@
 
 遮罩绘制改动另以 Chrome 软件栅格对照旧完整视口实现：2,304 组、每组连续两帧，覆盖 4 种 DPR、3 种窗口尺寸、圆形／孔洞／建筑外观／多光源及屏幕边缘，RGBA 差异像素为 0。非整数设备像素尺寸保留旧绘制与缓存生命周期，避免边缘重采样改变结果。该对照只证明绘制一致性，不代替 FPS、输入和联机门槛。
 
+10 月 3 日 22:30 的 `f3afcb2` 候选真实移动七会话记录为 `artifact/qa/v2.5.4-chrome-seven-real-moving-refresh-mask.json`：两个阶段均各执行 118 次移动。普通阶段玩家 FPS 最低 58.76、帧 p95 16.8 ms、所有会话输入 p95 最高 16.3 ms；黑暗三光源阶段玩家 FPS 最低 58.58、帧 p95 16.8 ms、输入 p95 最高 15.6 ms。两个阶段均通过性能门槛，但完整流程未通过：包含 3 秒停服的恢复耗时 15,976.991 ms，高于 13 秒门槛，Player 6 的视野来源也在续传时被清空。该记录保留为失败证据，不能用于发布晋升。同期该包六来源大范围 LAN 单轮 ACK／差量 p95 为 71.443／76.580 ms，完整采样和 Fog 正确，延迟仍未达标。
+
 联机基准采用同机 GM＋6 Player、500 Token 的实际 WebSocket 会话，包含可靠 WAL 写入、ACK 和最后一个玩家收到差量的时间。大范围用例单独验证六名玩家各移动 425 米、1,000 米视野、三光源和黑暗场景；每条路径保留 171 个采样，比较完整参考 Fog，并等待持久任务与缓存排空。这是主机回环网络的端到端测量；实际局域网还会增加网络传输及客户端设备的耗时。
 
 复现：`node scripts/lan-performance-benchmark.mjs --package=<安装包目录> --assert`、`node scripts/occlusion-lan-benchmark.mjs --package=<安装包目录> --assert`。浏览器基准设置 `RPGMAP_BENCHMARK_PACKAGE=<安装包目录>`、`RPGMAP_BENCHMARK_BROWSER=chrome`、`RPGMAP_BROWSER_BENCHMARK_HEADLESS=1` 后运行 `node scripts/browser-performance-benchmark.mjs --assert`。Chrome 安装包检查使用 `scripts/windows-smoke.ps1 -Root <安装包目录> -Browser chrome`，包含 37 个缩放档位（-4～5，每档 0.25）、DPR 1／1.25／1.5／2、平移、动画、窗口变化与编辑器提交重载。
@@ -48,5 +50,7 @@
 最终 main 提交、安装包 SHA-256、包体积以及全量测试结果在发布前记录。本轮包体积仅记录变化，不以旧体积预算阻止必要功能。
 
 2026-10-03 本轮刷新筛选、灯光绘制及持久探索上下文修改后的全量回归为 991／991 测试通过（`artifact/occlusion-full-tests-refresh-light-policy-final.log`），483 个 JavaScript 模块语法检查通过。先前开发及生产依赖审计均为 0 个漏洞。正式发布的工作流同时要求大范围联机和七会话 Chrome 指标通过；最终 main 提交、安装包 SHA-256、性能结果和包体积仍待填写。
+
+2026-10-04 增加续传来源修复、不可变状态定义与 Actor 索引复用、未变化集合免扫描及权限 getter 撤销回归后，全量为 1,013／1,013 测试通过（`artifact/occlusion-full-tests-immutable-map-resume.log`）。前一诊断包单轮大范围 LAN ACK／差量 p95 为 59.026／63.468 ms，仍未满足全部门槛；该包包含未提交源码，仅用于定位，不用于发布证据。新固定候选将重新构建并测量。
 
 本地发布清单必须同时提供普通 LAN、大范围 LAN、真实移动 Chrome 与同机视野对照的原始 JSON。验证器从 ZIP 读取 VERSION，并比对服务端模块及全部前端文件指纹，再复核原始样本、采样数、队列排空与各项门槛；单独填写 `passed` 不能晋升为正式版。
