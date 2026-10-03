@@ -1,6 +1,6 @@
 # v2.5.4 视野与延迟验收报告
 
-测试日期：2026-10-01～2026-10-03。设备：Windows、Intel Core i7-13650HX（20 线程）、Node 24.19.0。主要浏览器为 Chrome。报告区分算法 CPU 耗时、浏览器完整反馈和 WebSocket 确认耗时。**目前仍是发布前草稿；表中早期对照不能代表正在修改的最终候选包。**
+测试日期：2026-10-01～2026-10-04。设备：Windows、Intel Core i7-13650HX（20 线程）、Node 24.19.0。主要浏览器为 Chrome。报告区分算法 CPU 耗时、浏览器完整反馈和 WebSocket 确认耗时。**目前仍是发布前草稿；表中早期对照不能代表正在修改的最终候选包。**
 
 ## 同机算法对照
 
@@ -43,6 +43,8 @@
 
 10 月 4 日 02:07 的固定候选 `07c7303` 七会话完整测试通过（`artifact/qa/v2.5.4-chrome-seven-immutable-map-resume.json`）：普通阶段玩家 FPS 最低 59.95，黑暗三光源阶段约 60；帧 p95 最高 16.8 ms，所有会话输入 p95 最高 15.3 ms，确认 p95 最高 16.2 ms。各阶段仍为 60 秒及 118 次真实移动。恢复包含固定 3 秒停服，总耗时 12,475.455 ms；七个会话的来源、Token、Fog 和 revision 均一致。该包 CI 与 Windows Chrome 安装包检查通过，但同包大范围 LAN 单轮 ACK／差量 p95 为 71.994／76.139 ms，仍不得正式发布。后续状态派生与结构验证改动和最终 main 包都需要重新验收。
 
+固定候选 `9ecc740` 的正式五轮大范围 LAN 记录为 `artifact/qa/v2.5.4-lan-large-static-index-status-five.json`：六来源共 30 次移动，ACK／最终差量 p95 为 56.369／60.398 ms，完整探索中位 3,915.378 ms。全部 5,130 个测量采样、参考 Fog 和队列／上下文排空通过，但差量仍超过 60 ms 门槛，故记录为失败；没有通过取整或排除样本改判。后续优化继续针对重复 Token 索引和资格检查。
+
 联机基准采用同机 GM＋6 Player、500 Token 的实际 WebSocket 会话，包含可靠 WAL 写入、ACK 和最后一个玩家收到差量的时间。大范围用例单独验证六名玩家各移动 425 米、1,000 米视野、三光源和黑暗场景；每条路径保留 171 个采样，比较完整参考 Fog，并等待持久任务与缓存排空。这是主机回环网络的端到端测量；实际局域网还会增加网络传输及客户端设备的耗时。
 
 复现：`node scripts/lan-performance-benchmark.mjs --package=<安装包目录> --assert`、`node scripts/occlusion-lan-benchmark.mjs --package=<安装包目录> --assert`。浏览器基准设置 `RPGMAP_BENCHMARK_PACKAGE=<安装包目录>`、`RPGMAP_BENCHMARK_BROWSER=chrome`、`RPGMAP_BROWSER_BENCHMARK_HEADLESS=1` 后运行 `node scripts/browser-performance-benchmark.mjs --assert`。Chrome 安装包检查使用 `scripts/windows-smoke.ps1 -Root <安装包目录> -Browser chrome`，包含 37 个缩放档位（-4～5，每档 0.25）、DPR 1／1.25／1.5／2、平移、动画、窗口变化与编辑器提交重载。
@@ -56,5 +58,7 @@
 2026-10-04 增加续传来源修复、不可变状态定义与 Actor 索引复用、未变化集合免扫描及权限 getter 撤销回归后，全量为 1,013／1,013 测试通过（`artifact/occlusion-full-tests-immutable-map-resume.log`）。前一诊断包单轮大范围 LAN ACK／差量 p95 为 59.026／63.468 ms，仍未满足全部门槛；该包包含未提交源码，仅用于定位，不用于发布证据。新固定候选将重新构建并测量。
 
 静态结构索引和状态专用派生修改后，全量为 1,029／1,029 测试通过（`artifact/occlusion-full-tests-static-index-status-inputs.log`），全部 488 个 JavaScript 模块语法检查通过。覆盖新 Token 全校验、定义与 schema 失效、失败候选不缓存、getter／Proxy 回退、节点／深度／字节预算，以及旧完整 Actor 派生的生命、伤势、不良状态、效果和迁移对照；性能仍需固定候选实测。
+
+Token 索引和整数组资格复用修改后，全量为 1,032／1,032 测试通过（`artifact/occlusion-full-tests-token-index-policy-array.log`），488 个模块语法检查通过。新增测试确认只复用私有规范数组索引、玩家投影仍重新建立索引，以及可变输入、getter、重复 ID、状态定义和权限变化保留完整判定。
 
 本地发布清单必须同时提供普通 LAN、大范围 LAN、真实移动 Chrome 与同机视野对照的原始 JSON。验证器从 ZIP 读取 VERSION，并比对服务端模块及全部前端文件指纹，再复核原始样本、采样数、队列排空与各项门槛；单独填写 `passed` 不能晋升为正式版。

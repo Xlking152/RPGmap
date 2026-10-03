@@ -18,6 +18,7 @@ const projectionPolicies = new WeakMap();
 const immutablePolicyDocuments = new WeakSet();
 const vagueActorDocuments = new WeakSet();
 const canonicalActorMaps = new WeakMap();
+const canonicalTokenMaps = new WeakMap();
 const audienceKey = context => JSON.stringify([context.role, context.userId,
   context.user?.ownership || {}, context.user?.placementGrants || {}, context.user?.disabled === true]);
 
@@ -135,6 +136,20 @@ function actorMap(world, cacheCanonical = false) {
   if (result.size === actors.length && jsonPermissionValue(actors) && immutablePolicyDocument(actors)
     && actors.every(actor => typeof actor?.id === 'string' && actor.id.length > 0)) {
     canonicalActorMaps.set(actors, result);
+  }
+  return result;
+}
+
+function canonicalTokenMap(tokens) {
+  const cached = canonicalTokenMaps.get(tokens);
+  if (cached) return cached;
+  const result = new Map(tokens.map(token => [String(token.id), token]));
+  // The previous canonical array was qualified as a whole when its audience
+  // was projected. Reuse that immutable proof without scanning every document
+  // again. Unqualified and duplicate-ID arrays keep the legacy fresh map.
+  if (immutablePolicyDocuments.has(tokens) && result.size === tokens.length
+    && tokens.every(token => typeof token?.id === 'string' && token.id.length > 0)) {
+    canonicalTokenMaps.set(tokens, result);
   }
   return result;
 }
@@ -539,6 +554,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const mapPackageUnchanged = previousPolicies?.mapPackage === context.mapPackage;
   const reusePolicies = Boolean(sourceIdentityUnchanged && partiesUnchanged && definitionsUnchanged);
   const policies = new WeakMap();
+  const immutableActors = immutablePolicyDocuments.has(rawWorld.actors);
   const oldActive = previousScenes.get(String(world.activeSceneId));
   const rawActive = activeScene(rawState.preferences.worldV2);
   const geometryUnchanged = oldActive && oldActive.featureStates === rawActive?.featureStates
@@ -560,12 +576,13 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     const isActive = String(scene.id) === String(world.activeSceneId);
     const previousScene = previousScenes.get(String(scene.id));
     const projectedScene = projectedScenes.get(String(scene.id));
-    const previousTokens = new Map((previousScene?.tokens || []).map(token => [String(token.id), token]));
+    const previousTokens = canonicalTokenMap(previousScene?.tokens || []);
     const projectedSceneTokens = projectedScene?.tokens || [];
     const projectedTokens = new Map(projectedSceneTokens.map(token => [String(token.id), token]));
     const hasVaguePrior = Boolean(sourceIdentityUnchanged && projectedSceneTokens.some(token => token.audienceVisibility === 'vague'));
     const sceneVisibleTokenIds = new Set();
     const projectedSceneTokensNext = [];
+    const immutableScenePolicies = immutableActors && immutablePolicyDocuments.has(scene.tokens);
     for (const rawToken of scene.tokens || []) {
       const actor = actors.get(String(rawToken.actorId));
       const unchanged = movementCache && actor && previousTokens.get(String(rawToken.id)) === rawToken
@@ -577,7 +594,8 @@ export function projectStateForAudience(rawState, rawContext = {}) {
       // Only the immediately preceding projection supplies policy decisions,
       // and its audience/source/party/definition scope has already been checked.
       // Frozen canonical documents cannot change policy between coordinates.
-      const policyCacheable = immutablePolicyDocument(rawToken) && immutablePolicyDocument(actor);
+      const policyCacheable = immutableScenePolicies
+        || immutablePolicyDocument(rawToken) && immutablePolicyDocument(actor);
       const oldPolicy = reusePolicies && policyCacheable ? previousPolicies.policies.get(rawToken) : null;
       const policy = oldPolicy?.actor === actor ? oldPolicy.policy
         : tokenAudiencePolicy(rawToken, actor, context, parties, definitions);

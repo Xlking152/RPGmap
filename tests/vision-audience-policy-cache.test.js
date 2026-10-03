@@ -402,3 +402,92 @@ test('shared canonical Actor maps preserve fresh audience decisions after source
   assert.equal(next.preferences.worldV2.actors.find(actor => actor.id === 'hostile').name, 'Changed Hostile');
   assert.notEqual(next.preferences.worldV2.actors.find(actor => actor.id === 'hostile').audienceRestricted, true);
 });
+
+test('previous canonical Token indexes are reused while even frozen recipient Token maps are rebuilt', () => {
+  const before = fixture(), projected = frozen(projectStateForAudience(before, context));
+  const canonicalToken = before.preferences.worldV2.scenes[0].tokens.find(token => token.id === 'near');
+  const projectedToken = projected.preferences.worldV2.scenes[0].tokens.find(token => token.id === 'near');
+  assert.notEqual(canonicalToken, projectedToken);
+  const after = update(before, { tokenId: 'source', tokenPatch: { x: 60 } });
+  const options = { ...context, movementCache: { beforeState: before, previousProjection: projected,
+    tokenIds: new Set(['source']) } };
+  const mapSet = Map.prototype.set;
+  let canonicalInsertions = 0, projectedInsertions = 0;
+  Map.prototype.set = function (key, value) {
+    if (value === canonicalToken) canonicalInsertions += 1;
+    if (value === projectedToken) projectedInsertions += 1;
+    return mapSet.call(this, key, value);
+  };
+  try {
+    const first = projectStateForAudience(after, options);
+    assert.equal(canonicalInsertions, 1, 'the first movement builds the previous canonical Token index');
+    assert.equal(projectedInsertions, 1);
+    assert.deepEqual(projectStateForAudience(after, options), first);
+    assert.equal(canonicalInsertions, 1, 'the next audience reuses that canonical index');
+    assert.equal(projectedInsertions, 2, 'recipient maps are always fresh, even after an external freeze');
+    assert.deepEqual(first, projectStateForAudience(after, context));
+  } finally { Map.prototype.set = mapSet; }
+});
+
+test('unqualified mutable, shallow, accessor and duplicate Token arrays never reuse canonical indexes', () => {
+  for (const variant of ['mutable', 'shallow', 'accessor', 'duplicate']) {
+    let before = structuredClone(fixture());
+    const tokens = before.preferences.worldV2.scenes[0].tokens;
+    const near = tokens.find(token => token.id === 'near');
+    if (variant === 'shallow') Object.freeze(tokens);
+    if (variant === 'accessor') {
+      Object.defineProperty(near, 'id', { enumerable: true, get: () => 'near' });
+      before = frozen(before);
+    }
+    if (variant === 'duplicate') {
+      tokens.push({ ...near, x: 90 }); before = frozen(before);
+    }
+    const projected = projectStateForAudience(before, context);
+    const after = update(before, { tokenId: 'source', tokenPatch: { x: 60 } });
+    const options = { ...context, movementCache: { beforeState: before, previousProjection: projected,
+      tokenIds: new Set(['source']) } };
+    const mapSet = Map.prototype.set;
+    let insertions = 0;
+    Map.prototype.set = function (key, value) {
+      if (value === near) insertions += 1;
+      return mapSet.call(this, key, value);
+    };
+    try {
+      const first = projectStateForAudience(after, options);
+      assert.equal(insertions, 1, variant);
+      assert.deepEqual(projectStateForAudience(after, options), first);
+      assert.equal(insertions, 2, variant);
+      assert.deepEqual(first, projectStateForAudience(after, context));
+    } finally { Map.prototype.set = mapSet; }
+  }
+});
+
+test('qualified canonical arrays avoid repeated per-document policy qualification with the same full output', () => {
+  const before = fixture(), projected = projectStateForAudience(before, context);
+  const after = update(before, { tokenId: 'source', tokenPatch: { x: 60 } });
+  const options = { ...context, movementCache: { beforeState: before, previousProjection: projected,
+    tokenIds: new Set(['source']) } };
+  const warmed = projectStateForAudience(after, options);
+  const priorDocuments = new Set([...before.preferences.worldV2.actors, ...before.preferences.worldV2.scenes[0].tokens]);
+  const weakHas = WeakSet.prototype.has;
+  let documentChecks = 0;
+  WeakSet.prototype.has = function (value) {
+    if (priorDocuments.has(value)) documentChecks += 1;
+    return weakHas.call(this, value);
+  };
+  try {
+    assert.deepEqual(projectStateForAudience(after, options), warmed);
+    assert.equal(documentChecks, 0, 'whole-array proofs replace Token/Actor qualification on each policy decision');
+  } finally { WeakSet.prototype.has = weakHas; }
+  assert.deepEqual(warmed, projectStateForAudience(after, context));
+  const replacement = update(after, { actorId: 'hostile', actorPatch: { partyId: 'party-a' } });
+  compare(after, warmed, replacement, context);
+  const invisible = update(after, { tokenId: 'near', tokenPatch: {
+    effects: [{ id: 'invisible-effect', definitionId: 'invisible', enabled: true }],
+  } });
+  const hidden = compare(after, warmed, invisible, context, ['near']);
+  assert.equal(hidden.preferences.worldV2.scenes[0].tokens.some(token => token.id === 'near'), false);
+  const visible = update(invisible, { definitions: [{ id: 'invisible', capabilities: {} }] });
+  assert.equal(compare(invisible, hidden, visible, context).preferences.worldV2.scenes[0].tokens
+    .some(token => token.id === 'near'), true);
+});
