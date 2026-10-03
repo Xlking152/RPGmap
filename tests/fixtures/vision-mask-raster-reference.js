@@ -101,4 +101,3 @@ export function createContinuousMaskRenderer(documentNode) {
     dispose() { for (const surface of [mask, illumination, light, tint]) surface.canvas.width = surface.canvas.height = 0; },
   };
 }
-

@@ -1,10 +1,9 @@
-import { normalizeVisionOccluder, inspectLineOfSight, visionOccludersForSource, resolveSourceHostOccluderId } from '../spatial/kernel.js';
-import { queryOccluders, boundsOf } from '../spatial/index.js';
-import { polygonDifference } from '../engine/geometry.js';
-import { finishWorkSync } from './work.js';
-
-const ascendingNumber = (a, b) => a - b;
-const ascendingInterval = (a, b) => a[0] - b[0];
+// Full pre-optimization implementation. Keep its independent row loop as the
+// reference for mutable output, tangencies, holes and generator cancellation.
+import { normalizeVisionOccluder, inspectLineOfSight, visionOccludersForSource, resolveSourceHostOccluderId } from '../../src/spatial/kernel.js';
+import { queryOccluders, boundsOf } from '../../src/spatial/index.js';
+import { polygonDifference } from '../../src/engine/geometry.js';
+import { finishWorkSync } from '../../src/vision/work.js';
 
 /** Continuous shadows use the same edge projection as authoritative five-metre Fog. */
 export function projectVisionOcclusion({ source, radiusUnits, occluders = [], metersPerUnit = 1,
@@ -104,46 +103,36 @@ export function* groundShadowRowsSteps(source, radiusUnits, occluders, cellUnits
     const edges = [];
     for (const ring of rings) for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
       const a = ring[i], b = ring[j];
-      if (a[1] !== b[1]) edges.push({ ax: a[0], ay: a[1], dx: b[0] - a[0], dy: b[1] - a[1],
-        minY: Math.min(a[1], b[1]), maxY: Math.max(a[1], b[1]) });
+      if (a[1] !== b[1]) edges.push({ a, b, minY: Math.min(a[1], b[1]), maxY: Math.max(a[1], b[1]) });
     }
     return { edges, minY: Math.min(...edges.map(e => e.minY)), maxY: Math.max(...edges.map(e => e.maxY)) };
   });
   const result = {};
   shapes.sort((a, b) => a.minY - b.minY);
   let nextShape = 0;
-  const active = [], xs = [];
+  let active = [];
   for (const [rowKey, ranges] of Object.entries(circleRows)) {
     const y = (Number(rowKey) + 0.5) * cellUnits;
-    const firstCenter = ranges.length ? (ranges[0][0] + 0.5) * cellUnits : undefined;
-    const lastCenter = ranges.length ? (ranges.at(-1)[1] + 0.5) * cellUnits : undefined;
     const intervals = [];
     let fullyBlocked = false;
     while (nextShape < shapes.length && shapes[nextShape].minY <= y) active.push(shapes[nextShape++]);
-    let activeCount = 0;
-    for (let index = 0; index < active.length; index++) {
-      const shape = active[index];
-      if (shape.maxY > y) active[activeCount++] = shape;
-    }
-    active.length = activeCount;
+    active = active.filter(shape => shape.maxY > y);
     for (const shape of active) {
-      xs.length = 0;
-      for (const { ax, ay, dx, dy, minY, maxY } of shape.edges) {
-        // Preserve multiplication followed by division; reassociating this
-        // expression can change grid tangencies through floating-point rounding.
-        if (y >= minY && y < maxY) xs.push(ax + (y - ay) * dx / dy);
+      const xs = [];
+      for (const { a, b, minY, maxY } of shape.edges) {
+        if (y >= minY && y < maxY) xs.push(a[0] + (y - a[1]) * (b[0] - a[0]) / (b[1] - a[1]));
       }
-      xs.sort(ascendingNumber);
+      xs.sort((a, b) => a - b);
       for (let i = 0; i + 1 < xs.length; i += 2) {
         const left = xs[i], right = xs[i + 1];
         intervals.push([left, right]);
-        if ((firstCenter ?? (ranges[0][0] + 0.5) * cellUnits) > left + 1e-7
-          && (lastCenter ?? (ranges.at(-1)[1] + 0.5) * cellUnits) < right - 1e-7) fullyBlocked = true;
+        if ((ranges[0][0] + 0.5) * cellUnits > left + 1e-7
+          && (ranges.at(-1)[1] + 0.5) * cellUnits < right - 1e-7) fullyBlocked = true;
       }
       if (fullyBlocked) break;
     }
     if (fullyBlocked) { yield; continue; }
-    intervals.sort(ascendingInterval);
+    intervals.sort((a, b) => a[0] - b[0]);
     const merged = [];
     for (const interval of intervals) {
       const last = merged.at(-1);
@@ -179,7 +168,7 @@ export function* groundShadowRowsSteps(source, radiusUnits, occluders, cellUnits
         if (column < b) visible.push([column + 1, b]);
       }
     }
-    visible.sort(ascendingInterval);
+    visible.sort((a, b) => a[0] - b[0]);
     const compact = [];
     for (const span of visible) {
       const last = compact.at(-1);

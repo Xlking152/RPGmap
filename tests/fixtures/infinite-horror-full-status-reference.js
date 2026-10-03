@@ -82,4 +82,3 @@ export function deriveFullActorStatusReference(actor, { statuses = [] } = {}) {
   }
   return [...derived, ...badStatusThresholds];
 }
-

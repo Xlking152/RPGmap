@@ -123,6 +123,19 @@ test('host exclusion is source scoped, strictly interior and deterministic for o
   assert.equal(resolveSourceHostOccluderId(source(5,5),[building('b',rect(4,4,4,4)),building('a',rect(4,4,4,4))]),'a');
 });
 
+test('equal-area host IDs have a fixed order across browser and server locales', () => {
+  const building = (id, offset) => normalizeVisionOccluder({ id, kind: 'building',
+    polygon: rect(offset, 2, 8, 8), blockingHeightMeters: 6 });
+  for (const [left, right, expected] of [['a', 'Z', 'Z'], ['ä', 'z', 'z'], ['乙', '丁', '丁']]) {
+    const values = [building(left, 2), building(right, 3)];
+    assert.equal(resolveSourceHostOccluderId(source(5, 5), values), expected);
+    assert.equal(resolveSourceHostOccluderId(source(5, 5), [...values].reverse()), expected);
+    const remaining = visionOccludersForSource(source(5, 5), Object.freeze(values));
+    assert.equal(remaining.length, 1);
+    assert.notEqual(remaining[0].id, expected);
+  }
+});
+
 test('host immunity lets the inside character see out, while outsiders, target hosts and light rays still block', () => {
   const values=deriveVisionOccluders(mapWith([feature('host',rect(4,4,4,4))]));
   const vision=source(5,5);

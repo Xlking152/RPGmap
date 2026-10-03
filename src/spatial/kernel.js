@@ -241,7 +241,8 @@ export function resolveSourceHostOccluderId(source, occluders = [], metersPerUni
       candidates.push({ id: obstacle.id, area: SOLID_AREAS.get(obstacle) });
     }
   }
-  candidates.sort((a, b) => a.area - b.area || a.id.localeCompare(b.id));
+  // Use the same ID order on the host and every browser, independent of locale.
+  candidates.sort((a, b) => a.area - b.area || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return candidates[0]?.id || null;
 }
 
