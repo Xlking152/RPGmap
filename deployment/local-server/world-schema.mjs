@@ -188,8 +188,9 @@ export function assertWorldState(value) {
 // result; only local checks of previously accepted frozen documents are reused.
 export function createCanonicalWorldValidator() {
   const summaries = new WeakMap();
+  const byteSizes = new WeakMap();
   const verifiedDocuments = new WeakMap();
-  return value => {
+  const validate = value => {
     const pending = [];
     const pendingDocuments = [];
     const documentCache = {
@@ -215,13 +216,15 @@ export function createCanonicalWorldValidator() {
         if (cached) { consume(cached, path, depth); return cached; }
       }
       consume({ nodes: 1, depth: 0 }, path, depth);
-      const summary = { nodes: 1, depth: 0 };
+      const summary = { nodes: 1, depth: 0, bytes: 0 };
       if (current === null || ['boolean', 'number'].includes(typeof current)) {
         if (typeof current === 'number' && !Number.isFinite(current)) fail(`${path} must contain finite numbers`);
+        summary.bytes = Buffer.byteLength(JSON.stringify(current));
         return summary;
       }
       if (typeof current === 'string') {
         if (current.length > WORLD_LIMITS.maxStringLength) fail(`${path} contains an oversized string`, 'world_limit');
+        summary.bytes = Buffer.byteLength(JSON.stringify(current));
         return summary;
       }
       let entries;
@@ -233,6 +236,7 @@ export function createCanonicalWorldValidator() {
         entries = Object.entries(current);
         if (entries.length > objectKeyLimit(path)) fail(`${path} has too many keys`, 'world_limit');
       }
+      summary.bytes = 2 + Math.max(0, entries.length - 1);
       for (const [key, entry] of entries) {
         if (!Array.isArray(current)) {
           if (['__proto__', 'prototype', 'constructor'].includes(key)) fail(`${path} contains an unsafe key`);
@@ -241,6 +245,7 @@ export function createCanonicalWorldValidator() {
         const child = visit(entry, Array.isArray(current) ? `${path}[${key}]` : `${path}.${key}`, depth + 1);
         summary.nodes += child.nodes;
         summary.depth = Math.max(summary.depth, child.depth + 1);
+        summary.bytes += child.bytes + (Array.isArray(current) ? 0 : Buffer.byteLength(JSON.stringify(key)) + 1);
       }
       pending.push({ value: current, path, summary });
       return summary;
@@ -254,6 +259,7 @@ export function createCanonicalWorldValidator() {
       if (!byPath) { byPath = new Map(); summaries.set(entry.value, byPath); }
       if (byPath.size >= 8 && !byPath.has(entry.path)) byPath.delete(byPath.keys().next().value);
       byPath.set(entry.path, entry.summary);
+      byteSizes.set(entry.value, entry.summary.bytes);
     }
     for (const entry of pendingDocuments) {
       let records = verifiedDocuments.get(entry.document);
@@ -263,6 +269,77 @@ export function createCanonicalWorldValidator() {
       records.set(entry.kind, entry.dependencies);
     }
     return value;
+  };
+  validate.serializedBytes = (value, { omitPreferencesKeys = [] } = {}) => {
+    const bytesFor = current => {
+      if (current === null || typeof current !== 'object') return Buffer.byteLength(JSON.stringify(current));
+      if (!byteSizes.has(current) || !Object.isFrozen(current)) fail('JSON size requires a verified canonical branch', 'unverified_canonical');
+      return byteSizes.get(current);
+    };
+    let bytes = bytesFor(value);
+    const preferences = value?.preferences;
+    const omitted = [...new Set(omitPreferencesKeys)].filter(key => Object.hasOwn(preferences || {}, key));
+    if (omitted.length) {
+      const fields = Object.keys(preferences).length;
+      bytes -= Math.min(omitted.length, Math.max(0, fields - 1));
+      for (const key of omitted) bytes -= Buffer.byteLength(JSON.stringify(key)) + 1 + bytesFor(preferences[key]);
+    }
+    return bytes;
+  };
+  return validate;
+}
+
+// This counter owns only server-derived snapshot metadata. Freeze and memoize
+// its immutable branches; never use it to validate messages, imports or WAL.
+function createPrivateSnapshotByteCounter() {
+  const cached = new WeakMap();
+  return value => {
+    const pending = [];
+    const visit = current => {
+      if (current === null) return 4;
+      if (['undefined', 'function', 'symbol'].includes(typeof current)) return undefined;
+      if (typeof current !== 'object') return Buffer.byteLength(JSON.stringify(current));
+      if (cached.has(current)) return cached.get(current);
+      if (!Array.isArray(current) && ![Object.prototype, null].includes(Object.getPrototypeOf(current)))
+        fail('Snapshot metadata must contain plain JSON objects', 'invalid_snapshot');
+      let bytes = 2, count = 0;
+      if (Array.isArray(current)) {
+        for (let index = 0; index < current.length; index++) { bytes += (visit(current[index]) ?? 4) + (index ? 1 : 0); }
+      } else {
+        for (const [key, entry] of Object.entries(current)) {
+          const child = visit(entry);
+          if (child === undefined) continue;
+          bytes += Buffer.byteLength(JSON.stringify(key)) + 1 + child + (count++ ? 1 : 0);
+        }
+      }
+      pending.push({ value: current, bytes });
+      return bytes;
+    };
+    const bytes = visit(value);
+    for (const entry of pending) { Object.freeze(entry.value); cached.set(entry.value, entry.bytes); }
+    return bytes;
+  };
+}
+
+export function createWorldSnapshotSizeValidator(canonicalValidator, {
+  maxStateBytes = 8 * 1024 * 1024,
+  maxExplorationBytes = 32 * 1024 * 1024,
+  maxSnapshotBytes = maxStateBytes + maxExplorationBytes,
+} = {}) {
+  const privateBytes = createPrivateSnapshotByteCounter();
+  return snapshot => {
+    const stateBytes = canonicalValidator.serializedBytes(snapshot.state, {
+      omitPreferencesKeys: ['featureStates', 'featureInteractions'],
+    });
+    if (stateBytes > maxStateBytes) fail('World state is too large', 'state_too_large');
+    const explorationBytes = snapshot.exploration === undefined ? 0 : privateBytes(snapshot.exploration);
+    if (explorationBytes > maxExplorationBytes) fail('Exploration backlog is full; retry after it has drained', 'exploration_backlog');
+    const envelope = { ...snapshot, state: null,
+      ...(snapshot.exploration === undefined ? {} : { exploration: null }) };
+    const snapshotBytes = privateBytes(envelope) + stateBytes - 4
+      + (snapshot.exploration === undefined ? 0 : explorationBytes - 4);
+    if (snapshotBytes > maxSnapshotBytes) fail('World snapshot is too large', 'state_too_large');
+    return { stateBytes, explorationBytes, snapshotBytes };
   };
 }
 

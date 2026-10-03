@@ -24,7 +24,7 @@ import {
   verifyUserCredential,
 } from './access-control.mjs';
 import { createPortableStorage, ensurePortableStorage, migrateLegacyStorage } from './portable-storage.mjs';
-import { assertSafeJson, assertWorldState, createCanonicalWorldValidator, isSameChat } from './world-schema.mjs';
+import { assertSafeJson, assertWorldState, createCanonicalWorldValidator, createWorldSnapshotSizeValidator, isSameChat } from './world-schema.mjs';
 import {
   STATUS_OPERATION_CACHE_LIMIT,
   STATUS_SCHEMA_VERSION,
@@ -433,6 +433,7 @@ world = await worldWal.replay(world);
 if (world.state?.preferences?.worldV2) world.state = projectWorldOperationState(world.state);
 const assertCanonicalWorldState = createCanonicalWorldValidator();
 if (world.state) assertCanonicalWorldState(world.state);
+const assertWorldSnapshotSize = createWorldSnapshotSizeValidator(assertCanonicalWorldState, { maxStateBytes: MAX_WS_PAYLOAD });
 
 // Idempotency is intentionally bounded. A reconnect can safely retry a recent
 // GM status mutation without applying it twice, while unbounded client keys can
@@ -483,13 +484,10 @@ function durableWorld(snapshot) {
 }
 
 function persistWorld(snapshot, { forceBackup = false } = {}) {
+  try { assertWorldSnapshotSize(snapshot); }
+  catch (error) { return Promise.reject(error); }
   const durable = durableWorld(snapshot);
   const serialized = JSON.stringify(durable);
-  if (Buffer.byteLength(JSON.stringify(durable.state)) > MAX_WS_PAYLOAD) {
-    const error = new Error('World state is too large');
-    error.code = 'state_too_large';
-    return Promise.reject(error);
-  }
   const revision = Number(snapshot.revision) || 0;
   const backup = forceBackup
     || revision - lastWorldBackupRevision >= 25
@@ -792,6 +790,9 @@ function visiblePreciseToken(state, tokenId) {
 }
 
 async function persistWorldCommit(snapshot, beforeState, operationId) {
+  // Deterministic size rejection precedes any WAL write. It must not enter the
+  // uncertain-fsync failure path or consume the operation's idempotency key.
+  assertWorldSnapshotSize(snapshot);
   const patch = createWorldOperationPatch(beforeState, snapshot.state, { trustedCanonical: true });
   try { await worldWal.append({
     baseRevision: Number(snapshot.revision) - 1,
@@ -2321,6 +2322,9 @@ server.on('upgrade', (req, socket) => {
         recentStatusOperations: world.recentStatusOperations || [],
         exploration: emptyExploration(),
       };
+      try { assertWorldSnapshotSize(nextWorld); }
+      catch (error) { return sendSocket(socket, { type: 'error', operationId: worldOperationId,
+        code: error.code || 'persist_failed', message: error.message }); }
       try {
         await commitStorageUpgrade(STORAGE, { ...contentUpgrade.replacements,
           'world.json': Buffer.from(JSON.stringify(durableWorld(nextWorld))), 'users.json': Buffer.from(JSON.stringify(access)),
