@@ -491,3 +491,110 @@ test('qualified canonical arrays avoid repeated per-document policy qualificatio
   assert.equal(compare(invisible, hidden, visible, context).preferences.worldV2.scenes[0].tokens
     .some(token => token.id === 'near'), true);
 });
+
+function relationChecks(scene, callback) {
+  const descriptors = Object.getOwnPropertyDescriptors;
+  let checks = 0;
+  Object.getOwnPropertyDescriptors = function (value) {
+    if (value === scene) checks += 1;
+    return descriptors(value);
+  };
+  try { return { projection: callback(), checks }; }
+  finally { Object.getOwnPropertyDescriptors = descriptors; }
+}
+
+test('different audiences share only the successful immutable movement relation proof', () => {
+  const before = fixture();
+  const ownedViewer = { ...context, userId: 'second-viewer', user: {
+    ownership: { scout: 'owner', hostile: 'owner' }, placementGrants: {},
+  } };
+  const original = projectStateForAudience(before, context);
+  const ownedOriginal = projectStateForAudience(before, ownedViewer);
+  const after = update(before, { tokenId: 'source', tokenPatch: { x: 60 } });
+  const options = (viewer, previousProjection) => ({ ...viewer, movementCache: {
+    beforeState: before, previousProjection, tokenIds: new Set(['source']),
+  } });
+  const scene = after.preferences.worldV2.scenes[0];
+  const first = relationChecks(scene, () => projectStateForAudience(after, options(context, original)));
+  assert.equal(first.checks, 1, 'the first audience validates the Scene and all Token relationships');
+  const second = relationChecks(scene, () => projectStateForAudience(after, options(ownedViewer, ownedOriginal)));
+  assert.equal(second.checks, 0, 'the second audience does not walk the proven Scene/Token relationships');
+  assert.deepEqual(first.projection, projectStateForAudience(after, context));
+  assert.deepEqual(second.projection, projectStateForAudience(after, ownedViewer));
+  assert.deepEqual(first.projection.preferences.audienceVision.partyIds, ['party-a']);
+  assert.deepEqual(second.projection.preferences.audienceVision.partyIds, ['party-a', 'party-b']);
+  assert.equal(first.projection.preferences.worldV2.actors.find(actor => actor.id === 'hostile').audienceRestricted, true);
+  assert.notEqual(second.projection.preferences.worldV2.actors.find(actor => actor.id === 'hostile').audienceRestricted, true);
+});
+
+test('relation proofs are scoped to both canonical arrays and replace their single predecessor', () => {
+  const before = fixture(), original = projectStateForAudience(before, context);
+  const after = update(before, { tokenId: 'source', tokenPatch: { x: 60 } });
+  const scene = after.preferences.worldV2.scenes[0];
+  const project = (prior, projection, next = after) => projectStateForAudience(next, { ...context, movementCache: {
+    beforeState: prior, previousProjection: projection, tokenIds: new Set(['source']),
+  } });
+  project(before, original);
+  const alternateBefore = update(before, { tokenId: 'source', tokenPatch: { x: 51 } });
+  const alternateProjection = projectStateForAudience(alternateBefore, context);
+  const alternate = relationChecks(scene, () => project(alternateBefore, alternateProjection));
+  assert.equal(alternate.checks, 1, 'a different predecessor cannot use the existing relation proof');
+  assert.deepEqual(alternate.projection, projectStateForAudience(after, context));
+  const replaced = relationChecks(scene, () => project(before, original));
+  assert.equal(replaced.checks, 1, 'only the latest successful predecessor is retained');
+  const newer = update(after, { tokenId: 'source', tokenPatch: { x: 70 } });
+  const newResult = relationChecks(newer.preferences.worldV2.scenes[0], () => project(before, original, newer));
+  assert.equal(newResult.checks, 1, 'a different result array must be independently proved');
+  assert.deepEqual(newResult.projection, projectStateForAudience(newer, context));
+
+  for (const change of [
+    { tokenId: 'near', tokenPatch: { controllerUserIds: ['viewer'] } },
+    { tokenId: 'near', tokenPatch: { actorId: 'scout' } },
+    { scenePatch: { settings: { lighting: 'dark' } } },
+  ]) {
+    const changedBefore = update(before, change);
+    const changedProjection = projectStateForAudience(changedBefore, context);
+    const result = relationChecks(scene, () => project(changedBefore, changedProjection));
+    assert.equal(result.checks, 1, JSON.stringify(change));
+    assert.deepEqual(result.projection, projectStateForAudience(after, context));
+    assert.deepEqual(createDocumentChanges(changedProjection, result.projection),
+      createDocumentChangesFull(changedProjection, projectStateForAudience(after, context)));
+    assert.deepEqual(result.projection.preferences.audienceVision.partyIds, ['party-a']);
+  }
+  const reordered = frozen({ ...before, preferences: { ...before.preferences, worldV2: {
+    ...before.preferences.worldV2,
+    scenes: [{ ...before.preferences.worldV2.scenes[0], tokens: [...before.preferences.worldV2.scenes[0].tokens].reverse() }],
+  } } });
+  const reorderedProjection = projectStateForAudience(reordered, context);
+  const result = relationChecks(scene, () => project(reordered, reorderedProjection));
+  assert.equal(result.checks, 1);
+  assert.deepEqual(result.projection, projectStateForAudience(after, context));
+});
+
+test('same private policy records are reused only for unchanged canonical Actors and Tokens', () => {
+  const before = fixture();
+  const near = before.preferences.worldV2.scenes[0].tokens.find(token => token.id === 'near');
+  const records = [];
+  const weakSet = WeakMap.prototype.set;
+  WeakMap.prototype.set = function (key, value) {
+    if (key === near && Object.hasOwn(value || {}, 'actor') && Object.hasOwn(value || {}, 'policy')) records.push(value);
+    return weakSet.call(this, key, value);
+  };
+  try {
+    const original = projectStateForAudience(before, context);
+    const firstRecord = records.at(-1);
+    assert.ok(firstRecord);
+    const after = update(before, { tokenId: 'source', tokenPatch: { x: 60 } });
+    const moved = projectStateForAudience(after, { ...context, movementCache: {
+      beforeState: before, previousProjection: original, tokenIds: new Set(['source']),
+    } });
+    assert.equal(records.at(-1), firstRecord, 'the immediately prior internal policy record is reused');
+    assert.deepEqual(moved, projectStateForAudience(after, context));
+    const changedActor = update(after, { actorId: 'hostile', actorPatch: { partyId: 'party-a' } });
+    const changed = projectStateForAudience(changedActor, { ...context, movementCache: {
+      beforeState: after, previousProjection: moved, tokenIds: new Set(),
+    } });
+    assert.notEqual(records.at(-1), firstRecord, 'a replacement Actor requires a fresh policy record');
+    assert.deepEqual(changed, projectStateForAudience(changedActor, context));
+  } finally { WeakMap.prototype.set = weakSet; }
+});

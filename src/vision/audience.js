@@ -19,6 +19,7 @@ const immutablePolicyDocuments = new WeakSet();
 const vagueActorDocuments = new WeakSet();
 const canonicalActorMaps = new WeakMap();
 const canonicalTokenMaps = new WeakMap();
+const movementPartyRelations = new WeakMap();
 const audienceKey = context => JSON.stringify([context.role, context.userId,
   context.user?.ownership || {}, context.user?.placementGrants || {}, context.user?.disabled === true]);
 
@@ -205,6 +206,9 @@ function viewerPartyInputs(world) {
 function movementPartyInputs(world, previous) {
   if (!previous || world.actors !== previous.actors || !Array.isArray(world.scenes)
     || !Object.isFrozen(world.scenes) || world.scenes.length !== previous.scenes.length) return null;
+  if (movementPartyRelations.get(world.scenes)?.has(previous.scenes)) {
+    return { actors: world.actors, scenes: world.scenes };
+  }
   const knownScenes = immutablePolicyDocuments.has(world.scenes);
   if (!knownScenes && (Object.getPrototypeOf(world.scenes) !== Array.prototype
     || Object.getOwnPropertyNames(world.scenes).length !== world.scenes.length + 1
@@ -242,6 +246,10 @@ function movementPartyInputs(world, previous) {
     immutablePolicyDocuments.add(scene);
   }
   immutablePolicyDocuments.add(world.scenes);
+  // This proof concerns only immutable collection structure, never a user's
+  // party membership or projection. Keep one predecessor per live result,
+  // with both arrays weakly keyed, so old Worlds cannot form a retained chain.
+  movementPartyRelations.set(world.scenes, new WeakMap([[previous.scenes, true]]));
   return { actors: world.actors, scenes: world.scenes };
 }
 
@@ -597,9 +605,10 @@ export function projectStateForAudience(rawState, rawContext = {}) {
       const policyCacheable = immutableScenePolicies
         || immutablePolicyDocument(rawToken) && immutablePolicyDocument(actor);
       const oldPolicy = reusePolicies && policyCacheable ? previousPolicies.policies.get(rawToken) : null;
-      const policy = oldPolicy?.actor === actor ? oldPolicy.policy
+      const reusablePolicy = oldPolicy?.actor === actor ? oldPolicy : null;
+      const policy = reusablePolicy ? reusablePolicy.policy
         : tokenAudiencePolicy(rawToken, actor, context, parties, definitions);
-      if (policyCacheable) policies.set(rawToken, { actor, policy });
+      if (policyCacheable) policies.set(rawToken, reusablePolicy || { actor, policy });
       if (!policy.visible) continue;
       if (reuseDetection && unchanged && !movedIds.has(String(rawToken.id))) {
         // The session, source, geometry, lights, permissions, party membership,
