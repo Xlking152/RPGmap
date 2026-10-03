@@ -16,12 +16,12 @@ import { projectStateForAudience } from '../src/vision/audience.js';
 import { exploreFogVisibleCircle, isFogCellExplored } from '../src/vision/fog.js';
 import { createInitialState, createDamagePreview, commitDamageEvent, deriveSceneState, undoLastSceneEvent, commitRestoreEvent, commitResetSceneEvent } from '../src/engine/state.js';
 
-test('spatial point reuse preserves coordinate-only shape and mutable/getter/height behavior', () => {
+test('spatial normalization preserves coordinate-only shape and mutable/getter/height behavior', () => {
   const raw = Object.freeze({ x: 3, y: 4, elevationMeters: 12, id: 'private-token', secret: 'hidden' });
   const normalized = normalizeSpatialPoint(raw);
   assert.deepEqual(normalized, { x: 3, y: 4, elevationMeters: 12 });
-  assert.equal(normalizeSpatialPoint(raw), normalized);
-  assert.equal(normalizeSpatialPoint(normalized), normalized);
+  assert.deepEqual(normalizeSpatialPoint(raw), normalized);
+  assert.deepEqual(normalizeSpatialPoint(normalized), normalized);
   assert.equal(distance3dMeters(normalized, { x: 0, y: 0, elevationMeters: 0 }), 13);
   const mutable = { x: 3, y: 4, elevationMeters: 0 };
   normalizeSpatialPoint(mutable); mutable.x = 8;

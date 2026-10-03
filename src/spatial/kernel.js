@@ -8,8 +8,6 @@ const LIGHTING_CACHE = new WeakMap();
 const IMMUTABLE_LIGHTS = new WeakSet();
 const VISION_HOST_FILTERS = new WeakMap();
 const SOLID_AREAS = new WeakMap();
-const NORMALIZED_SPATIAL_POINTS = new WeakSet();
-const IMMUTABLE_SPATIAL_POINTS = new WeakMap();
 
 function immutableLights(lights) {
   if (!Array.isArray(lights) || !Object.isFrozen(lights)) return false;
@@ -25,9 +23,6 @@ function number(value, fallback = 0) {
 }
 
 export function normalizeSpatialPoint(value, fallbackElevationMeters = 0) {
-  if (NORMALIZED_SPATIAL_POINTS.has(value)) return value;
-  const cached = IMMUTABLE_SPATIAL_POINTS.get(value);
-  if (cached) return cached;
   const x = Number(value?.x);
   const y = Number(value?.y);
   const elevationMeters = value?.elevationMeters == null
@@ -35,27 +30,20 @@ export function normalizeSpatialPoint(value, fallbackElevationMeters = 0) {
     : Number(value.elevationMeters);
   if (!Number.isFinite(x) || !Number.isFinite(y)
     || !Number.isFinite(elevationMeters) || elevationMeters < 0) return null;
-  const point = Object.freeze({ x, y, elevationMeters });
-  NORMALIZED_SPATIAL_POINTS.add(point);
-  // Only own immutable coordinates can be reused. Frozen wrappers with
-  // getters, inherited coordinates or a caller-dependent height stay fresh.
-  if (value && Object.isFrozen(value) && ['x', 'y', 'elevationMeters'].every(key => {
-    const field = Object.getOwnPropertyDescriptor(value, key);
-    return field && Object.hasOwn(field, 'value') && Number.isFinite(field.value);
-  })) IMMUTABLE_SPATIAL_POINTS.set(value, point);
-  return point;
+  return Object.freeze({ x, y, elevationMeters });
 }
 
 export function distance3dMeters(from, to, metersPerUnit = 1) {
-  const first = normalizeSpatialPoint(from);
-  const second = normalizeSpatialPoint(to);
-  if (!first || !second) return Number.POSITIVE_INFINITY;
+  const x1 = Number(from?.x), y1 = Number(from?.y), z1 = from?.elevationMeters == null ? 0 : Number(from.elevationMeters);
+  const x2 = Number(to?.x), y2 = Number(to?.y), z2 = to?.elevationMeters == null ? 0 : Number(to.elevationMeters);
+  if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(z1) || z1 < 0
+    || !Number.isFinite(x2) || !Number.isFinite(y2) || !Number.isFinite(z2) || z2 < 0) return Number.POSITIVE_INFINITY;
   const scale = Number(metersPerUnit);
   const units = Number.isFinite(scale) && scale > 0 ? scale : 1;
   return Math.hypot(
-    (second.x - first.x) * units,
-    (second.y - first.y) * units,
-    second.elevationMeters - first.elevationMeters,
+    (x2 - x1) * units,
+    (y2 - y1) * units,
+    z2 - z1,
   );
 }
 
@@ -415,7 +403,7 @@ export function perceptionLevelAtPoint({
   let level = distance <= Math.max(0, number(vision?.preciseRangeMeters ?? vision?.rangeMeters)) ? 'precise'
     : distance <= Math.max(0, number(vision?.vagueRangeMeters)) ? 'vague' : 'none';
   if (level === 'none') return level;
-  if (lineOfSightEnabled && !inspectLineOfSight({ from: IMMUTABLE_SPATIAL_POINTS.has(vision) ? vision : { ...vision, ...source }, to: destination, occluders, metersPerUnit,
+  if (lineOfSightEnabled && !inspectLineOfSight({ from: { ...vision, ...source }, to: destination, occluders, metersPerUnit,
     applySourceHostExemption: true }).clear) return 'none';
   if (level === 'precise') {
     const lighting = resolveLightingAtPoint(destination, ambient, lights, { occluders, metersPerUnit });
