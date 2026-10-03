@@ -25,11 +25,15 @@ const spatialPoint = (value, fallbackElevation = 0) => {
 };
 const featurePoint = feature => Array.isArray(feature?.entrance) ? point({ x: feature.entrance[0], y: feature.entrance[1] }) : null;
 
+function statusForActor(world, token, actor, ruleset) {
+  return resolveStatuses({
+    schemaVersion: 4, actors: [actor], tokens: [token], statusDefinitions: world.statusDefinitions || [],
+  }, { actorId: token.actorId, tokenId: token.id, ruleset });
+}
+
 export function resolveMovementStatus(world, scene, token, ruleset) {
   const resolved = resolveTokenActor({ ...world, activeSceneId: scene.id, scenes: [scene] }, token.id, { ruleset });
-  return resolveStatuses({
-    schemaVersion: 4, actors: [resolved.actor], tokens: [token], statusDefinitions: world.statusDefinitions || [],
-  }, { actorId: token.actorId, tokenId: token.id, ruleset });
+  return statusForActor(world, token, resolved.actor, ruleset);
 }
 
 /** Shared offline/LAN validator; only the host provides MapPackage and Ruleset data. */
@@ -41,13 +45,21 @@ export function createMovementAuthority(resolveMapPackage) {
     movementMode = null, verticalAction = null } = {}) => {
     const reposition = operationType === 'token.reposition';
     if (!reposition && token?.locked === true) return failure('token_locked');
-    const snapshot = status || (capabilities ? { capabilities } : resolveMovementStatus(world, scene, token, ruleset));
+    const actorWorld = { ...world, activeSceneId: scene.id, scenes: [scene] };
+    let resolvedActor = null;
+    let actorResolved = false;
+    if (!status && !capabilities) {
+      resolvedActor = resolveTokenActor(actorWorld, token.id, { ruleset }).actor;
+      actorResolved = true;
+    }
+    const snapshot = status || (capabilities ? { capabilities } : statusForActor(world, token, resolvedActor, ruleset));
     const effective = snapshot.capabilities || {};
     if (!reposition && effective.canMove === false) return failure('status_movement_forbidden', effective.reasons?.[0]);
     const mapPackage = resolveMapPackage(scene);
-    let resolvedActor = null;
-    try { resolvedActor = resolveTokenActor({ ...world, activeSceneId: scene.id, scenes: [scene] }, token.id, { ruleset })?.actor || null; }
-    catch { resolvedActor = null; }
+    if (!actorResolved) {
+      try { resolvedActor = resolveTokenActor(actorWorld, token.id, { ruleset })?.actor || null; }
+      catch { resolvedActor = null; }
+    }
     const movement = ruleset?.movement?.describe?.(resolvedActor, { token, scene, world, status: snapshot }) || {};
     const requestedMode = normalizeMovementMode(movementMode, token?.movement?.mode || 'walk');
     const capabilityFailure = reposition ? null : movementCapabilityFailure(movement, requestedMode, verticalAction);

@@ -393,6 +393,7 @@ export function perceptionLevelAtPoint({
   ambient = 'normal',
   lights = [],
   occluders = [],
+  sourceOccluders = null,
   metersPerUnit = 1,
   lineOfSightEnabled = false,
 } = {}) {
@@ -403,8 +404,9 @@ export function perceptionLevelAtPoint({
   let level = distance <= Math.max(0, number(vision?.preciseRangeMeters ?? vision?.rangeMeters)) ? 'precise'
     : distance <= Math.max(0, number(vision?.vagueRangeMeters)) ? 'vague' : 'none';
   if (level === 'none') return level;
-  if (lineOfSightEnabled && !inspectLineOfSight({ from: { ...vision, ...source }, to: destination, occluders, metersPerUnit,
-    applySourceHostExemption: true }).clear) return 'none';
+  if (lineOfSightEnabled && !inspectLineOfSight({ from: { ...vision, ...source }, to: destination,
+    occluders: sourceOccluders || occluders, metersPerUnit,
+    applySourceHostExemption: sourceOccluders === null }).clear) return 'none';
   if (level === 'precise') {
     const lighting = resolveLightingAtPoint(destination, ambient, lights, { occluders, metersPerUnit });
     const senses = vision?.senses || {};

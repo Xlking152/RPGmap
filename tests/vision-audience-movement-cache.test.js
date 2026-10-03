@@ -99,3 +99,32 @@ test('movement can look up prior anonymous identities without generating IDs for
   assert.equal(generatedHidden, false);
   assert.ok(result.preferences.worldV2.scenes[0].tokens.some(token => token.audienceVisibility === 'vague'));
 });
+
+test('moving a vague Token reuses only its blank Actor and ownership changes reveal the canonical Actor', () => {
+  const before = fixture();
+  const previousProjection = projectStateForAudience(before, context);
+  const previousVague = previousProjection.preferences.worldV2.actors
+    .find(actor => actor.id === 'opaque-actor-vague');
+  assert.equal(previousVague?.name, '模糊轮廓');
+  const after = update(before, { tokenId: 'vague', patch: { x: 84, y: 205 } });
+  const cached = compare(before, previousProjection, after, ['vague']);
+  assert.equal(cached.preferences.worldV2.actors.find(actor => actor.id === previousVague.id), previousVague);
+
+  const owner = { ...context, user: { ownership: { scout: 'owner', hostile: 'owner' }, placementGrants: {} } };
+  const ownerProjection = compare(before, previousProjection, after, ['vague'], owner);
+  assert.equal(ownerProjection.preferences.worldV2.actors.find(actor => actor.id === 'hostile')?.name, 'Hostile');
+  assert.equal(ownerProjection.preferences.worldV2.actors.some(actor => actor.id === previousVague.id), false);
+});
+
+test('precise hostile Tokens and hidden Tokens do not reserve opaque identities', () => {
+  const calls = [];
+  const viewer = {
+    ...context,
+    ruleset: { vision: { describe: () => ({ preciseRangeMeters: 120, vagueRangeMeters: 120, senses: {} }) } },
+    opaqueIdFor: (kind, id) => { calls.push(`${kind}:${id}`); return `opaque-${kind}-${id}`; },
+  };
+  const projected = projectStateForAudience(fixture(), viewer);
+  const near = projected.preferences.worldV2.scenes[0].tokens.find(item => item.id === 'near');
+  assert.equal(near?.audienceVisibility, 'precise');
+  assert.deepEqual(calls, []);
+});

@@ -5,7 +5,8 @@ import { validateAuthoritativeTokenMovePath } from '../src/server/movement-autho
 import lanzhou from '../reference/maps/lanzhou/runtime.json' with { type: 'json' };
 import { createNavigationGrid, inspectDirectNavigationPath } from '../src/engine/navigation.js';
 import { deriveSceneState } from '../src/engine/state.js';
-import { createMovementAuthority } from '../src/movement/authority.js';
+import { createMovementAuthority, resolveMovementStatus } from '../src/movement/authority.js';
+import { getActiveRuleset } from '../src/ruleset/index.js';
 
 function context(overrides = {}) {
   const mapPackage = createMinimalReferencePackage();
@@ -31,6 +32,53 @@ test('server movement authority accepts a clear path on a built-in map', () => {
   });
   assert.equal(result.valid, true);
   assert.equal(result.collisionValidation, 'server');
+});
+
+test('movement validation resolves the Actor once for status and movement rules', () => {
+  const baseRuleset = getActiveRuleset();
+  const calls = { migrate: 0, normalize: 0, describe: 0 };
+  let observedActor = null;
+  let observedStatus = null;
+  const ruleset = {
+    ...baseRuleset,
+    actor: {
+      ...baseRuleset.actor,
+      migrateLegacy(...args) {
+        calls.migrate += 1;
+        return baseRuleset.actor.migrateLegacy(...args);
+      },
+      normalizeSystem(...args) {
+        calls.normalize += 1;
+        return baseRuleset.actor.normalizeSystem(...args);
+      },
+    },
+    movement: {
+      ...baseRuleset.movement,
+      describe(actor, context) {
+        calls.describe += 1;
+        observedActor = actor;
+        observedStatus = context.status;
+        return baseRuleset.movement.describe(actor, context);
+      },
+    },
+  };
+  const token = { id: 'token-a', actorId: 'actor-a', actorLink: true, actorDelta: null,
+    placement: 'map', x: 700, y: 430, diameterMeters: 1, elevationMeters: 0 };
+  const scene = { id: 'scene-a', tokens: [token], sceneEvents: [], featureStates: {} };
+  const world = { activeSceneId: scene.id, scenes: [scene], actors: [{ id: 'actor-a', name: 'Actor', system: {} }],
+    statusDefinitions: [] };
+  const expectedStatus = resolveMovementStatus(world, scene, token, ruleset);
+  calls.migrate = 0;
+  calls.normalize = 0;
+  const result = createMovementAuthority(() => createMinimalReferencePackage())({
+    state: { preferences: { worldV2: world } }, world, scene, token,
+    origin: { x: token.x, y: token.y }, waypoints: [{ x: 740, y: 430 }], ruleset,
+  });
+  assert.equal(result.valid, true);
+  assert.ok(result.costMeters > 0);
+  assert.equal(observedActor.id, 'actor-a');
+  assert.deepEqual(observedStatus, expectedStatus);
+  assert.deepEqual(calls, { migrate: 1, normalize: 1, describe: 1 });
 });
 
 test('server movement authority rejects locked and status-blocked Tokens', () => {

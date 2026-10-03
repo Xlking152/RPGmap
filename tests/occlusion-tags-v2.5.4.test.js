@@ -133,6 +133,24 @@ test('host immunity lets the inside character see out, while outsiders, target h
     occluders:values,lineOfSightEnabled:true}),'vague');
 });
 
+test('prepared source blockers match independent rays without granting the same exemption to lights', () => {
+  const values=Object.freeze(deriveVisionOccluders(mapWith([
+    feature('host',rect(4,4,4,4)), feature('other',rect(15,0,2,20)),
+  ])));
+  const lights=[{x:5,y:5,rangeMeters:100,intensity:1,occlusion:'scene'}];
+  for(const vision of [source(5,5),source(4,5),source(12,5),source(5,5,7)]) {
+    const sourceOccluders=visionOccludersForSource(vision,values);
+    for(const ambient of ['normal','dim','dark']) for(const target of [
+      {x:12,y:5},{x:20,y:5},{x:6,y:6},{x:12,y:5,elevationMeters:8},
+    ]) {
+      const input={vision,target,ambient,lights,occluders:values,lineOfSightEnabled:true};
+      assert.equal(perceptionLevelAtPoint({...input,sourceOccluders}),perceptionLevelAtPoint(input));
+    }
+  }
+  assert.equal(perceptionLevelAtPoint({vision:source(5,5),target:{x:12,y:5},ambient:'dark',lights,
+    occluders:values,sourceOccluders:visionOccludersForSource(source(5,5),values),lineOfSightEnabled:true}),'vague');
+});
+
 test('Fog sweeps resolve the host at every preserved 2.5 metre sample and match a union of circles', () => {
   const map=mapWith([feature('host',rect(5,0,5,15))]);
   const occluders=Object.freeze(deriveVisionOccluders(map)), from={x:7.5,y:7.5},to={x:22.5,y:7.5};

@@ -8,11 +8,13 @@ import {
   perceptionLevelAtPoint,
   sphereGroundRadiusMeters,
   visionIgnoresOcclusion,
+  visionOccludersForSource,
 } from '../spatial/kernel.js';
 import { journalVisibleToAudience } from '../journal/model.js';
 
 const clone = structuredClone;
 const projectionAudiences = new WeakMap();
+const vagueActorDocuments = new WeakSet();
 const audienceKey = context => JSON.stringify([context.role, context.userId,
   context.user?.ownership || {}, context.user?.placementGrants || {}, context.user?.disabled === true]);
 
@@ -188,11 +190,11 @@ function currentVision(world, context, actors) {
 }
 
 function detectionLevel(token, vision, metersPerUnit, {
-  lineOfSightEnabled = false, occluders = [], lights = [], ambient = 'normal',
+  lineOfSightEnabled = false, occluders = [], sourceOccluders = null, lights = [], ambient = 'normal',
 } = {}) {
   if (!vision || token?.placement !== 'map') return 'none';
   return perceptionLevelAtPoint({
-    vision, target: token, ambient, lights, occluders, metersPerUnit, lineOfSightEnabled,
+    vision, target: token, ambient, lights, occluders, sourceOccluders, metersPerUnit, lineOfSightEnabled,
   });
 }
 
@@ -245,8 +247,8 @@ function restrictedToken(token, {
   const opaque = typeof opaqueIdFor === 'function'
     ? opaqueIdFor
     : (kind, value) => `audience-${kind}-${String(value)}`;
-  const vagueId = opaque('token', token.id);
-  const vagueActorId = opaque('actor', token.id);
+  const vagueId = vague ? opaque('token', token.id) : null;
+  const vagueActorId = vague ? opaque('actor', token.id) : null;
   const actorLink = vague ? true : token.actorLink !== false;
   const quantize = value => Math.round(Number(value) * metersPerUnit / 5) * 5 / metersPerUnit;
   return {
@@ -292,12 +294,14 @@ function restrictedToken(token, {
 }
 
 function vagueActor(token, opaqueIdFor) {
-  return {
+  const actor = {
     id: opaqueIdFor('actor', token.id),
     name: '模糊轮廓', img: null, type: 'other', partyId: null,
     prototypeToken: { texture: { src: null }, showName: false },
     system: {}, effects: [], audienceRestricted: true, audienceVisibility: 'vague',
   };
+  vagueActorDocuments.add(actor);
+  return actor;
 }
 
 function referencesHiddenEntity(value, hiddenActorIds, hiddenTokenIds, depth = 0) {
@@ -376,6 +380,8 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const lineOfSightEnabled = true;
   const spatial = context.mapPackage ? sceneVisionContext(context.mapPackage, currentScene) : null;
   const occluders = spatial?.occluders || [];
+  const sourceOccluders = vision && !visionIgnoresOcclusion(vision)
+    ? visionOccludersForSource(vision, occluders, metersPerUnit) : occluders;
   const lights = spatial?.lights || deriveSceneLightSources(context.mapPackage, currentScene);
   const stamp = audienceKey(context);
   const requestedCache = context.movementCache;
@@ -457,7 +463,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
         ? reuseDetection && unchanged && !movedIds.has(String(rawToken.id))
           ? prior ? prior.audienceVisibility === 'vague' ? 'vague' : 'precise' : 'none'
           : detectionLevel(rawToken, vision, metersPerUnit, {
-          lineOfSightEnabled: lineOfSightEnabled && !visionIgnoresOcclusion(vision), occluders, lights, ambient: currentScene?.settings?.lighting || 'normal',
+          lineOfSightEnabled: lineOfSightEnabled && !visionIgnoresOcclusion(vision), occluders, sourceOccluders, lights, ambient: currentScene?.settings?.lighting || 'normal',
         })
         : 'precise';
       if (requiresDetection && (!isActive || level === 'none')) continue;
@@ -475,7 +481,8 @@ export function projectStateForAudience(rawState, rawContext = {}) {
         token = unchanged && sourceUnchanged && prior?.audienceVisibility === 'vague' ? prior : restrictedToken(rawToken, {
           level, vision, metersPerUnit, opaqueIdFor: context.opaqueIdFor,
         });
-        vagueActors.push(vagueActor(rawToken, context.opaqueIdFor));
+        const priorVagueActor = movementCache ? projectedActors.get(String(token.actorId)) : null;
+        vagueActors.push(vagueActorDocuments.has(priorVagueActor) ? priorVagueActor : vagueActor(rawToken, context.opaqueIdFor));
       } else {
         token = unchanged && prior?.audienceRestricted === true && prior.audienceVisibility === 'precise' ? prior : restrictedToken(rawToken, { level, vision, metersPerUnit, actor, definitions });
         visibleTokenIds.add(String(token.id));
