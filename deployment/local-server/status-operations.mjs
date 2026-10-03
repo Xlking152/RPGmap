@@ -227,16 +227,21 @@ export function assertStatusInstance(value, label, { definitions, scope, legacy 
 function validateStatusState(entitySystem, documentCache = null) {
   const entities = object(entitySystem, 'entitySystem');
   const definitions = array(entities.statusDefinitions ?? [], 'entitySystem.statusDefinitions', STATUS_LIMITS.maxDefinitions);
-  const definitionIds = new Set();
-  for (let index = 0; index < definitions.length; index += 1) {
-    const definition = assertStatusDefinition(definitions[index], `entitySystem.statusDefinitions[${index}]`);
-    const definitionId = String(definition.id);
-    if (definitionIds.has(definitionId)) fail(`Duplicate status definition: ${definitionId}`, 'duplicate_id');
-    definitionIds.add(definitionId);
+  let definitionsById = documentCache?.collection('statusDefinitions', definitions);
+  if (!definitionsById) {
+    const definitionIds = new Set();
+    for (let index = 0; index < definitions.length; index += 1) {
+      const definition = assertStatusDefinition(definitions[index], `entitySystem.statusDefinitions[${index}]`);
+      const definitionId = String(definition.id);
+      if (definitionIds.has(definitionId)) fail(`Duplicate status definition: ${definitionId}`, 'duplicate_id');
+      definitionIds.add(definitionId);
+    }
+    definitionsById = definitionMap(entities);
+    documentCache?.stageCollection('statusDefinitions', definitions, definitionsById);
   }
-  const definitionsById = definitionMap(entities);
   const legacy = Number(entities.schemaVersion || 0) < 3;
   for (const [scope, targets] of [['actor', entities.actors], ['token', entities.tokens]]) {
+    if (scope === 'actor' && documentCache?.collection('statusActors', targets, definitions, legacy)) continue;
     for (let targetIndex = 0; targetIndex < targets.length; targetIndex += 1) {
       const target = targets[targetIndex];
       const cacheKind = scope === 'actor' ? 'statusActor' : 'statusToken';
@@ -259,6 +264,7 @@ function validateStatusState(entitySystem, documentCache = null) {
       }
       documentCache?.stage(cacheKind, target, definitions, legacy);
     }
+    if (scope === 'actor') documentCache?.stageCollection('statusActors', targets, true, definitions, legacy);
   }
   return entitySystem;
 }

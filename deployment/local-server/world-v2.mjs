@@ -180,7 +180,8 @@ function validateWorldV2(value, documentCache = null) {
   const ruleset = object(world.ruleset, 'worldV2.ruleset');
   cleanId(ruleset.id, 'worldV2.ruleset.id');
   if (typeof ruleset.version !== 'string' || !ruleset.version.trim()) fail('worldV2.ruleset.version is required');
-  const actorIds = unique(world.actors, 'worldV2.actors');
+  const actorIndex = documentCache?.collection('worldActors', world.actors);
+  const actorIds = actorIndex?.ids || unique(world.actors, 'worldV2.actors');
   const journals = Array.isArray(world.journals) ? world.journals : [];
   unique(journals, 'worldV2.journals');
   journals.forEach((entry, index) => {
@@ -196,13 +197,18 @@ function validateWorldV2(value, documentCache = null) {
     if (visibility.mode === 'party' && !journal.partyId) fail(`${label}.partyId is required`);
     documentCache?.stage('journal', journal);
   });
-  const actorById = new Map(world.actors.map(actor => [String(actor?.id ?? ''), actor]));
-  world.actors.forEach((actor, index) => {
-    if (documentCache?.verified('worldActor', actor)) return;
-    if (!ACTOR_TYPES.has(String(actor.type))) fail(`worldV2.actors[${index}].type is invalid`);
-    if (actor.partyId !== null && typeof actor.partyId !== 'string') fail(`worldV2.actors[${index}].partyId must be a string or null`);
-    documentCache?.stage('worldActor', actor);
-  });
+  // Preserve the existing distinction: uniqueness uses trimmed IDs, while
+  // document lookup uses the original String(id) spelling.
+  const actorById = actorIndex?.byId || new Map(world.actors.map(actor => [String(actor?.id ?? ''), actor]));
+  if (!actorIndex) {
+    world.actors.forEach((actor, index) => {
+      if (documentCache?.verified('worldActor', actor)) return;
+      if (!ACTOR_TYPES.has(String(actor.type))) fail(`worldV2.actors[${index}].type is invalid`);
+      if (actor.partyId !== null && typeof actor.partyId !== 'string') fail(`worldV2.actors[${index}].partyId must be a string or null`);
+      documentCache?.stage('worldActor', actor);
+    });
+    documentCache?.stageCollection('worldActors', world.actors, { ids: actorIds, byId: actorById });
+  }
   const statusDefinitions = Array.isArray(world.statusDefinitions) ? world.statusDefinitions : [];
   const sceneIds = unique(world.scenes, 'worldV2.scenes');
   const activeSceneId = cleanId(world.activeSceneId, 'worldV2.activeSceneId');

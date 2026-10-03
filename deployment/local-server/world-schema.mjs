@@ -1,3 +1,4 @@
+import { types } from 'node:util';
 import { assertCanonicalStatusState, assertStatusState } from './status-operations.mjs';
 import { assertCanonicalWorldV2, assertWorldV2 } from './world-v2.mjs';
 
@@ -117,7 +118,11 @@ function assertWorldStateStructure(value, documentCache = null) {
   let tokenIds = new Set();
   if (entities !== undefined) {
     const entityState = object(entities, 'state.preferences.entitySystem');
-    actorIds = assertUniqueIds(entityState.actors, 'entitySystem.actors');
+    actorIds = documentCache?.collection('entityActorIds', entityState.actors);
+    if (!actorIds) {
+      actorIds = assertUniqueIds(entityState.actors, 'entitySystem.actors');
+      documentCache?.stageCollection('entityActorIds', entityState.actors, actorIds);
+    }
     tokenIds = assertUniqueIds(entityState.tokens, 'entitySystem.tokens');
     for (const [index, token] of entityState.tokens.entries()) {
       const actorId = id(token.actorId, `entitySystem.tokens[${index}].actorId`);
@@ -184,24 +189,37 @@ export function assertWorldState(value) {
 // and is recursively frozen, so reference reuse is evidence of immutability.
 // Summaries still count every occurrence of a shared branch against the global
 // node/depth budgets, and are path-specific because Fog row dictionaries have
-// a different key limit. Global uniqueness/reference checks still run on every
-// result; only local checks of previously accepted frozen documents are reused.
+// a different key limit. Unchanged, immutable Actor/definition arrays reuse
+// their private structural indexes; new Token collections and all references
+// still use the current candidate. Getter/Proxy branches never seed a cache.
 export function createCanonicalWorldValidator() {
   const summaries = new WeakMap();
   const byteSizes = new WeakMap();
+  const immutableData = new WeakSet();
   const verifiedDocuments = new WeakMap();
+  const verifiedCollections = new WeakMap();
   const validate = value => {
     const pending = [];
     const pendingDocuments = [];
+    const pendingCollections = [];
     const documentCache = {
       verified(kind, document, ...dependencies) {
-        if (!document || typeof document !== 'object' || !Object.isFrozen(document)) return false;
+        if (!document || typeof document !== 'object' || !immutableData.has(document)) return false;
         const accepted = verifiedDocuments.get(document)?.get(kind);
         return accepted?.length === dependencies.length
           && accepted.every((dependency, index) => dependency === dependencies[index]);
       },
       stage(kind, document, ...dependencies) {
         if (document && typeof document === 'object') pendingDocuments.push({ kind, document, dependencies });
+      },
+      collection(kind, collection, ...dependencies) {
+        const accepted = verifiedCollections.get(collection)?.get(kind);
+        if (!accepted || accepted.dependencies.length !== dependencies.length
+          || !accepted.dependencies.every((dependency, index) => dependency === dependencies[index])) return null;
+        return accepted.value;
+      },
+      stageCollection(kind, collection, index, ...dependencies) {
+        if (Array.isArray(collection)) pendingCollections.push({ kind, collection, value: index, dependencies });
       },
     };
     let nodes = 0;
@@ -216,7 +234,7 @@ export function createCanonicalWorldValidator() {
         if (cached) { consume(cached, path, depth); return cached; }
       }
       consume({ nodes: 1, depth: 0 }, path, depth);
-      const summary = { nodes: 1, depth: 0, bytes: 0 };
+      const summary = { nodes: 1, depth: 0, bytes: 0, cacheable: true };
       if (current === null || ['boolean', 'number'].includes(typeof current)) {
         if (typeof current === 'number' && !Number.isFinite(current)) fail(`${path} must contain finite numbers`);
         summary.bytes = Buffer.byteLength(JSON.stringify(current));
@@ -236,8 +254,20 @@ export function createCanonicalWorldValidator() {
         entries = Object.entries(current);
         if (entries.length > objectKeyLimit(path)) fail(`${path} has too many keys`, 'world_limit');
       }
+      // Freezing an accessor or Proxy does not make its observed values
+      // immutable. Only ordinary own enumerable data properties (and an
+      // Array's length) may enter either the JSON or structural caches.
+      const arrayValue = Array.isArray(current);
+      summary.cacheable = !types.isProxy(current)
+        && (arrayValue ? Object.getPrototypeOf(current) === Array.prototype
+          : [Object.prototype, null].includes(Object.getPrototypeOf(current)))
+        && Reflect.ownKeys(current).length === entries.length + (arrayValue ? 1 : 0);
       summary.bytes = 2 + Math.max(0, entries.length - 1);
       for (const [key, entry] of entries) {
+        if (summary.cacheable) {
+          const descriptor = Object.getOwnPropertyDescriptor(current, key);
+          if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) summary.cacheable = false;
+        }
         if (!Array.isArray(current)) {
           if (['__proto__', 'prototype', 'constructor'].includes(key)) fail(`${path} contains an unsafe key`);
           if (key.length > 160) fail(`${path} has an oversized key`, 'world_limit');
@@ -246,6 +276,7 @@ export function createCanonicalWorldValidator() {
         summary.nodes += child.nodes;
         summary.depth = Math.max(summary.depth, child.depth + 1);
         summary.bytes += child.bytes + (Array.isArray(current) ? 0 : Buffer.byteLength(JSON.stringify(key)) + 1);
+        if (!child.cacheable) summary.cacheable = false;
       }
       pending.push({ value: current, path, summary });
       return summary;
@@ -255,18 +286,34 @@ export function createCanonicalWorldValidator() {
     // Children precede parents. No rejected candidate can seed trusted entries.
     for (const entry of pending) {
       Object.freeze(entry.value);
-      let byPath = summaries.get(entry.value);
-      if (!byPath) { byPath = new Map(); summaries.set(entry.value, byPath); }
-      if (byPath.size >= 8 && !byPath.has(entry.path)) byPath.delete(byPath.keys().next().value);
-      byPath.set(entry.path, entry.summary);
-      byteSizes.set(entry.value, entry.summary.bytes);
+      if (entry.summary.cacheable) {
+        immutableData.add(entry.value);
+        let byPath = summaries.get(entry.value);
+        if (!byPath) { byPath = new Map(); summaries.set(entry.value, byPath); }
+        if (byPath.size >= 8 && !byPath.has(entry.path)) byPath.delete(byPath.keys().next().value);
+        byPath.set(entry.path, entry.summary);
+      }
+      // A null entry proves whole-candidate acceptance without trusting an
+      // accessor/Proxy branch's earlier observed serialized size.
+      byteSizes.set(entry.value, entry.summary.cacheable ? entry.summary.bytes : null);
     }
+    const immutableDependencies = dependencies => dependencies.every(dependency =>
+      !dependency || typeof dependency !== 'object' || immutableData.has(dependency));
     for (const entry of pendingDocuments) {
+      if (!immutableData.has(entry.document) || !immutableDependencies(entry.dependencies)) continue;
       let records = verifiedDocuments.get(entry.document);
       if (!records) { records = new Map(); verifiedDocuments.set(entry.document, records); }
       // A document has only a fixed set of validator kinds. Replacing its last
       // dependency tuple avoids retaining every historical Actor/definition.
       records.set(entry.kind, entry.dependencies);
+    }
+    for (const entry of pendingCollections) {
+      if (!immutableData.has(entry.collection) || !immutableDependencies(entry.dependencies)) continue;
+      let records = verifiedCollections.get(entry.collection);
+      if (!records) { records = new Map(); verifiedCollections.set(entry.collection, records); }
+      // Indexes are private derived data. Keep only the latest dependency
+      // tuple for each fixed validator kind, never a history of old Worlds.
+      records.set(entry.kind, { value: entry.value, dependencies: entry.dependencies });
     }
     return value;
   };
@@ -274,7 +321,7 @@ export function createCanonicalWorldValidator() {
     const bytesFor = current => {
       if (current === null || typeof current !== 'object') return Buffer.byteLength(JSON.stringify(current));
       if (!byteSizes.has(current) || !Object.isFrozen(current)) fail('JSON size requires a verified canonical branch', 'unverified_canonical');
-      return byteSizes.get(current);
+      return immutableData.has(current) ? byteSizes.get(current) : Buffer.byteLength(JSON.stringify(current));
     };
     let bytes = bytesFor(value);
     const preferences = value?.preferences;
