@@ -224,7 +224,7 @@ export function assertStatusInstance(value, label, { definitions, scope, legacy 
   return effect;
 }
 
-export function assertStatusState(entitySystem) {
+function validateStatusState(entitySystem, documentCache = null) {
   const entities = object(entitySystem, 'entitySystem');
   const definitions = array(entities.statusDefinitions ?? [], 'entitySystem.statusDefinitions', STATUS_LIMITS.maxDefinitions);
   const definitionIds = new Set();
@@ -238,7 +238,10 @@ export function assertStatusState(entitySystem) {
   const legacy = Number(entities.schemaVersion || 0) < 3;
   for (const [scope, targets] of [['actor', entities.actors], ['token', entities.tokens]]) {
     for (let targetIndex = 0; targetIndex < targets.length; targetIndex += 1) {
-      const effects = array(targets[targetIndex]?.effects ?? [], `entitySystem.${scope}s[${targetIndex}].effects`, STATUS_LIMITS.maxEffectsPerTarget);
+      const target = targets[targetIndex];
+      const cacheKind = scope === 'actor' ? 'statusActor' : 'statusToken';
+      if (documentCache?.verified(cacheKind, target, definitions, legacy)) continue;
+      const effects = array(target?.effects ?? [], `entitySystem.${scope}s[${targetIndex}].effects`, STATUS_LIMITS.maxEffectsPerTarget);
       const effectIds = new Set();
       const statusIds = new Set();
       for (let effectIndex = 0; effectIndex < effects.length; effectIndex += 1) {
@@ -254,9 +257,19 @@ export function assertStatusState(entitySystem) {
           statusIds.add(definitionId);
         }
       }
+      documentCache?.stage(cacheKind, target, definitions, legacy);
     }
   }
   return entitySystem;
+}
+
+export function assertStatusState(entitySystem) {
+  return validateStatusState(entitySystem);
+}
+
+// Only the canonical server validator passes its private, commit-on-success cache.
+export function assertCanonicalStatusState(entitySystem, documentCache) {
+  return validateStatusState(entitySystem, documentCache);
 }
 
 function normalizedDefinition(input) {

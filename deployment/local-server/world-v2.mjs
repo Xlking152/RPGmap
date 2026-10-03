@@ -169,8 +169,11 @@ function assertMarker(marker, label) {
   if (marker.partyId !== null && typeof marker.partyId !== 'string') fail(`${label}.partyId must be a string or null`);
 }
 
-export function assertWorldV2(value) {
-  assertTemplateLibrary(value?.templateLibrary);
+function validateWorldV2(value, documentCache = null) {
+  if (!documentCache?.verified('templateLibrary', value?.templateLibrary)) {
+    assertTemplateLibrary(value?.templateLibrary);
+    documentCache?.stage('templateLibrary', value?.templateLibrary);
+  }
   const world = object(value, 'worldV2');
   if (Number(world.schemaVersion) !== WORLD_V2_SCHEMA_VERSION) fail('worldV2.schemaVersion must be 4');
   cleanId(world.id, 'worldV2.id');
@@ -183,6 +186,7 @@ export function assertWorldV2(value) {
   journals.forEach((entry, index) => {
     const label = `worldV2.journals[${index}]`;
     const journal = object(entry, label);
+    if (documentCache?.verified('journal', journal)) return;
     if (typeof journal.title !== 'string' || !journal.title.trim() || journal.title.length > 240) fail(`${label}.title is invalid`);
     if (!/^body:[a-f0-9]{64}$/.test(String(journal.bodyRef || ''))) fail(`${label}.bodyRef is invalid`);
     const visibility = object(journal.visibility, `${label}.visibility`);
@@ -190,11 +194,14 @@ export function assertWorldV2(value) {
     stringIds(visibility.userIds, `${label}.visibility.userIds`);
     if (journal.partyId !== null && typeof journal.partyId !== 'string') fail(`${label}.partyId must be a string or null`);
     if (visibility.mode === 'party' && !journal.partyId) fail(`${label}.partyId is required`);
+    documentCache?.stage('journal', journal);
   });
   const actorById = new Map(world.actors.map(actor => [String(actor?.id ?? ''), actor]));
   world.actors.forEach((actor, index) => {
+    if (documentCache?.verified('worldActor', actor)) return;
     if (!ACTOR_TYPES.has(String(actor.type))) fail(`worldV2.actors[${index}].type is invalid`);
     if (actor.partyId !== null && typeof actor.partyId !== 'string') fail(`worldV2.actors[${index}].partyId must be a string or null`);
+    documentCache?.stage('worldActor', actor);
   });
   const statusDefinitions = Array.isArray(world.statusDefinitions) ? world.statusDefinitions : [];
   const sceneIds = unique(world.scenes, 'worldV2.scenes');
@@ -208,21 +215,24 @@ export function assertWorldV2(value) {
     if (typeof mapPackage.version !== 'string' || !mapPackage.version.trim()) {
       fail(`worldV2.scenes[${sceneIndex}].mapPackage.version is required`);
     }
-    if (scene.featureStates !== undefined) {
+    if (scene.featureStates !== undefined && !documentCache?.verified('featureStates', scene.featureStates)) {
       if (!isPlainObject(scene.featureStates)) fail(`worldV2.scenes[${sceneIndex}].featureStates must be an object`);
       for (const [featureId, state] of Object.entries(scene.featureStates)) {
         cleanId(featureId, `worldV2.scenes[${sceneIndex}].featureStates key`);
         if (!isPlainObject(state)) fail(`worldV2.scenes[${sceneIndex}].featureStates.${featureId} must be an object`);
         assertFeatureStatePatch(state);
       }
+      documentCache?.stage('featureStates', scene.featureStates);
     }
     const tokenIds = unique(scene.tokens, `worldV2.scenes[${sceneIndex}].tokens`);
     for (const [tokenIndex, tokenRaw] of scene.tokens.entries()) {
       const token = object(tokenRaw, `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}]`);
       const actorId = cleanId(token.actorId, `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}].actorId`);
       if (!actorIds.has(actorId)) fail(`World V2 Token references missing Actor: ${actorId}`, 'invalid_reference');
+      const actor = actorById.get(actorId);
+      if (documentCache?.verified('worldToken', token, actor, statusDefinitions)) continue;
       if (typeof token.actorLink !== 'boolean') fail('worldV2 token.actorLink must be boolean');
-      assertTokenAccess(token, actorById.get(actorId), `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}]`);
+      assertTokenAccess(token, actor, `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}]`);
       if (token.actorDelta !== null && token.actorDelta !== undefined
         && (!token.actorDelta || typeof token.actorDelta !== 'object' || Array.isArray(token.actorDelta))) {
         fail('worldV2 token.actorDelta must be an object or null');
@@ -254,9 +264,14 @@ export function assertWorldV2(value) {
       }
       finite(token.diameterMeters, `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}].diameterMeters`);
       if (Number(token.diameterMeters) <= 0) fail('worldV2 token.diameterMeters must be positive');
+      documentCache?.stage('worldToken', token, actor, statusDefinitions);
     }
     unique(scene.markers, `worldV2.scenes[${sceneIndex}].markers`);
-    scene.markers.forEach((marker, markerIndex) => assertMarker(marker, `worldV2.scenes[${sceneIndex}].markers[${markerIndex}]`));
+    scene.markers.forEach((marker, markerIndex) => {
+      if (documentCache?.verified('marker', marker)) return;
+      assertMarker(marker, `worldV2.scenes[${sceneIndex}].markers[${markerIndex}]`);
+      documentCache?.stage('marker', marker);
+    });
     const attackAreas = array(scene.attackAreas, `worldV2.scenes[${sceneIndex}].attackAreas`);
     for (const [areaIndex, rawArea] of attackAreas.entries()) {
       const area = object(rawArea, `worldV2.scenes[${sceneIndex}].attackAreas[${areaIndex}]`);
@@ -271,7 +286,20 @@ export function assertWorldV2(value) {
       }
     }
     array(scene.sceneEvents, `worldV2.scenes[${sceneIndex}].sceneEvents`);
-    assertFog(scene.fog, `worldV2.scenes[${sceneIndex}].fog`);
+    if (!documentCache?.verified('fog', scene.fog)) {
+      assertFog(scene.fog, `worldV2.scenes[${sceneIndex}].fog`);
+      documentCache?.stage('fog', scene.fog);
+    }
   }
   return world;
+}
+
+export function assertWorldV2(value) {
+  return validateWorldV2(value);
+}
+
+// Full validation remains the public entry; only the canonical server caller
+// supplies a cache populated after an earlier complete, immutable validation.
+export function assertCanonicalWorldV2(value, documentCache) {
+  return validateWorldV2(value, documentCache);
 }

@@ -8,6 +8,8 @@ const LIGHTING_CACHE = new WeakMap();
 const IMMUTABLE_LIGHTS = new WeakSet();
 const VISION_HOST_FILTERS = new WeakMap();
 const SOLID_AREAS = new WeakMap();
+const CLEAR_RAY = Object.freeze({ clear: true, code: 'ok' });
+const INVALID_RAY = Object.freeze({ clear: false, code: 'spatial_point_invalid' });
 
 function immutableLights(lights) {
   if (!Array.isArray(lights) || !Object.isFrozen(lights)) return false;
@@ -22,7 +24,7 @@ function number(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-export function normalizeSpatialPoint(value, fallbackElevationMeters = 0) {
+function spatialPoint(value, fallbackElevationMeters = 0) {
   const x = Number(value?.x);
   const y = Number(value?.y);
   const elevationMeters = value?.elevationMeters == null
@@ -30,7 +32,12 @@ export function normalizeSpatialPoint(value, fallbackElevationMeters = 0) {
     : Number(value.elevationMeters);
   if (!Number.isFinite(x) || !Number.isFinite(y)
     || !Number.isFinite(elevationMeters) || elevationMeters < 0) return null;
-  return Object.freeze({ x, y, elevationMeters });
+  return { x, y, elevationMeters };
+}
+
+export function normalizeSpatialPoint(value, fallbackElevationMeters = 0) {
+  const point = spatialPoint(value, fallbackElevationMeters);
+  return point ? Object.freeze(point) : null;
 }
 
 export function distance3dMeters(from, to, metersPerUnit = 1) {
@@ -253,10 +260,14 @@ export function inspectLineOfSight({
   excludedFeatureIds = [],
   applySourceHostExemption = false,
 } = {}) {
-  const start = normalizeSpatialPoint(from);
-  const end = normalizeSpatialPoint(to);
-  if (!start || !end) return Object.freeze({ clear: false, code: 'spatial_point_invalid' });
-  const excluded = new Set(excludedFeatureIds.map(String));
+  return inspectSpatialRay(spatialPoint(from), spatialPoint(to), {
+    from, occluders, metersPerUnit, excludedFeatureIds, applySourceHostExemption,
+  });
+}
+
+function inspectSpatialRay(start, end, { from, occluders, metersPerUnit, excludedFeatureIds = [], applySourceHostExemption }) {
+  if (!start || !end) return INVALID_RAY;
+  const excluded = excludedFeatureIds.length ? new Set(excludedFeatureIds.map(String)) : null;
   const scale = Number.isFinite(Number(metersPerUnit)) && Number(metersPerUnit) > 0 ? Number(metersPerUnit) : 1;
   const rayBounds = [
     Math.min(start.x, end.x), Math.min(start.y, end.y),
@@ -265,7 +276,7 @@ export function inspectLineOfSight({
   const visualOccluders = applySourceHostExemption ? visionOccludersForSource(from, occluders, metersPerUnit) : occluders;
   for (const raw of queryOccluders(visualOccluders, rayBounds)) {
     const occluder = normalizeVisionOccluder(raw);
-    if (!occluder || excluded.has(String(occluder.featureId || occluder.id))) continue;
+    if (!occluder || excluded?.has(String(occluder.featureId || occluder.id))) continue;
     const polygon = occluder.polygon;
     if (polygon.every(point => point[0] < rayBounds[0])
       || polygon.every(point => point[0] > rayBounds[2])
@@ -310,7 +321,7 @@ export function inspectLineOfSight({
       });
     }
   }
-  return Object.freeze({ clear: true, code: 'ok' });
+  return CLEAR_RAY;
 }
 
 export function resolveLineOfSightEnabled() {
@@ -397,14 +408,14 @@ export function perceptionLevelAtPoint({
   metersPerUnit = 1,
   lineOfSightEnabled = false,
 } = {}) {
-  const source = normalizeSpatialPoint(vision, vision?.elevationMeters);
-  const destination = normalizeSpatialPoint(target, target?.elevationMeters);
+  const source = spatialPoint(vision, vision?.elevationMeters);
+  const destination = spatialPoint(target, target?.elevationMeters);
   if (!source || !destination) return 'none';
   const distance = distance3dMeters(source, destination, metersPerUnit);
   let level = distance <= Math.max(0, number(vision?.preciseRangeMeters ?? vision?.rangeMeters)) ? 'precise'
     : distance <= Math.max(0, number(vision?.vagueRangeMeters)) ? 'vague' : 'none';
   if (level === 'none') return level;
-  if (lineOfSightEnabled && !inspectLineOfSight({ from: { ...vision, ...source }, to: destination,
+  if (lineOfSightEnabled && !inspectSpatialRay(source, destination, { from: sourceOccluders ? source : { ...vision, ...source },
     occluders: sourceOccluders || occluders, metersPerUnit,
     applySourceHostExemption: sourceOccluders === null }).clear) return 'none';
   if (level === 'precise') {

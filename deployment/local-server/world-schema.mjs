@@ -1,5 +1,5 @@
-import { assertStatusState } from './status-operations.mjs';
-import { assertWorldV2 } from './world-v2.mjs';
+import { assertCanonicalStatusState, assertStatusState } from './status-operations.mjs';
+import { assertCanonicalWorldV2, assertWorldV2 } from './world-v2.mjs';
 
 // The release server applies these hostile-input limits before any permission
 // projection or authoritative World mutation.
@@ -92,7 +92,7 @@ export function assertSafeJson(value, label = 'world') {
   return value;
 }
 
-function assertWorldStateStructure(value) {
+function assertWorldStateStructure(value, documentCache = null) {
   const state = object(value, 'state');
   const preferences = state.preferences === undefined ? {} : object(state.preferences, 'state.preferences');
   const hasWorldV2 = preferences.worldV2 !== undefined && preferences.worldV2 !== null;
@@ -122,22 +122,29 @@ function assertWorldStateStructure(value) {
     for (const [index, token] of entityState.tokens.entries()) {
       const actorId = id(token.actorId, `entitySystem.tokens[${index}].actorId`);
       if (!actorIds.has(actorId)) fail(`Token references missing Actor: ${actorId}`, 'invalid_reference');
-      if (hasWorldV2 && Object.hasOwn(token, 'characterId')) {
-        fail(`entitySystem.tokens[${index}].characterId is forbidden in World V2`, 'legacy_character_forbidden');
-      }
-      if (!hasWorldV2 && token.characterId !== undefined && token.characterId !== null && String(token.characterId).trim() !== '') {
-        id(token.characterId, `entitySystem.tokens[${index}].characterId`);
-      }
-      if (token.diameterMeters !== undefined && ![1, 5, 10, 20].includes(Number(token.diameterMeters))) {
-        fail(`entitySystem.tokens[${index}].diameterMeters must be 1, 5, 10, or 20`);
+      if (!documentCache?.verified('entityToken', token, hasWorldV2)) {
+        if (hasWorldV2 && Object.hasOwn(token, 'characterId')) {
+          fail(`entitySystem.tokens[${index}].characterId is forbidden in World V2`, 'legacy_character_forbidden');
+        }
+        if (!hasWorldV2 && token.characterId !== undefined && token.characterId !== null && String(token.characterId).trim() !== '') {
+          id(token.characterId, `entitySystem.tokens[${index}].characterId`);
+        }
+        if (token.diameterMeters !== undefined && ![1, 5, 10, 20].includes(Number(token.diameterMeters))) {
+          fail(`entitySystem.tokens[${index}].diameterMeters must be 1, 5, 10, or 20`);
+        }
+        documentCache?.stage('entityToken', token, hasWorldV2);
       }
     }
-    assertStatusState(entityState);
+    if (documentCache) assertCanonicalStatusState(entityState, documentCache);
+    else assertStatusState(entityState);
   }
 
   // World V2 is canonical. Flat entity/scene fields remain a reducer projection,
   // but placement and identity never route through Character documents.
-  if (worldV2) assertWorldV2(worldV2);
+  if (worldV2) {
+    if (documentCache) assertCanonicalWorldV2(worldV2, documentCache);
+    else assertWorldV2(worldV2);
+  }
 
   const chat = preferences.chatSystem;
   if (chat !== undefined) {
@@ -177,11 +184,25 @@ export function assertWorldState(value) {
 // and is recursively frozen, so reference reuse is evidence of immutability.
 // Summaries still count every occurrence of a shared branch against the global
 // node/depth budgets, and are path-specific because Fog row dictionaries have
-// a different key limit. Structural/reference checks always run on the result.
+// a different key limit. Global uniqueness/reference checks still run on every
+// result; only local checks of previously accepted frozen documents are reused.
 export function createCanonicalWorldValidator() {
   const summaries = new WeakMap();
+  const verifiedDocuments = new WeakMap();
   return value => {
     const pending = [];
+    const pendingDocuments = [];
+    const documentCache = {
+      verified(kind, document, ...dependencies) {
+        if (!document || typeof document !== 'object' || !Object.isFrozen(document)) return false;
+        const accepted = verifiedDocuments.get(document)?.get(kind);
+        return accepted?.length === dependencies.length
+          && accepted.every((dependency, index) => dependency === dependencies[index]);
+      },
+      stage(kind, document, ...dependencies) {
+        if (document && typeof document === 'object') pendingDocuments.push({ kind, document, dependencies });
+      },
+    };
     let nodes = 0;
     const consume = (summary, path, depth) => {
       nodes += summary.nodes;
@@ -225,7 +246,7 @@ export function createCanonicalWorldValidator() {
       return summary;
     };
     visit(value, 'state', 0);
-    assertWorldStateStructure(value);
+    assertWorldStateStructure(value, documentCache);
     // Children precede parents. No rejected candidate can seed trusted entries.
     for (const entry of pending) {
       Object.freeze(entry.value);
@@ -233,6 +254,13 @@ export function createCanonicalWorldValidator() {
       if (!byPath) { byPath = new Map(); summaries.set(entry.value, byPath); }
       if (byPath.size >= 8 && !byPath.has(entry.path)) byPath.delete(byPath.keys().next().value);
       byPath.set(entry.path, entry.summary);
+    }
+    for (const entry of pendingDocuments) {
+      let records = verifiedDocuments.get(entry.document);
+      if (!records) { records = new Map(); verifiedDocuments.set(entry.document, records); }
+      // A document has only a fixed set of validator kinds. Replacing its last
+      // dependency tuple avoids retaining every historical Actor/definition.
+      records.set(entry.kind, entry.dependencies);
     }
     return value;
   };

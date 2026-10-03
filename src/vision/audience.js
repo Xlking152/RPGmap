@@ -113,10 +113,10 @@ function explicitVisibilityGranted(entity, context) {
   return hasId(entity?.visibility?.userIds, context.userId);
 }
 
-function visibleByPolicy(entity, actor, context, parties) {
+function visibleByPolicy(entity, actor, context, parties, controlled) {
   const visibility = plainObject(entity?.visibility) ? entity.visibility : { mode: 'public', userIds: [] };
   if (visibility.mode === 'gm') return false;
-  if (tokenControlled(entity, actor, context)) return true;
+  if (controlled) return true;
   if (explicitVisibilityGranted(entity, context)) return true;
   if (visibility.mode === 'users') return false;
   if (visibility.mode === 'party') return Boolean(actor?.partyId && parties.has(String(actor.partyId)));
@@ -144,8 +144,8 @@ function tokenVisionPrecision(token, actor, definitions) {
     : 'precise';
 }
 
-function authorizedForPrivateData(token, actor, context, parties) {
-  return tokenControlled(token, actor, context)
+function authorizedForPrivateData(actor, parties, controlled) {
+  return controlled
     || Boolean((actor?.type === 'pc' || actor?.type === 'summon')
       && actor?.partyId && parties.has(String(actor.partyId)));
 }
@@ -453,9 +453,11 @@ export function projectStateForAudience(rawState, rawContext = {}) {
         projectedSceneTokensNext.push(prior);
         continue;
       }
-      if (!actor || !visibleByPolicy(rawToken, actor, context, parties)) continue;
+      if (!actor) continue;
+      const controlled = tokenControlled(rawToken, actor, context);
+      if (!visibleByPolicy(rawToken, actor, context, parties, controlled)) continue;
       const visibilityOverride = explicitVisibilityGranted(rawToken, context);
-      const authorized = authorizedForPrivateData(rawToken, actor, context, parties);
+      const authorized = authorizedForPrivateData(actor, parties, controlled);
       if (tokenInvisible(rawToken, actor, definitions) && !authorized && !visibilityOverride) continue;
       const hostile = !authorized;
       const requiresDetection = hostile && !visibilityOverride;
