@@ -14,6 +14,8 @@ import { journalVisibleToAudience } from '../journal/model.js';
 
 const clone = structuredClone;
 const projectionAudiences = new WeakMap();
+const projectionPolicies = new WeakMap();
+const immutablePolicyDocuments = new WeakSet();
 const vagueActorDocuments = new WeakSet();
 const audienceKey = context => JSON.stringify([context.role, context.userId,
   context.user?.ownership || {}, context.user?.placementGrants || {}, context.user?.disabled === true]);
@@ -62,6 +64,14 @@ function projectionShell(rawState) {
 
 function plainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function immutablePolicyDocument(value) {
+  if (!value || typeof value !== 'object') return true;
+  if (immutablePolicyDocuments.has(value)) return true;
+  if (!Object.isFrozen(value) || !Object.values(value).every(immutablePolicyDocument)) return false;
+  immutablePolicyDocuments.add(value);
+  return true;
 }
 
 function hasId(value, target) {
@@ -113,11 +123,11 @@ function explicitVisibilityGranted(entity, context) {
   return hasId(entity?.visibility?.userIds, context.userId);
 }
 
-function visibleByPolicy(entity, actor, context, parties, controlled) {
+function visibleByPolicy(entity, actor, context, parties, controlled, visibilityOverride = explicitVisibilityGranted(entity, context)) {
   const visibility = plainObject(entity?.visibility) ? entity.visibility : { mode: 'public', userIds: [] };
   if (visibility.mode === 'gm') return false;
   if (controlled) return true;
-  if (explicitVisibilityGranted(entity, context)) return true;
+  if (visibilityOverride) return true;
   if (visibility.mode === 'users') return false;
   if (visibility.mode === 'party') return Boolean(actor?.partyId && parties.has(String(actor.partyId)));
   return visibility.mode === 'public';
@@ -148,6 +158,15 @@ function authorizedForPrivateData(actor, parties, controlled) {
   return controlled
     || Boolean((actor?.type === 'pc' || actor?.type === 'summon')
       && actor?.partyId && parties.has(String(actor.partyId)));
+}
+
+function tokenAudiencePolicy(token, actor, context, parties, definitions) {
+  const controlled = tokenControlled(token, actor, context);
+  const visibilityOverride = explicitVisibilityGranted(token, context);
+  if (!visibleByPolicy(token, actor, context, parties, controlled, visibilityOverride)) return { visible: false };
+  const authorized = authorizedForPrivateData(actor, parties, controlled);
+  const invisible = tokenInvisible(token, actor, definitions);
+  return { visible: !invisible || authorized || visibilityOverride, authorized, visibilityOverride, invisible };
 }
 
 function currentVision(world, context, actors) {
@@ -398,6 +417,13 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const partiesUnchanged = movementCache && JSON.stringify([...(previousProjection?.preferences?.audienceVision?.partyIds || [])].sort())
     === JSON.stringify([...parties].sort());
   const definitionsUnchanged = movementCache && previousWorld?.statusDefinitions === rawState.preferences.worldV2.statusDefinitions;
+  const previousPolicies = movementCache && projectionPolicies.get(previousProjection?.preferences?.audienceVision);
+  const sourceIdentityUnchanged = previousPolicies
+    && previousPolicies.sourceTokenId === String(context.visionSourceTokenId || '');
+  const mapMetricsUnchanged = previousPolicies?.metersPerUnit === metersPerUnit;
+  const mapPackageUnchanged = previousPolicies?.mapPackage === context.mapPackage;
+  const reusePolicies = Boolean(sourceIdentityUnchanged && partiesUnchanged && definitionsUnchanged);
+  const policies = new WeakMap();
   const oldActive = previousScenes.get(String(world.activeSceneId));
   const rawActive = activeScene(rawState.preferences.worldV2);
   const geometryUnchanged = oldActive && oldActive.featureStates === rawActive?.featureStates
@@ -406,7 +432,8 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const movedIds = movementCache?.tokenIds || new Set();
   const lightMoved = movementCache && (rawActive?.tokens || []).some(token => movedIds.has(String(token.id))
     && (token.light?.enabled === true || oldActive?.tokens?.find(item => String(item.id) === String(token.id))?.light?.enabled === true));
-  const reuseDetection = Boolean(sourceUnchanged && partiesUnchanged && definitionsUnchanged && geometryUnchanged && !lightMoved);
+  const reuseDetection = Boolean(sourceUnchanged && partiesUnchanged && definitionsUnchanged && geometryUnchanged
+    && mapMetricsUnchanged && mapPackageUnchanged && !lightMoved);
   const visibleTokenIds = new Set();
   const privateActorIds = new Set();
   const referencedActorIds = new Set();
@@ -421,7 +448,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     const previousTokens = new Map((previousScene?.tokens || []).map(token => [String(token.id), token]));
     const projectedSceneTokens = projectedScene?.tokens || [];
     const projectedTokens = new Map(projectedSceneTokens.map(token => [String(token.id), token]));
-    const hasVaguePrior = Boolean(sourceUnchanged && projectedSceneTokens.some(token => token.audienceVisibility === 'vague'));
+    const hasVaguePrior = Boolean(sourceIdentityUnchanged && projectedSceneTokens.some(token => token.audienceVisibility === 'vague'));
     const sceneVisibleTokenIds = new Set();
     const projectedSceneTokensNext = [];
     for (const rawToken of scene.tokens || []) {
@@ -431,6 +458,16 @@ export function projectStateForAudience(rawState, rawContext = {}) {
       const canReuseVaguePrior = hasVaguePrior && unchanged && !movedIds.has(String(rawToken.id));
       const prior = movementCache ? projectedTokens.get(String(rawToken.id))
         || (canReuseVaguePrior ? projectedTokens.get((context.lookupOpaqueId || context.opaqueIdFor)('token', rawToken.id)) : null) : null;
+      if (!actor) continue;
+      // Only the immediately preceding projection supplies policy decisions,
+      // and its audience/source/party/definition scope has already been checked.
+      // Frozen canonical documents cannot change policy between coordinates.
+      const policyCacheable = immutablePolicyDocument(rawToken) && immutablePolicyDocument(actor);
+      const oldPolicy = reusePolicies && policyCacheable ? previousPolicies.policies.get(rawToken) : null;
+      const policy = oldPolicy?.actor === actor ? oldPolicy.policy
+        : tokenAudiencePolicy(rawToken, actor, context, parties, definitions);
+      if (policyCacheable) policies.set(rawToken, { actor, policy });
+      if (!policy.visible) continue;
       if (reuseDetection && unchanged && !movedIds.has(String(rawToken.id))) {
         // The session, source, geometry, lights, permissions, party membership,
         // definitions and both canonical documents are unchanged. Reusing the
@@ -453,12 +490,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
         projectedSceneTokensNext.push(prior);
         continue;
       }
-      if (!actor) continue;
-      const controlled = tokenControlled(rawToken, actor, context);
-      if (!visibleByPolicy(rawToken, actor, context, parties, controlled)) continue;
-      const visibilityOverride = explicitVisibilityGranted(rawToken, context);
-      const authorized = authorizedForPrivateData(actor, parties, controlled);
-      if (tokenInvisible(rawToken, actor, definitions) && !authorized && !visibilityOverride) continue;
+      const { authorized, visibilityOverride, invisible } = policy;
       const hostile = !authorized;
       const requiresDetection = hostile && !visibilityOverride;
       const level = requiresDetection && isActive
@@ -476,13 +508,15 @@ export function projectStateForAudience(rawState, rawContext = {}) {
         sceneVisibleTokenIds.add(String(token.id));
         referencedActorIds.add(String(actor.id));
         privateActorIds.add(String(actor.id));
-        if (tokenInvisible(rawToken, actor, definitions) && token.audienceVisibility !== 'allied-invisible') {
+        if (invisible && token.audienceVisibility !== 'allied-invisible') {
           token = { ...token, audienceVisibility: 'allied-invisible' };
         }
       } else if (level === 'vague') {
-        token = unchanged && sourceUnchanged && prior?.audienceVisibility === 'vague' ? prior : restrictedToken(rawToken, {
-          level, vision, metersPerUnit, opaqueIdFor: context.opaqueIdFor,
-        });
+        token = unchanged && sourceIdentityUnchanged && mapMetricsUnchanged && prior?.audienceVisibility === 'vague'
+          && (sourceUnchanged || policyCacheable)
+          ? sourceUnchanged ? prior : { ...prior,
+            approximateDirection: Math.atan2(Number(rawToken.y) - vision.y, Number(rawToken.x) - vision.x) }
+          : restrictedToken(rawToken, { level, vision, metersPerUnit, opaqueIdFor: context.opaqueIdFor });
         const priorVagueActor = movementCache ? projectedActors.get(String(token.actorId)) : null;
         vagueActors.push(vagueActorDocuments.has(priorVagueActor) ? priorVagueActor : vagueActor(rawToken, context.opaqueIdFor));
       } else {
@@ -563,6 +597,10 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     partyIds: [...parties],
   };
   projectionAudiences.set(state.preferences.audienceVision, stamp);
+  projectionPolicies.set(state.preferences.audienceVision, {
+    sourceTokenId: String(context.visionSourceTokenId || ''), metersPerUnit,
+    mapPackage: context.mapPackage, policies,
+  });
   state.markers = clone(active?.markers || []);
   state.attackAreas = clone(active?.attackAreas || []);
   state.audienceProjection = true;

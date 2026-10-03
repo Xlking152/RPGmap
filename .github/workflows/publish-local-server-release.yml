@@ -121,6 +121,8 @@ jobs:
           $root = Join-Path $PWD "release/unpacked/RPGmap-v$version"
           & node scripts/verify-package.mjs "--root=$root" "--archive=$zip" "--commit=${{ needs.candidate.outputs.commit }}"
           if ($LASTEXITCODE -ne 0) { throw 'Candidate package verification failed.' }
+          & node scripts/vision-mask-raster-check.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Continuous mask raster equivalence failed.' }
           & ./scripts/windows-smoke.ps1 -Root $root -Browser chrome -TimeoutSeconds 30
       - name: Determine v2.5.4 performance gates
         id: occlusion_gates

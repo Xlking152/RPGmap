@@ -35,6 +35,10 @@
 
 候选测试使用 Chrome headless 与软件栅格（`--disable-gpu`），保留原有 60 秒、500 Token、七会话负载及既定门槛。复核发现旧七会话脚本按全局操作奇偶设置坐标，六名玩家轮转时多数操作重复当前位置；旧记录（包括 16.9 ms 输入和随后两阶段记录）不构成真实移动验收。脚本已改为根据各角色当前位置往返，并记录实际移动次数、活动来源、完整遮罩、Fog 和绘制次数；光照阶段明确使用黑暗和三个已有 Token 光源。修正后的真实移动结果尚待完整复测。所有失败或无效记录均不能在本地验证清单中标为通过。
 
+10 月 3 日 21:35 的真实移动候选（`c49a409`）在两个阶段分别执行 118 次实际移动，原始记录为 `artifact/qa/v2.5.4-chrome-seven-real-moving-ray-snapshot.json`。普通阶段 Player FPS 为 54.23～54.67、帧 p95 33.3 ms、输入 p95 29.4～32.0 ms；黑暗三光源阶段 FPS 为 50.97～51.30、帧 p95 49.9 ms、输入 p95 56.5～61.6 ms，均未达标。该包六来源大范围 LAN 单轮 ACK／差量 p95 为 149.950／159.485 ms，仍未通过。之后的源码减少无关 Token 与 Fog 刷新，按来源与灯光版本复用绘制结果，并减少权限判定与持久几何复制；收益须用重建包复测确认。
+
+遮罩绘制改动另以 Chrome 软件栅格对照旧完整视口实现：2,304 组、每组连续两帧，覆盖 4 种 DPR、3 种窗口尺寸、圆形／孔洞／建筑外观／多光源及屏幕边缘，RGBA 差异像素为 0。非整数设备像素尺寸保留旧绘制与缓存生命周期，避免边缘重采样改变结果。该对照只证明绘制一致性，不代替 FPS、输入和联机门槛。
+
 联机基准采用同机 GM＋6 Player、500 Token 的实际 WebSocket 会话，包含可靠 WAL 写入、ACK 和最后一个玩家收到差量的时间。大范围用例单独验证六名玩家各移动 425 米、1,000 米视野、三光源和黑暗场景；每条路径保留 171 个采样，比较完整参考 Fog，并等待持久任务与缓存排空。这是主机回环网络的端到端测量；实际局域网还会增加网络传输及客户端设备的耗时。
 
 复现：`node scripts/lan-performance-benchmark.mjs --package=<安装包目录> --assert`、`node scripts/occlusion-lan-benchmark.mjs --package=<安装包目录> --assert`。浏览器基准设置 `RPGMAP_BENCHMARK_PACKAGE=<安装包目录>`、`RPGMAP_BENCHMARK_BROWSER=chrome`、`RPGMAP_BROWSER_BENCHMARK_HEADLESS=1` 后运行 `node scripts/browser-performance-benchmark.mjs --assert`。Chrome 安装包检查使用 `scripts/windows-smoke.ps1 -Root <安装包目录> -Browser chrome`，包含 37 个缩放档位（-4～5，每档 0.25）、DPR 1／1.25／1.5／2、平移、动画、窗口变化与编辑器提交重载。
@@ -43,4 +47,6 @@
 
 最终 main 提交、安装包 SHA-256、包体积以及全量测试结果在发布前记录。本轮包体积仅记录变化，不以旧体积预算阻止必要功能。
 
-2026-10-03 离线／LAN 隔离与局部校验缓存的源码回归为 944／944 测试通过（`artifact/occlusion-full-tests-isolation-cache.log`）；此后仍有射线分配与验收脚本修正，最终合并前需重新运行全量测试。先前开发及生产依赖审计均为 0 个漏洞，最终提交也需复核。正式发布的工作流同时要求大范围联机和七会话 Chrome 指标通过；最终 main 提交、安装包 SHA-256 和包体积仍待填写。
+2026-10-03 本轮刷新筛选、灯光绘制及持久探索上下文修改后的全量回归为 991／991 测试通过（`artifact/occlusion-full-tests-refresh-light-policy-final.log`），483 个 JavaScript 模块语法检查通过。先前开发及生产依赖审计均为 0 个漏洞。正式发布的工作流同时要求大范围联机和七会话 Chrome 指标通过；最终 main 提交、安装包 SHA-256、性能结果和包体积仍待填写。
+
+本地发布清单必须同时提供普通 LAN、大范围 LAN、真实移动 Chrome 与同机视野对照的原始 JSON。验证器从 ZIP 读取 VERSION，并比对服务端模块及全部前端文件指纹，再复核原始样本、采样数、队列排空与各项门槛；单独填写 `passed` 不能晋升为正式版。

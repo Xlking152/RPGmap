@@ -26,12 +26,21 @@ export async function benchmarkBuildInfo(root, packageRoot) {
   if (!packageRoot) return { sourceVersion: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version };
   const metadata = JSON.parse(await readFile(path.join(packageRoot, 'VERSION.json'), 'utf8'));
   const fileHashes = {};
-  // The exploration worker and shared validators are part of the measured
-  // server too. Fingerprint every bundled runtime module so a concurrent
-  // rebuild cannot silently mix versions during an acceptance run.
+  // Both the server and the delivered browser code belong to the measured
+  // build. Exclude map/ because it contains mutable user saves and jobs.
   const runtimeFiles = (await readdir(packageRoot)).filter(file => file.endsWith('.mjs')).sort();
-  for (const file of runtimeFiles) {
-    fileHashes[file] = createHash('sha256').update(await readFile(path.join(packageRoot, file))).digest('hex');
+  const appFiles = [];
+  async function collectAppFiles(relative) {
+    const entries = await readdir(path.join(packageRoot, relative), { withFileTypes: true });
+    for (const entry of entries) {
+      const file = `${relative}/${entry.name}`;
+      if (entry.isDirectory()) await collectAppFiles(file);
+      else if (entry.isFile()) appFiles.push(file);
+    }
+  }
+  await collectAppFiles('app');
+  for (const file of [...runtimeFiles, ...appFiles].sort()) {
+    fileHashes[file] = createHash('sha256').update(await readFile(path.join(packageRoot, ...file.split('/')))).digest('hex');
   }
   return { metadata, fileHashes };
 }

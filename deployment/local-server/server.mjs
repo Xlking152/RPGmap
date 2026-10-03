@@ -53,7 +53,7 @@ import {
   projectStateForAudience,
   serverRuleset,
   sphereGroundRadiusMeters,
-  sceneVisionContext,
+  sceneExplorationContext,
   mergeExplorationChunkFog,
   validateSceneOcclusion,
   createExplorationOperationCapture,
@@ -1404,11 +1404,7 @@ function explorationContextFor(state, sceneId) {
   const scene = canonicalWorldScene(state, sceneId);
   const map = visionMapForScene(scene);
   if (!scene || !map) throw Object.assign(new Error('Exploration Scene map is unavailable'), { code: 'map_package_not_found' });
-  const spatial = sceneVisionContext(map, scene);
-  return { map: { id: map.id, version: map.version, width: map.width, height: map.height, metersPerUnit: map.metersPerUnit || 1 },
-    occluders: spatial.occluders.map(occluder => ({ ...occluder,
-      blockingHeightMeters: Number.isFinite(occluder.blockingHeightMeters) ? occluder.blockingHeightMeters : null })),
-    lights: spatial.lights, ambient: scene.settings?.lighting || 'normal' };
+  return sceneExplorationContext(map, scene);
 }
 function queueSourceCircle(metadata, state, vision, id, revision) {
   if (!vision?.partyId) return metadata;

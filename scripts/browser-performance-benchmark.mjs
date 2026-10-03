@@ -333,7 +333,9 @@ function validatePhase(phase) {
     if (!frame || session.diagnostics.averageFps < 58 || frame.p95 > 20) {
       throw new Error(`${phase.name}/${session.name} frame gate failed: ${JSON.stringify({ fps: session.diagnostics.averageFps, frame })}`);
     }
-    if (!input || input.p95 > 16.7) throw new Error(`${phase.name}/${session.name} input gate failed: ${JSON.stringify(input)}`);
+    if (session.inputStimuli !== phase.operations || !input || input.count < session.inputStimuli || input.p95 > 16.7) {
+      throw new Error(`${phase.name}/${session.name} input gate failed: ${JSON.stringify({ stimuli: session.inputStimuli, operations: phase.operations, input })}`);
+    }
     if (longtask?.max > 100) throw new Error(`${phase.name}/${session.name} long task gate failed: ${JSON.stringify(longtask)}`);
     if (session.vision) {
       const { vision, moves } = session;
@@ -437,6 +439,7 @@ try {
     let actualMoves = 0;
     const movesBySession = new Map(sessions.map(session => [session.index, 0]));
     const sourceMismatchBySession = new Map(sessions.map(session => [session.index, 0]));
+    const inputStimuliBySession = new Map(sessions.map(session => [session.index, 0]));
     while (performance.now() - started < phaseSeconds * 1000) {
       const cycleStarted = performance.now();
       const session = sessions.length > 1 ? sessions[1 + (step % (sessions.length - 1))] : sessions[0];
@@ -447,7 +450,10 @@ try {
       if (session.role === 'player' && moved.sourceTokenId !== moved.tokenId) {
         sourceMismatchBySession.set(session.index, sourceMismatchBySession.get(session.index) + 1);
       }
-      await Promise.all(sessions.map(value => value.stimulateInput()));
+      const stimulated = await Promise.all(sessions.map(value => value.stimulateInput()));
+      stimulated.forEach((value, index) => {
+        if (value) inputStimuliBySession.set(sessions[index].index, inputStimuliBySession.get(sessions[index].index) + 1);
+      });
       step += 1;
       const wait = Math.max(0, 500 - (performance.now() - cycleStarted));
       if (wait) await new Promise(resolve => setTimeout(resolve, wait));
@@ -462,6 +468,7 @@ try {
     const measurements = await Promise.all(sessions.map(async session => ({
       name: session.name, moves: movesBySession.get(session.index),
       sourceMismatches: sourceMismatchBySession.get(session.index),
+      inputStimuli: inputStimuliBySession.get(session.index),
       diagnostics: await session.snapshot(),
       vision: session.role === 'player' ? await session.visionSnapshot(session.index - 1) : null,
       failures: session.failures, exceptions: session.exceptions,
@@ -477,17 +484,29 @@ try {
   if (sessions[1]) await sessions[1].screenshot('final');
 
   const revisionsBefore = await Promise.all(sessions.map(session => session.evaluate(`document.querySelector('#app').rpgMapApp.multiplayer.getStatus().revision`)));
+  const recoveryStateExpression = `(() => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const world = api.world.get();
+    const scene = world.scenes.find(item => item.id === world.activeSceneId);
+    return { worldId: world.id, sceneId: scene?.id, sourceTokenId: api.vision.getSource(),
+      tokens: scene?.tokens, fog: scene?.fog };
+  })()`;
+  const statesBefore = await Promise.all(sessions.map(session => session.evaluate(recoveryStateExpression)));
   const disconnectedAt = performance.now();
   await stopServer(server); server = null;
   await new Promise(resolve => setTimeout(resolve, 3000));
   server = await launchServer({ port, mapDir });
   await Promise.all(sessions.map(session => retry(
-    () => session.evaluate(`document.querySelector('#app').rpgMapApp.multiplayer.getStatus().connected === true`),
+    () => session.evaluate(`(() => { const status = document.querySelector('#app').rpgMapApp.multiplayer.getStatus();
+      return status.connected === true && status.resuming === false && status.applyingRemote === false; })()`),
     `${session.name} reconnect`, 10_000,
   )));
   const recoveredMs = performance.now() - disconnectedAt;
   const revisionsAfter = await Promise.all(sessions.map(session => session.evaluate(`document.querySelector('#app').rpgMapApp.multiplayer.getStatus().revision`)));
-  const recovery = { outageDelayMs: 3000, recoveredMs, revisionsBefore, revisionsAfter };
+  const statesAfter = await Promise.all(sessions.map(session => session.evaluate(recoveryStateExpression)));
+  const projectionMatches = statesBefore.map((value, index) => JSON.stringify(value) === JSON.stringify(statesAfter[index]));
+  const recovery = { outageDelayMs: 3000, recoveredMs, revisionsBefore, revisionsAfter,
+    synchronizationComplete: true, projectionMatches };
   const report = {
     version: packageJson.version, browser: browserName, headless, browserExecutable: browserExecutable(),
     packageRoot, build: buildInfo,
@@ -505,6 +524,7 @@ try {
     if (revisionsBefore.some((value, index) => value !== revisionsAfter[index])) {
       throw new Error(`Reconnect changed revision without an operation: ${JSON.stringify(recovery)}`);
     }
+    if (projectionMatches.some(value => !value)) throw new Error(`Reconnect changed source, Tokens or Fog: ${JSON.stringify(recovery)}`);
   }
   for (const session of sessions) {
     if (session.failures.length || session.exceptions.length) {

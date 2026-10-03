@@ -1534,6 +1534,7 @@ export function createMultiplayerController() {
           joining,
           retainsServerState: Boolean(lastConnectionOptions),
           resuming,
+          applyingRemote,
           revision,
           audienceRevision,
           audienceFingerprint,

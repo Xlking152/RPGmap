@@ -2,6 +2,7 @@ import { deriveSceneState } from '../engine/state.js';
 import { deriveVisionOccluders, deriveSceneLightSources } from '../spatial/kernel.js';
 
 const contexts = new WeakMap();
+const explorationContexts = new WeakMap();
 const immutableValues = new WeakSet();
 let version = 0;
 function immutable(value) {
@@ -41,4 +42,28 @@ export function sceneVisionContext(map, scene = {}) {
     lightKey: value.lightKey, lights: value.lights, lightVersion: value.lightVersion,
     cacheHit: hit, cacheSize: entries.size };
 }
-export function releaseVisionContexts(map) { contexts.delete(map); }
+// Persisted exploration uses the same public geometry/light snapshot, with
+// unbounded height represented as null so JSON round-trips preserve its rule.
+// Retain only two derived versions per map; jobs keep their accepted snapshot.
+export function sceneExplorationContext(map, scene = {}, spatial = sceneVisionContext(map, scene)) {
+  let entries = explorationContexts.get(map);
+  if (!entries) { entries = new Map(); explorationContexts.set(map, entries); }
+  const ambient = scene.settings?.lighting || 'normal';
+  const key = JSON.stringify([spatial.geometryVersion, spatial.lightVersion, ambient,
+    map.id, map.version, map.width, map.height, map.metersPerUnit || 1]);
+  let context = entries.get(key);
+  if (!context) {
+    context = Object.freeze({
+      map: Object.freeze({ id: map.id, version: map.version, width: map.width, height: map.height,
+        metersPerUnit: map.metersPerUnit || 1 }),
+      occluders: Object.freeze(spatial.occluders.map(occluder => Object.freeze({ ...occluder,
+        blockingHeightMeters: Number.isFinite(occluder.blockingHeightMeters) ? occluder.blockingHeightMeters : null }))),
+      lights: spatial.lights, ambient,
+    });
+    entries.set(key, context);
+    if (entries.size > 2) entries.delete(entries.keys().next().value);
+  }
+  return context;
+}
+
+export function releaseVisionContexts(map) { contexts.delete(map); explorationContexts.delete(map); }

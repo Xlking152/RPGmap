@@ -256,13 +256,34 @@ try {
   if (mode === 'fog') {
     movementAudit = await evaluate(`(async () => {
       const api = document.querySelector('#app').rpgMapApp;
-      const id = 'smoke-pc-token';
+      let id = 'smoke-pc-token';
+      const lanFixture = { token: api.tokens.get(id) };
+      lanFixture.actor = api.tokens.getActor(lanFixture.token?.actorId);
+      if (!lanFixture.token || !lanFixture.actor) throw new Error('LAN movement fixture is incomplete');
       const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
       const records = [];
       for (const mode of ['lan', 'offline']) {
         if (mode === 'offline') {
           api.multiplayer.disconnect();
+          if (!api.isLocalWorldActive() || api.multiplayer.getStatus().retainsServerState
+            || api.tokens.get('smoke-pc-token')) throw new Error('Disconnect did not restore the independent offline World');
+          // LAN is a temporary projection. Create a fresh local fixture through
+          // the normal authoritative APIs after the saved offline World returns.
+          const actor = { ...structuredClone(lanFixture.actor), id: 'smoke-offline-pc',
+            name: 'Offline Smoke Scout', partyId: 'smoke-offline-party' };
+          const sceneId = api.world.getActiveScene().id;
+          await api.world.performOperations([
+            { type: 'actor.upsert', payload: { actor } },
+            { type: 'scene.settings.patch', payload: { sceneId,
+              patch: { lineOfSightEnabled: true, movementBudgetMetersPerTurn: null } } },
+          ], { source: 'browser-smoke:offline-fixture' });
+          id = 'smoke-offline-pc-token';
+          await api.tokens.create({ id, actorId: actor.id, actorLink: true,
+            x: lanFixture.token.x, y: lanFixture.token.y,
+            diameterMeters: lanFixture.token.diameterMeters, elevationMeters: lanFixture.token.elevationMeters,
+            vision: structuredClone(lanFixture.token.vision) });
           await api.vision.setSource(id);
+          api.selection.replace([id], id);
         }
         const origin = api.tokens.get(id);
         const mid = { x: origin.x + 2, y: origin.y };
@@ -282,7 +303,7 @@ try {
           || Math.abs(visual.x - canonical.x) > 0.001 || Math.abs(visual.y - canonical.y) > 0.001) {
           throw new Error(mode + ' Token snapped back: ' + JSON.stringify({ mid, canonical, visual }));
         }
-        records.push({ mode, origin: { x: origin.x, y: origin.y }, canonical: { x: canonical.x, y: canonical.y }, visual });
+        records.push({ mode, tokenId: id, origin: { x: origin.x, y: origin.y }, canonical: { x: canonical.x, y: canonical.y }, visual });
       }
       await api.vision.setSource(null);
       let largeOrigin, largeDestination;
@@ -495,7 +516,7 @@ try {
     try {
       feedback = await evaluate(`(async () => {
       const api = document.querySelector('#app').rpgMapApp;
-      const id = 'smoke-pc-token';
+      const id = 'smoke-offline-pc-token';
       const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
       const traceMarks = ${Boolean(feedbackTracePath)};
       const observeFeedback = ${Boolean(feedbackTracePath || process.env.RPGMAP_SMOKE_FEEDBACK_OBSERVE)};

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { types } from 'node:util';
 
 const MAX_JOBS = 4096;
 const MAX_BYTES = 32 * 1024 * 1024;
@@ -7,22 +8,59 @@ const own = (value, key) => Object.hasOwn(value || {}, key);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const clone = structuredClone;
 const keyFor = (sceneId, partyId) => JSON.stringify([String(sceneId), String(partyId)]);
+const validatedContexts = new WeakMap();
+const immutableContexts = new WeakSet();
+
+// Frozen JSON data has a stable checksum. Accessors, custom prototypes and
+// toJSON functions keep the full validation path, even on frozen objects.
+function immutableContext(value) {
+  if (value === null || !['object', 'function'].includes(typeof value)) return !['function', 'symbol', 'bigint'].includes(typeof value);
+  if (immutableContexts.has(value)) return true;
+  if (typeof value !== 'object' || !Object.isFrozen(value)
+    || types.isProxy(value)
+    || (!Array.isArray(value) && ![Object.prototype, null].includes(Object.getPrototypeOf(value)))) return false;
+  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
+    if (!own(descriptor, 'value') || !immutableContext(descriptor.value)) return false;
+  }
+  for (let prototype = Object.getPrototypeOf(value); prototype; prototype = Object.getPrototypeOf(prototype)) {
+    const toJSON = Object.getOwnPropertyDescriptor(prototype, 'toJSON');
+    if (toJSON && (!own(toJSON, 'value') || typeof toJSON.value === 'function')) return false;
+  }
+  immutableContexts.add(value);
+  return true;
+}
+
+function contextChecksum(context, memoized = false) {
+  return memoized && validatedContexts.has(context) ? validatedContexts.get(context)
+    : createHash('sha256').update(JSON.stringify(context)).digest('hex');
+}
+
+function assertContextShape(context) {
+  if (!object(context?.map) || !Number.isFinite(context.map.metersPerUnit) || context.map.metersPerUnit <= 0
+    || !Array.isArray(context.occluders) || !Array.isArray(context.lights)) fail('Invalid durable exploration context');
+}
 
 export function emptyExploration() {
   return { schemaVersion: 1, worldEpoch: randomUUID(), partyEpochs: {}, contexts: {}, jobs: {} };
 }
 
 export function validateExploration(value) {
+  return validateExplorationState(value);
+}
+
+function validateExplorationState(value, memoizedContexts = false) {
   if (!object(value) || value.schemaVersion !== 1 || typeof value.worldEpoch !== 'string'
     || !object(value.partyEpochs) || !object(value.contexts) || !object(value.jobs)) fail('Invalid durable exploration state');
   if (Object.keys(value.jobs).length > MAX_JOBS || Buffer.byteLength(JSON.stringify(value)) > MAX_BYTES) {
     throw Object.assign(new Error('Exploration backlog is full; retry after it has drained'), { code: 'exploration_backlog' });
   }
   for (const epoch of Object.values(value.partyEpochs)) if (!Number.isSafeInteger(epoch) || epoch < 0) fail('Invalid exploration epoch');
+  const pendingContexts = [];
   for (const [id, context] of Object.entries(value.contexts)) {
-    if (!/^[a-f0-9]{64}$/.test(id) || createHash('sha256').update(JSON.stringify(context)).digest('hex') !== id) fail('Exploration context checksum mismatch');
-    if (!object(context?.map) || !Number.isFinite(context.map.metersPerUnit) || context.map.metersPerUnit <= 0
-      || !Array.isArray(context.occluders) || !Array.isArray(context.lights)) fail('Invalid durable exploration context');
+    if (!/^[a-f0-9]{64}$/.test(id) || contextChecksum(context, memoizedContexts) !== id) fail('Exploration context checksum mismatch');
+    if (memoizedContexts && validatedContexts.get(context) === id) continue;
+    assertContextShape(context);
+    if (immutableContext(context)) pendingContexts.push([context, id]);
   }
   for (const [id, job] of Object.entries(value.jobs)) {
     if (!object(job) || id !== job.id || !own(value.contexts, job.contextId) || job.worldEpoch !== value.worldEpoch
@@ -35,6 +73,7 @@ export function validateExploration(value) {
       || job.totalSamples !== explorationSampleCount(job.path, value.contexts[job.contextId].map.metersPerUnit)
       || job.epoch !== (value.partyEpochs[keyFor(job.sceneId, job.partyId)] || 0)) fail('Invalid durable exploration job');
   }
+  for (const [context, id] of pendingContexts) validatedContexts.set(context, id);
   return value;
 }
 
@@ -70,8 +109,9 @@ export function explorationSampleCount(path, metersPerUnit = 1) {
 }
 
 export function enqueueExploration(previous, context, input) {
-  const contextId = createHash('sha256').update(JSON.stringify(context)).digest('hex');
-  const next = { ...previous, contexts: { ...previous.contexts, [contextId]: context }, jobs: { ...previous.jobs } };
+  const contextId = contextChecksum(context, true);
+  const next = { ...previous, contexts: { ...previous.contexts,
+    [contextId]: own(previous.contexts, contextId) ? previous.contexts[contextId] : context }, jobs: { ...previous.jobs } };
   if (own(next.jobs, input.id)) return previous;
   const path = input.path.map(point => ({ x: Number(point.x), y: Number(point.y), elevationMeters: Number(point.elevationMeters) || 0 }));
   if (path.some(point => !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.elevationMeters))) fail('Exploration path must be finite');
@@ -79,7 +119,15 @@ export function enqueueExploration(previous, context, input) {
     ordinal: Number.isSafeInteger(input.ordinal) ? input.ordinal : Number(String(input.id).split(':').at(-1)) || 0,
     epoch: previous.partyEpochs[keyFor(input.sceneId, input.partyId)] || 0, cursor: 0,
     totalSamples: explorationSampleCount(path, context.map.metersPerUnit || 1) };
-  return validateExploration(next);
+  const validated = validateExplorationState(next, true);
+  // A restart can leave an accepted snapshot object distinct from its equal
+  // freshly derived context. Its verified checksum and local shape also make
+  // the immutable incoming object safe to reuse on the next movement.
+  if (next.contexts[contextId] !== context && immutableContext(context)) {
+    assertContextShape(context);
+    validatedContexts.set(context, contextId);
+  }
+  return validated;
 }
 
 function collectContexts(value) {

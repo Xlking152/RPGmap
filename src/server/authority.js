@@ -1,6 +1,6 @@
 import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
 import { describeExplorationSource } from '../vision/exploration-operations.js';
-import { sceneVisionContext } from '../vision/context.js';
+import { sceneVisionContext, sceneExplorationContext } from '../vision/context.js';
 import { deriveSceneState } from '../engine/state.js';
 import { normalizeOcclusionShapes } from '../vision/occlusion-model.js';
 import { assertOcclusionReferences } from '../world/occlusion-config.js';
@@ -14,7 +14,7 @@ import {
 
 export { canUserControlToken, projectStateForAudience } from '../vision/audience.js';
 export { sphereGroundRadiusMeters } from '../spatial/kernel.js';
-export { sceneVisionContext };
+export { sceneVisionContext, sceneExplorationContext };
 export { mergeExploration } from '../vision/fog.js';
 export { computeExplorationChunk, mergeExplorationChunkFog } from './exploration-compute.js';
 export { createExplorationOperationCapture } from '../vision/exploration-operations.js';

@@ -1,6 +1,6 @@
 import { prepareFogOperation } from '../world/operations.js';
 import { mergeActorDelta } from '../token/actor.js';
-import { sceneVisionContext } from './context.js';
+import { sceneExplorationContext } from './context.js';
 import { sphereGroundRadiusMeters } from '../spatial/kernel.js';
 
 const worldOf = state => state?.preferences?.worldV2;
@@ -78,13 +78,9 @@ export function createExplorationOperationCapture({ sourceIds = [], ruleset, map
         sourceRangeMeters: source.vagueRangeMeters });
     }
     if (!inputs.length) return;
-    const spatial = sceneVisionContext(map, scene);
     events.push({ type: 'explore', sceneId: source.sceneId, partyId: source.partyId, tokenId: source.tokenId,
       vision: source, path: points, inputs,
-      context: { map: { id: map.id, version: map.version, width: map.width, height: map.height, metersPerUnit: map.metersPerUnit || 1 },
-        occluders: spatial.occluders.map(occluder => ({ ...occluder,
-          blockingHeightMeters: Number.isFinite(occluder.blockingHeightMeters) ? occluder.blockingHeightMeters : null })),
-        lights: spatial.lights, ambient: scene.settings?.lighting || 'normal' } });
+      context: sceneExplorationContext(map, scene) });
   };
   return {
     events,

@@ -1,44 +1,13 @@
+// Full-viewport raster oracle from c49a409, deliberately retained for equivalence checks.
 function canvasSurface(documentNode) {
   const canvas = documentNode.createElement('canvas');
   return { canvas, context: canvas.getContext('2d') };
 }
 
-// Align the blend region with the viewport's device-pixel grid. This retains
-// the original rasterization at fractional DPR while avoiding full-viewport
-// blending for a small sight circle.
-export function continuousMaskBounds(viewport, source, radiusUnits, width, height, dpr) {
-  const center = viewport.project(source.x, source.y);
-  const radius = Math.max(0, radiusUnits * Math.abs(viewport.scaleX));
-  const left = Math.max(0, Math.floor((center.x - radius - 2) * dpr));
-  const top = Math.max(0, Math.floor((center.y - radius - 2) * dpr));
-  const right = Math.min(Math.ceil(width * dpr), Math.ceil((center.x + radius + 2) * dpr));
-  const bottom = Math.min(Math.ceil(height * dpr), Math.ceil((center.y + radius + 2) * dpr));
-  return { x: left / dpr, y: top / dpr,
-    width: Math.max(0, right - left) / dpr, height: Math.max(0, bottom - top) / dpr };
-}
-
 export function createContinuousMaskRenderer(documentNode) {
-  const masks = {};
-  const illumination = canvasSurface(documentNode);
+  const mask = canvasSurface(documentNode), illumination = canvasSurface(documentNode);
   const light = canvasSurface(documentNode), tint = canvasSurface(documentNode);
-  const preparedKeys = {};
-  let alignedViewport = null;
-  let currentLightingKey = null, preparedLightingKey = null;
-  function resetMasks() {
-    for (const key of Object.keys(masks)) { masks[key].canvas.width = masks[key].canvas.height = 0; delete masks[key]; }
-    for (const key of Object.keys(preparedKeys)) delete preparedKeys[key];
-    preparedLightingKey = null;
-  }
-  function drawPrepared(target, canvas, bounds, width, height, dpr) {
-    // Canvas rounds its backing dimensions up. Preserve the legacy edge
-    // resampling when either logical dimension spans fractional device pixels.
-    if (!Number.isInteger(width * dpr) || !Number.isInteger(height * dpr)) {
-      target.drawImage(canvas, 0, 0, width, height); return;
-    }
-    target.drawImage(canvas, Math.round(bounds.x * dpr), Math.round(bounds.y * dpr),
-      Math.round(bounds.width * dpr), Math.round(bounds.height * dpr),
-      bounds.x, bounds.y, bounds.width, bounds.height);
-  }
+  let preparedKey = null;
   function size(surface, width, height, dpr) {
     const pixelsX = Math.ceil(width * dpr), pixelsY = Math.ceil(height * dpr);
     if (surface.canvas.width !== pixelsX || surface.canvas.height !== pixelsY) {
@@ -67,8 +36,6 @@ export function createContinuousMaskRenderer(documentNode) {
     context.fill('evenodd');
   }
   function lightUnion(regions, normal, viewport, width, height, dpr) {
-    const key = currentLightingKey == null ? null : `${currentLightingKey}:${normal}`;
-    if (key !== null && key === preparedLightingKey) return illumination.canvas;
     size(illumination, width, height, dpr);
     for (const region of regions) {
       const radius = normal ? region.normalRadiusUnits : region.radiusUnits;
@@ -79,22 +46,12 @@ export function createContinuousMaskRenderer(documentNode) {
       for (const rings of region.shadows || []) polygon(light.context, viewport, rings);
       illumination.context.drawImage(light.canvas, 0, 0, width, height);
     }
-    preparedLightingKey = key;
     return illumination.canvas;
   }
   return {
-    reset() { for (const key of Object.keys(preparedKeys)) delete preparedKeys[key]; preparedLightingKey = null; },
-    draw(target, { key, lightingKey = null, geometry, source, radiusUnits, kind, viewport, width, height, dpr }) {
-      const bounds = continuousMaskBounds(viewport, source, radiusUnits, width, height, dpr);
-      if (!bounds.width || !bounds.height) return;
-      const aligned = Number.isInteger(width * dpr) && Number.isInteger(height * dpr);
-      if (alignedViewport !== aligned) { resetMasks(); alignedViewport = aligned; }
-      currentLightingKey = aligned ? lightingKey : null;
-      // Keep the legacy single-surface lifecycle when fractional backing
-      // dimensions require edge resampling. Aligned views cache both passes.
-      const cacheKind = aligned ? kind : 'shared';
-      const mask = masks[cacheKind] ||= canvasSurface(documentNode);
-      if (preparedKeys[cacheKind] !== key) {
+    reset() { preparedKey = null; },
+    draw(target, { key, geometry, source, radiusUnits, kind, viewport, width, height, dpr }) {
+      if (preparedKey !== key) {
         size(mask, width, height, dpr);
         if (!geometry.blocked) {
           const context = mask.context;
@@ -129,18 +86,19 @@ export function createContinuousMaskRenderer(documentNode) {
             }
           }
         }
-        preparedKeys[cacheKind] = key;
+        preparedKey = key;
       }
-      if (target.globalCompositeOperation === 'destination-out') drawPrepared(target, mask.canvas, bounds, width, height, dpr);
+      if (target.globalCompositeOperation === 'destination-out') target.drawImage(mask.canvas, 0, 0, width, height);
       else {
         size(tint, width, height, dpr);
         tint.context.drawImage(mask.canvas, 0, 0, width, height);
         tint.context.globalCompositeOperation = 'source-in';
         tint.context.fillStyle = target.fillStyle;
         tint.context.fillRect(0, 0, width, height);
-        drawPrepared(target, tint.canvas, bounds, width, height, dpr);
+        target.drawImage(tint.canvas, 0, 0, width, height);
       }
     },
-    dispose() { for (const surface of [...Object.values(masks), illumination, light, tint]) surface.canvas.width = surface.canvas.height = 0; },
+    dispose() { for (const surface of [mask, illumination, light, tint]) surface.canvas.width = surface.canvas.height = 0; },
   };
 }
+

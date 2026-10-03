@@ -5,6 +5,7 @@ import { createVisionBackground } from './background.js';
 import { createVisionViewport, visionZoomTransform } from './viewport.js';
 import { createContinuousMaskRenderer } from './mask-renderer.js';
 import { readRuntimeState } from '../engine/state-access.js';
+import { classifyVisionChange, tokenVisionLight, visionStatusTargets, visionScene as runtimeScene } from './invalidation.js';
 import {
   sphereGroundRadiusMeters,
   visionIgnoresOcclusion,
@@ -33,11 +34,6 @@ function mergeDirtyBounds(left, right) {
     maxX: Math.max(Number(left.maxX), Number(right.maxX)),
     maxY: Math.max(Number(left.maxY), Number(right.maxY)),
   };
-}
-
-function runtimeScene(state) {
-  const world = state?.preferences?.worldV2;
-  return world?.scenes?.find(scene => String(scene?.id ?? '') === String(world?.activeSceneId ?? '')) || null;
 }
 
 export function resolveVisionAudience(connected, serverAudience, localAudience) {
@@ -110,7 +106,6 @@ export function createVisionFogSystem() {
       let connectedClearPending = false;
       let renderFrame = 0;
       let pendingDirtyBounds;
-      let lastVisionSignature = '';
       let explorationDirty = true;
       let exploredDirty = true, exploredCache = [], exploredParties = '', exploredFogReference = null;
       let visibilityRowsCache = null;
@@ -331,17 +326,11 @@ export function createVisionFogSystem() {
         return changed;
       }
 
-      function visionSignature() {
-        const audience = liveVisionState();
-        return JSON.stringify({ source: audience?.source || null, partyIds: audience?.partyIds || [] });
-      }
-
       function render(dirtyBounds = null) {
         const renderStarted = performance.now();
         const audience = liveVisionState();
         if (!audience) {
           canvases.forEach(canvas => { canvas.hidden = true; });
-          lastVisionSignature = '';
           return;
         }
         const authoritativeScene = runtimeScene(visionState());
@@ -461,6 +450,7 @@ export function createVisionFogSystem() {
             const geometry = visibilityRowsCache.continuous;
             if (geometry && !geometry.fallback && !(kind === 'precise' && geometry.illumination.regions.some(region => region.fallback))) {
               continuousMasks.draw(context, { key: `${kind}:${rangeMeters}:${visibilityRowsCache.signature}:${zero.x}:${zero.y}:${scaleX}:${scaleY}:${size.x}:${size.y}:${dpr}`, geometry, source: visibilityRowsCache.source,
+                lightingKey: `${geometryVersion}:${lightVersion}:${zero.x}:${zero.y}:${scaleX}:${scaleY}:${size.x}:${size.y}:${dpr}`,
                 radiusUnits: rangeMeters / metersPerUnit, kind, viewport, width: size.x, height: size.y, dpr });
             } else drawRows(context, visibilityRowsCache[kind] || []);
           }
@@ -500,7 +490,6 @@ export function createVisionFogSystem() {
         perception.fillStyle = '#000';
         drawCurrent(perception, preciseRange, 'precise');
         perception.globalCompositeOperation = 'source-over';
-        lastVisionSignature = visionSignature();
         perception.restore();
         if (visibilityRowsCache && !visibilityRowsCache.feedbackRecorded) {
           visibilityRowsCache.feedbackRecorded = true;
@@ -587,57 +576,106 @@ export function createVisionFogSystem() {
         if (!canControl) return;
         api.vision.setSource(tokenId).catch(error => api.showToast?.(error.message, 'error'));
       }));
-      retain(api.on?.('state:commit', detail => {
-        const changed = synchronizeLocalVision();
+      let observedState = visionState();
+      let observedSourceTokenId = confirmedSourceTokenId();
+      const eventDetail = event => event?.detail || event || {};
+      function observeStateChange(changeSet = null) {
+        const next = readRuntimeState(api);
+        const sourceTokenId = confirmedSourceTokenId();
+        const invalidation = classifyVisionChange({ beforeState: observedState, afterState: next,
+          changeSet, sourceTokenId, previousSourceTokenId: observedSourceTokenId,
+          connected: api.multiplayer?.getStatus?.()?.connected === true });
+        cachedState = next;
+        snapshotRevision = api.getStateRevision?.();
+        // Ruleset descriptions receive the Scene, including its ambient light.
+        if (invalidation.sourceChanged || invalidation.spatialChanged) cachedSubject = null;
+        if (invalidation.spatialChanged) spatial = null;
+        if (invalidation.exploredChanged) { exploredDirty = true; explorationDirty = true; }
+        else if (exploredFogReference === runtimeScene(observedState)?.fog) {
+          // A different party's COW Fog branch must not force normalization or
+          // repainting our unchanged exploration during the next animation.
+          exploredFogReference = runtimeScene(next)?.fog || null;
+        }
+        if (invalidation.resetVisibility) cancelVisibility();
+        observedState = next;
+        observedSourceTokenId = sourceTokenId;
+        const changed = (invalidation.sourceChanged || invalidation.spatialChanged) && synchronizeLocalVision();
         clearUnavailableConnectedSource();
-        if (changed || /fog|vision|scene|import/i.test(String(detail?.source || ''))) scheduleRender();
-      }));
+        if (changed || invalidation.render) scheduleRender(invalidation.dirtyBounds);
+      }
+      retain(api.on?.('state:commit', event => observeStateChange(eventDetail(event).changeSet)));
       for (const eventName of ['state:import', 'scene:activate']) {
         retain(api.on?.(eventName, () => {
           explorationGeneration += 1;
           cancelVisibility();
+          cachedState = readRuntimeState(api); snapshotRevision = api.getStateRevision?.();
+          cachedSubject = null; spatial = null;
+          observedState = cachedState; observedSourceTokenId = confirmedSourceTokenId();
           synchronizeLocalVision();
           clearUnavailableConnectedSource();
-          explorationDirty = true;
+          exploredDirty = true; explorationDirty = true;
           scheduleRender();
         }));
       }
-      retain(api.on?.('vision:source-change', () => scheduleRender(null)));
-      retain(api.on?.('vision:exploration-cancel', () => { explorationGeneration += 1; }));
-      retain(api.on?.('state:patch', event => {
-        const changes = event?.detail?.changeSet;
-        const changed = synchronizeLocalVision();
-        if (!changes) { exploredDirty = true; spatial = null; }
-        if (changed || !changes || changes.tokens?.length || changes.actors?.length
-          || changes.featureStates?.length || changes.sceneContent?.length || changes.fog?.length
-          || changes.scenes?.activeSceneChanged || changes.scenes?.upsertIds?.length
-          || changes.statusDefinitionsChanged) scheduleRender(null);
-      }));
-      retain(api.on?.('token:delete', () => {
-        synchronizeLocalVision();
-        clearUnavailableConnectedSource();
+      retain(api.on?.('vision:source-change', () => {
+        observedState = visionState(); observedSourceTokenId = confirmedSourceTokenId();
         scheduleRender(null);
       }));
-      retain(api.on?.('feature:state-change', () => scheduleRender(null)));
+      retain(api.on?.('vision:exploration-cancel', () => { explorationGeneration += 1; }));
+      retain(api.on?.('state:patch', event => observeStateChange(eventDetail(event).changeSet)));
+      // The runtime emits these notifications before its complete state:patch.
+      // Classify that patch once, retaining the BEFORE snapshot for removed lights.
+      retain(api.on?.('token:delete', event => {
+        const detail = eventDetail(event);
+        if (detail.canonical) return;
+        const id = detail.tokenId || detail.id;
+        observeStateChange(id ? { tokens: [{ sceneId: detail.sceneId, removeIds: [String(id)] }] } : null);
+      }));
+      retain(api.on?.('feature:state-change', event => {
+        const detail = eventDetail(event);
+        if (detail.canonical) return;
+        if (detail.sceneId && String(detail.sceneId) !== String(runtimeScene(visionState())?.id)) return;
+        spatial = null; scheduleRender(null);
+      }));
       retain(api.on?.('occlusion:preview', () => { spatial = null; cancelVisibility(); scheduleRender(null); }));
       retain(api.on?.('scene:content-change', event => {
-        if (event.detail?.types?.includes('SceneEvent')) scheduleRender(null);
+        const detail = eventDetail(event);
+        if (detail.canonical) return;
+        observeStateChange({ sceneContent: [{ sceneId: detail.sceneId, types: detail.types }] });
       }));
       retain(api.on?.('token:visual-position', event => {
-        if (String(event?.detail?.tokenId || '') === String(confirmedSourceTokenId() || '')) scheduleRender(null);
+        const detail = eventDetail(event), id = String(detail.tokenId || '');
+        if (!id) return;
+        if (detail.sceneId && String(detail.sceneId) !== String(runtimeScene(visionState())?.id)) return;
+        if (id === String(confirmedSourceTokenId() || '')) { scheduleRender(null); return; }
+        const token = runtimeScene(readRuntimeState(api))?.tokens?.find(item => String(item.id) === id);
+        if (tokenVisionLight(token)) scheduleRender(null);
       }));
-      retain(api.on?.('status:change', () => {
+      const observeStatus = event => {
+        const detail = eventDetail(event);
+        if (detail.canonical || (detail.type === 'state.sync'
+          && ['state:patch', 'state:commit', 'state:import'].includes(detail.source))) return;
+        const scene = runtimeScene(visionState()), id = confirmedSourceTokenId();
+        const token = scene?.tokens?.find(item => String(item.id) === String(id || ''));
+        const targets = visionStatusTargets(detail);
+        if (targets) {
+          if (!targets.tokenIds.some(value => String(value) === String(id || ''))
+            && !targets.actorIds.some(value => String(value) === String(token?.actorId || ''))) return;
+        } else { observeStateChange(); return; }
+        cachedSubject = null;
         synchronizeLocalVision();
-        if (visionSignature() !== lastVisionSignature) scheduleRender();
-      }));
+        scheduleRender();
+      };
+      retain(api.on?.('status:change', observeStatus));
+      retain(api.on?.('status:definitions-change', observeStatus));
+      retain(api.on?.('actor:change', observeStatus));
       retain(api.on?.('fog:change', event => {
-        exploredDirty = true;
-        explorationDirty = true;
-        scheduleRender(event?.detail?.dirtyBounds ?? null);
+        const detail = eventDetail(event);
+        if (detail.canonical) return;
+        observeStateChange({ fog: [{ sceneId: detail.sceneId, dirtyBounds: detail.dirtyBounds ?? null }] });
       }));
       retain(api.on?.('multiplayer:capabilities', () => {
-        clearUnavailableConnectedSource();
-        scheduleRender();
+        observeStateChange();
       }));
       const scheduleViewportRender = () => {
         explorationDirty = true;
@@ -651,7 +689,7 @@ export function createVisionFogSystem() {
       render();
       api.on?.('app:destroy', () => {
         destroyed = true;
-        cachedState = null; cachedSubject = null; spatial = null; exploredCache = []; exploredFogReference = null;
+        cachedState = null; observedState = null; cachedSubject = null; spatial = null; exploredCache = []; exploredFogReference = null;
         releaseVisionContexts(api.mapPackage);
         visibilityAbort?.abort();
         visibilityBackground?.dispose();

@@ -108,7 +108,9 @@ test('v2.5.4 publication requires large-range LAN and complete browser gates for
       assert.throws(verify, error => error.stderr.toString().includes(`Local check missing: ${check}`));
       validation.checks[check] = 'passed';
     }
-    save(); assert.doesNotThrow(verify);
+    // Passing labels alone must not promote a fake archive or substitute for
+    // the v2.5.4 raw package-bound performance evidence.
+    save(); assert.throws(verify, error => error.stderr.toString().includes('Candidate ZIP directory missing'));
     writeFileSync(path.join(directory, `RPGmap-v${version}.zip`), 'different candidate');
     assert.throws(verify, error => error.stderr.toString().includes('ZIP checksum mismatch'));
   } finally {
