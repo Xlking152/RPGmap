@@ -87,9 +87,8 @@ function tokenControlled(token, actor, context) {
   return actor?.type === 'pc' && ownershipLevel(context.user, actor.id) === 'owner';
 }
 
-function viewerParties(world, context) {
+function viewerParties(world, context, actors) {
   const parties = new Set();
-  const actors = actorMap(world);
   for (const actor of world?.actors || []) {
     if (['pc', 'summon'].includes(String(actor?.type || ''))
       && ownershipLevel(context.user, actor.id) === 'owner' && actor.partyId) {
@@ -100,7 +99,8 @@ function viewerParties(world, context) {
     for (const token of scene.tokens || []) {
       const actor = actors.get(String(token.actorId));
       if (['pc', 'summon'].includes(String(actor?.type || ''))
-        && actor?.partyId && tokenControlled(token, actor, context)) {
+        && actor?.partyId && !parties.has(String(actor.partyId))
+        && (context.role === 'gm' || hasId(token?.controllerUserIds, context.userId))) {
         parties.add(String(actor.partyId));
       }
     }
@@ -367,7 +367,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     return state;
   }
   delete world.templateLibrary;
-  const parties = viewerParties(world, context);
+  const parties = viewerParties(world, context, actors);
   world.journals = (world.journals || [])
     .filter(entry => journalVisibleToAudience(entry, {
       role: context.role, userId: context.userId, partyIds: [...parties],

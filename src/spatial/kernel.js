@@ -91,6 +91,18 @@ function pointInPolygon(point, polygon) {
   return inside;
 }
 
+function pointInSolid(point, polygons) {
+  for (const rings of polygons) {
+    if (!pointInPolygon(point, rings[0])) continue;
+    let inHole = false;
+    for (let index = 1; index < rings.length; index += 1) {
+      if (pointInPolygon(point, rings[index])) { inHole = true; break; }
+    }
+    if (!inHole) return true;
+  }
+  return false;
+}
+
 function occluderPolygon(value) {
   const source = value?.polygon ?? value?.blockingPolygon ?? value?.geometry?.points;
   if (!Array.isArray(source) || source.length < 3) return null;
@@ -284,23 +296,38 @@ function inspectSpatialRay(start, end, { from, occluders, metersPerUnit, exclude
       || polygon.every(point => point[1] > rayBounds[3])) continue;
     // Ring crossings partition the ray into intervals wholly inside or outside
     // the remaining solid. Hole boundaries alone must not block a clear ray.
-    const intersections = [0, 1];
+    // Most rays cross zero, one or two distinct edges. Keep those crossings
+    // in scalars; holes/concave fragments with more crossings retain sorting.
+    // Equal crossings only form zero-width intervals in the reference path.
+    let firstCrossing, secondCrossing, intersections = null;
     for (const rings of occluder.polygons) for (const ring of rings) {
       for (let index = 0; index < ring.length; index += 1) {
         const t = segmentIntersectionT(start, end, ring[index], ring[(index + 1) % ring.length]);
-        if (t != null && t > 0 && t < 1) intersections.push(t);
+        if (t == null || t <= 0 || t >= 1) continue;
+        if (firstCrossing === undefined) firstCrossing = t;
+        else if (t !== firstCrossing && secondCrossing === undefined) secondCrossing = t;
+        else if (t !== firstCrossing && t !== secondCrossing) {
+          intersections ||= [0, firstCrossing, secondCrossing, 1];
+          intersections.push(t);
+        }
       }
     }
-    intersections.sort((left, right) => left - right);
+    intersections?.sort((left, right) => left - right);
+    const lower = secondCrossing === undefined ? firstCrossing : Math.min(firstCrossing, secondCrossing);
+    const upper = secondCrossing === undefined ? firstCrossing : Math.max(firstCrossing, secondCrossing);
+    const intervals = intersections ? intersections.length - 1
+      : firstCrossing === undefined ? 1 : secondCrossing === undefined ? 2 : 3;
     let blockedAt;
     const slope = end.elevationMeters - start.elevationMeters;
-    for (let index = 1; index < intersections.length; index += 1) {
-      const first = intersections[index - 1], last = intersections[index];
+    const point = { x: 0, y: 0 };
+    for (let index = 0; index < intervals; index += 1) {
+      const first = intersections ? intersections[index] : index === 0 ? 0 : index === 1 ? lower : upper;
+      const last = intersections ? intersections[index + 1] : index === intervals - 1 ? 1 : index === 0 ? lower : upper;
       if (last - first <= EPSILON) continue;
       const middle = (first + last) / 2;
-      const point = { x: start.x + (end.x - start.x) * middle, y: start.y + (end.y - start.y) * middle };
-      if (!occluder.polygons.some(([outer, ...holes]) => pointInPolygon(point, outer)
-        && !holes.some(hole => pointInPolygon(point, hole)))) continue;
+      point.x = start.x + (end.x - start.x) * middle;
+      point.y = start.y + (end.y - start.y) * middle;
+      if (!pointInSolid(point, occluder.polygons)) continue;
       if (start.elevationMeters + slope * first <= occluder.blockingHeightMeters + EPSILON) blockedAt = first;
       else if (slope < 0 && start.elevationMeters + slope * last <= occluder.blockingHeightMeters + EPSILON) {
         blockedAt = (occluder.blockingHeightMeters - start.elevationMeters) / slope;
