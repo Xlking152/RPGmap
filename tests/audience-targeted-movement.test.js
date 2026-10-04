@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectStateForAudience } from '../src/vision/audience.js';
+import { projectStateForAudience, targetedProjectionCollectionChanges } from '../src/vision/audience.js';
 import { projectStateForAudience as previousProjection } from './fixtures/audience-before-targeted-movement.mjs';
 import { createCanonicalWorldValidator } from '../deployment/local-server/world-schema.mjs';
 import { createDocumentChanges, createDocumentChangesFull } from '../src/documents/changes.js';
@@ -84,6 +84,13 @@ function checkedProjection({ validate, before, projected, context }, after, ids,
   const oracle = previousProjection(after, viewerContext);
   assert.deepEqual(result, oracle);
   assert.deepEqual(createDocumentChanges(projected, result), createDocumentChangesFull(projected, oracle));
+  const collectionChanges = targetedProjectionCollectionChanges(projected, result);
+  assert.equal(Boolean(collectionChanges), expectHit);
+  const motion = ids.map(tokenId => ({ tokenId, sceneId: 'scene' }));
+  assert.deepEqual(createDocumentChanges(projected, result, null, { motion, collectionChanges }),
+    createDocumentChangesFull(projected, oracle, null, { motion }));
+  assert.equal(targetedProjectionCollectionChanges({ ...projected }, result), null);
+  assert.equal(targetedProjectionCollectionChanges(projected, { ...result }), null);
   assert.equal(JSON.stringify(projected), previousJson);
   assert.equal(JSON.stringify(after), rawJson);
   assert.deepEqual([...declaredIds], ids);
@@ -99,6 +106,16 @@ test('precise, vague, spatial-hidden and policy-hidden targets hit and preserve 
     assert.equal(result.preferences.audienceVision === state.projected.preferences.audienceVision, false);
     assert.equal(JSON.stringify(result).includes('secret-hostile'), false);
     assert.deepEqual(Object.keys(sceneOf(result).fog.exploredByParty), ['party-a']);
+  }
+});
+
+test('opaque IDs colliding with public collection IDs retain the full document-diff fallback', () => {
+  for (const kind of ['token', 'actor']) {
+    const state = setup({ opaqueIdFor: (type, id) => type === kind
+      ? kind === 'token' ? 'source-a' : 'scout-a' : `collision-${type}-${id}`,
+      lookupOpaqueId: (type, id) => type === kind
+        ? kind === 'token' ? 'source-a' : 'scout-a' : `collision-${type}-${id}` });
+    checkedProjection(state, move(state.before, ['vague']), ['vague']);
   }
 });
 

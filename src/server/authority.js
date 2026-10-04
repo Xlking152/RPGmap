@@ -12,7 +12,7 @@ import {
   visionIgnoresOcclusion,
 } from '../spatial/kernel.js';
 
-export { canUserControlToken, projectStateForAudience, advanceFogProjectionMetadata } from '../vision/audience.js';
+export { canUserControlToken, projectStateForAudience, advanceFogProjectionMetadata, targetedProjectionCollectionChanges } from '../vision/audience.js';
 export { sphereGroundRadiusMeters } from '../spatial/kernel.js';
 export { sceneVisionContext, sceneExplorationContext };
 export { mergeExploration } from '../vision/fog.js';

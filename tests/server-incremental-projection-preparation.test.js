@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createDocumentChanges, createFogDocumentChanges } from '../src/documents/changes.js';
-import { projectStateForAudience, advanceFogProjectionMetadata } from '../src/vision/audience.js';
+import { projectStateForAudience, advanceFogProjectionMetadata, targetedProjectionCollectionChanges } from '../src/vision/audience.js';
 import { createPreviousProjectionFunctions } from './fixtures/server-incremental-before-preparation.js';
 
 const server = readFileSync(new URL('../deployment/local-server/server.mjs', import.meta.url), 'utf8');
@@ -11,7 +11,7 @@ const functionSource = server.slice(server.indexOf('function lightweightProjecti
 const currentFactory = new Function('dependencies', `
   const { sessions, audienceStateFor, projectMotionForSession, createFogDocumentChanges,
     createDocumentChanges, sendSocket, rememberResumeCommit, committedPatches,
-    describeVisionForToken, advanceFogProjectionMetadata, visionMapForScene,
+    describeVisionForToken, advanceFogProjectionMetadata, targetedProjectionCollectionChanges, visionMapForScene,
     findUser, assertCanonicalWorldState, structuredClone, metrics } = dependencies;
   ${functionSource}
   const shell = lightweightProjectionShell;
@@ -61,7 +61,7 @@ function harness(previous = false, overrides = {}) {
     calls: [], responses: [], resumptions: [] };
   const dependencies = {
     sessions: new Map(), committedPatches: new WeakMap(), metrics,
-    advanceFogProjectionMetadata, visionMapForScene: () => null, findUser: () => null,
+    advanceFogProjectionMetadata, targetedProjectionCollectionChanges, visionMapForScene: () => null, findUser: () => null,
     assertCanonicalWorldState: { isImmutableData: () => false },
     structuredClone(value) { metrics.clones++; return structuredClone(value); },
     describeVisionForToken(state, id) {

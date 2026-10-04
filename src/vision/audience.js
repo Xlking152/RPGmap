@@ -21,6 +21,19 @@ const canonicalActorMaps = new WeakMap();
 const canonicalTokenMaps = new WeakMap();
 const movementPartyRelations = new WeakMap();
 const targetedMovementRelations = new WeakMap();
+const projectionCollectionProofs = new WeakMap();
+const uniqueProjectionCollections = new WeakSet();
+function registerUniqueProjectionCollection(collection) {
+  if (!Array.isArray(collection)) return;
+  const ids = new Set();
+  for (const item of collection) {
+    if (!item || !Object.hasOwn(item, 'id')) return;
+    const id = String(item.id);
+    if (ids.has(id)) return;
+    ids.add(id);
+  }
+  uniqueProjectionCollections.add(collection);
+}
 const EMPTY_ACTOR_SELECTION = Object.freeze([]);
 const audienceKey = context => JSON.stringify([context.role, context.userId,
   context.user?.ownership || {}, context.user?.placementGrants || {}, context.user?.disabled === true]);
@@ -302,7 +315,32 @@ function targetedMovementProjection(state, rawState, context, previousProjection
   state.markers = previousProjection.markers;
   state.attackAreas = previousProjection.attackAreas;
   state.audienceProjection = true;
+  const collections = new Map();
+  const rememberCollection = (before, after, indices = []) => {
+    if (Array.isArray(before) && Array.isArray(after) && uniqueProjectionCollections.has(before)) {
+      uniqueProjectionCollections.add(after);
+      collections.set(after, Object.freeze({ before, indices: Object.freeze(indices) }));
+    }
+  };
+  for (const field of ['actors', 'statusDefinitions', 'journals']) {
+    if (priorWorld[field] === nextWorld[field]) rememberCollection(priorWorld[field], nextWorld[field]);
+  }
+  for (let index = 0; index < nextWorld.scenes.length; index++) {
+    const before = priorWorld.scenes[index], after = nextWorld.scenes[index];
+    if (String(before.id) !== String(after.id)) continue;
+    rememberCollection(before.tokens, after.tokens, [...(replacements.get(String(after.id))?.keys() || [])].sort((a, b) => a - b));
+    for (const field of ['markers', 'attackAreas', 'sceneEvents', 'occlusionShapes']) {
+      if (before[field] === after[field]) rememberCollection(before[field], after[field]);
+    }
+  }
+  // Neither the current projection nor its metadata retains predecessor
+  // projections. Only this exact server-owned pair can obtain the proof.
+  projectionCollectionProofs.set(state, new WeakMap([[previousProjection, collections]]));
   return state;
+}
+
+export function targetedProjectionCollectionChanges(beforeProjection, projection) {
+  return projectionCollectionProofs.get(projection)?.get(beforeProjection) || null;
 }
 
 function tokenControlled(token, actor, context) {
@@ -934,6 +972,12 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     partyInputs: partyInputs || viewerPartyInputs(rawWorld),
     targetedIndex, targetedState: targetedIndex ? rawState : null, occluders, lights,
   });
+  if (targetedIndex) {
+    for (const field of ['actors', 'statusDefinitions', 'journals']) registerUniqueProjectionCollection(world[field]);
+    for (const scene of world.scenes || []) {
+      for (const field of ['tokens', 'markers', 'attackAreas', 'sceneEvents', 'occlusionShapes']) registerUniqueProjectionCollection(scene[field]);
+    }
+  }
   state.markers = clone(active?.markers || []);
   state.attackAreas = clone(active?.attackAreas || []);
   state.audienceProjection = true;

@@ -167,7 +167,7 @@ export function createFogDocumentChanges(beforeState, afterState, { fog = [] } =
 
 // Changes are generated only from the recipient's before/after projections.
 // Arrays are atomic field values; object deletions have explicit path segments.
-function createPairedDocumentChanges(beforeState, afterState, { motion = [], fog = [] } = {}) {
+function createPairedDocumentChanges(beforeState, afterState, { motion = [], fog = [], collectionChanges = null } = {}) {
   const beforeWorld = beforeState?.preferences?.worldV2;
   const afterWorld = afterState?.preferences?.worldV2;
   if (!beforeWorld || !afterWorld || !Array.isArray(beforeWorld.scenes) || !Array.isArray(afterWorld.scenes)
@@ -191,6 +191,14 @@ function createPairedDocumentChanges(beforeState, afterState, { motion = [], fog
   const sameCollection = (type, beforeItems, afterItems, parent = null, onPair = paired) => {
     const before = beforeItems || [], after = afterItems || [];
     if (!Array.isArray(before) || !Array.isArray(after) || before.length !== after.length) return false;
+    const qualified = onPair === paired && collectionChanges instanceof Map ? collectionChanges.get(after) : null;
+    if (qualified?.before === before && Object.isFrozen(qualified) && Object.isFrozen(qualified.indices)
+      && Array.isArray(qualified.indices) && qualified.indices.every((index, offset) => Number.isInteger(index)
+        && index >= 0 && index < before.length && (!offset || qualified.indices[offset - 1] < index)
+        && before[index] && after[index] && String(before[index].id) === String(after[index].id))) {
+      for (const index of qualified.indices) onPair(type, String(before[index].id), before[index], after[index], parent);
+      return true;
+    }
     // Scene pairs still descend into Fog, feature states and child collections.
     // Only an unchanged qualified leaf collection can omit the ID scan.
     if (onPair === paired && before === after && immutableCollection(before)) return true;
