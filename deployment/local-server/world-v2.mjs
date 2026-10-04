@@ -230,8 +230,9 @@ function validateWorldV2(value, documentCache = null) {
       }
       documentCache?.stage('featureStates', scene.featureStates);
     }
-    const tokenIds = unique(scene.tokens, `worldV2.scenes[${sceneIndex}].tokens`);
-    for (const [tokenIndex, tokenRaw] of scene.tokens.entries()) {
+    const acceptedTokens = documentCache?.collection('worldTokens', scene.tokens, world.actors, statusDefinitions);
+    const tokenIds = acceptedTokens || unique(scene.tokens, `worldV2.scenes[${sceneIndex}].tokens`);
+    if (!acceptedTokens) for (const [tokenIndex, tokenRaw] of scene.tokens.entries()) {
       const token = object(tokenRaw, `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}]`);
       const actorId = cleanId(token.actorId, `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}].actorId`);
       if (!actorIds.has(actorId)) fail(`World V2 Token references missing Actor: ${actorId}`, 'invalid_reference');
@@ -272,6 +273,7 @@ function validateWorldV2(value, documentCache = null) {
       if (Number(token.diameterMeters) <= 0) fail('worldV2 token.diameterMeters must be positive');
       documentCache?.stage('worldToken', token, actor, statusDefinitions);
     }
+    if (!acceptedTokens) documentCache?.stageCollection('worldTokens', scene.tokens, tokenIds, world.actors, statusDefinitions);
     unique(scene.markers, `worldV2.scenes[${sceneIndex}].markers`);
     scene.markers.forEach((marker, markerIndex) => {
       if (documentCache?.verified('marker', marker)) return;

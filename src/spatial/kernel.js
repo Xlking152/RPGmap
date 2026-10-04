@@ -463,6 +463,7 @@ export function perceptionLevelAtPoint({
   sourceOccluders = null,
   metersPerUnit = 1,
   lineOfSightEnabled = false,
+  lineOfSightCache = null,
 } = {}) {
   const source = spatialPoint(vision, vision?.elevationMeters);
   const destination = spatialPoint(target, target?.elevationMeters);
@@ -471,9 +472,21 @@ export function perceptionLevelAtPoint({
   let level = distance <= Math.max(0, number(vision?.preciseRangeMeters ?? vision?.rangeMeters)) ? 'precise'
     : distance <= Math.max(0, number(vision?.vagueRangeMeters)) ? 'vague' : 'none';
   if (level === 'none') return level;
-  if (lineOfSightEnabled && !inspectSpatialRay(source, destination, { from: sourceOccluders ? source : { ...vision, ...source },
-    occluders: sourceOccluders || occluders, metersPerUnit,
-    applySourceHostExemption: sourceOccluders === null }).clear) return 'none';
+  if (lineOfSightEnabled) {
+    // Only the internal Audience caller supplies this bounded, recipient-owned
+    // cache, after proving source/geometry/scale and immutable target identity.
+    // Illumination and perception ranges are still evaluated on every call.
+    let clear = lineOfSightCache?.entries.get(target);
+    if (clear === undefined) {
+      clear = inspectSpatialRay(source, destination, { from: sourceOccluders ? source : { ...vision, ...source },
+        occluders: sourceOccluders || occluders, metersPerUnit,
+        applySourceHostExemption: sourceOccluders === null }).clear;
+      if (lineOfSightCache && lineOfSightCache.count < 1024) {
+        lineOfSightCache.entries.set(target, clear); lineOfSightCache.count += 1;
+      }
+    }
+    if (!clear) return 'none';
+  }
   if (level === 'precise') {
     const lighting = resolveLightingAtPoint(destination, ambient, lights, { occluders, metersPerUnit });
     const senses = vision?.senses || {};

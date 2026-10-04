@@ -241,7 +241,8 @@ function validateStatusState(entitySystem, documentCache = null) {
   }
   const legacy = Number(entities.schemaVersion || 0) < 3;
   for (const [scope, targets] of [['actor', entities.actors], ['token', entities.tokens]]) {
-    if (scope === 'actor' && documentCache?.collection('statusActors', targets, definitions, legacy)) continue;
+    const collectionKind = scope === 'actor' ? 'statusActors' : 'statusTokens';
+    if (documentCache?.collection(collectionKind, targets, definitions, legacy)) continue;
     for (let targetIndex = 0; targetIndex < targets.length; targetIndex += 1) {
       const target = targets[targetIndex];
       const cacheKind = scope === 'actor' ? 'statusActor' : 'statusToken';
@@ -264,7 +265,7 @@ function validateStatusState(entitySystem, documentCache = null) {
       }
       documentCache?.stage(cacheKind, target, definitions, legacy);
     }
-    if (scope === 'actor') documentCache?.stageCollection('statusActors', targets, true, definitions, legacy);
+    documentCache?.stageCollection(collectionKind, targets, true, definitions, legacy);
   }
   return entitySystem;
 }

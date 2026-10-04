@@ -533,10 +533,11 @@ function currentVision(world, context, actors) {
 
 function detectionLevel(token, vision, metersPerUnit, {
   lineOfSightEnabled = false, occluders = [], sourceOccluders = null, lights = [], ambient = 'normal',
+  lineOfSightCache = null,
 } = {}) {
   if (!vision || token?.placement !== 'map') return 'none';
   return perceptionLevelAtPoint({
-    vision, target: token, ambient, lights, occluders, sourceOccluders, metersPerUnit, lineOfSightEnabled,
+    vision, target: token, ambient, lights, occluders, sourceOccluders, metersPerUnit, lineOfSightEnabled, lineOfSightCache,
   });
 }
 
@@ -785,6 +786,13 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     && mapMetricsUnchanged && mapPackageUnchanged && !lightMoved);
   const targetedIndex = vision && context.trustedProjection && typeof context.isCanonicalData === 'function'
     && context.isCanonicalData(rawState) ? new Map() : null;
+  // A light move changes illumination, not the rays from a stationary viewer.
+  // Reuse only this recipient's previous geometric result. Own movement, host
+  // exemption, geometry, map scale or any source descriptor change resets it.
+  const rayContext = targetedIndex ? sourceUnchanged && mapMetricsUnchanged && mapPackageUnchanged
+    && previousPolicies?.rayContext?.occluders === sourceOccluders
+    ? previousPolicies.rayContext
+    : { occluders: sourceOccluders, cache: { entries: new WeakMap(), count: 0 } } : null;
   const visibleTokenIds = new Set();
   const privateActorIds = new Set();
   const referencedActorIds = new Set();
@@ -861,6 +869,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
           ? prior ? prior.audienceVisibility === 'vague' ? 'vague' : 'precise' : 'none'
           : detectionLevel(rawToken, vision, metersPerUnit, {
           lineOfSightEnabled: lineOfSightEnabled && !visionIgnoresOcclusion(vision), occluders, sourceOccluders, lights, ambient: currentScene?.settings?.lighting || 'normal',
+          lineOfSightCache: policyCacheable ? rayContext?.cache : null,
         })
         : 'precise';
       if (requiresDetection && (!isActive || level === 'none')) { rememberSelection(rawToken); continue; }
@@ -970,7 +979,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     sourceTokenId: String(context.visionSourceTokenId || ''), metersPerUnit,
     mapPackage: context.mapPackage, policies, partyIds: Object.freeze([...parties]),
     partyInputs: partyInputs || viewerPartyInputs(rawWorld),
-    targetedIndex, targetedState: targetedIndex ? rawState : null, occluders, lights,
+    targetedIndex, targetedState: targetedIndex ? rawState : null, occluders, lights, rayContext,
   });
   if (targetedIndex) {
     for (const field of ['actors', 'statusDefinitions', 'journals']) registerUniqueProjectionCollection(world[field]);

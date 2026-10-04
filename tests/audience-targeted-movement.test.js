@@ -191,6 +191,52 @@ test('unknown changes, Fog, definitions, Actor, Scene geometry and token policy 
     patched(move(withNegativeZero, ['near']), { scenePatch: { unknown: 0 } }), ['near'], false);
 });
 
+test('stationary private rays survive light moves while illumination and source/geometry scopes stay fresh', () => {
+  const validate = createCanonicalWorldValidator(), before = fixture();
+  sceneOf(before).settings.lighting = 'dark';
+  const { context } = viewer(validate, 'a', { ruleset: { vision: { describe: () => ({
+    preciseRangeMeters: 120, vagueRangeMeters: 300, senses: {} }) } } });
+  validate(before);
+  const projected = projectStateForAudience(before, context);
+  const after = move(before, ['lamp'], 600); validate(after);
+  const originalGet = WeakMap.prototype.get;
+  const measure = (state, scope = context) => {
+    let hits = 0;
+    try {
+      WeakMap.prototype.get = function (key) {
+        const result = originalGet.call(this, key);
+        if (typeof result === 'boolean') hits++;
+        return result;
+      };
+      const projection = projectStateForAudience(state, { ...scope,
+        movementCache: { beforeState: before, previousProjection: projected, tokenIds: new Set(['lamp']) } });
+      return { projection, hits };
+    } finally { WeakMap.prototype.get = originalGet; }
+  };
+  const measured = measure(after);
+  assert.ok(measured.hits > 0, 'unchanged immutable targets must reuse actual geometric results');
+  assert.deepEqual(measured.projection, previousProjection(after, context));
+  assert.equal(sceneOf(projected).tokens.find(token => token.id === 'near').audienceVisibility, 'precise');
+  assert.ok(sceneOf(measured.projection).tokens.some(token => token.audienceVisibility === 'vague'));
+  assert.equal(sceneOf(measured.projection).tokens.some(token => token.id === 'blocked'), false);
+  for (const change of [
+    { tokenId: 'source-a', tokenPatch: { x: 40, elevationMeters: 2 } },
+    { scenePatch: { occlusionShapes: [] } },
+  ]) {
+    const changed = patched(after, change); validate(changed);
+    const result = measure(changed);
+    assert.equal(result.hits, 0);
+    assert.deepEqual(result.projection, previousProjection(changed, context));
+  }
+  for (const scope of [{ ...context, mapMetrics: { metersPerUnit: 2 } },
+    { ...context, userId: 'b', user: { ownership: { 'scout-b': 'owner' } }, visionSourceTokenId: 'source-b' },
+    { ...context, user: { ownership: {}, placementGrants: {} } }]) {
+    const result = measure(after, scope);
+    assert.equal(result.hits, 0);
+    assert.deepEqual(result.projection, previousProjection(after, scope));
+  }
+});
+
 test('source, light, permission, map scale, opaque identity and missing metadata cannot take targeted path', () => {
   for (const id of ['source-a', 'lamp']) {
     const state = setup();

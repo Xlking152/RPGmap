@@ -72,6 +72,36 @@ test('accepted static arrays avoid per-Actor checks while new Tokens are fully c
   sameRejection(validate, missingAnchor);
 });
 
+test('Fog-only commits reuse accepted Token collections while dependencies and new arrays stay fully checked', () => {
+  const validate = createCanonicalWorldValidator(), before = fixture();
+  validate(before);
+  const world = before.preferences.worldV2, scene = world.scenes[0];
+  const after = { ...before, preferences: { ...before.preferences,
+    worldV2: { ...world, scenes: [{ ...scene, fog: { ...scene.fog, exploredByParty: { party: { rows: { 0: [[0, 3]] } } } } }] } } };
+  const originalGet = Map.prototype.get;
+  let perTokenChecks = 0;
+  try {
+    Map.prototype.get = function (key) {
+      if (['worldToken', 'entityToken', 'statusToken'].includes(key)) perTokenChecks++;
+      return originalGet.call(this, key);
+    };
+    validate(after);
+  } finally { Map.prototype.get = originalGet; }
+  assert.equal(perTokenChecks, 0);
+  assert.equal(validate.serializedBytes(after), Buffer.byteLength(JSON.stringify(after)));
+  for (const kind of ['removeActor', 'removeDefinition', 'badNewToken', 'duplicateToken']) {
+    const next = moved(after);
+    if (kind === 'removeActor') next.preferences.worldV2.actors = world.actors.slice(1);
+    if (kind === 'removeDefinition') {
+      next.preferences.entitySystem.statusDefinitions = [];
+      next.preferences.entitySystem.tokens[0].effects = [{ id: 'root', definitionId: 'status-rooted', stacks: 1, enabled: true }];
+    }
+    if (kind === 'badNewToken') next.preferences.worldV2.scenes[0].tokens[0].placement = 'invalid';
+    if (kind === 'duplicateToken') next.preferences.entitySystem.tokens[1] = next.preferences.entitySystem.tokens[0];
+    sameRejection(validate, next);
+  }
+});
+
 test('Actor replacement, removal and duplicate IDs invalidate collection indexes', () => {
   const validate = createCanonicalWorldValidator();
   const before = fixture();

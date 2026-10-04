@@ -275,8 +275,9 @@ function assertWorldStateStructure(value, documentCache = null) {
       actorIds = assertUniqueIds(entityState.actors, 'entitySystem.actors');
       documentCache?.stageCollection('entityActorIds', entityState.actors, actorIds);
     }
-    tokenIds = assertUniqueIds(entityState.tokens, 'entitySystem.tokens');
-    for (const [index, token] of entityState.tokens.entries()) {
+    const tokenIndex = documentCache?.collection('entityTokens', entityState.tokens, entityState.actors, hasWorldV2);
+    tokenIds = tokenIndex || assertUniqueIds(entityState.tokens, 'entitySystem.tokens');
+    if (!tokenIndex) for (const [index, token] of entityState.tokens.entries()) {
       const actorId = id(token.actorId, `entitySystem.tokens[${index}].actorId`);
       if (!actorIds.has(actorId)) fail(`Token references missing Actor: ${actorId}`, 'invalid_reference');
       if (!documentCache?.verified('entityToken', token, hasWorldV2)) {
@@ -292,6 +293,7 @@ function assertWorldStateStructure(value, documentCache = null) {
         documentCache?.stage('entityToken', token, hasWorldV2);
       }
     }
+    if (!tokenIndex) documentCache?.stageCollection('entityTokens', entityState.tokens, tokenIds, entityState.actors, hasWorldV2);
     if (documentCache) assertCanonicalStatusState(entityState, documentCache);
     else assertStatusState(entityState);
   }
