@@ -90,7 +90,7 @@ function standardArrayIteration() {
 // This proof is local to one snapshot attempt. An accepted immutable document
 // needs no scan; a new graph must contain only ordinary own JSON data, so no
 // child can change iterator hooks while the optimized loop is running.
-function readOnlyJsonGraph(value, immutableData, acceptedNode = null, proven = null) {
+function readOnlyJsonGraph(value, immutableData, acceptedNode = null, proven = null, leanDescriptors = false) {
   const visiting = new WeakSet(), accepted = new WeakSet();
   let nodes = 0;
   const inspect = (current, depth) => {
@@ -104,11 +104,12 @@ function readOnlyJsonGraph(value, immutableData, acceptedNode = null, proven = n
     const arrayValue = Array.isArray(current), prototype = Object.getPrototypeOf(current);
     if (arrayValue ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
     if (arrayValue && current.length > WORLD_LIMITS.maxArrayLength) return false;
-    const keys = Reflect.ownKeys(current), descriptors = Object.getOwnPropertyDescriptors(current);
+    const keys = Reflect.ownKeys(current);
+    const descriptors = leanDescriptors ? null : Object.getOwnPropertyDescriptors(current);
     if (arrayValue && (keys.length !== current.length + 1 || keys[current.length] !== 'length')) return false;
     visiting.add(current);
     for (let index = 0; index < keys.length; index++) {
-      const key = keys[index], descriptor = descriptors[key];
+      const key = keys[index], descriptor = descriptors ? descriptors[key] : Object.getOwnPropertyDescriptor(current, key);
       if (typeof key !== 'string' || !Object.hasOwn(descriptor, 'value')
         || !(arrayValue && key === 'length') && !descriptor.enumerable) return false;
       if (!(arrayValue && key === 'length') && !inspect(descriptor.value, depth + 1)) return false;
@@ -375,7 +376,7 @@ export function createCanonicalWorldValidator() {
     let snapshotData = acceptedDataProof;
     if (wholeSnapshotProofAllowed()) {
       const proven = [];
-      if (readOnlyJsonGraph(value, acceptedDataProof, null, proven)) {
+      if (readOnlyJsonGraph(value, acceptedDataProof, null, proven, true)) {
         const localProof = new WeakSet(proven);
         snapshotData = { has: current => localProof.has(current) || acceptedDataProof.has(current) };
       }

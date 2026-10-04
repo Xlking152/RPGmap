@@ -37,22 +37,24 @@ export function resolveMovementStatus(world, scene, token, ruleset) {
 }
 
 /** Shared offline/LAN validator; only the host provides MapPackage and Ruleset data. */
-export function createMovementAuthority(resolveMapPackage) {
+export function createMovementAuthority(resolveMapPackage, { prepareActorInputs = null } = {}) {
   const bases = new WeakMap();
   const navigationCaches = new WeakMap();
   return ({ state, world = state?.preferences?.worldV2, scene, token, origin, waypoints = [], destination = null,
     operationType = 'token.movePath', ruleset, capabilities = null, status = null,
-    movementMode = null, verticalAction = null } = {}) => {
+    movementMode = null, verticalAction = null, isCanonicalData = null, canonicalMovementRuleset = null } = {}) => {
     const reposition = operationType === 'token.reposition';
     if (!reposition && token?.locked === true) return failure('token_locked');
     const actorWorld = { ...world, activeSceneId: scene.id, scenes: [scene] };
     let resolvedActor = null;
     let actorResolved = false;
+    const preparedInputs = !status && !capabilities
+      ? prepareActorInputs?.({ world, scene, token, ruleset, isCanonicalData, canonicalMovementRuleset }) : null;
     if (!status && !capabilities) {
-      resolvedActor = resolveTokenActor(actorWorld, token.id, { ruleset }).actor;
+      resolvedActor = preparedInputs?.actor || resolveTokenActor(actorWorld, token.id, { ruleset }).actor;
       actorResolved = true;
     }
-    const snapshot = status || (capabilities ? { capabilities } : statusForActor(world, token, resolvedActor, ruleset));
+    const snapshot = status || (capabilities ? { capabilities } : preparedInputs?.status || statusForActor(world, token, resolvedActor, ruleset));
     const effective = snapshot.capabilities || {};
     if (!reposition && effective.canMove === false) return failure('status_movement_forbidden', effective.reasons?.[0]);
     const mapPackage = resolveMapPackage(scene);

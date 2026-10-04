@@ -2208,7 +2208,8 @@ server.on('upgrade', (req, socket) => {
           source: { role: session.role, userId: session.userId },
           prepareOperation: explorationCapture.prepareOperation,
           onOperationApplied: explorationCapture.onOperationApplied,
-          validateTokenMovePath: args => validateAuthoritativeTokenMovePath({ ...args, ruleset: serverRuleset }),
+          validateTokenMovePath: args => validateAuthoritativeTokenMovePath({ ...args, ruleset: serverRuleset,
+            canonicalMovementRuleset: serverRuleset, isCanonicalData: assertCanonicalWorldState.isImmutableData }),
           applyStatus(state, statusMessage) {
             return applyStatusMessage(state, statusMessage, {
               now, mutate: true, assumeNormalized: true,
