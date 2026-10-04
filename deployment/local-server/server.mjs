@@ -2197,6 +2197,8 @@ server.on('upgrade', (req, socket) => {
         });
         applied = await applyWorldOperationsAsync(world.state, operations, {
           now,
+          isCanonicalData: assertCanonicalWorldState.isImmutableData,
+          trustedOperationHooks: true,
           ruleset: serverRuleset,
           mapMetrics: visionMapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)) || { metersPerUnit: 1 },
           mapPackage: visionMapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)),

@@ -183,11 +183,13 @@ try {
     await writeFile(output, `${JSON.stringify(report, null, 2)}\n`);
   }
   if (process.argv.includes('--assert')) {
-    if (ackMeasurement.aggregate.p95Ms > 60) {
-      throw new Error(`LAN performance gate failed: ACK p95 ${ackMeasurement.aggregate.p95Ms}ms exceeds 60ms`);
-    }
-    if (measurement.aggregate.p95Ms > 60) {
-      throw new Error(`LAN performance gate failed: aggregate p95 ${measurement.aggregate.p95Ms}ms exceeds 60ms`);
+    for (const type of ['move', 'status', 'chat', 'aggregate']) {
+      if (ackMeasurement[type].p95Ms > 60) {
+        throw new Error(`LAN performance gate failed: ${type} ACK p95 ${ackMeasurement[type].p95Ms}ms exceeds 60ms`);
+      }
+      if (measurement[type].p95Ms > 60) {
+        throw new Error(`LAN performance gate failed: ${type} fanout p95 ${measurement[type].p95Ms}ms exceeds 60ms`);
+      }
     }
     if (moveBytes.requestMax > 4096 || moveBytes.responseMax > 4096) {
       throw new Error(`Single visible Token move packet exceeds 4 KiB: ${JSON.stringify(moveBytes)}`);

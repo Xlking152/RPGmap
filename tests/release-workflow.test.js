@@ -35,7 +35,9 @@ test('release LAN benchmark isolates hosted-runner disk jitter without relaxing 
     /Assert LAN WebSocket performance budget[\s\S]*?RPGMAP_BENCHMARK_TMPDIR:\s*\/dev\/shm[\s\S]*?npm run benchmark:lan -- --assert/,
   );
   assert.match(lanBenchmarkSupport, /process\.env\.RPGMAP_BENCHMARK_TMPDIR/);
-  assert.match(lanBenchmarkSource, /measurement\.aggregate\.p95Ms > 60/);
+  assert.match(lanBenchmarkSource, /for \(const type of \['move', 'status', 'chat', 'aggregate'\]\)/);
+  assert.match(lanBenchmarkSource, /ackMeasurement\[type\]\.p95Ms > 60/);
+  assert.match(lanBenchmarkSource, /measurement\[type\]\.p95Ms > 60/);
   assert.match(lanBenchmarkSource, /moveBytes\.requestMax > 4096 \|\| moveBytes\.responseMax > 4096/);
 });
 

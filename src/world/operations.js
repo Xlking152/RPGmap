@@ -116,11 +116,15 @@ const OPERATION_TYPES = new Set([
 ]);
 
 const STATUS_TYPES = new Set([...OPERATION_TYPES].filter(type => type.startsWith('status.')));
+const CHAT_TYPES = new Set(['chat.append', 'chat.clear']);
+const CHAT_STATE_HOOKS = ['prepareOperation', 'onOperationApplied', 'applyStatus',
+  'validateTokenMovePath', 'describeVision', 'mapForScene', 'computeFogExploration'];
 const COPY_ON_WRITE_TYPES = new Set([
   'token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch',
   'scene.door.use', 'scene.featureState.patch', 'scene.activate',
   'scene.occlusionShape.upsert', 'scene.occlusionShape.delete', 'scene.occlusion.configure',
   'scene.fog.explore', 'scene.fog.hide', 'scene.fog.reset',
+  ...CHAT_TYPES,
 ]);
 const TOKEN_POSITION_TYPES = new Set(['token.move', 'token.reposition']);
 const GRANULAR_OPERATION_TYPES = new Set([
@@ -240,20 +244,35 @@ export function markMovementAdjudicationRequired(state, ruleset) {
   return changed;
 }
 
-function cloneOperationInput(rawState, operations) {
+function cloneOperationInput(rawState, operations, context) {
   if (operations.some(operation => !COPY_ON_WRITE_TYPES.has(operation.type) && !STATUS_TYPES.has(operation.type))) return clone(rawState);
+  const hasChat = operations.some(operation => CHAT_TYPES.has(operation.type));
+  const chatOnly = hasChat && operations.every(operation => CHAT_TYPES.has(operation.type));
+  // Chat historically cloned the complete transaction input. Share unchanged
+  // documents only with the server's proof of accepted immutable JSON; generic
+  // callers retain structuredClone's accessor, Proxy and failure behavior.
+  if (hasChat && (!chatOnly || typeof context.isCanonicalData !== 'function' || context.isCanonicalData(rawState) !== true)) return clone(rawState);
+  // Existing external hooks may mutate any part of their private transaction.
+  // Accepted input does not prove those hooks obey the server's COW contract.
+  if (hasChat && context.trustedOperationHooks !== true
+    && (context.ruleset != null || CHAT_STATE_HOOKS.some(key => typeof context[key] === 'function'))) return clone(rawState);
   const source = object(rawState, 'state');
   const preferences = { ...object(source.preferences, 'state.preferences') };
   const rawWorld = object(preferences.worldV2, 'state.preferences.worldV2');
-  const world = { ...rawWorld, scenes: [...array(rawWorld.scenes, 'world.scenes')] };
+  const world = { ...rawWorld, scenes: chatOnly ? array(rawWorld.scenes, 'world.scenes') : [...array(rawWorld.scenes, 'world.scenes')] };
   const state = { ...source, preferences };
   preferences.worldV2 = world;
   preferences.entitySystem = plainObject(preferences.entitySystem)
     ? { ...preferences.entitySystem }
     : preferences.entitySystem;
+  if (hasChat && plainObject(preferences.chatSystem)) {
+    preferences.chatSystem = { ...preferences.chatSystem,
+      messages: Array.isArray(preferences.chatSystem.messages) ? [...preferences.chatSystem.messages] : preferences.chatSystem.messages };
+  }
   const sceneChanges = new Map();
   let currentSceneId = String(world.activeSceneId || '');
   for (const operation of operations) {
+    if (CHAT_TYPES.has(operation.type)) continue;
     if (operation.type === 'scene.activate') {
       currentSceneId = String(operation.payload?.sceneId || '');
       continue;
@@ -387,10 +406,11 @@ function pruneCombatReferences(state) {
   const combatSystem = state.preferences?.combatSystem;
   const combat = combatSystem?.combat;
   if (!plainObject(combat) || !Array.isArray(combat.combatants)) return;
-  combat.combatants = combat.combatants.filter(item => tokenIds.has(String(item?.tokenId ?? ''))
+  const combatants = combat.combatants.filter(item => tokenIds.has(String(item?.tokenId ?? ''))
     && (item?.actorId == null || actorIds.has(String(item.actorId))));
-  if (!combat.combatants.length) combatSystem.combat = null;
-  else combat.turnIndex = Math.max(0, Math.min(combat.combatants.length - 1, Number(combat.turnIndex) || 0));
+  state.preferences.combatSystem = { ...combatSystem, combat: combatants.length
+    ? { ...combat, combatants, turnIndex: Math.max(0, Math.min(combatants.length - 1, Number(combat.turnIndex) || 0)) }
+    : null };
 }
 
 function mergeRuntimeToken(canonical, runtime) {
@@ -1234,7 +1254,7 @@ function* worldOperationSteps(rawState, rawOperations, context = {}) {
   if (!operations.length || operations.length > WORLD_OPERATION_BATCH_LIMIT) {
     fail(`operations must contain 1-${WORLD_OPERATION_BATCH_LIMIT} items`, 'world_operation_limit');
   }
-  const state = cloneOperationInput(rawState, operations);
+  const state = cloneOperationInput(rawState, operations, context);
   worldFromState(state);
   const results = [];
   for (let index = 0; index < operations.length; index += 1) {
