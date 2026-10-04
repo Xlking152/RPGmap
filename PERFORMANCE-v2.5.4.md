@@ -80,3 +80,5 @@ Token 索引和整数组资格复用修改后，全量为 1,032／1,032 测试�
 继续减少 JSON 校验的临时二元素数组、Actor 投影的返回数组及 Document 标量复制，保留数组快照读序、getter／Proxy／Species／iterator 回退、权限及对象隔离。独立旧实现对照和全量回归为 1,078／1,078 测试通过（`artifact/occlusion-full-tests-json-selection-scalars.log`），499 个模块语法通过。新的固定候选与最终 main 仍需重新通过全部性能门槛。
 
 固定候选 `ce6595d` 五轮大范围 ACK／差量 p95 为 76.844／80.980 ms，仍未达标；采样、参考 Fog 与队列排空正确。交叉审查随后发现子对象 getter 在遍历中修改 Array 迭代器时，JSON 快路径与旧实现的拒绝行为不一致，已增加完整无副作用数据图证明以及迭代器 next／return／原型链检查。异常输入保留旧路径，动态钩子和 IteratorClose 的独立旧实现对照通过；修复后的全量为 1,080／1,080（`artifact/occlusion-full-tests-json-iterator-guard.log`）。该候选不用于发布，后续投影优化仍须固定包重测。
+
+继续修复旧地图遮挡列表压制 Scene 显式开启 Tag、默认打开的绑定门无法关闭，以及描述符资格检查额外读取继承 getter 的问题。门按钮、视线和权威校验共用 Scene 优先的开门规则；新增内部纯数据证明只接受完整校验并冻结的自有数据图，getter／Proxy／失败候选不建立证明。全量 1,090／1,090 通过（`artifact/occlusion-full-tests-canonical-proof-door-state.log`）；当前全部 501 个模块语法通过。云端旧单次像素对照因 RPC 超时而失败，改为每 32 组返回进度；保留每条命令 60 秒超时、全部 2,304 组连续两帧和零像素差异门槛。本地完整对照通过（`artifact/occlusion-raster-chunked-oracle.log`），不作为性能门槛替代。

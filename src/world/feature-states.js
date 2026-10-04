@@ -10,6 +10,16 @@ const MAX_STRING_LENGTH = 65536;
 
 const clone = structuredClone;
 
+/** Effective authored open state; an explicit Scene boolean always wins. */
+export function effectiveFeatureOpen(state, feature) {
+  return typeof state?.open === 'boolean' ? state.open : Boolean(
+    feature?.interaction?.initialState?.open
+    ?? feature?.interaction?.initialOpen
+    ?? feature?.initialOpen
+    ?? false
+  );
+}
+
 function cloneFeatureValue(value) {
   if (Array.isArray(value)) return value.map(cloneFeatureValue);
   if (!isPlainObject(value)) return value;

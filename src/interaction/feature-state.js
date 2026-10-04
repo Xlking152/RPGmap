@@ -3,6 +3,7 @@ import {
   FEATURE_STATE_KEY,
   LEGACY_FEATURE_INTERACTION_STATE_KEY,
   applyFeatureStateMergePatch,
+  effectiveFeatureOpen,
 } from '../world/feature-states.js';
 
 export { FEATURE_STATE_KEY, LEGACY_FEATURE_INTERACTION_STATE_KEY };
@@ -15,15 +16,6 @@ function isPlainObject(value) {
 
 function cloneRecord(value) {
   return isPlainObject(value) ? structuredClone(value) : {};
-}
-
-function initialOpen(feature) {
-  return Boolean(
-    feature?.interaction?.initialState?.open
-    ?? feature?.interaction?.initialOpen
-    ?? feature?.initialOpen
-    ?? false
-  );
 }
 
 function initialCustom(feature) {
@@ -50,7 +42,7 @@ export function getFeatureState(state, feature) {
   if (!feature?.id) throw new TypeError('Feature State requires a Feature with an id');
   const saved = persistedState(state, String(feature.id));
   const status = featureSceneStatus(feature.id, state?.sceneEvents || []);
-  const open = typeof saved.open === 'boolean' ? saved.open : initialOpen(feature);
+  const open = effectiveFeatureOpen(saved, feature);
   const custom = Object.freeze({
     ...initialCustom(feature),
     ...cloneRecord(saved.custom),

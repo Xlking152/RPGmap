@@ -2,6 +2,7 @@ import { latLngToWorld, worldToLatLng, pointInPolygon, featureToPolygon } from '
 import { normalizeOcclusionShape } from '../vision/occlusion-model.js';
 import { createOcclusionDraft } from './occlusion-draft.js';
 import { availableOcclusionHostIds, featureForOcclusionDoor } from '../world/occlusion-config.js';
+import { effectiveFeatureOpen } from '../world/feature-states.js';
 
 const STYLE_ID = 'rpgmap-occlusion-editor-style';
 const clone = structuredClone;
@@ -329,7 +330,7 @@ export function createOcclusionEditor(api) {
       const featureId = shape.featureId || shape.id;
       const feature = featureForOcclusionDoor(api.mapPackage, current, featureId);
       if (!feature) continue;
-      const openState = current.featureStates?.[featureId]?.open === true;
+      const openState = effectiveFeatureOpen(current.featureStates?.[featureId], feature);
       const control = L.marker(worldToLatLng({ x: feature.center[0], y: feature.center[1] }, api.mapPackage.height), {
         pane: 'handlePane', keyboard: true, title: openState ? '关闭门' : '打开门',
         icon: L.divIcon({ className: 'occlusion-door-control', html: openState ? '↔' : '▣', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(doorLayer);

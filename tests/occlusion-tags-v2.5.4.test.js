@@ -89,6 +89,61 @@ test('binding a shape replaces its Feature geometry and retains destruction and 
   assert.equal(deriveVisionOccluders(map,{...scene,featureStates:{house:{vision:{occluder:false}}}}).length,0);
 });
 
+test('legacy blocker lists allow Scene tags to add undeclared Features, including an empty list', () => {
+  const house = feature('house', rect(4,-2,2,4), 6, { vision: { occluder: false } });
+  const legacy = { id: 'legacy-wall', polygon: rect(8,-2,2,4), blockingHeightMeters: 10 };
+  for (const visionOccluders of [[], [legacy]]) {
+    const map = { ...mapWith([house]), visionOccluders };
+    const preserved = structuredClone(visionOccluders);
+    const defaultIds = visionOccluders.map(item => item.id);
+    assert.deepEqual(deriveVisionOccluders(map).map(item => item.id), defaultIds);
+    const enabled = deriveVisionOccluders(map, { featureStates: { house: { vision: {
+      occluder: true, blockingHeightMeters: 12,
+    } } } });
+    assert.deepEqual(enabled.map(item => item.id), [...defaultIds, 'house']);
+    assert.equal(enabled.at(-1).blockingHeightMeters, 12);
+    assert.deepEqual(enabled.at(-1).polygon, house.geometry.points);
+    assert.deepEqual(deriveVisionOccluders(map, { featureStates: { house: { vision: { occluder: false } } } })
+      .map(item => item.id), defaultIds);
+    assert.deepEqual(visionOccluders, preserved);
+  }
+});
+
+test('legacy declarations keep map-default selection, geometry, ordering and duplicate-entry behavior', () => {
+  const house = feature('house', rect(4,-2,2,4));
+  const second = feature('second', rect(12,-2,2,4));
+  const legacy = [
+    { id: 'legacy-house', featureId: 'house', polygon: rect(20,-2,2,4), blockingHeightMeters: 10 },
+    { id: 'legacy-wall', polygon: rect(8,-2,2,4), blockingHeightMeters: 10 },
+    { id: 'legacy-house', featureId: 'house', polygon: rect(30,-2,2,4), blockingHeightMeters: 14 },
+    { id: 'legacy-house-fragment', featureId: 'house', polygon: rect(40,-2,2,4), blockingHeightMeters: 16 },
+  ];
+  const map = { ...mapWith([house, second]), visionOccluders: legacy };
+  const defaults = deriveVisionOccluders(map);
+  assert.deepEqual(defaults.map(item => item.id), ['legacy-house', 'legacy-wall', 'legacy-house-fragment']);
+  assert.deepEqual(defaults[0].polygon, legacy[2].polygon);
+  assert.equal(defaults[0].blockingHeightMeters, 14);
+  const enabled = deriveVisionOccluders(map, { featureStates: { house: { vision: { occluder: true } },
+    second: { vision: { occluder: true } } } });
+  assert.deepEqual(enabled.map(item => item.id), [...defaults.map(item => item.id), 'second']);
+  assert.deepEqual(enabled.slice(0, defaults.length), defaults);
+  const disabled = deriveVisionOccluders(map, { featureStates: { house: { vision: { occluder: false } } } });
+  assert.deepEqual(disabled.map(item => item.id), ['legacy-wall']);
+  const height = deriveVisionOccluders(map, { featureStates: { house: { vision: { blockingHeightMeters: 25 } } } });
+  assert.equal(height[0].blockingHeightMeters, 25);
+  assert.equal(height[2].blockingHeightMeters, 25);
+});
+
+test('Scene tag additions cannot overwrite a legacy blocker through a colliding custom vision ID', () => {
+  const wall = { id: 'shared-id', featureId: 'original', polygon: rect(8,-2,2,4), blockingHeightMeters: 10 };
+  const map = { ...mapWith([feature('house', rect(4,-2,2,4), 6,
+    { vision: { id: 'shared-id', occluder: true } })]), visionOccluders: [wall] };
+  const values = deriveVisionOccluders(map, { featureStates: { house: { vision: { occluder: true } } } });
+  assert.equal(values.length, 1);
+  assert.equal(values[0].featureId, 'original');
+  assert.deepEqual(values[0].polygon, wall.polygon);
+});
+
 test('open and destroyed drawn doors cut host apertures; closed doors restore their own finite blocker', () => {
   const map=mapWith([], [{id:'host',kind:'building',points:rect(4,-6,4,12),blockingHeightMeters:10},
     {id:'door',kind:'door',hostShapeId:'host',points:rect(3,-1,6,2),blockingHeightMeters:3}]);

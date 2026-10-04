@@ -1,6 +1,7 @@
 import { polygonDifference, polygonArea } from '../engine/geometry.js';
 import { isIndexableOccluderCollection, queryOccluders } from './index.js';
 import { resolveEffectiveOcclusionShapes } from '../vision/occlusion-model.js';
+import { effectiveFeatureOpen } from '../world/feature-states.js';
 
 const EPSILON = 1e-9;
 const NORMALIZED_VISION_OCCLUDERS = new WeakSet();
@@ -157,8 +158,7 @@ export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = n
     const effectiveHeight = vision.blockingHeightMeters ?? state.custom?.blockingHeightMeters ?? raw.blockingHeightMeters;
     const occluder = normalizeVisionOccluder({ ...raw, blockingHeightMeters: effectiveHeight });
     if (!occluder) return;
-    const open = typeof state.open === 'boolean' ? state.open
-      : Boolean(feature?.interaction?.initialState?.open ?? feature?.interaction?.initialOpen ?? feature?.initialOpen);
+    const open = effectiveFeatureOpen(state, feature);
     if (raw.hostShapeId) doors.push({ ...occluder, hostShapeId: raw.hostShapeId });
     // Turning off a door's blocker makes its existing aperture transparent;
     // it must not fill the opening with the host's original solid wall.
@@ -175,9 +175,13 @@ export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = n
     if (raw.featureId) aliases.set(raw.featureId, occluder.id);
   };
   const legacy = Array.isArray(mapPackage?.visionOccluders) ? mapPackage.visionOccluders : null;
-  const declared = legacy || [...features.values()].flatMap(feature => {
+  const legacyIds = legacy && new Set(legacy.flatMap(raw => [raw.id, raw.featureId]
+    .filter(value => value != null).map(String)));
+  const declaredFeatures = [...features.values()].flatMap(feature => {
     const vision = feature?.capabilities?.vision;
     const binding = bindings.get(String(feature.id));
+    if (legacy && (states[feature.id]?.vision?.occluder !== true
+      || legacyIds.has(String(vision?.id || feature.id)) || legacyIds.has(String(feature.id)))) return [];
     if (states[feature.id]?.vision?.occluder !== true && !binding && vision?.occluder !== true) return [];
     const navigation = feature?.capabilities?.navigation || {};
     return [{ ...vision, id: vision?.id || feature.id, featureId: feature.id,
@@ -187,6 +191,11 @@ export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = n
       passableWhenOpen: vision?.passableWhenOpen ?? navigation.passableWhenOpen,
       passableWhenDestroyed: vision?.passableWhenDestroyed !== false }];
   });
+  // Legacy packages may declare only some blockers, or an empty collection.
+  // Keep their geometry and ordering, while allowing an explicit Scene tag to
+  // add a previously undeclared Feature. Existing legacy IDs and bindings win;
+  // their duplicate-entry behavior remains handled by the original Map below.
+  const declared = legacy ? [...legacy, ...declaredFeatures] : declaredFeatures;
   for (const raw of declared) {
     const feature = features.get(String(raw.featureId || raw.id));
     const binding = bindings.get(String(raw.featureId || raw.id));

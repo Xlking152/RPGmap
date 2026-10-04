@@ -250,6 +250,140 @@ test('static ArrayIterator next, inherited return and changed prototype chains u
   }
 });
 
+test('descriptor qualification never reads inherited value, get or set getters', () => {
+  const prototype = Object.getPrototypeOf([][Symbol.iterator]());
+  const nextDescriptor = Object.getOwnPropertyDescriptor(prototype, 'next');
+  const speciesDescriptor = Object.getOwnPropertyDescriptor(Array, Symbol.species);
+  const mapDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, 'map');
+  const iteratorDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
+  const ownDescriptor = fields => Object.assign(Object.create(null), fields);
+  for (const field of ['value', 'get', 'set']) for (const throwing of [false, true]) {
+    for (const kind of field === 'value' ? ['next', 'map', 'iterator'] : ['species']) {
+      const exercise = factory => {
+        const inherited = Object.getOwnPropertyDescriptor(Object.prototype, field);
+        const trace = [], value = { payload: [1, 2] };
+        try {
+          Object.defineProperty(Object.prototype, field, ownDescriptor({ configurable: true, get() {
+            trace.push(`inherited ${field}`);
+            if (throwing) throw new Error(`inherited ${field} must not be read`);
+            return undefined;
+          } }));
+          if (kind === 'next') Object.defineProperty(prototype, 'next', ownDescriptor({ configurable: true,
+            get() { trace.push('next getter'); return nextDescriptor.value; } }));
+          if (kind === 'map') Object.defineProperty(Array.prototype, 'map', ownDescriptor({ configurable: true,
+            get() { trace.push('map getter'); return mapDescriptor.value; } }));
+          if (kind === 'iterator') Object.defineProperty(Array.prototype, Symbol.iterator, ownDescriptor({ configurable: true,
+            get() { trace.push('iterator getter'); return iteratorDescriptor.value; } }));
+          if (kind === 'species') Object.defineProperty(Array, Symbol.species, ownDescriptor({ configurable: true,
+            ...(field === 'get' ? { value: Array } : { get: speciesDescriptor.get }) }));
+          return { result: outcome(factory(), value, false), trace };
+        } finally {
+          if (inherited) Object.defineProperty(Object.prototype, field, ownDescriptor(inherited));
+          else delete Object.prototype[field];
+          Object.defineProperty(prototype, 'next', nextDescriptor);
+          Object.defineProperty(Array, Symbol.species, speciesDescriptor);
+          Object.defineProperty(Array.prototype, 'map', mapDescriptor);
+          Object.defineProperty(Array.prototype, Symbol.iterator, iteratorDescriptor);
+        }
+      };
+      const actual = exercise(createCanonicalWorldValidator), expected = exercise(previousValidator);
+      assert.deepEqual(actual, expected, `${field}/${kind}/${throwing}`);
+      assert.equal(actual.result.accepted, true);
+      assert.ok(!actual.trace.some(entry => entry === `inherited ${field}`));
+    }
+  }
+});
+
+test('immutable data proof accepts only fully accepted frozen ordinary data graphs', () => {
+  const validate = createCanonicalWorldValidator();
+  const pureChild = { nested: [1, { value: 'ordinary' }] };
+  const world = { payload: [pureChild, null, true] };
+  for (const value of [undefined, null, false, 0, 'text', {}, world, pureChild]) {
+    assert.equal(validate.isImmutableData(value), false);
+  }
+  validate(world);
+  for (const value of [world, world.payload, pureChild, pureChild.nested, pureChild.nested[1]]) {
+    assert.equal(validate.isImmutableData(value), true);
+    assert.equal(Object.isFrozen(value), true);
+  }
+  assert.throws(() => { validate.isImmutableData = () => true; }, TypeError);
+  const failedChild = { value: 1 }, failedWorld = { payload: [failedChild, Infinity] };
+  assert.throws(() => validate(failedWorld), /finite numbers/);
+  for (const value of [failedChild, failedWorld.payload, failedWorld]) assert.equal(validate.isImmutableData(value), false);
+  assert.equal(Object.isFrozen(failedChild), false);
+
+  let getterReads = 0, proxyTraps = 0;
+  const accessor = { get value() { getterReads++; return 1; } };
+  const proxy = new Proxy({ value: 2 }, { get(target, key, receiver) {
+    proxyTraps++; return Reflect.get(target, key, receiver);
+  } });
+  const unusual = { payload: [accessor, proxy] };
+  validate(unusual);
+  const readsBeforeProof = getterReads, trapsBeforeProof = proxyTraps;
+  for (const value of [unusual, unusual.payload, accessor, proxy]) assert.equal(validate.isImmutableData(value), false);
+  assert.equal(getterReads, readsBeforeProof);
+  assert.equal(proxyTraps, trapsBeforeProof);
+});
+
+test('later getters cannot turn a stale visitor summary into an immutable data proof', () => {
+  const validate = createCanonicalWorldValidator();
+  const child = { value: 1 };
+  let replacementReads = 0;
+  const later = { get mutate() {
+    Object.defineProperty(child, 'value', { enumerable: true, configurable: true,
+      get() { replacementReads++; return 2; } });
+    return 'done';
+  } };
+  const world = { payload: [child, later] };
+  validate(world);
+  assert.equal(Object.isFrozen(child), true);
+  assert.equal(typeof Object.getOwnPropertyDescriptor(child, 'value').get, 'function');
+  assert.equal(validate.isImmutableData(child), false);
+  assert.equal(validate.isImmutableData(world.payload), false);
+  assert.equal(validate.isImmutableData(world), false);
+  assert.equal(replacementReads, 0, 'descriptor-only proof must not read the replaced getter');
+});
+
+test('stale accepted summaries cannot skip dynamic iterator fallback after relocation', () => {
+  const iteratorDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
+  const exercise = factory => {
+    const trace = [], validate = factory(), child = { value: 1 };
+    const later = { get mutate() {
+      Object.defineProperty(child, 'value', { enumerable: true, configurable: true, get() {
+        trace.push('relocated getter');
+        Object.defineProperty(Array.prototype, Symbol.iterator, { ...iteratorDescriptor, value: function () {
+          const source = Reflect.apply(iteratorDescriptor.value, this, []);
+          return { next() {
+            const step = source.next();
+            return !step.done && step.value === 2 ? { value: Infinity, done: false } : step;
+          }, return() { trace.push('iterator closed'); return { done: true }; } };
+        } });
+        return 1;
+      } });
+      return 'done';
+    } };
+    try {
+      validate({ payload: [child, later] });
+      return { result: outcome(validate, { relocated: [child, 2] }, false), trace };
+    } finally { Object.defineProperty(Array.prototype, Symbol.iterator, iteratorDescriptor); }
+  };
+  const actual = exercise(createCanonicalWorldValidator), expected = exercise(previousValidator);
+  assert.deepEqual(actual, expected);
+  assert.equal(actual.result.accepted, false);
+  assert.equal(actual.result.code, 'invalid_world');
+  assert.ok(actual.trace.includes('relocated getter'));
+});
+
+test('a failed freeze cannot seed the complete-acceptance proof', () => {
+  const validate = createCanonicalWorldValidator();
+  const child = { value: 1 };
+  const proxy = new Proxy({ value: 2 }, { preventExtensions() { throw new Error('freeze failed'); } });
+  const world = { payload: [child, proxy] };
+  assert.throws(() => validate(world), /freeze failed/);
+  assert.equal(Object.isFrozen(child), true, 'the old visitor may already have frozen an earlier child');
+  for (const value of [child, proxy, world.payload, world]) assert.equal(validate.isImmutableData(value), false);
+});
+
 test('array cache remains path-specific and rejected candidates do not freeze or seed snapshots', () => {
   for (const factory of [createCanonicalWorldValidator, previousValidator]) {
     const validate = factory();

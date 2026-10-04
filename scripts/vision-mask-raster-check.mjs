@@ -42,7 +42,11 @@ try {
     const id = ++nextId, timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)); }, 60_000);
     pending.set(id, { resolve, reject, timer }); socket.send(JSON.stringify({ id, method, params }));
   }); }
-  const result = await send('Runtime.evaluate', { awaitPromise: true, returnByValue: true, expression: `(() => {
+  // Keep each CDP command bounded without placing all software-rendered cases
+  // in one long command. Every case still draws both frames and checks every
+  // pixel; yielding does not change the zero-difference acceptance threshold.
+  const initialized = await send('Runtime.evaluate', { returnByValue: true, expression: `
+    globalThis.rpgmapMaskRasterIterator = (function* () {
     const oldFactory = (() => { ${reference.replaceAll('export ', '')}; return createContinuousMaskRenderer; })();
     const newFactory = (() => { ${candidate.replaceAll('export ', '')}; return createContinuousMaskRenderer; })();
     let cases = 0, differingPixels = 0, maxChannelError = 0, maxAlphaError = 0, maxPremultipliedError = 0, worstDifference = null, firstDifference = null;
@@ -90,12 +94,23 @@ try {
               worstDifference={width,height,dpr,scale,center,radiusUnits,mode,pixel:index/4,old:[...outputs[0].slice(index,index+4)],candidate:[...outputs[1].slice(index,index+4)]};}
             firstDifference ||= {width,height,dpr,scale,center,radiusUnits,mode,pixel:index/4,old:[...outputs[0].slice(index,index+4)],candidate:[...outputs[1].slice(index,index+4)]};}
         }
+        if (cases % 32 === 0) yield { cases };
       }
     return {cases,framesPerCase:2,differingPixels,maxChannelError,maxAlphaError,maxPremultipliedError,worstDifference,firstDifference};
-  })()` });
-  if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
-  console.log(JSON.stringify(result.result.value, null, 2));
-  assert.equal(result.result.value.differingPixels, 0, 'Cropped mask must match full-viewport software raster pixels');
+  })(); true` });
+  if (initialized.exceptionDetails) throw new Error(initialized.exceptionDetails.exception?.description || initialized.exceptionDetails.text);
+  let progress;
+  do {
+    const result = await send('Runtime.evaluate', { returnByValue: true,
+      expression: 'globalThis.rpgmapMaskRasterIterator.next()' });
+    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+    progress = result.result.value;
+    assert(Number.isSafeInteger(progress?.value?.cases), 'Raster oracle progress missing');
+  } while (!progress.done);
+  console.log(JSON.stringify(progress.value, null, 2));
+  assert.equal(progress.value.cases, 2304, 'Raster oracle must complete all cases');
+  assert.equal(progress.value.framesPerCase, 2, 'Raster oracle must draw both consecutive frames');
+  assert.equal(progress.value.differingPixels, 0, 'Cropped mask must match full-viewport software raster pixels');
   await send('Browser.close');
 } finally {
   socket?.close();

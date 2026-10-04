@@ -15,9 +15,12 @@ export const WORLD_LIMITS = Object.freeze({
 });
 
 const ONE_JSON_NODE = Object.freeze({ nodes: 1, depth: 0 });
-const standardArrayMap = Object.getOwnPropertyDescriptor(Array.prototype, 'map')?.value;
-const standardArrayIterator = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator)?.value;
-const standardArraySpecies = Object.getOwnPropertyDescriptor(Array, Symbol.species)?.get;
+function ownDescriptorField(descriptor, field) {
+  return descriptor && Object.hasOwn(descriptor, field) ? descriptor[field] : undefined;
+}
+const standardArrayMap = ownDescriptorField(Object.getOwnPropertyDescriptor(Array.prototype, 'map'), 'value');
+const standardArrayIterator = ownDescriptorField(Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator), 'value');
+const standardArraySpecies = ownDescriptorField(Object.getOwnPropertyDescriptor(Array, Symbol.species), 'get');
 const standardArrayMethods = typeof standardArrayMap === 'function'
   && Function.prototype.toString.call(standardArrayMap) === 'function map() { [native code] }'
   && typeof standardArrayIterator === 'function'
@@ -30,7 +33,7 @@ const standardArrayIteratorState = (() => {
   try {
     const iterator = Reflect.apply(standardArrayIterator, [], []);
     const prototype = Object.getPrototypeOf(iterator);
-    const next = Object.getOwnPropertyDescriptor(prototype, 'next')?.value;
+    const next = ownDescriptorField(Object.getOwnPropertyDescriptor(prototype, 'next'), 'value');
     if (typeof next !== 'function' || Function.prototype.toString.call(next) !== 'function next() { [native code] }'
       || Reflect.apply(next, iterator, []).done !== true) return null;
     let chain = null, current = prototype;
@@ -45,7 +48,7 @@ const standardArrayIteratorState = (() => {
 
 function standardArrayIteration() {
   const state = standardArrayIteratorState;
-  if (!state || Object.getOwnPropertyDescriptor(state.prototype, 'next')?.value !== state.next) return false;
+  if (!state || ownDescriptorField(Object.getOwnPropertyDescriptor(state.prototype, 'next'), 'value') !== state.next) return false;
   for (let entry = state.chain; entry; entry = entry.next) {
     if (Object.getPrototypeOf(entry.prototype) !== entry.parent
       || Object.getOwnPropertyDescriptor(entry.prototype, 'return')) return false;
@@ -56,7 +59,7 @@ function standardArrayIteration() {
 // This proof is local to one snapshot attempt. An accepted immutable document
 // needs no scan; a new graph must contain only ordinary own JSON data, so no
 // child can change iterator hooks while the optimized loop is running.
-function readOnlyJsonGraph(value, immutableData) {
+function readOnlyJsonGraph(value, immutableData, acceptedNode = null, proven = null) {
   const visiting = new WeakSet(), accepted = new WeakSet();
   let nodes = 0;
   const inspect = (current, depth) => {
@@ -65,6 +68,7 @@ function readOnlyJsonGraph(value, immutableData) {
     if (typeof current === 'number') return Number.isFinite(current);
     if (!current || typeof current !== 'object' || types.isProxy(current)) return false;
     if (immutableData.has(current) || accepted.has(current)) return true;
+    if (acceptedNode && !acceptedNode(current)) return false;
     if (visiting.has(current)) return false;
     const arrayValue = Array.isArray(current), prototype = Object.getPrototypeOf(current);
     if (arrayValue ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
@@ -74,11 +78,12 @@ function readOnlyJsonGraph(value, immutableData) {
     for (let index = 0; index < keys.length; index++) {
       const key = keys[index], descriptor = descriptors[key];
       if (typeof key !== 'string' || !Object.hasOwn(descriptor, 'value')
-        || !(arrayValue && key === 'length') && !descriptor.enumerable
-        || !inspect(descriptor.value, depth + 1)) return false;
+        || !(arrayValue && key === 'length') && !descriptor.enumerable) return false;
+      if (!(arrayValue && key === 'length') && !inspect(descriptor.value, depth + 1)) return false;
     }
     visiting.delete(current);
     accepted.add(current);
+    if (proven) proven.push(current);
     return true;
   };
   return inspect(value, 0);
@@ -95,8 +100,9 @@ function denseArrayDataSnapshot(value, immutableData) {
   const iterator = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
   const constructor = Object.getOwnPropertyDescriptor(Array.prototype, 'constructor');
   const species = Object.getOwnPropertyDescriptor(Array, Symbol.species);
-  if (map?.value !== standardArrayMap || iterator?.value !== standardArrayIterator
-    || constructor?.value !== Array || species?.get !== standardArraySpecies || species?.set) return null;
+  if (ownDescriptorField(map, 'value') !== standardArrayMap || ownDescriptorField(iterator, 'value') !== standardArrayIterator
+    || ownDescriptorField(constructor, 'value') !== Array || ownDescriptorField(species, 'get') !== standardArraySpecies
+    || ownDescriptorField(species, 'set')) return null;
   if (!readOnlyJsonGraph(value, immutableData)) return null;
   // Native map creates own data slots, preserving its species/property rules
   // and avoiding inherited numeric setters while allocating only this copy.
@@ -285,6 +291,21 @@ export function createCanonicalWorldValidator() {
   const summaries = new WeakMap();
   const byteSizes = new WeakMap();
   const immutableData = new WeakSet();
+  const acceptedData = new WeakSet();
+  const immutableDataProofs = new WeakSet();
+  const isImmutableData = value => {
+    if (!value || typeof value !== 'object' || types.isProxy(value) || !acceptedData.has(value)) return false;
+    if (immutableDataProofs.has(value)) return true;
+    const proven = [];
+    if (!readOnlyJsonGraph(value, immutableDataProofs,
+      current => acceptedData.has(current) && Object.isFrozen(current), proven)) return false;
+    // A later getter in an accepted candidate may have replaced an earlier
+    // data slot. Freeze alone does not prove purity; commit this separate
+    // descriptor-only proof only after the complete graph passes.
+    for (let index = 0; index < proven.length; index++) immutableDataProofs.add(proven[index]);
+    return true;
+  };
+  const acceptedDataProof = { has: isImmutableData };
   const verifiedDocuments = new WeakMap();
   const verifiedCollections = new WeakMap();
   const validate = value => {
@@ -337,7 +358,7 @@ export function createCanonicalWorldValidator() {
       let entries, dataSnapshot = null;
       if (Array.isArray(current)) {
         if (current.length > WORLD_LIMITS.maxArrayLength) fail(`${path} exceeds maximum length`, 'world_limit');
-        dataSnapshot = denseArrayDataSnapshot(current, immutableData);
+        dataSnapshot = denseArrayDataSnapshot(current, acceptedDataProof);
         entries = dataSnapshot || current.map((entry, index) => [index, entry]);
       } else {
         if (!current || typeof current !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(current))) fail(`${path} is not JSON-safe`);
@@ -413,8 +434,14 @@ export function createCanonicalWorldValidator() {
       // tuple for each fixed validator kind, never a history of old Worlds.
       records.set(entry.kind, { value: entry.value, dependencies: entry.dependencies });
     }
+    for (let index = 0; index < pending.length; index++) acceptedData.add(pending[index].value);
     return value;
   };
+  // Data graphs are proved lazily; repeated queries are O(1). Consumers never
+  // receive the private set, and rejected or accessor/Proxy graphs cannot seed it.
+  const immutableProofDescriptor = Object.create(null);
+  immutableProofDescriptor.value = isImmutableData;
+  Object.defineProperty(validate, 'isImmutableData', immutableProofDescriptor);
   validate.serializedBytes = (value, { omitPreferencesKeys = [] } = {}) => {
     const bytesFor = current => {
       if (current === null || typeof current !== 'object') return Buffer.byteLength(JSON.stringify(current));
