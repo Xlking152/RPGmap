@@ -194,6 +194,9 @@ test('offline and LAN events suppress unrelated commits and preserve every sourc
         const worker = workers.at(-1);
         worker.onmessage({ data: { id: worker.message.id, result: { precise: [['0', [[0, 10]]]], vague: [] } } });
         await new Promise(resolve => setImmediate(resolve));
+        assert.equal(api.vision.getFeedbackState().rendered, false);
+        assert.equal(runtime.frames.size, 1, 'complete Worker masks share the next frame');
+        runtime.flush();
         const completed = api.vision.getFeedbackState();
         assert.equal(completed.rendered, true);
         for (let i = 0; i < 20; i++) {

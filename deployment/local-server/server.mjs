@@ -537,12 +537,19 @@ const RESUME_HISTORY_MAX_AGE_MS = 5 * 60_000;
 let resumeBaseRevision = Number(world.revision) || 0;
 let resumeBaseState = world.state ? structuredClone(world.state) : null;
 function audienceFingerprint(session) {
+  // Unrelated users do not affect this recipient's projection. Hash the
+  // complete current recipient record instead of the global access revision;
+  // future recipient fields therefore still invalidate an old projection.
+  const user = session.userId ? findUser(session.userId) : null;
   return createHash('sha256').update(JSON.stringify({
+    worldId: WORLD_ID,
+    opaqueSeed: GM_SECRET,
+    accessSchema: access.schemaVersion,
     role: session.role,
     userId: session.userId || null,
     identityStatus: session.identityStatus,
     visionSourceTokenId: session.visionSourceTokenId || null,
-    accessRevision: Math.max(0, Number(access.revision) || 0),
+    user,
   })).digest('hex').slice(0, 24);
 }
 function advanceResumeBase(entry) {

@@ -1997,6 +1997,9 @@ test('disconnected Player resumes missed Document commits without a full World s
     });
     const resumeRevision = player.welcome.world.revision;
     const resumeFingerprint = player.welcome.audienceFingerprint;
+    const unrelatedClaim = waitForMessage(gm.ws, message => message.type === 'access.claim' && message.user?.name === 'Unrelated Player');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Unrelated Player', ownership: {} }));
+    await unrelatedClaim;
     player.ws.close();
     await new Promise(resolve => setTimeout(resolve, 80));
 
@@ -2054,6 +2057,18 @@ test('disconnected Player resumes missed Document commits without a full World s
     assert.equal(complete.revision, 3);
     assert.equal(snapshotReceived, false);
     socket.close();
+    const revoked = waitForMessage(gm.ws, message => message.type === 'access.snapshot'
+      && message.users?.some(user => user.id === player.bound.userId && !user.ownership?.['actor-a']));
+    gm.ws.send(JSON.stringify({ type: 'access.user.update', userId: player.bound.userId,
+      ownership: {}, defaultActorId: '' }));
+    await revoked;
+    const deniedResume = await openAndHello(runtime.url, { name: 'Revoked Resume Player', requestedRole: 'player',
+      userId: player.bound.userId, authToken: player.bound.authToken, visionSourceTokenId: 'token-a',
+      resumeRevision: 3, audienceFingerprint: resumeFingerprint });
+    assert.equal(deniedResume.welcome.resumeAccepted, false);
+    assert.equal(deniedResume.welcome.world.state.preferences.audienceVision.source, null);
+    assert.equal(deniedResume.welcome.world.state.preferences.worldV2.actors.some(actor => actor.id === 'actor-a'), false);
+    deniedResume.ws.close();
     gm.ws.close();
   } finally {
     await stopServer(runtime);

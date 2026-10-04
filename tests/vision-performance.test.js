@@ -358,7 +358,12 @@ test('missing or failing Worker uses asynchronous main-thread visibility and dis
       fixture.flushFrame();
       const before = fixture.rects;
       await new Promise(resolve => setImmediate(resolve));
-      assert.equal(fixture.frames.length, 1, `${mode}: completed mask needs no extra RAF`);
+      assert.equal(fixture.frames.length, 2, `${mode}: complete mask waits for the next frame`);
+      assert.equal(fixture.rects, before, `${mode}: Worker completion cannot paint between frames`);
+      fixture.api.emit('token:visual-position', { tokenId: 'scout' });
+      fixture.api.emit('fog:change', { sceneId: 's', dirtyBounds: null });
+      assert.equal(fixture.frames.length, 2, `${mode}: other updates share the pending mask frame`);
+      fixture.flushFrame();
       assert.ok(fixture.rects > before, mode);
       assert.equal(fixture.api.vision.getFeedbackState()?.rendered, true, mode);
       assert.deepEqual(fixture.toasts, []);

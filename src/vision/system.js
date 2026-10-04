@@ -160,11 +160,9 @@ export function createVisionFogSystem() {
           // source/geometry generations still reject invalidated results.
           visibilityRowsCache = { signature: next.signature, source: next.input.source,
             requestedAt: next.requestedAt, stateRevision: next.stateRevision, feedbackRecorded: false, ...result };
-          // A complete mask is ready. Paint it atomically now so the next
-          // browser frame can composite it without another RAF of latency.
-          // Consume queued Fog/viewport invalidations in the same full pass.
-          pendingDirtyBounds = null;
-          flushScheduledRender();
+          // Replace the complete mask at the next frame, coalescing Worker,
+          // animation, Fog and viewport updates into one atomic paint.
+          scheduleRender(null);
         }).catch(error => {
           if (!destroyed && generation === visibilityGeneration && !controller.signal.aborted)
             api.showToast?.(error.message, 'error');
