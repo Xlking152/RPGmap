@@ -76,6 +76,15 @@ async function waitForWalRecord(filePath, predicate, timeout = 5000) {
   throw new Error(`World WAL did not reach expected state: ${filePath}`);
 }
 
+async function waitForEmptyWal(filePath, timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if ((await readFile(filePath, 'utf8')).trim() === '') return;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error(`World WAL was not durably compacted: ${filePath}`);
+}
+
 async function openSocket(url) {
   const ws = new WebSocket(url);
   await new Promise((resolve, reject) => {
@@ -1452,10 +1461,14 @@ test('LAN writes every revision to WAL and atomically compacts after 100 revisio
         sceneId: 'scene-test', tokenId: 'token-a', placement: 'map', x: 40, y: 10,
       } }],
     });
+    // ACK now confirms the WAL fsync. Maintenance publishes the complete
+    // snapshot before its separate durable log truncation.
+    const durable = await waitForJsonFile(path.join(runtime.mapDir, 'world.json'), value => value.revision === 100);
+    await waitForEmptyWal(path.join(runtime.mapDir, 'world.operations.ndjson'));
     const backups = (await readdir(path.join(runtime.mapDir, 'backups'))).filter(name => name.startsWith('world.backup.'));
     assert.equal(backups.length, 1);
-    const durable = JSON.parse(await readFile(path.join(runtime.mapDir, 'world.json'), 'utf8'));
     assert.equal(durable.revision, 100);
+    assert.equal(durable.state.preferences.worldV2.scenes[0].tokens.find(token => token.id === 'token-a').x, 40);
     assert.equal((await readFile(path.join(runtime.mapDir, 'world.operations.ndjson'), 'utf8')).trim(), '');
     gm.ws.close();
   } finally {

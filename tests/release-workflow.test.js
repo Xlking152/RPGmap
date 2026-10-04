@@ -78,6 +78,8 @@ test('automatic v2.5.4 publishing gates the exact Windows ZIP on large-range LAN
 test('release package closes every local server module inside the ZIP root', () => {
   assert.match(packageSource, /'http-runtime\.mjs'/);
   assert.match(packageSource, /'websocket-runtime\.mjs'/);
+  assert.match(packageSource, /'world-checkpoint\.mjs'/);
+  assert.match(verifierSource, /'world-checkpoint\.mjs'/);
   assert.match(packageSource, /bundleServerModule\('src\/permissions\/model\.js', 'permissions-model\.mjs'\)/);
   assert.match(packageSource, /bundleServerModule\('deployment\/local-server\/status-operations\.mjs', 'status-operations\.mjs'\)/);
   assert.match(verifierSource, /imports outside the package root/);

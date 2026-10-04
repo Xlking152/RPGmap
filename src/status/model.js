@@ -193,11 +193,41 @@ function stableValue(value) {
   return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableValue(value[key])]));
 }
 function stableStringify(value) { return JSON.stringify(stableValue(value)); }
+const stableHashMemo = new Map();
+let stableHashMemoCharacters = 0;
+const HASH_MEMO_MIN_CHARACTERS = 2_048;
+const HASH_MEMO_MAX_CHARACTERS = 65_536;
+const HASH_MEMO_MAX_ENTRIES = 32;
+const HASH_MEMO_CHARACTER_BUDGET = 524_288;
+
 function stableHash(value) {
   const source = typeof value === 'string' ? value : stableStringify(value);
+  // Rebuild the exact input on every call, including mutable values and getter
+  // results. Only the final string's hash is reusable; no status result or
+  // Ruleset derivation is retained. Limits count UTF-16 units, as does FNV.
+  const memoizable = source.length >= HASH_MEMO_MIN_CHARACTERS && source.length <= HASH_MEMO_MAX_CHARACTERS;
+  if (memoizable) {
+    const existing = stableHashMemo.get(source);
+    if (existing !== undefined) {
+      stableHashMemo.delete(source);
+      stableHashMemo.set(source, existing);
+      return existing;
+    }
+  }
   let hash = 0x811c9dc5;
   for (let index = 0; index < source.length; index += 1) { hash ^= source.charCodeAt(index); hash = Math.imul(hash, 0x01000193); }
-  return (hash >>> 0).toString(16).padStart(8, '0');
+  const result = (hash >>> 0).toString(16).padStart(8, '0');
+  if (memoizable) {
+    while (stableHashMemo.size >= HASH_MEMO_MAX_ENTRIES
+      || stableHashMemoCharacters + source.length > HASH_MEMO_CHARACTER_BUDGET) {
+      const oldest = stableHashMemo.keys().next().value;
+      stableHashMemo.delete(oldest);
+      stableHashMemoCharacters -= oldest.length;
+    }
+    stableHashMemo.set(source, result);
+    stableHashMemoCharacters += source.length;
+  }
+  return result;
 }
 function idSlug(value) {
   return cleanText(value).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'legacy';

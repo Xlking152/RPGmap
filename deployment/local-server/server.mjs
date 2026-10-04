@@ -72,6 +72,7 @@ import {
   websocketAccept,
 } from './websocket-runtime.mjs';
 import { createWorldWal } from './world-wal.mjs';
+import { createWorldCheckpoint } from './world-checkpoint.mjs';
 import { mapForScene, validateAuthoritativeTokenMovePath } from './movement-authority.mjs';
 import { createContentStorage, prepareContentUpgrade } from './content-storage.mjs';
 import { hasRetainedContentReference } from './content-history.mjs';
@@ -806,13 +807,11 @@ async function persistWorldCommit(snapshot, beforeState, operationId) {
     // A failed fsync may have written a complete record. Do not append another
     // mutation against the old in-memory revision until validated recovery.
     storageBlocked = true;
+    worldCheckpoint.close();
     throw error;
   }
   committedPatches.set(snapshot.state, patch);
-  if (worldWal.shouldCompact(snapshot.revision)) {
-    try { await persistWorld(snapshot); await worldWal.reset(); }
-    catch (error) { console.error('[RPGmap] checkpoint failed; durable WAL retained:', error); }
-  }
+  if (worldWal.shouldCompact(snapshot.revision)) worldCheckpoint.request();
 }
 function projectMotionForSession(results, beforeProjection, afterProjection, session = null) {
   if (session?.role === 'gm') {
@@ -876,13 +875,19 @@ function projectedFogAfterMovement(previous, canonical, partyIds = []) {
   return { ...(previous || {}), exploredByParty };
 }
 
-function tryIncrementalAudienceProjection(session, beforeProjection, afterState, operations, results, beforeState = null) {
-  if (!beforeProjection || session.role === 'gm' || !Array.isArray(operations) || !operations.length) return null;
-  const types = new Set(operations.map(operation => String(operation?.type || '')));
+function incrementalProjectionShell(beforeProjection, afterState) {
   const next = lightweightProjectionShell(beforeProjection);
   const projectedWorld = next.preferences.worldV2;
   projectedWorld.updatedAt = String(afterState?.preferences?.worldV2?.updatedAt || projectedWorld.updatedAt || '');
+  return next;
+}
+
+function tryIncrementalAudienceProjection(session, beforeProjection, afterState, operations, results, beforeState = null, preparedMovementTargets = undefined) {
+  if (!beforeProjection || session.role === 'gm' || !Array.isArray(operations) || !operations.length) return null;
+  const types = new Set(operations.map(operation => String(operation?.type || '')));
   if ([...types].every(type => type === 'scene.fog.explore')) {
+    const next = incrementalProjectionShell(beforeProjection, afterState);
+    const projectedWorld = next.preferences.worldV2;
     const partyIds = next.preferences.audienceVision?.partyIds || [];
     projectedWorld.scenes = projectedWorld.scenes.map(scene => {
       const canonical = canonicalWorldScene(afterState, scene.id);
@@ -898,6 +903,7 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
     // Player chat has no entity-bearing data. Protected GM event data still
     // uses the full projection so hidden Actor/Token references are filtered.
     if (appended.length !== chatIds.size || appended.some(message => message?.data != null)) return null;
+    const next = incrementalProjectionShell(beforeProjection, afterState);
     next.preferences.chatSystem = {
       ...(beforeProjection.preferences?.chatSystem || {}),
       messages: [
@@ -908,8 +914,10 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
     return next;
   }
 
-  const movementTargets = movementProjectionTargets(afterState, operations);
+  const movementTargets = preparedMovementTargets === undefined
+    ? movementProjectionTargets(afterState, operations) : preparedMovementTargets;
   if (movementTargets) {
+    const projectedWorld = beforeProjection.preferences?.worldV2 || {};
     const activeSceneId = String(projectedWorld.activeSceneId || '');
     const sourceId = String(session.visionSourceTokenId || '');
     const sourceMoved = movementTargets.get(activeSceneId)?.has(sourceId) === true;
@@ -925,38 +933,50 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
     }
     const pending = new Set([...movementTargets].flatMap(([sceneId, ids]) =>
       [...ids].map(tokenId => `${sceneId}:${tokenId}`)));
-    for (const [sceneIndex, scene] of projectedWorld.scenes.entries()) {
+    const sceneMoves = [];
+    for (const [sceneIndex, scene] of (projectedWorld.scenes || []).entries()) {
       const canonical = canonicalWorldScene(afterState, scene.id);
       if (!canonical) return null;
       const movedIds = movementTargets.get(String(scene.id)) || new Set();
-      let changed = false;
-      const tokens = (scene.tokens || []).map(token => {
+      let tokens = null;
+      const sceneTokens = scene.tokens || [];
+      for (let tokenIndex = 0; tokenIndex < sceneTokens.length; tokenIndex++) {
+        const token = sceneTokens[tokenIndex];
         const tokenId = String(token?.id || '');
-        if (!movedIds.has(tokenId)) return token;
-        if (token.audienceRestricted === true || token.audienceVisibility === 'vague') return token;
+        if (!movedIds.has(tokenId)) continue;
+        if (token.audienceRestricted === true || token.audienceVisibility === 'vague') continue;
         const authoritative = (canonical.tokens || []).find(item => String(item?.id || '') === String(token.id));
-        if (!authoritative) return token;
+        if (!authoritative) continue;
         pending.delete(`${scene.id}:${tokenId}`);
-        changed = true;
-        return structuredClone(authoritative);
-      });
+        tokens ||= sceneTokens.slice();
+        tokens[tokenIndex] = structuredClone(authoritative);
+      }
+      sceneMoves.push({ sceneIndex, scene, canonical, movedIds, tokens });
+    }
+    if (pending.size) return null;
+    const source = sourceMoved ? describeVisionForToken(afterState, sourceId) : null;
+    if (sourceMoved && !source) return null;
+    // Perception-only or missing targets must use the full audience projection.
+    // Stage eligible Token replacements before copying the large Actor shell;
+    // unchanged Scenes also avoid a temporary full Token array.
+    const next = incrementalProjectionShell(beforeProjection, afterState);
+    const nextWorld = next.preferences.worldV2;
+    for (const { sceneIndex, scene, canonical, movedIds, tokens } of sceneMoves) {
       const fog = canonicalWorldScene(beforeState, scene.id)?.fog === canonical.fog ? scene.fog
         : projectedFogAfterMovement(scene.fog, canonical.fog, next.preferences.audienceVision?.partyIds || []);
-      if (!changed && (fog === scene.fog || JSON.stringify(fog) === JSON.stringify(scene.fog))) continue;
+      if (!tokens && (fog === scene.fog || JSON.stringify(fog) === JSON.stringify(scene.fog))) continue;
+      const nextTokens = tokens || [...(scene.tokens || [])];
       const attackAreas = (scene.attackAreas || []).map(area => {
         if (!movedIds.has(String(area?.anchor?.tokenId || ''))) return area;
         return structuredClone((canonical.attackAreas || []).find(item => String(item?.id || '') === String(area?.id || '')) || area);
       });
-      projectedWorld.scenes[sceneIndex] = { ...scene, tokens, attackAreas, fog };
-      if (String(projectedWorld.activeSceneId || '') === String(scene.id)) {
-        next.preferences.entitySystem = { ...next.preferences.entitySystem, tokens: [...tokens] };
+      nextWorld.scenes[sceneIndex] = { ...scene, tokens: nextTokens, attackAreas, fog };
+      if (String(nextWorld.activeSceneId || '') === String(scene.id)) {
+        next.preferences.entitySystem = { ...next.preferences.entitySystem, tokens: [...nextTokens] };
         next.attackAreas = [...attackAreas];
       }
     }
-    if (pending.size) return null;
     if (sourceMoved) {
-      const source = describeVisionForToken(afterState, sourceId);
-      if (!source) return null;
       next.preferences.audienceVision = {
         ...next.preferences.audienceVision,
         source: {
@@ -996,6 +1016,8 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
       const definition = definitions.get(String(operation.payload?.statusId || operation.payload?.definitionId || ''));
       return definition?.capabilities?.visibility !== undefined || definition?.capabilities?.visionPrecision !== undefined;
     })) return null;
+    const next = incrementalProjectionShell(beforeProjection, afterState);
+    const projectedWorld = next.preferences.worldV2;
     for (const actorId of actorIds) {
       if (session.visionSourceTokenId) {
         const source = canonicalWorldScene(afterState, canonicalWorld?.activeSceneId)?.tokens
@@ -1054,6 +1076,13 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
 function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, operations = [], documentBatch = false, onOriginProjection = null }) {
   const fog = results.filter(result => Object.hasOwn(result, 'dirtyBounds'));
   const fogOnly = operations.length && operations.every(operation => operation.type === 'scene.fog.explore');
+  // These describe the authoritative commit, not any viewer's permissions.
+  // Keep them private to this broadcast; each audience still prepares its own
+  // mask, incremental eligibility, motion and Document changes.
+  const movementTargets = movementProjectionTargets(afterState, operations);
+  const pureMovement = operations.length && operations.every(operation => ['token.move', 'token.movePath', 'token.reposition'].includes(operation.type))
+    && results.every(result => ['token.move', 'token.movePath', 'token.reposition'].includes(result.action));
+  const tokenIds = pureMovement ? new Set(results.flatMap(result => result.tokenIds || [result.tokenId]).map(String)) : null;
   const recipients = [...sessions];
   const originIndex = recipients.findIndex(([, session]) => session.id === originSessionId);
   if (originIndex > 0) recipients.unshift(...recipients.splice(originIndex, 1));
@@ -1061,13 +1090,11 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
     if (session.role !== 'gm' && session.identityStatus !== 'active') continue;
     const beforeProjection = session.audienceProjection || audienceStateFor(session, beforeState);
     const incrementalProjection = tryIncrementalAudienceProjection(
-      session, beforeProjection, afterState, operations, results, beforeState,
+      session, beforeProjection, afterState, operations, results, beforeState, movementTargets,
     );
-    const pureMovement = operations.length && operations.every(operation => ['token.move', 'token.movePath', 'token.reposition'].includes(operation.type))
-      && results.every(result => ['token.move', 'token.movePath', 'token.reposition'].includes(result.action));
     const afterProjection = incrementalProjection || audienceStateFor(session, afterState, pureMovement ? {
       movementCache: { beforeState, previousProjection: beforeProjection,
-        tokenIds: new Set(results.flatMap(result => result.tokenIds || [result.tokenId]).map(String)) },
+        tokenIds },
     } : {});
     session.audienceProjection = afterProjection;
     const motion = documentBatch
@@ -1565,6 +1592,7 @@ const contentStorage = createContentStorage({
     return null;
   },
   serialize(task) {
+    worldCheckpoint.noteActivity();
     const pending = messageChain.then(() => {
       if (storageBlocked) throw new Error('storage_recovery_required');
       return task();
@@ -1617,6 +1645,28 @@ let explorationLane = null;
 let explorationRetryTimer = null;
 let pendingExploration = [];
 let lastExplorationCommitAt = 0;
+const worldCheckpoint = createWorldCheckpoint({
+  getWorld: () => world,
+  serialize(task) {
+    const pending = messageChain.catch(() => {}).then(() => {
+      // An uncertain append can leave a later revision in the WAL than world.
+      // Never compact that log from its older in-memory snapshot.
+      if (storageBlocked || explorationClosed) { worldCheckpoint.close(); return; }
+      return task();
+    });
+    messageChain = pending.catch(() => {});
+    return pending;
+  },
+  save: snapshot => persistWorld(snapshot),
+  reset: () => worldWal.reset(),
+  onSnapshotFailure(error) {
+    console.error('[RPGmap] checkpoint failed; durable WAL retained for retry:', error);
+  },
+  onStorageFailure(error) {
+    storageBlocked = true;
+    console.error('[RPGmap] WAL checkpoint reset uncertain; writes paused until recovery:', error);
+  },
+});
 
 function workerExploration(job, context, exploredRows) {
   if (!explorationWorker) {
@@ -1768,6 +1818,7 @@ server.on('upgrade', (req, socket) => {
   };
 
   attachWebSocketReader(socket, text => {
+    worldCheckpoint.noteActivity();
     messageChain = messageChain.then(async () => {
     if (storageBlocked || socket.destroyed) return;
     let message;
@@ -2338,6 +2389,7 @@ server.on('upgrade', (req, socket) => {
         return sendSocket(socket, { type: 'error', operationId: worldOperationId, code: 'persist_failed', message: `World 未保存：${error.message}` });
       }
       worldWal.adoptCheckpoint();
+      worldCheckpoint.cancel();
       world = nextWorld;
       resetResumeHistory();
       const snapshot = {
@@ -2403,6 +2455,7 @@ let shuttingDown = false;
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  worldCheckpoint.close();
   explorationClosed = true;
   clearTimeout(explorationRetryTimer);
   explorationWorker?.terminate();
