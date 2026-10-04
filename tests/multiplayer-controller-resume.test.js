@@ -5,6 +5,7 @@ import { applyDocumentChanges, createDocumentChanges } from '../src/documents/ch
 import { WORLD_OPERATION_SCHEMA_VERSION } from '../src/world/operations.js';
 import { STATUS_SCHEMA_VERSION } from '../src/status/model.js';
 import { ACCESS_SCHEMA_VERSION } from '../src/permissions/model.js';
+import { registerRuntimeStateReader } from '../src/engine/state-access.js';
 
 const settle = async () => { for (let index = 0; index < 12; index++) await Promise.resolve(); };
 
@@ -54,7 +55,7 @@ function welcome(state, revision, resumeAccepted = false) {
   };
 }
 
-async function runtime(t) {
+async function runtime(t, { internalReader = false } = {}) {
   const originalWebSocket = globalThis.WebSocket;
   globalThis.WebSocket = FakeWebSocket; FakeWebSocket.instances = [];
   let state = projectedState(), timerId = 0;
@@ -70,10 +71,11 @@ async function runtime(t) {
     createElement() { const element = new Element(); element.queries = { '[data-mp-label]': label }; return element; } };
   const map = new Element(); map.ownerDocument = document; map.closest = () => shell;
   const listeners = new Map(), events = [], imports = [], documentCommits = [];
+  const snapshots = { state: 0, world: 0 };
   const api = {
     map: { getContainer: () => map }, mapPackage: { id: 'map' },
-    getState: () => structuredClone(state), exportState: () => structuredClone(state),
-    world: { get: () => structuredClone(state.preferences.worldV2) },
+    getState: () => { snapshots.state++; return structuredClone(state); }, exportState: () => structuredClone(state),
+    world: { get: () => { snapshots.world++; return structuredClone(state.preferences.worldV2); } },
     tokens: { get: id => state.preferences.worldV2.scenes[0].tokens.find(token => token.id === id) || null },
     async importState(next, persist) { state = structuredClone(next); imports.push({ state, persist }); },
     applyAuthoritativeDocumentChanges(changes, options) {
@@ -82,12 +84,13 @@ async function runtime(t) {
     on(type, listener) { listeners.set(type, [...(listeners.get(type) || []), listener]); },
     emit(type, detail) { events.push({ type, detail }); for (const listener of listeners.get(type) || []) listener(detail); },
   };
+  if (internalReader) t.after(registerRuntimeStateReader(api, () => state));
   createMultiplayerController().register(api);
   t.after(() => { api.emit('app:destroy'); globalThis.WebSocket = originalWebSocket; });
   api.multiplayer.connect({ name: 'Player', requestedRole: 'player', playerKey: 'claim', joinCode: 'join' });
   const first = FakeWebSocket.instances.at(-1); first.open(); await first.receive(welcome(state, 4));
   events.length = 0;
-  return { api, imports, documentCommits, events, get state() { return state; },
+  return { api, imports, documentCommits, events, snapshots, get state() { return state; },
     reconnect() {
       FakeWebSocket.instances.at(-1).close();
       assert.equal(api.multiplayer.getStatus().connected, false);
@@ -152,4 +155,37 @@ test('rejected resume with no permitted source clears the previous selection', a
   assert.equal(client.api.multiplayer.getVisionSource(), null);
   assert.equal(client.state.preferences.audienceVision.source, null);
   assert.deepEqual(client.events.filter(event => event.type === 'vision:source-change').map(event => event.detail.tokenId), [null]);
+});
+
+for (const internalReader of [false, true]) test(`permission queries preserve live ownership, turns and instance control (${internalReader ? 'internal' : 'public fallback'} reader)`, async t => {
+  const client = await runtime(t, { internalReader });
+  const capabilities = client.api.multiplayer.getCapabilities();
+  client.snapshots.state = 0; client.snapshots.world = 0;
+  const stateBefore = structuredClone(client.state);
+  for (let index = 0; index < 500; index++) {
+    assert.equal(client.api.multiplayer.canControlToken('scout'), true);
+    assert.equal(capabilities.canControlToken('scout'), true);
+    assert.equal(capabilities.canEditActor('actor'), true);
+    assert.equal(client.api.multiplayer.canControlActor('actor'), true);
+    assert.equal(capabilities.canPlaceActor('actor'), false);
+  }
+  assert.deepEqual(client.state, stateBefore);
+  assert.equal(client.snapshots.world, 0);
+  if (internalReader) assert.equal(client.snapshots.state, 0);
+  else assert(client.snapshots.state > 0);
+  client.state.preferences.combatSystem.combat = { state: 'active', turnIndex: 0, combatants: [{ actorId: 'someone-else' }] };
+  assert.equal(capabilities.canControlToken('scout'), false);
+  assert.equal(client.api.multiplayer.canControlActor('actor'), false);
+  client.state.preferences.worldV2.scenes[0].tokens[0].controllerUserIds = ['player'];
+  assert.equal(capabilities.canControlToken('scout'), true);
+  assert.equal(client.api.multiplayer.canControlToken('missing'), false);
+  await FakeWebSocket.instances.at(-1).receive({ type: 'permissions.update', permissions: {
+    actorOwnerIds: [], placementGrants: { actorIds: ['actor'] },
+  } });
+  assert.equal(capabilities.canEditActor('actor'), false);
+  assert.equal(client.api.multiplayer.canControlToken('other'), false);
+  assert.equal(capabilities.canControlToken('scout'), true);
+  assert.equal(capabilities.canPlaceActor('actor'), true);
+  client.state.preferences.worldV2.scenes[0].tokens[0].controllerUserIds = [];
+  assert.equal(capabilities.canControlToken('scout'), false);
 });

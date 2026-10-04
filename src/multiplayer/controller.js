@@ -12,6 +12,7 @@ import { escapeMultiplayerHtml as escapeHtml } from './access-ui.js';
 import { createMultiplayerSessionStorage } from './session.js';
 import { createOperationId, parseTransportMessage, sendTransportMessage } from './transport.js';
 import { hasWorldOperationRevisionGap, shouldApplyOwnServerSnapshot } from './revision.js';
+import { readRuntimeState } from '../engine/state-access.js';
 
 const STYLE_ID = 'rpgmap-multiplayer-style';
 
@@ -438,6 +439,20 @@ export function createMultiplayerController() {
         return true;
       }
 
+      function controlsCurrentToken(tokenId) {
+        if (session?.role === 'gm') return true;
+        const token = api.tokens?.get?.(tokenId);
+        if (!token) return false;
+        if ((token.controllerUserIds || []).map(String).includes(String(session?.userId || ''))) return true;
+        // These predicates only read state. Public World/getState snapshots
+        // remain detached, but copying them for every Token during a render
+        // makes permission checks quadratic in the size of the World.
+        const state = readRuntimeState(api);
+        const actors = state.preferences?.worldV2?.actors || api.world?.get?.()?.actors || [];
+        const actor = actors.find(item => String(item?.id) === String(token.actorId));
+        return actor?.type === 'pc' && canControlActor({ actorId: actor.id, state, permissions });
+      }
+
       function getCapabilities() {
         if (!connected) return {
           connected: false, role: 'offline', canManageWorld: true, canManageStructure: true,
@@ -456,19 +471,13 @@ export function createMultiplayerController() {
           canClearChat: gm,
           canManageStatuses: gm || activePlayer,
           canManageStatusDefinitions: gm,
-          canEditActor: actorId => gm || canControlActor({ actorId, state: api.getState(), permissions }),
-          canControlToken: tokenId => {
-            if (gm) return true;
-            const token = api.tokens?.get?.(tokenId);
-            if (!token) return false;
-            if ((token.controllerUserIds || []).map(String).includes(String(session?.userId || ''))) return true;
-            const actor = api.world?.get?.()?.actors?.find(item => String(item?.id) === String(token.actorId));
-            return actor?.type === 'pc' && canControlActor({ actorId: actor.id, state: api.getState(), permissions });
-          },
+          canEditActor: actorId => gm || canControlActor({ actorId, state: readRuntimeState(api), permissions }),
+          canControlToken: controlsCurrentToken,
           canPlaceActor: actorId => {
             if (gm) return true;
             const grants = permissions.placementGrants || {};
-            const actor = api.world?.get?.()?.actors?.find(item => String(item?.id) === String(actorId));
+            const actors = readRuntimeState(api).preferences?.worldV2?.actors || api.world?.get?.()?.actors || [];
+            const actor = actors.find(item => String(item?.id) === String(actorId));
             return canPlaceActorTemplate(actor, grants);
           },
           canPlaceMarker: kind => gm || permissions.placementGrants?.markerKinds?.includes(String(kind)),
@@ -1515,15 +1524,8 @@ export function createMultiplayerController() {
           return true;
         },
         getCapabilities,
-        canControlActor: actorId => canControlActor({ actorId, state: api.getState(), permissions }),
-        canControlToken: tokenId => {
-          if (session?.role === 'gm') return true;
-          const token = api.tokens?.get?.(tokenId);
-          if (!token) return false;
-          if ((token.controllerUserIds || []).map(String).includes(String(session?.userId || ''))) return true;
-          const actor = api.world?.get?.()?.actors?.find(item => String(item?.id) === String(token.actorId));
-          return actor?.type === 'pc' && canControlActor({ actorId: actor.id, state: api.getState(), permissions });
-        },
+        canControlActor: actorId => canControlActor({ actorId, state: readRuntimeState(api), permissions }),
+        canControlToken: controlsCurrentToken,
         canObserveActor: actorId => session?.role === 'gm' || (permissions.actorObserverIds || []).map(String).includes(String(actorId)),
         canViewLimitedActor: actorId => session?.role === 'gm' || (permissions.actorLimitedIds || []).map(String).includes(String(actorId)),
         getActorAccessLevel: actorId => {
