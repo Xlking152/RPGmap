@@ -1,6 +1,7 @@
+// Independent canonical JSON visitor before dense-array snapshot optimization.
 import { types } from 'node:util';
-import { assertCanonicalStatusState, assertStatusState } from './status-operations.mjs';
-import { assertCanonicalWorldV2, assertWorldV2 } from './world-v2.mjs';
+import { assertCanonicalStatusState, assertStatusState } from '../../deployment/local-server/status-operations.mjs';
+import { assertCanonicalWorldV2, assertWorldV2 } from '../../deployment/local-server/world-v2.mjs';
 
 // The release server applies these hostile-input limits before any permission
 // projection or authoritative World mutation.
@@ -13,42 +14,6 @@ export const WORLD_LIMITS = Object.freeze({
   maxFogRowKeys: 32_768,
   maxChatMessages: 500,
 });
-
-const ONE_JSON_NODE = Object.freeze({ nodes: 1, depth: 0 });
-const standardArrayMap = Object.getOwnPropertyDescriptor(Array.prototype, 'map')?.value;
-const standardArrayIterator = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator)?.value;
-const standardArraySpecies = Object.getOwnPropertyDescriptor(Array, Symbol.species)?.get;
-const standardArrayMethods = typeof standardArrayMap === 'function'
-  && Function.prototype.toString.call(standardArrayMap) === 'function map() { [native code] }'
-  && typeof standardArrayIterator === 'function'
-  && Function.prototype.toString.call(standardArrayIterator) === 'function values() { [native code] }'
-  && typeof standardArraySpecies === 'function'
-  && Function.prototype.toString.call(standardArraySpecies) === 'function get [Symbol.species]() { [native code] }';
-
-// map() reads every Array value before the visitor descends into any child.
-// Keep that snapshot order, but avoid a separate [index, value] allocation for
-// every dense ordinary data slot. Descriptor checks do not read a map getter;
-// unusual Arrays retain the complete original map/iterator path below.
-function denseArrayDataSnapshot(value) {
-  if (!standardArrayMethods || types.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
-  const map = Object.getOwnPropertyDescriptor(Array.prototype, 'map');
-  const iterator = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
-  const constructor = Object.getOwnPropertyDescriptor(Array.prototype, 'constructor');
-  const species = Object.getOwnPropertyDescriptor(Array, Symbol.species);
-  if (map?.value !== standardArrayMap || iterator?.value !== standardArrayIterator
-    || constructor?.value !== Array || species?.get !== standardArraySpecies || species?.set) return null;
-  const keys = Reflect.ownKeys(value), length = value.length;
-  // Ordinary Array keys put all own indexes before length and any extra key
-  // after it. Together these conditions also exclude holes and Symbols.
-  if (keys.length !== length + 1 || keys[length] !== 'length') return null;
-  for (let index = 0; index < length; index++) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, index);
-    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) return null;
-  }
-  // Native map creates own data slots, preserving its species/property rules
-  // and avoiding inherited numeric setters while allocating only this copy.
-  return value.map(entry => entry);
-}
 
 function fail(message, code = 'invalid_world') {
   const error = new Error(message);
@@ -269,7 +234,7 @@ export function createCanonicalWorldValidator() {
         const cached = summaries.get(current)?.get(path);
         if (cached) { consume(cached, path, depth); return cached; }
       }
-      consume(ONE_JSON_NODE, path, depth);
+      consume({ nodes: 1, depth: 0 }, path, depth);
       const summary = { nodes: 1, depth: 0, bytes: 0, cacheable: true };
       if (current === null || ['boolean', 'number'].includes(typeof current)) {
         if (typeof current === 'number' && !Number.isFinite(current)) fail(`${path} must contain finite numbers`);
@@ -281,11 +246,10 @@ export function createCanonicalWorldValidator() {
         summary.bytes = Buffer.byteLength(JSON.stringify(current));
         return summary;
       }
-      let entries, dataSnapshot = null;
+      let entries;
       if (Array.isArray(current)) {
         if (current.length > WORLD_LIMITS.maxArrayLength) fail(`${path} exceeds maximum length`, 'world_limit');
-        dataSnapshot = denseArrayDataSnapshot(current);
-        entries = dataSnapshot || current.map((entry, index) => [index, entry]);
+        entries = current.map((entry, index) => [index, entry]);
       } else {
         if (!current || typeof current !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(current))) fail(`${path} is not JSON-safe`);
         entries = Object.entries(current);
@@ -294,21 +258,13 @@ export function createCanonicalWorldValidator() {
       // Freezing an accessor or Proxy does not make its observed values
       // immutable. Only ordinary own enumerable data properties (and an
       // Array's length) may enter either the JSON or structural caches.
-      const arrayValue = dataSnapshot ? true : Array.isArray(current);
-      summary.cacheable = Boolean(dataSnapshot) || !types.isProxy(current)
+      const arrayValue = Array.isArray(current);
+      summary.cacheable = !types.isProxy(current)
         && (arrayValue ? Object.getPrototypeOf(current) === Array.prototype
           : [Object.prototype, null].includes(Object.getPrototypeOf(current)))
         && Reflect.ownKeys(current).length === entries.length + (arrayValue ? 1 : 0);
       summary.bytes = 2 + Math.max(0, entries.length - 1);
-      if (dataSnapshot) {
-        for (let index = 0; index < dataSnapshot.length; index++) {
-          const child = visit(dataSnapshot[index], `${path}[${index}]`, depth + 1);
-          summary.nodes += child.nodes;
-          summary.depth = Math.max(summary.depth, child.depth + 1);
-          summary.bytes += child.bytes;
-          if (!child.cacheable) summary.cacheable = false;
-        }
-      } else for (const [key, entry] of entries) {
+      for (const [key, entry] of entries) {
         if (summary.cacheable) {
           const descriptor = Object.getOwnPropertyDescriptor(current, key);
           if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) summary.cacheable = false;

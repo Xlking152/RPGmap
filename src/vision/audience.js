@@ -20,6 +20,7 @@ const vagueActorDocuments = new WeakSet();
 const canonicalActorMaps = new WeakMap();
 const canonicalTokenMaps = new WeakMap();
 const movementPartyRelations = new WeakMap();
+const EMPTY_ACTOR_SELECTION = Object.freeze([]);
 const audienceKey = context => JSON.stringify([context.role, context.userId,
   context.user?.ownership || {}, context.user?.placementGrants || {}, context.user?.disabled === true]);
 
@@ -696,12 +697,17 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     const placementGranted = actorPlacementGranted(actor, context);
     if (!referencedActorIds.has(actorId) && !owned && !observed && !limited && !allied && !placementGranted) {
       hiddenActorIds.add(actorId);
-      return [];
+      return EMPTY_ACTOR_SELECTION;
     }
     const prior = movementCache && previousActors.get(actorId) === actor ? projectedActors.get(actorId) : null;
-    if (privateActorIds.has(actorId) || owned || observed || allied) return [prior && prior.audienceRestricted !== true ? prior : clone(actor)];
+    // Ordinary documents append directly; Array documents must remain nested.
+    if (privateActorIds.has(actorId) || owned || observed || allied) {
+      const selected = prior && prior.audienceRestricted !== true ? prior : clone(actor);
+      return Array.isArray(selected) ? [selected] : selected;
+    }
     restrictedActorIds.add(actorId);
-    return [prior?.audienceRestricted === true ? prior : restrictedActor(actor)];
+    const selected = prior?.audienceRestricted === true ? prior : restrictedActor(actor);
+    return Array.isArray(selected) ? [selected] : selected;
   });
   world.actors.push(...vagueActors);
   const hiddenTokenIds = new Set();

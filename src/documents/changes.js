@@ -113,7 +113,8 @@ function diffFields(before, after, path = [], removed = []) {
     if (plain(before[key]) && plain(value)) {
       const nested = diffFields(before[key], value, [...path, key], removed);
       if (Object.keys(nested).length) changed[key] = nested;
-    } else changed[key] = clone(value);
+    } else changed[key] = value === null || typeof value === 'string' || typeof value === 'boolean'
+      || (typeof value === 'number' && Number.isFinite(value)) ? value : clone(value);
   }
   return changed;
 }

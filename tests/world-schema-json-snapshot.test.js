@@ -1,0 +1,202 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createCanonicalWorldValidator, WORLD_LIMITS } from '../deployment/local-server/world-schema.mjs';
+import { createCanonicalWorldValidator as previousValidator } from './fixtures/world-schema-before-json-snapshot.mjs';
+
+function outcome(validate, value, measureBytes = true) {
+  try {
+    validate(value);
+    return { accepted: true, ...(measureBytes ? { bytes: validate.serializedBytes(value), json: JSON.stringify(value) } : {}) };
+  } catch (error) {
+    return { accepted: false, name: error.name, message: error.message, code: error.code };
+  }
+}
+
+function compare(build, measureBytes = true) {
+  const currentTrace = [], previousTrace = [];
+  const current = build(currentTrace), previous = build(previousTrace);
+  const actual = outcome(createCanonicalWorldValidator(), current, measureBytes);
+  const expected = outcome(previousValidator(), previous, measureBytes);
+  assert.deepEqual(actual, expected);
+  assert.deepEqual(currentTrace, previousTrace);
+  return { actual, current, previous, trace: currentTrace };
+}
+
+test('dense snapshots preserve complete acceptance, serialized bytes and frozen output for ordinary data', () => {
+  for (const values of [[], [null, false, true, 0, -0, 1.25, 1e20, '地图😀\ud800\n"\\'],
+    [[1, 2], { nested: [3, { text: 'sample' }] }], Array.from({ length: 500 }, (_, index) => ({
+      id: `token-${index}`, x: index, y: index + 0.25, effects: [],
+    }))]) {
+    const result = compare(() => ({ preferences: {}, payload: structuredClone(values) }));
+    assert.equal(result.actual.accepted, true);
+    assert.equal(result.actual.bytes, Buffer.byteLength(result.actual.json));
+    assert.equal(Object.isFrozen(result.current.payload), true);
+    for (const child of result.current.payload) if (child && typeof child === 'object') assert.equal(Object.isFrozen(child), true);
+  }
+});
+
+test('ordinary dense Arrays use one stable type decision instead of repeated per-child checks', () => {
+  const count = factory => {
+    const value = { payload: Array.from({ length: 500 }, (_, index) => index) };
+    const original = Array.isArray;
+    let checks = 0;
+    try {
+      Array.isArray = candidate => { if (candidate === value.payload) checks++; return original(candidate); };
+      assert.equal(outcome(factory(), value, false).accepted, true);
+    } finally { Array.isArray = original; }
+    return checks;
+  };
+  assert.equal(count(createCanonicalWorldValidator), 1);
+  assert.equal(count(previousValidator), 1_502);
+});
+
+test('all values are snapshotted before child accessors mutate a later dense Array slot', () => {
+  const result = compare(trace => {
+    const later = { value: 'original' }, child = {};
+    const payload = [child, later];
+    let changed = false;
+    Object.defineProperty(child, 'change', { enumerable: true, get() {
+      trace.push('child getter');
+      if (!changed) { changed = true; payload[1] = { replaced: 'after snapshot' }; }
+      return 'ok';
+    } });
+    return { preferences: {}, payload };
+  });
+  assert.equal(result.actual.accepted, true);
+  assert.equal(result.current.payload[1].replaced, 'after snapshot');
+  assert.equal(Object.isFrozen(result.current.payload[1]), false, 'the replacement was not in the old snapshot');
+});
+
+test('Array accessors and Proxies preserve the complete original read and trap order', () => {
+  for (const kind of ['array-accessor', 'child-proxy', 'array-proxy', 'revoked-during-map']) {
+    compare(trace => {
+      const child = {};
+      Object.defineProperty(child, 'nested', { enumerable: true, get() { trace.push('child getter'); return 1; } });
+      let payload = [child, 2, 3];
+      if (kind === 'array-accessor') Object.defineProperty(payload, 1, { enumerable: true, configurable: true,
+        get() { trace.push('array getter'); return 2; } });
+      if (kind === 'child-proxy') payload[0] = new Proxy({ nested: 1 }, {
+        get(target, key, receiver) { trace.push(`child get:${String(key)}`); return Reflect.get(target, key, receiver); },
+        ownKeys(target) { trace.push('child ownKeys'); return Reflect.ownKeys(target); },
+        getOwnPropertyDescriptor(target, key) { trace.push(`child descriptor:${String(key)}`); return Reflect.getOwnPropertyDescriptor(target, key); },
+        getPrototypeOf(target) { trace.push('child prototype'); return Reflect.getPrototypeOf(target); },
+      });
+      if (kind === 'array-proxy') payload = new Proxy(payload, {
+        get(target, key, receiver) { trace.push(`array get:${String(key)}`); return Reflect.get(target, key, receiver); },
+        has(target, key) { trace.push(`array has:${String(key)}`); return Reflect.has(target, key); },
+        ownKeys(target) { trace.push('array ownKeys'); return Reflect.ownKeys(target); },
+        getOwnPropertyDescriptor(target, key) { trace.push(`array descriptor:${String(key)}`); return Reflect.getOwnPropertyDescriptor(target, key); },
+        getPrototypeOf(target) { trace.push('array prototype'); return Reflect.getPrototypeOf(target); },
+      });
+      if (kind === 'revoked-during-map') {
+        const revocable = Proxy.revocable([1], { get(target, key, receiver) {
+          trace.push(`revocable get:${String(key)}`);
+          if (key === '0') { revocable.revoke(); return 1; }
+          return Reflect.get(target, key, receiver);
+        } });
+        payload = revocable.proxy;
+      }
+      return { preferences: {}, payload };
+    });
+  }
+});
+
+test('holes, hidden indexes, extra keys, Symbols and subclasses keep the old map branch', () => {
+  for (const kind of ['hole', 'undefined', 'extra', 'hidden-extra', 'symbol', 'hidden-index', 'subclass']) {
+    compare(trace => {
+      let payload = [1, 2];
+      if (kind === 'hole') delete payload[1];
+      if (kind === 'undefined') payload[1] = undefined;
+      if (kind === 'extra') payload.extra = 'ignored by Array JSON';
+      if (kind === 'hidden-extra') Object.defineProperty(payload, 'extra', { value: 3 });
+      if (kind === 'symbol') Object.defineProperty(payload, Symbol('hidden'), { value: 'private', enumerable: false });
+      if (kind === 'hidden-index') Object.defineProperty(payload, 1, { value: 2, enumerable: false });
+      if (kind === 'subclass') {
+        class CustomArray extends Array {
+          get map() { trace.push('subclass map getter'); return Array.prototype.map; }
+        }
+        payload = new CustomArray(1, 2);
+      }
+      return { preferences: {}, payload };
+    });
+  }
+});
+
+test('own map getter is read once and throwing/custom mapped iterators keep exception closing', () => {
+  for (const kind of ['getter', 'throw', 'iterator-error', 'bad-entry']) {
+    const result = compare(trace => {
+      const payload = [1, 2];
+      Object.defineProperty(payload, 'map', { configurable: true, get() {
+        trace.push('map getter');
+        return function (callback) {
+          trace.push('map call');
+          if (kind === 'throw') throw new Error('custom map failure');
+          if (kind === 'getter') return Array.prototype.map.call(this, callback);
+          return { length: 2, *[Symbol.iterator]() {
+            try { yield kind === 'bad-entry' ? undefined : [0, Infinity]; }
+            finally { trace.push('iterator closed'); }
+          } };
+        };
+      } });
+      return { preferences: {}, payload };
+    });
+    assert.equal(result.trace.filter(value => value === 'map getter').length, 1);
+    if (kind === 'iterator-error' || kind === 'bad-entry') assert.ok(result.trace.includes('iterator closed'));
+  }
+});
+
+test('prototype map/iterator and species hooks keep their original access and exception behavior', () => {
+  const mapDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, 'map');
+  const iteratorDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
+  const speciesDescriptor = Object.getOwnPropertyDescriptor(Array, Symbol.species);
+  for (const kind of ['map-getter', 'iterator-getter', 'species-getter', 'species-throw']) {
+    const exercise = validator => {
+      const trace = [], value = { preferences: {}, payload: [1, 2] };
+      try {
+        if (kind === 'map-getter') Object.defineProperty(Array.prototype, 'map', { configurable: true,
+          get() { trace.push('prototype map'); return mapDescriptor.value; } });
+        if (kind === 'iterator-getter') Object.defineProperty(Array.prototype, Symbol.iterator, { configurable: true,
+          get() { trace.push('prototype iterator'); return iteratorDescriptor.value; } });
+        if (kind.startsWith('species')) Object.defineProperty(Array, Symbol.species, { configurable: true,
+          get() { trace.push('species'); if (kind === 'species-throw') throw new Error('species failure'); return Array; } });
+        return { result: outcome(validator(), value), trace };
+      } finally {
+        Object.defineProperty(Array.prototype, 'map', mapDescriptor);
+        Object.defineProperty(Array.prototype, Symbol.iterator, iteratorDescriptor);
+        Object.defineProperty(Array, Symbol.species, speciesDescriptor);
+      }
+    };
+    assert.deepEqual(exercise(createCanonicalWorldValidator), exercise(previousValidator));
+  }
+});
+
+test('array cache remains path-specific and rejected candidates do not freeze or seed snapshots', () => {
+  for (const factory of [createCanonicalWorldValidator, previousValidator]) {
+    const validate = factory();
+    const rows = Object.fromEntries(Array.from({ length: 300 }, (_, index) => [index, [[0, 0]]]));
+    const first = { scene: { fog: { exploredByParty: { party: { rows } } } }, payload: [[{ value: 1 }]] };
+    validate(first);
+    assert.throws(() => validate({ ...first, ordinary: { rows } }), { code: 'world_limit' });
+    assert.equal(validate.serializedBytes(first), Buffer.byteLength(JSON.stringify(first)));
+    const rejected = { payload: [[{ value: 1 }], [Infinity]] };
+    assert.throws(() => validate(rejected), /finite numbers/);
+    assert.equal(Object.isFrozen(rejected.payload), false);
+    assert.equal(Object.isFrozen(rejected.payload[0][0]), false);
+    rejected.payload[0][0].value = NaN;
+    rejected.payload[1][0] = 2;
+    assert.throws(() => validate(rejected), /finite numbers/);
+    const changed = { ...first, payload: [[{ value: 2 }]] };
+    validate(changed);
+    assert.equal(validate.serializedBytes(changed), Buffer.byteLength(JSON.stringify(changed)));
+  }
+});
+
+test('dense snapshots preserve exact limit errors including array, string, key and depth budgets', () => {
+  for (const build of [() => Array(WORLD_LIMITS.maxArrayLength + 1).fill(0),
+    () => ['x'.repeat(WORLD_LIMITS.maxStringLength + 1)], () => [{ ['k'.repeat(161)]: 1 }],
+    () => { let nested = [0]; for (let i = 0; i < WORLD_LIMITS.maxDepth; i++) nested = [nested]; return nested; }]) {
+    const result = compare(() => ({ payload: build() }), false);
+    assert.equal(result.actual.accepted, false);
+    assert.equal(result.actual.code, 'world_limit');
+  }
+});
