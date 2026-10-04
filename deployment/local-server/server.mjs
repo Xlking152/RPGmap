@@ -738,6 +738,7 @@ function audienceStateFor(session, state = world.state, projectionOptions = {}) 
     opaqueIdFor,
     lookupOpaqueId: (kind, rawId) => session.audienceOpaqueIds.get(`${String(kind)}:${String(rawId)}`),
     trustedProjection: true,
+    isCanonicalData: assertCanonicalWorldState.isImmutableData,
     ...projectionOptions,
   });
   const projectedWorld = projected.preferences?.worldV2;
