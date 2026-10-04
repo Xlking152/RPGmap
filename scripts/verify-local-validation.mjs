@@ -114,6 +114,7 @@ function largeLan(report) {
 }
 
 function browser(report) {
+  requireCondition(report.diagnosticProfileSession == null, 'Diagnostic browser profiles are not acceptance evidence');
   requireCondition(report.browser === 'chrome' && report.headless === true && report.fixture?.sessions === 7
     && report.fixture.actors === 100 && report.fixture.tokens === 500 && report.fixture.viewport === '1920x1080', 'Chrome fixture invalid');
   requireCondition(report.phases?.length === 2, 'Chrome phases missing');

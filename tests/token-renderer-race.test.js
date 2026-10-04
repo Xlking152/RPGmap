@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { interpolateTokenPoint, normalizeTokenPoint, sameTokenPoint, tokenMoveDuration } from '../src/render/token-motion.js';
+import { readConnectionState } from '../src/multiplayer/connection-state.js';
 
 // Run the real renderer with a deterministic browser/Leaflet shell. Its normal
 // import graph requires a full DOM, which Node's focused animation test lacks.
@@ -73,14 +74,14 @@ function rendererFixture() {
   };
   const createTokenRendererSystem = new Function('worldToLatLng', 'formatMeters',
     'resolveStatusUiSnapshot', 'renderTokenStatusBadges', 'interpolateTokenPoint',
-    'normalizeTokenPoint', 'sameTokenPoint', 'tokenMoveDuration', 'createTokenViewModel', 'L',
+    'normalizeTokenPoint', 'sameTokenPoint', 'tokenMoveDuration', 'createTokenViewModel', 'L', 'readConnectionState',
     `${rendererSource}\nreturn createTokenRendererSystem;`)(
     (point, height) => ({ lat: height - point.y, lng: point.x }), String,
     () => ({ statuses: [], capabilities: {} }), () => '',
     interpolateTokenPoint, normalizeTokenPoint, sameTokenPoint, tokenMoveDuration,
     ({ token: value }) => ({ ...value, name: 'Actor', avatarDataUrl: null, color: '#336699',
       audienceRestricted: false, audienceVisibility: null, gmViewer: true, invisible: false }),
-    leaflet);
+    leaflet, readConnectionState);
   createTokenRendererSystem().register(api);
   return {
     api, token,

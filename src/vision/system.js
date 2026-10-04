@@ -1,3 +1,4 @@
+import { readConnectionState } from "../multiplayer/connection-state.js";
 import { FOG_CELL_SIZE_METERS, normalizeFogState, mergeSpans } from './fog.js';
 import { computeVisibilityRowsAsync } from './visibility.js';
 import { sceneVisionContext, releaseVisionContexts } from './context.js';
@@ -262,7 +263,7 @@ export function createVisionFogSystem() {
             };
         localExploreChain = localExploreChain.catch(() => null).then(() => {
           const current = localVisionSubject();
-          if (generation !== explorationGeneration || api.multiplayer?.getStatus?.()?.connected || !current
+          if (generation !== explorationGeneration || readConnectionState(api)?.connected || !current
             || current.sceneId !== subject.sceneId || current.tokenId !== subject.tokenId) return null;
           return api.world.performOperations([
             { type: 'scene.fog.explore', payload },
@@ -272,7 +273,7 @@ export function createVisionFogSystem() {
       }
 
       function confirmedSourceTokenId() {
-        if (api.multiplayer?.getStatus?.()?.connected) {
+        if (readConnectionState(api)?.connected) {
           return api.multiplayer?.getVisionSource?.() || null;
         }
         return localSourceTokenId;
@@ -280,7 +281,7 @@ export function createVisionFogSystem() {
 
       function liveVisionState() {
         const state = visionState();
-        const connected = api.multiplayer?.getStatus?.()?.connected === true;
+        const connected = readConnectionState(api)?.connected === true;
         const audience = resolveVisionAudience(connected, state.preferences?.audienceVision,
           connected ? null : localVisionState());
         const sourceTokenId = confirmedSourceTokenId();
@@ -291,7 +292,7 @@ export function createVisionFogSystem() {
       }
 
       function clearUnavailableConnectedSource() {
-        if (!api.multiplayer?.getStatus?.()?.connected || connectedClearPending) return;
+        if (!readConnectionState(api)?.connected || connectedClearPending) return;
         const tokenId = api.multiplayer?.getVisionSource?.();
         if (!tokenId) return;
         const scene = runtimeScene(visionState());
@@ -306,7 +307,7 @@ export function createVisionFogSystem() {
       }
 
       function synchronizeLocalVision() {
-        if (api.multiplayer?.getStatus?.()?.connected || !localSourceTokenId) return false;
+        if (readConnectionState(api)?.connected || !localSourceTokenId) return false;
         const subject = localVisionSubject();
         if (!subject) {
           localSourceTokenId = null;
@@ -525,7 +526,7 @@ export function createVisionFogSystem() {
           exploredDirty = true;
           explorationGeneration += 1;
           cancelVisibility();
-          if (api.multiplayer?.getStatus?.()?.connected) return api.multiplayer.setVisionSource(tokenId);
+          if (readConnectionState(api)?.connected) return api.multiplayer.setVisionSource(tokenId);
           localSourceTokenId = tokenId == null ? null : String(tokenId);
           const subject = localVisionSubject();
           if (localSourceTokenId && !subject) {
@@ -574,7 +575,7 @@ export function createVisionFogSystem() {
         if (!['single', 'add', 'replace', 'external-replace'].includes(String(snapshot?.reason || ''))) return;
         const tokenId = snapshot?.primaryId;
         if (!tokenId) return;
-        const multiplayer = api.multiplayer?.getStatus?.();
+        const multiplayer = readConnectionState(api);
         const canControl = !multiplayer?.connected
           || api.multiplayer?.canControlToken?.(tokenId) === true;
         if (!canControl) return;
@@ -588,7 +589,7 @@ export function createVisionFogSystem() {
         const sourceTokenId = confirmedSourceTokenId();
         const invalidation = classifyVisionChange({ beforeState: observedState, afterState: next,
           changeSet, sourceTokenId, previousSourceTokenId: observedSourceTokenId,
-          connected: api.multiplayer?.getStatus?.()?.connected === true });
+          connected: readConnectionState(api)?.connected === true });
         cachedState = next;
         snapshotRevision = api.getStateRevision?.();
         // Ruleset descriptions receive the Scene, including its ambient light.

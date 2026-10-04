@@ -1,3 +1,4 @@
+import { readConnectionState } from "../multiplayer/connection-state.js";
 import {
   WORLD_STATE_KEY,
   activeWorldScene,
@@ -199,7 +200,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         requestedOperationId = null,
         addedExploration = null,
       } = {}) {
-        const multiplayer = api.multiplayer?.getStatus?.();
+        const multiplayer = readConnectionState(api);
         if (multiplayer?.connected) {
           if (typeof api.multiplayer?.performOperations !== 'function') {
             throw new Error('当前局域网控制器不支持通用 World 操作');
@@ -232,7 +233,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           try { added = background ? await background.run(request)
             : await computeFogExplorationAsync(request, {}, { signal: explorationAbort.signal }); }
           catch (error) { if (epoch !== explorationEpoch) return { unchanged: true }; throw error; }
-          if (epoch !== explorationEpoch || api.multiplayer?.getStatus?.()?.connected) return { unchanged: true };
+          if (epoch !== explorationEpoch || readConnectionState(api)?.connected) return { unchanged: true };
           const active = currentWorldFromState(readRuntimeState(api));
           if (String(active?.activeSceneId) !== String(operations[0].payload.sceneId)
             || (source === 'vision:explore' && api.vision?.getSource?.() !== request.payload.visionSourceTokenId)) return { unchanged: true };

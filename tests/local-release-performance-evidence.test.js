@@ -203,6 +203,13 @@ test('no-op moves, wrong sources, missing vision, and wrong lighting are rejecte
   }
 });
 
+test('diagnostic Chrome profiling cannot promote a package even if every metric passes', async t => {
+  const candidate = await fixture(t);
+  candidate.reports['browser.json'].diagnosticProfileSession = 4;
+  await candidate.save();
+  await assert.rejects(candidate.verify(), /Diagnostic browser profiles/);
+});
+
 test('Chrome metrics preserve strict FPS, frame, input, long-task and network limits', async t => {
   const candidate = await fixture(t), original = structuredClone(candidate.reports['browser.json']);
   const cases = [

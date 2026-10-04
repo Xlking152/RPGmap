@@ -483,6 +483,16 @@ export function createMultiplayerController() {
           canPlaceMarker: kind => gm || permissions.placementGrants?.markerKinds?.includes(String(kind)),
         };
       }
+      function connectionState() {
+        return {
+          connected, joining, retainsServerState: Boolean(lastConnectionOptions),
+          resuming, applyingRemote, revision, audienceRevision, audienceFingerprint,
+          rttMs, reconnectAttempt,
+          pendingOperationCount: operationQueue.length + (activeOperation ? 1 : 0),
+          visionSourceTokenId: activeVisionSourceTokenId,
+          session: session ? { ...session } : null,
+        };
+      }
       function publishCapabilities() { api.emit?.('multiplayer:capabilities', getCapabilities()); }
 
       function rejectAtomicWorldOperations(message = '联机连接已中断') {
@@ -1536,20 +1546,9 @@ export function createMultiplayerController() {
           if ((permissions.actorLimitedIds || []).map(String).includes(id)) return 'limited';
           return 'none';
         },
+        getConnectionState: connectionState,
         getStatus: () => ({
-          connected,
-          joining,
-          retainsServerState: Boolean(lastConnectionOptions),
-          resuming,
-          applyingRemote,
-          revision,
-          audienceRevision,
-          audienceFingerprint,
-          rttMs,
-          reconnectAttempt,
-          pendingOperationCount: operationQueue.length + (activeOperation ? 1 : 0),
-          visionSourceTokenId: activeVisionSourceTokenId,
-          session: session ? { ...session } : null,
+          ...connectionState(),
           permissions: structuredClone(permissions),
           clients: clients.map(item => ({ ...item })),
           access: structuredClone(access),

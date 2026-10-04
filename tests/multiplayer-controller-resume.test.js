@@ -6,6 +6,7 @@ import { WORLD_OPERATION_SCHEMA_VERSION } from '../src/world/operations.js';
 import { STATUS_SCHEMA_VERSION } from '../src/status/model.js';
 import { ACCESS_SCHEMA_VERSION } from '../src/permissions/model.js';
 import { registerRuntimeStateReader } from '../src/engine/state-access.js';
+import { readConnectionState } from '../src/multiplayer/connection-state.js';
 
 const settle = async () => { for (let index = 0; index < 12; index++) await Promise.resolve(); };
 
@@ -98,6 +99,42 @@ async function runtime(t, { internalReader = false } = {}) {
       const socket = FakeWebSocket.instances.at(-1); socket.open(); return socket;
     } };
 }
+
+test('light connection reads stay current and detached without copying private access tables', async t => {
+  const client = await runtime(t, { internalReader: true });
+  const clone = globalThis.structuredClone;
+  let copies = 0;
+  globalThis.structuredClone = value => { copies++; return clone(value); };
+  try {
+    for (let index = 0; index < 500; index++) {
+      const status = readConnectionState(client.api);
+      assert.equal(status.connected, true);
+      assert.equal(status.revision, 4);
+      assert.equal(status.session.role, 'player');
+      assert.equal(status.permissions, undefined);
+      assert.equal(status.access, undefined);
+      status.session.role = 'gm';
+    }
+    assert.equal(copies, 0);
+    const complete = client.api.multiplayer.getStatus();
+    assert.equal(copies, 2);
+    complete.permissions.actorOwnerIds.length = 0;
+    complete.session.role = 'gm';
+    assert.equal(client.api.multiplayer.canControlToken('scout'), true);
+  } finally { globalThis.structuredClone = clone; }
+  const socket = client.reconnect();
+  assert.equal(readConnectionState(client.api).connected, false);
+  assert.equal(readConnectionState(client.api).retainsServerState, true);
+  await socket.receive(welcome(null, 4, true));
+  assert.equal(readConnectionState(client.api).resuming, true);
+  await socket.receive({ type: 'resume.complete', revision: 4, audienceRevision: 0 });
+  assert.equal(readConnectionState(client.api).connected, true);
+  assert.equal(readConnectionState(client.api).resuming, false);
+  assert.equal(readConnectionState(client.api).session.role, 'player');
+  assert.equal(readConnectionState({}), undefined);
+  const legacy = { connected: true, session: { role: 'gm' } };
+  assert.equal(readConnectionState({ multiplayer: { getStatus: () => legacy } }), legacy);
+});
 
 test('accepted resume without a snapshot or missed patches preserves the confirmed source and projection', async t => {
   const client = await runtime(t), before = structuredClone(client.state), socket = client.reconnect();

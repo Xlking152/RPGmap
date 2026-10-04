@@ -1,3 +1,4 @@
+import { readConnectionState } from "../multiplayer/connection-state.js";
 import L from 'leaflet';
 import { worldToLatLng } from '../engine/geometry.js';
 import { formatMeters } from '../elevation/model.js';
@@ -157,7 +158,7 @@ export function createTokenRendererSystem() {
         try {
           const resolved = api.tokens.resolveActor(token.id);
           const statusSnapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
-          const multiplayer = api.multiplayer?.getStatus?.() || {};
+          const multiplayer = readConnectionState(api) || {};
           const gmViewer = !multiplayer.connected || multiplayer.session?.role === 'gm' || multiplayer.role === 'gm';
           return { model: createTokenViewModel({
             token,

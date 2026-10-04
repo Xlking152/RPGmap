@@ -1,3 +1,4 @@
+import { readConnectionState } from "../multiplayer/connection-state.js";
 import { createVisionBackground } from './background.js';
 import { computeFogExplorationAsync } from './fog.js';
 
@@ -16,10 +17,10 @@ export function createLocalExplorationQueue(api, commit) {
     if (api.persistNow?.() === false) throw new Error('探索路径未能可靠保存');
   }
   async function drain() {
-    if (running || disposed || api.multiplayer?.getStatus?.()?.connected || !state.jobs.length) return;
+    if (running || disposed || readConnectionState(api)?.connected || !state.jobs.length) return;
     running = true;
     try {
-      while (!disposed && !api.multiplayer?.getStatus?.()?.connected && state.jobs.length) {
+      while (!disposed && !readConnectionState(api)?.connected && state.jobs.length) {
         const job = state.jobs[0];
         inFlightJob = job;
         controller = new AbortController();
@@ -33,7 +34,7 @@ export function createLocalExplorationQueue(api, commit) {
             added = await computeFogExplorationAsync(job.input, {}, { signal: controller.signal });
           }
           if (disposed || controller.signal.aborted || !state.jobs.some(item => item.id === job.id)) continue;
-          if (api.multiplayer?.getStatus?.()?.connected) break;
+          if (readConnectionState(api)?.connected) break;
           const before = state.jobs;
           state.jobs = before.filter(item => item.id !== job.id);
           saveMetadata();

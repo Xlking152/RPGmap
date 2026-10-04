@@ -19,11 +19,18 @@ const browserName = String(process.env.RPGMAP_BENCHMARK_BROWSER || 'edge').toLow
 const headless = process.env.RPGMAP_BROWSER_BENCHMARK_HEADLESS === '1';
 const phaseSeconds = Math.max(5, Number(process.env.RPGMAP_BROWSER_BENCHMARK_SECONDS) || 60);
 const shouldAssert = process.argv.includes('--assert');
+const profileSessionIndex = process.env.RPGMAP_BROWSER_BENCHMARK_PROFILE_SESSION === undefined
+  ? null : Number(process.env.RPGMAP_BROWSER_BENCHMARK_PROFILE_SESSION);
 const GM_SECRET = 'BROWSER-BENCHMARK-GM';
 const JOIN_CODE = '246810';
 const ACTOR_COUNT = 100;
 const TOKEN_COUNT = Math.max(1, Math.min(500, Number(process.env.RPGMAP_BROWSER_BENCHMARK_TOKENS) || 500));
 const SESSION_COUNT = Math.max(1, Math.min(7, Number(process.env.RPGMAP_BROWSER_BENCHMARK_SESSIONS) || 7));
+if (profileSessionIndex !== null && (!Number.isInteger(profileSessionIndex)
+  || profileSessionIndex < 0 || profileSessionIndex >= SESSION_COUNT)) {
+  throw new Error('Diagnostic profile session index is invalid');
+}
+if (shouldAssert && profileSessionIndex !== null) throw new Error('Diagnostic profiles cannot be used for acceptance');
 const WAIT_MS = 60_000;
 const SETUP_WAIT_MS = 20_000;
 const CDP_WAIT_MS = Math.max(10_000, Number(process.env.RPGMAP_BROWSER_BENCHMARK_CDP_TIMEOUT_MS) || 60_000);
@@ -443,6 +450,12 @@ try {
     })()`);
     await new Promise(resolve => setTimeout(resolve, 1000));
     await Promise.all(sessions.map(session => session.resetDiagnostics()));
+    const profiledSession = profileSessionIndex === null ? null : sessions[profileSessionIndex];
+    if (profiledSession) {
+      await profiledSession.send('Profiler.enable');
+      await profiledSession.send('Profiler.setSamplingInterval', { interval: 1000 });
+      await profiledSession.send('Profiler.start');
+    }
     const started = performance.now();
     let step = 0;
     let actualMoves = 0;
@@ -468,6 +481,12 @@ try {
       if (wait) await new Promise(resolve => setTimeout(resolve, wait));
     }
     await new Promise(resolve => setTimeout(resolve, 1000));
+    if (profiledSession) {
+      const { profile } = await profiledSession.send('Profiler.stop');
+      await writeFile(path.join(outputRoot, `${name}-browser-profile-${profileSessionIndex}.cpuprofile`),
+        `${JSON.stringify(profile)}\n`, 'utf8');
+      await profiledSession.send('Profiler.disable');
+    }
     const sceneMetrics = await gm.evaluate(`(() => {
       const world = document.querySelector('#app').rpgMapApp.world.get();
       const scene = world.scenes.find(item => item.id === 'scene-northern-song-lanzhou-1104');
@@ -536,6 +555,7 @@ try {
     version: packageJson.version, browser: browserName, headless, browserExecutable: browserExecutable(),
     packageRoot, build: buildInfo,
     fixture: { sessions: SESSION_COUNT, actors: ACTOR_COUNT, tokens: TOKEN_COUNT, viewport: '1920x1080' },
+    diagnosticProfileSession: profileSessionIndex,
     phases, recovery, generatedAt: new Date().toISOString(),
   };
   await writeFile(path.join(outputRoot, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');

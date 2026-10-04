@@ -1,3 +1,4 @@
+import { readConnectionState } from "../multiplayer/connection-state.js";
 import L from 'leaflet';
 import { worldToLatLng, latLngToWorld } from './geometry.js';
 import { featureBounds } from './feature-selection.js';
@@ -115,7 +116,7 @@ export function createRpgMapRuntime({
   let remoteWorldIsolation = null;
 
   function assertWritable() {
-    if (remoteWorldIsolation?.active && !api.multiplayer?.getStatus?.()?.connected)
+    if (remoteWorldIsolation?.active && !readConnectionState(api)?.connected)
       throw Object.assign(new Error('正在恢复联机连接；请等待续传或主动退出后再编辑离线 World'), { code: 'world_reconnect_pending' });
     if (persistence.blocked) throw Object.assign(new Error('自动保存已暂停，请先恢复存储'), { code: 'world_persistence_blocked' });
     if (recoveryBlocked) throw Object.assign(new Error('storage_recovery_required'), { code: 'storage_recovery_required' });
@@ -369,7 +370,7 @@ export function createRpgMapRuntime({
 
   async function commitAuthoritativeState(nextState, { source = 'authoritative-world', reason = source, render = true } = {}) {
     const normalized = normalizeState(nextState);
-    const multiplayer = api.multiplayer?.getStatus?.();
+    const multiplayer = readConnectionState(api);
     if (multiplayer?.connected) {
       if (typeof api.multiplayer?.performStateOperation === 'function') {
         return api.multiplayer.performStateOperation(normalized, { reason });
@@ -385,7 +386,7 @@ export function createRpgMapRuntime({
 
   async function importState(raw, options = {}) {
     assertWritable();
-    const local = options !== false && options.persist !== false && !api.multiplayer?.getStatus?.().connected;
+    const local = options !== false && options.persist !== false && !readConnectionState(api)?.connected;
     if (local) importPending = true;
     try { return await importPreparedState(raw, options); }
     catch (error) {
@@ -404,7 +405,7 @@ export function createRpgMapRuntime({
     const migrateContent = persist && api.content;
     const prepared = migrateContent ? await prepareWorldContentState(raw, { mapPackage, ruleset }) : prepareRuntimeState(raw, { mapPackage, ruleset });
     const normalized = normalizeState(prepared.state);
-    if (persist && api.multiplayer?.getStatus?.().connected) {
+    if (persist && readConnectionState(api)?.connected) {
       const { persistArchiveContent } = await import('../content/archive.js');
       const content = [...records, ...(prepared.records || []).map(record => ({ reference: `asset:${record.id}`, blob: new Blob([record.bytes], { type: record.type }) }))];
       await persistArchiveContent(content, api.content);
@@ -595,7 +596,7 @@ export function createRpgMapRuntime({
   remoteWorldIsolation = createRemoteWorldIsolation({ persistence, getState: () => state,
     restoreState(localState) { state = localState; stateRevision += 1; trustedSaveRevision = null; } });
   on('multiplayer:capabilities', () => {
-    if (!remoteWorldIsolation.updateConnection(api.multiplayer?.getStatus?.())) return;
+    if (!remoteWorldIsolation.updateConnection(readConnectionState(api))) return;
     renderScene();
     emit('state:import', { source: 'offline:resume', persist: false, state: clone(state) });
   });
