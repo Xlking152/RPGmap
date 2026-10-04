@@ -218,6 +218,13 @@ test('offline and LAN events suppress unrelated commits and preserve every sourc
         api.emit('state:patch', { changeSet: tokenSet('scout') });
         assert.equal(runtime.frames.size, 1);
         runtime.flush();
+        worker.onmessage({ data: { id: worker.message.id, result: { precise: [['0', [[0, 11]]]], vague: [] } } });
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(api.vision.getFeedbackState(), completed, 'pending masks cannot replace the last drawn feedback');
+        assert.equal(runtime.frames.size, 1);
+        runtime.flush();
+        assert.equal(api.vision.getFeedbackState().source.x, 21);
+        assert.equal(api.vision.getFeedbackState().rendered, true);
         for (let i = 0; i < 6; i++) {
           api.emit('token:visual-position', { tokenId: 'scout' });
           assert.equal(runtime.frames.size, 1, `source animation sample ${i}`);

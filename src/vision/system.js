@@ -109,6 +109,7 @@ export function createVisionFogSystem() {
       let explorationDirty = true;
       let exploredDirty = true, exploredCache = [], exploredParties = '', exploredFogReference = null;
       let visibilityRowsCache = null;
+      let displayedVisibilityFrame = null;
       let visibilityBackground = createVisionBackground({ diagnostics: api.diagnostics });
       let visibilityPending = false;
       let latestVisibilityRequest = null;
@@ -126,6 +127,7 @@ export function createVisionFogSystem() {
       function cancelVisibility() {
         visibilityGeneration += 1;
         visibilityRowsCache = null;
+        displayedVisibilityFrame = null;
         latestVisibilityRequest = null;
         visibilitySignature = '';
         visibilityAbort?.abort();
@@ -493,6 +495,7 @@ export function createVisionFogSystem() {
           visibilityRowsCache.feedbackRecorded = true;
           api.diagnostics?.record('vision.feedback', performance.now() - visibilityRowsCache.requestedAt);
         }
+        if (visibilityRowsCache) displayedVisibilityFrame = visibilityRowsCache;
         api.diagnostics?.record('vision.draw', performance.now() - renderStarted);
       }
 
@@ -545,8 +548,11 @@ export function createVisionFogSystem() {
           return structuredClone(liveVisionState()?.source || null);
         },
         getFeedbackState() {
-          if (!visibilityRowsCache) return null;
-          const { signature, source, requestedAt, stateRevision, feedbackRecorded } = visibilityRowsCache;
+          // A later Worker completion can be waiting for RAF while the prior
+          // complete frame remains on Canvas. Report the frame actually drawn.
+          const feedback = displayedVisibilityFrame || visibilityRowsCache;
+          if (!feedback) return null;
+          const { signature, source, requestedAt, stateRevision, feedbackRecorded } = feedback;
           return { signature, source: structuredClone(source), requestedAt, stateRevision, rendered: feedbackRecorded === true };
         },
         getExplored(partyId) {
@@ -688,6 +694,7 @@ export function createVisionFogSystem() {
       api.on?.('app:destroy', () => {
         destroyed = true;
         cachedState = null; observedState = null; cachedSubject = null; spatial = null; exploredCache = []; exploredFogReference = null;
+        displayedVisibilityFrame = null; visibilityRowsCache = null;
         releaseVisionContexts(api.mapPackage);
         visibilityAbort?.abort();
         visibilityBackground?.dispose();
