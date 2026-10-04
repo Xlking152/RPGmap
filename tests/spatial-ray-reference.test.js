@@ -100,3 +100,26 @@ test('seeded arbitrary rays preserve exact hit distances and first-hit order acr
     assert.deepEqual(inspectLineOfSight(input),referenceRay(input));
   }
 });
+
+test('prepared ring coefficients preserve signed zero and widely scaled floating point boundaries', () => {
+  for (const scale of [1e-12, 1, 1e6, 2 ** 45, 1e100]) {
+    const polygon = [[-0, -0], [10 * scale, 0], [10 * scale, 10 * scale], [0, 10 * scale]];
+    const holes = [[[2 * scale, 2 * scale], [8 * scale, 2 * scale], [8 * scale, 8 * scale], [2 * scale, 8 * scale]]];
+    const occluders = Object.freeze([normalizeVisionOccluder({ id: 'scaled', polygon,
+      polygons: [[polygon, ...holes]], blockingHeightMeters: 6 })]);
+    for (const y of [0, 2 * scale, 5 * scale, 8 * scale, 10 * scale]) {
+      const input = { from: { x: -5 * scale, y }, to: { x: 15 * scale, y }, occluders };
+      for (let repetition = 0; repetition < 3; repetition++) assert.deepEqual(inspectLineOfSight(input), referenceRay(input));
+    }
+  }
+});
+
+test('mutable geometry with a reused ID is normalized afresh after moving its contour', () => {
+  const raw = { id: 'mutable', polygon: structuredClone(rectangle), blockingHeightMeters: 6 };
+  const input = { from: { x: -5, y: 5 }, to: { x: 15, y: 5 }, occluders: [raw] };
+  assert.equal(inspectLineOfSight(input).clear, false);
+  raw.polygon = raw.polygon.map(([x, y]) => [x, y + 20]);
+  assert.equal(inspectLineOfSight(input).clear, true);
+  raw.polygon = structuredClone(rectangle);
+  assert.equal(inspectLineOfSight(input).clear, false);
+});

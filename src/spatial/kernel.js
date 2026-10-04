@@ -9,6 +9,8 @@ const LIGHTING_CACHE = new WeakMap();
 const IMMUTABLE_LIGHTS = new WeakSet();
 const VISION_HOST_FILTERS = new WeakMap();
 const SOLID_AREAS = new WeakMap();
+const RING_RAY_DATA = new WeakMap();
+const OCCLUDER_RAY_BOUNDS = new WeakMap();
 const CLEAR_RAY = Object.freeze({ clear: true, code: 'ok' });
 const INVALID_RAY = Object.freeze({ clear: false, code: 'spatial_point_invalid' });
 
@@ -81,12 +83,23 @@ function segmentIntersectionT(from, to, first, second) {
 }
 
 function pointInPolygon(point, polygon) {
+  let data = RING_RAY_DATA.get(polygon);
+  if (!data) {
+    // All callers use normalized, privately frozen rings. Retain the exact
+    // subtraction and multiply/divide order of the original point test.
+    data = new Float64Array(polygon.length * 6);
+    for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index++) {
+      const first = polygon[index], second = polygon[previous], offset = index * 6;
+      data[offset] = first[0]; data[offset + 1] = first[1];
+      data[offset + 2] = second[0]; data[offset + 3] = second[1];
+      data[offset + 4] = second[0] - first[0]; data[offset + 5] = second[1] - first[1];
+    }
+    RING_RAY_DATA.set(polygon, data);
+  }
   let inside = false;
-  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
-    const [x1, y1] = polygon[index];
-    const [x2, y2] = polygon[previous];
-    const intersects = (y1 > point.y) !== (y2 > point.y)
-      && point.x < ((x2 - x1) * (point.y - y1)) / ((y2 - y1) || EPSILON) + x1;
+  for (let index = 0; index < data.length; index += 6) {
+    const intersects = (data[index + 1] > point.y) !== (data[index + 3] > point.y)
+      && point.x < (data[index + 4] * (point.y - data[index + 1])) / (data[index + 5] || EPSILON) + data[index];
     if (intersects) inside = !inside;
   }
   return inside;
@@ -299,11 +312,17 @@ function inspectSpatialRay(start, end, { from, occluders, metersPerUnit, exclude
   for (const raw of queryOccluders(visualOccluders, rayBounds)) {
     const occluder = normalizeVisionOccluder(raw);
     if (!occluder || excluded?.has(String(occluder.featureId || occluder.id))) continue;
-    const polygon = occluder.polygon;
-    if (polygon.every(point => point[0] < rayBounds[0])
-      || polygon.every(point => point[0] > rayBounds[2])
-      || polygon.every(point => point[1] < rayBounds[1])
-      || polygon.every(point => point[1] > rayBounds[3])) continue;
+    let bounds = OCCLUDER_RAY_BOUNDS.get(occluder);
+    if (!bounds) {
+      bounds = [Infinity, Infinity, -Infinity, -Infinity];
+      for (const point of occluder.polygon) {
+        bounds[0] = Math.min(bounds[0], point[0]); bounds[1] = Math.min(bounds[1], point[1]);
+        bounds[2] = Math.max(bounds[2], point[0]); bounds[3] = Math.max(bounds[3], point[1]);
+      }
+      OCCLUDER_RAY_BOUNDS.set(occluder, bounds);
+    }
+    if (bounds[2] < rayBounds[0] || bounds[0] > rayBounds[2]
+      || bounds[3] < rayBounds[1] || bounds[1] > rayBounds[3]) continue;
     // Ring crossings partition the ray into intervals wholly inside or outside
     // the remaining solid. Hole boundaries alone must not block a clear ray.
     // Most rays cross zero, one or two distinct edges. Keep those crossings
