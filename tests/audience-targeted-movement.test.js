@@ -117,6 +117,26 @@ test('multi-target, repeated submissions and consecutive targeted/full projectio
   checkedProjection(state, move(sourceMove, ['near']), ['near']);
 });
 
+test('early target projection still invokes a dynamic Ruleset vision hook and observes its changed output', () => {
+  let calls = 0, range = 120;
+  const state = setup({ describeVision: () => {
+    calls += 1;
+    return { preciseRangeMeters: range, vagueRangeMeters: 300, senses: {} };
+  } });
+  let after = move(state.before, ['near']);
+  state.validate(after);
+  const priorCalls = calls;
+  const result = projectStateForAudience(after, { ...state.context,
+    movementCache: { beforeState: state.before, previousProjection: state.projected, tokenIds: new Set(['near']) } });
+  assert.equal(calls, priorCalls + 1);
+  assert.equal(actorList(result), actorList(state.projected));
+  assert.deepEqual(result, previousProjection(after, state.context));
+  const next = { ...state, before: after, projected: result };
+  range = 60;
+  after = move(after, ['near']);
+  checkedProjection(next, after, ['near'], false);
+});
+
 test('category transitions use the complete original projection and never retain stale masks', () => {
   for (const [id, patch] of [['near', { x: 700, y: 700 }], ['far', { x: 80, y: 50 }],
     ['vague', { x: 75, y: 55 }], ['near', { x: 80, y: 200 }]]) {

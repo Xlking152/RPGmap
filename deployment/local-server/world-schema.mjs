@@ -21,6 +21,37 @@ function ownDescriptorField(descriptor, field) {
 const standardArrayMap = ownDescriptorField(Object.getOwnPropertyDescriptor(Array.prototype, 'map'), 'value');
 const standardArrayIterator = ownDescriptorField(Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator), 'value');
 const standardArraySpecies = ownDescriptorField(Object.getOwnPropertyDescriptor(Array, Symbol.species), 'get');
+const snapshotDescriptorReader = Object.getOwnPropertyDescriptor;
+const snapshotHasOwn = Object.hasOwn;
+const snapshotTraversalHooks = [
+  [Object, 'entries', Object.entries], [Object, 'getPrototypeOf', Object.getPrototypeOf],
+  [Object, 'getOwnPropertyDescriptor', Object.getOwnPropertyDescriptor],
+  [Object, 'getOwnPropertyDescriptors', Object.getOwnPropertyDescriptors],
+  [Object, 'getOwnPropertyNames', Object.getOwnPropertyNames], [Object, 'hasOwn', Object.hasOwn],
+  [Object, 'isFrozen', Object.isFrozen], [types, 'isProxy', types.isProxy],
+  [Reflect, 'ownKeys', Reflect.ownKeys], [Array, 'isArray', Array.isArray],
+  [Number, 'isFinite', Number.isFinite], [Math, 'max', Math.max], [JSON, 'stringify', JSON.stringify],
+  [globalThis, 'WeakSet', WeakSet],
+  [WeakSet.prototype, 'has', WeakSet.prototype.has], [WeakSet.prototype, 'add', WeakSet.prototype.add],
+  [WeakSet.prototype, 'delete', WeakSet.prototype.delete],
+  [WeakMap.prototype, 'get', WeakMap.prototype.get], [WeakMap.prototype, 'has', WeakMap.prototype.has],
+  [WeakMap.prototype, 'set', WeakMap.prototype.set], [WeakMap.prototype, 'delete', WeakMap.prototype.delete],
+  [Map.prototype, 'get', Map.prototype.get], [Map.prototype, 'has', Map.prototype.has],
+  [Map.prototype, 'set', Map.prototype.set], [Map.prototype, 'delete', Map.prototype.delete],
+  [Map.prototype, 'keys', Map.prototype.keys],
+  [Array.prototype, 'includes', Array.prototype.includes], [Array.prototype, 'every', Array.prototype.every],
+  [Array.prototype, 'push', Array.prototype.push],
+  [String.prototype, 'endsWith', String.prototype.endsWith], [String.prototype, 'includes', String.prototype.includes],
+  [Buffer, 'byteLength', Buffer.byteLength],
+];
+const standardSnapshotTraversal = (() => {
+  for (let index = 0; index < snapshotTraversalHooks.length; index++) {
+    const entry = snapshotTraversalHooks[index], method = entry[2];
+    if (entry[0] !== Buffer && (typeof method !== 'function'
+      || !Function.prototype.toString.call(method).includes('[native code]'))) return false;
+  }
+  return true;
+})();
 const standardArrayMethods = typeof standardArrayMap === 'function'
   && Function.prototype.toString.call(standardArrayMap) === 'function map() { [native code] }'
   && typeof standardArrayIterator === 'function'
@@ -72,6 +103,7 @@ function readOnlyJsonGraph(value, immutableData, acceptedNode = null, proven = n
     if (visiting.has(current)) return false;
     const arrayValue = Array.isArray(current), prototype = Object.getPrototypeOf(current);
     if (arrayValue ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
+    if (arrayValue && current.length > WORLD_LIMITS.maxArrayLength) return false;
     const keys = Reflect.ownKeys(current), descriptors = Object.getOwnPropertyDescriptors(current);
     if (arrayValue && (keys.length !== current.length + 1 || keys[current.length] !== 'length')) return false;
     visiting.add(current);
@@ -93,16 +125,40 @@ function readOnlyJsonGraph(value, immutableData, acceptedNode = null, proven = n
 // Keep that snapshot order, but avoid a separate [index, value] allocation for
 // every dense ordinary data slot. Descriptor checks do not read a map getter;
 // unusual Arrays retain the complete original map/iterator path below.
-function denseArrayDataSnapshot(value, immutableData) {
-  if (!standardArrayMethods || !standardArrayIteration()
-    || types.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
+function standardArrayDataHooks() {
+  if (!standardArrayMethods || !standardArrayIteration()) return false;
   const map = Object.getOwnPropertyDescriptor(Array.prototype, 'map');
   const iterator = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
   const constructor = Object.getOwnPropertyDescriptor(Array.prototype, 'constructor');
   const species = Object.getOwnPropertyDescriptor(Array, Symbol.species);
   if (ownDescriptorField(map, 'value') !== standardArrayMap || ownDescriptorField(iterator, 'value') !== standardArrayIterator
     || ownDescriptorField(constructor, 'value') !== Array || ownDescriptorField(species, 'get') !== standardArraySpecies
-    || ownDescriptorField(species, 'set')) return null;
+    || ownDescriptorField(species, 'set')) return false;
+  return true;
+}
+
+function wholeSnapshotProofAllowed() {
+  if (!standardSnapshotTraversal) return false;
+  for (let index = 0; index < snapshotTraversalHooks.length; index++) {
+    const entry = snapshotTraversalHooks[index], owner = entry[0], key = entry[1], method = entry[2];
+    const descriptor = snapshotDescriptorReader(owner, key);
+    if (!descriptor || !snapshotHasOwn(descriptor, 'value') || descriptor.value !== method) return false;
+  }
+  // Native push still uses inherited setters on the private pending/proof
+  // Arrays. Any numeric prototype property can change input after this proof,
+  // so keep the complete per-Array fallback when one is present.
+  const prototypes = [Array.prototype, Object.prototype];
+  for (let prototypeIndex = 0; prototypeIndex < prototypes.length; prototypeIndex++) {
+    const names = Object.getOwnPropertyNames(prototypes[prototypeIndex]);
+    for (let index = 0; index < names.length; index++) {
+      if (names[index].length && Number.isFinite(+names[index])) return false;
+    }
+  }
+  return standardArrayDataHooks();
+}
+
+function denseArrayDataSnapshot(value, immutableData) {
+  if (!standardArrayDataHooks() || types.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
   if (!readOnlyJsonGraph(value, immutableData)) return null;
   // Native map creates own data slots, preserving its species/property rules
   // and avoiding inherited numeric setters while allocating only this copy.
@@ -312,6 +368,18 @@ export function createCanonicalWorldValidator() {
     const pending = [];
     const pendingDocuments = [];
     const pendingCollections = [];
+    // No input hook may run in this synchronous JSON visitor when the whole
+    // root is ordinary data and traversal intrinsics remain standard. Share
+    // that one proof only within this call; a partial or failed proof seeds
+    // neither this memo nor the accepted/frozen graph caches.
+    let snapshotData = acceptedDataProof;
+    if (wholeSnapshotProofAllowed()) {
+      const proven = [];
+      if (readOnlyJsonGraph(value, acceptedDataProof, null, proven)) {
+        const localProof = new WeakSet(proven);
+        snapshotData = { has: current => localProof.has(current) || acceptedDataProof.has(current) };
+      }
+    }
     const documentCache = {
       verified(kind, document, ...dependencies) {
         if (!document || typeof document !== 'object' || !immutableData.has(document)) return false;
@@ -358,7 +426,7 @@ export function createCanonicalWorldValidator() {
       let entries, dataSnapshot = null;
       if (Array.isArray(current)) {
         if (current.length > WORLD_LIMITS.maxArrayLength) fail(`${path} exceeds maximum length`, 'world_limit');
-        dataSnapshot = denseArrayDataSnapshot(current, acceptedDataProof);
+        dataSnapshot = denseArrayDataSnapshot(current, snapshotData);
         entries = dataSnapshot || current.map((entry, index) => [index, entry]);
       } else {
         if (!current || typeof current !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(current))) fail(`${path} is not JSON-safe`);

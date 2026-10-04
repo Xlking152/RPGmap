@@ -51,6 +51,7 @@ import {
   describeServerVision,
   motionPathPreciselyVisible,
   projectStateForAudience,
+  advanceFogProjectionMetadata,
   serverRuleset,
   sphereGroundRadiusMeters,
   sceneExplorationContext,
@@ -894,7 +895,15 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
       const canonical = canonicalWorldScene(afterState, scene.id);
       return canonical ? { ...scene, fog: projectedFogAfterMovement(scene.fog, canonical.fog, partyIds) } : scene;
     });
-    return next;
+    const canonicalScene = canonicalWorldScene(afterState, projectedWorld.activeSceneId);
+    const mapPackage = visionMapForScene(canonicalScene);
+    return advanceFogProjectionMetadata(beforeProjection, next, beforeState, afterState, {
+      role: session.role, userId: session.userId,
+      user: session.userId ? findUser(session.userId) : null,
+      visionSourceTokenId: session.visionSourceTokenId,
+      mapPackage, mapMetrics: { metersPerUnit: mapPackage?.metersPerUnit || 1 },
+      trustedProjection: true, isCanonicalData: assertCanonicalWorldState.isImmutableData,
+    });
   }
 
   if ([...types].every(type => type === 'chat.append')) {
