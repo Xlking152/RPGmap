@@ -68,6 +68,7 @@ try {
           const canvas=document.createElement('canvas');canvas.width=Math.ceil(width*dpr);canvas.height=Math.ceil(height*dpr);
           const context=canvas.getContext('2d');context.setTransform(dpr,0,0,dpr,0,0);
           const renderer=factory(document);
+          const frames=[];
           for(let frame=0;frame<2;frame++) {
           context.globalCompositeOperation='source-over';context.clearRect(0,0,width,height);
           context.fillStyle='rgba(8,12,14,.96)';context.fillRect(0,0,width,height);
@@ -77,22 +78,23 @@ try {
               source:{x:frame*.5,y:frame*.75},radiusUnits:kind==='precise'?radiusUnits*.75:radiusUnits,
               kind,viewport,width,height,dpr});
           }
+          frames.push(context.getImageData(0,0,canvas.width,canvas.height).data);
           }
-          outputs.push(context.getImageData(0,0,canvas.width,canvas.height).data); renderer.dispose();
+          outputs.push(frames); renderer.dispose();
         }
         cases++;
-        for(let index=0;index<outputs[0].length;index+=4) {
+        for(let frame=0;frame<2;frame++) for(let index=0;index<outputs[0][frame].length;index+=4) {
           let difference=0;
-          for(let channel=0;channel<4;channel++) difference=Math.max(difference,Math.abs(outputs[0][index+channel]-outputs[1][index+channel]));
+          for(let channel=0;channel<4;channel++) difference=Math.max(difference,Math.abs(outputs[0][frame][index+channel]-outputs[1][frame][index+channel]));
           if(difference){differingPixels++;maxChannelError=Math.max(maxChannelError,difference);
-            const alphaError=Math.abs(outputs[0][index+3]-outputs[1][index+3]);
+            const alphaError=Math.abs(outputs[0][frame][index+3]-outputs[1][frame][index+3]);
             maxAlphaError=Math.max(maxAlphaError,alphaError);
             let premultipliedError=alphaError;
             for(let channel=0;channel<3;channel++) premultipliedError=Math.max(premultipliedError,
-              Math.abs(outputs[0][index+channel]*outputs[0][index+3]-outputs[1][index+channel]*outputs[1][index+3])/255);
+              Math.abs(outputs[0][frame][index+channel]*outputs[0][frame][index+3]-outputs[1][frame][index+channel]*outputs[1][frame][index+3])/255);
             if(premultipliedError>maxPremultipliedError) {maxPremultipliedError=premultipliedError;
-              worstDifference={width,height,dpr,scale,center,radiusUnits,mode,pixel:index/4,old:[...outputs[0].slice(index,index+4)],candidate:[...outputs[1].slice(index,index+4)]};}
-            firstDifference ||= {width,height,dpr,scale,center,radiusUnits,mode,pixel:index/4,old:[...outputs[0].slice(index,index+4)],candidate:[...outputs[1].slice(index,index+4)]};}
+              worstDifference={width,height,dpr,scale,center,radiusUnits,mode,frame,pixel:index/4,old:[...outputs[0][frame].slice(index,index+4)],candidate:[...outputs[1][frame].slice(index,index+4)]};}
+            firstDifference ||= {width,height,dpr,scale,center,radiusUnits,mode,frame,pixel:index/4,old:[...outputs[0][frame].slice(index,index+4)],candidate:[...outputs[1][frame].slice(index,index+4)]};}
         }
         if (cases % 32 === 0) yield { cases };
       }

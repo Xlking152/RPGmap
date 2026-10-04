@@ -21,7 +21,7 @@ function fakeDocument() {
   const canvases = [];
   return { canvases, createElement() {
     const context = { calls: [] };
-    for (const name of ['setTransform', 'clearRect', 'beginPath', 'arc', 'save', 'restore', 'clip',
+    for (const name of ['setTransform', 'clearRect', 'beginPath', 'rect', 'arc', 'save', 'restore', 'clip',
       'fill', 'moveTo', 'lineTo', 'closePath', 'fillRect', 'drawImage']) {
       context[name] = (...args) => context.calls.push({ name, args });
     }

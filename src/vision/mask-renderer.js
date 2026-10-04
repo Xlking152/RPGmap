@@ -39,7 +39,7 @@ export function createContinuousMaskRenderer(documentNode) {
       Math.round(bounds.width * dpr), Math.round(bounds.height * dpr),
       bounds.x, bounds.y, bounds.width, bounds.height);
   }
-  function size(surface, width, height, dpr) {
+  function size(surface, width, height, dpr, bounds = null) {
     const pixelsX = Math.ceil(width * dpr), pixelsY = Math.ceil(height * dpr);
     if (surface.canvas.width !== pixelsX || surface.canvas.height !== pixelsY) {
       surface.canvas.width = pixelsX; surface.canvas.height = pixelsY;
@@ -47,8 +47,15 @@ export function createContinuousMaskRenderer(documentNode) {
     const context = surface.context;
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.globalCompositeOperation = 'source-over';
-    context.clearRect(0, 0, width, height);
+    if (bounds) context.clearRect(bounds.x, bounds.y, bounds.width, bounds.height);
+    else context.clearRect(0, 0, width, height);
     context.fillStyle = '#fff';
+  }
+  function clipSurface(context, bounds) {
+    context.save();
+    if (bounds) {
+      context.beginPath(); context.rect(bounds.x, bounds.y, bounds.width, bounds.height); context.clip();
+    }
   }
   function circle(context, viewport, x, y, radius) {
     const point = viewport.project(x, y);
@@ -88,6 +95,7 @@ export function createContinuousMaskRenderer(documentNode) {
       const bounds = continuousMaskBounds(viewport, source, radiusUnits, width, height, dpr);
       if (!bounds.width || !bounds.height) return;
       const aligned = Number.isInteger(width * dpr) && Number.isInteger(height * dpr);
+      const paintBounds = aligned ? bounds : null;
       if (alignedViewport !== aligned) { resetMasks(); alignedViewport = aligned; }
       currentLightingKey = aligned ? lightingKey : null;
       // Keep the legacy single-surface lifecycle when fractional backing
@@ -95,7 +103,8 @@ export function createContinuousMaskRenderer(documentNode) {
       const cacheKind = aligned ? kind : 'shared';
       const mask = masks[cacheKind] ||= canvasSurface(documentNode);
       if (preparedKeys[cacheKind] !== key) {
-        size(mask, width, height, dpr);
+        size(mask, width, height, dpr, paintBounds);
+        clipSurface(mask.context, paintBounds);
         if (!geometry.blocked) {
           const context = mask.context;
           circle(context, viewport, source.x, source.y, radiusUnits);
@@ -112,7 +121,8 @@ export function createContinuousMaskRenderer(documentNode) {
               context.drawImage(lightUnion(regions, false, viewport, width, height, dpr), 0, 0, width, height);
               // Build the normal-light union separately, then intersect it with
               // the same circle/shadow mask so light cannot reveal behind walls.
-              size(tint, width, height, dpr);
+              size(tint, width, height, dpr, paintBounds);
+              clipSurface(tint.context, paintBounds);
               circle(tint.context, viewport, source.x, source.y, radiusUnits); tint.context.fill();
               tint.context.globalCompositeOperation = 'destination-out';
               for (const rings of geometry.shadows || []) polygon(tint.context, viewport, rings);
@@ -122,6 +132,7 @@ export function createContinuousMaskRenderer(documentNode) {
               tint.context.restore();
               tint.context.globalCompositeOperation = 'destination-in';
               tint.context.drawImage(lightUnion(regions, true, viewport, width, height, dpr), 0, 0, width, height);
+              tint.context.restore();
               context.globalCompositeOperation = 'source-over'; context.drawImage(tint.canvas, 0, 0, width, height);
             } else {
               context.globalCompositeOperation = 'destination-in';
@@ -129,15 +140,19 @@ export function createContinuousMaskRenderer(documentNode) {
             }
           }
         }
+        mask.context.restore();
         preparedKeys[cacheKind] = key;
       }
       if (target.globalCompositeOperation === 'destination-out') drawPrepared(target, mask.canvas, bounds, width, height, dpr);
       else {
-        size(tint, width, height, dpr);
+        size(tint, width, height, dpr, paintBounds);
+        clipSurface(tint.context, paintBounds);
         tint.context.drawImage(mask.canvas, 0, 0, width, height);
         tint.context.globalCompositeOperation = 'source-in';
         tint.context.fillStyle = target.fillStyle;
-        tint.context.fillRect(0, 0, width, height);
+        if (paintBounds) tint.context.fillRect(paintBounds.x, paintBounds.y, paintBounds.width, paintBounds.height);
+        else tint.context.fillRect(0, 0, width, height);
+        tint.context.restore();
         drawPrepared(target, tint.canvas, bounds, width, height, dpr);
       }
     },
