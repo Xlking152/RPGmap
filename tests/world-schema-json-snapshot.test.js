@@ -35,7 +35,7 @@ test('dense snapshots preserve complete acceptance, serialized bytes and frozen 
   }
 });
 
-test('ordinary dense Arrays use one stable type decision instead of repeated per-child checks', () => {
+test('ordinary dense Arrays use preparation and visitor type decisions instead of repeated per-child checks', () => {
   const count = factory => {
     const value = { payload: Array.from({ length: 500 }, (_, index) => index) };
     const original = Array.isArray;
@@ -46,7 +46,7 @@ test('ordinary dense Arrays use one stable type decision instead of repeated per
     } finally { Array.isArray = original; }
     return checks;
   };
-  assert.equal(count(createCanonicalWorldValidator), 1);
+  assert.equal(count(createCanonicalWorldValidator), 2);
   assert.equal(count(previousValidator), 1_502);
 });
 
@@ -167,6 +167,86 @@ test('prototype map/iterator and species hooks keep their original access and ex
       }
     };
     assert.deepEqual(exercise(createCanonicalWorldValidator), exercise(previousValidator));
+  }
+});
+
+test('child getters changing iteration hooks during a dense Array visit keep the old rejection and close behavior', () => {
+  const iteratorDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
+  const iteratorPrototype = Object.getPrototypeOf(Reflect.apply(iteratorDescriptor.value, [], []));
+  const nextDescriptor = Object.getOwnPropertyDescriptor(iteratorPrototype, 'next');
+  const returnDescriptor = Object.getOwnPropertyDescriptor(iteratorPrototype, 'return');
+  for (const kind of ['iterator', 'next', 'return']) {
+    const exercise = factory => {
+      const trace = [], child = {};
+      const value = { payload: [child, kind === 'return' ? Infinity : 2] };
+      Object.defineProperty(child, 'trigger', { enumerable: true, get() {
+        trace.push('child getter');
+        if (kind === 'iterator') Object.defineProperty(Array.prototype, Symbol.iterator, { ...iteratorDescriptor,
+          value: function () {
+            const source = Reflect.apply(iteratorDescriptor.value, this, []);
+            return { next() {
+              const step = Reflect.apply(nextDescriptor.value, source, []);
+              return !step.done && step.value === 2 ? { value: Infinity, done: false } : step;
+            }, return() { trace.push('iterator closed'); return { done: true }; } };
+          } });
+        if (kind === 'next') Object.defineProperty(iteratorPrototype, 'next', { ...nextDescriptor,
+          value: function () {
+            const step = Reflect.apply(nextDescriptor.value, this, []);
+            return !step.done && step.value === 2 ? { value: Infinity, done: false } : step;
+          } });
+        if (kind === 'return') Object.defineProperty(iteratorPrototype, 'return', { configurable: true,
+          get() { trace.push('return getter'); return function () { trace.push('return call'); return { done: true }; }; } });
+        return 'triggered';
+      } });
+      try { return { result: outcome(factory(), value, false), trace }; }
+      finally {
+        Object.defineProperty(Array.prototype, Symbol.iterator, iteratorDescriptor);
+        Object.defineProperty(iteratorPrototype, 'next', nextDescriptor);
+        if (returnDescriptor) Object.defineProperty(iteratorPrototype, 'return', returnDescriptor);
+        else delete iteratorPrototype.return;
+      }
+    };
+    const actual = exercise(createCanonicalWorldValidator), expected = exercise(previousValidator);
+    assert.deepEqual(actual, expected, kind);
+    assert.equal(actual.result.accepted, false);
+    assert.equal(actual.result.code, 'invalid_world');
+    if (kind === 'return') assert.ok(actual.trace.includes('return call'));
+  }
+});
+
+test('static ArrayIterator next, inherited return and changed prototype chains use the full old iterator path', () => {
+  const iterator = [][Symbol.iterator]();
+  const prototype = Object.getPrototypeOf(iterator), parent = Object.getPrototypeOf(prototype);
+  const nextDescriptor = Object.getOwnPropertyDescriptor(prototype, 'next');
+  const returnDescriptor = Object.getOwnPropertyDescriptor(prototype, 'return');
+  const parentReturn = Object.getOwnPropertyDescriptor(parent, 'return');
+  for (const kind of ['next-function', 'next-getter', 'return-function', 'return-getter', 'inherited-return', 'changed-chain']) {
+    const exercise = factory => {
+      const trace = [], value = { payload: [1, kind.includes('return') || kind === 'changed-chain' ? Infinity : 2] };
+      try {
+        if (kind === 'next-function') Object.defineProperty(prototype, 'next', { ...nextDescriptor,
+          value: function () { trace.push('next call'); return Reflect.apply(nextDescriptor.value, this, []); } });
+        if (kind === 'next-getter') Object.defineProperty(prototype, 'next', { configurable: true,
+          get() { trace.push('next getter'); return nextDescriptor.value; } });
+        if (kind === 'return-function') Object.defineProperty(prototype, 'return', { configurable: true,
+          value() { trace.push('return call'); return { done: true }; } });
+        if (kind === 'return-getter' || kind === 'inherited-return') Object.defineProperty(
+          kind === 'inherited-return' ? parent : prototype, 'return', { configurable: true,
+            get() { trace.push('return getter'); return function () { trace.push('return call'); return { done: true }; }; } });
+        if (kind === 'changed-chain') Object.setPrototypeOf(prototype, Object.create(parent, { return: {
+          configurable: true, value() { trace.push('changed chain return'); return { done: true }; },
+        } }));
+        return { result: outcome(factory(), value, false), trace };
+      } finally {
+        Object.setPrototypeOf(prototype, parent);
+        Object.defineProperty(prototype, 'next', nextDescriptor);
+        if (returnDescriptor) Object.defineProperty(prototype, 'return', returnDescriptor);
+        else delete prototype.return;
+        if (parentReturn) Object.defineProperty(parent, 'return', parentReturn);
+        else delete parent.return;
+      }
+    };
+    assert.deepEqual(exercise(createCanonicalWorldValidator), exercise(previousValidator), kind);
   }
 });
 

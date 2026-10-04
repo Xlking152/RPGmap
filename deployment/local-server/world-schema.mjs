@@ -25,26 +25,79 @@ const standardArrayMethods = typeof standardArrayMap === 'function'
   && typeof standardArraySpecies === 'function'
   && Function.prototype.toString.call(standardArraySpecies) === 'function get [Symbol.species]() { [native code] }';
 
+const standardArrayIteratorState = (() => {
+  if (!standardArrayMethods) return null;
+  try {
+    const iterator = Reflect.apply(standardArrayIterator, [], []);
+    const prototype = Object.getPrototypeOf(iterator);
+    const next = Object.getOwnPropertyDescriptor(prototype, 'next')?.value;
+    if (typeof next !== 'function' || Function.prototype.toString.call(next) !== 'function next() { [native code] }'
+      || Reflect.apply(next, iterator, []).done !== true) return null;
+    let chain = null, current = prototype;
+    while (current) {
+      const parent = Object.getPrototypeOf(current);
+      chain = { prototype: current, parent, next: chain };
+      current = parent;
+    }
+    return { prototype, next, chain };
+  } catch { return null; }
+})();
+
+function standardArrayIteration() {
+  const state = standardArrayIteratorState;
+  if (!state || Object.getOwnPropertyDescriptor(state.prototype, 'next')?.value !== state.next) return false;
+  for (let entry = state.chain; entry; entry = entry.next) {
+    if (Object.getPrototypeOf(entry.prototype) !== entry.parent
+      || Object.getOwnPropertyDescriptor(entry.prototype, 'return')) return false;
+  }
+  return true;
+}
+
+// This proof is local to one snapshot attempt. An accepted immutable document
+// needs no scan; a new graph must contain only ordinary own JSON data, so no
+// child can change iterator hooks while the optimized loop is running.
+function readOnlyJsonGraph(value, immutableData) {
+  const visiting = new WeakSet(), accepted = new WeakSet();
+  let nodes = 0;
+  const inspect = (current, depth) => {
+    if (++nodes > WORLD_LIMITS.maxNodes || depth > WORLD_LIMITS.maxDepth) return false;
+    if (current === null || typeof current === 'string' || typeof current === 'boolean') return true;
+    if (typeof current === 'number') return Number.isFinite(current);
+    if (!current || typeof current !== 'object' || types.isProxy(current)) return false;
+    if (immutableData.has(current) || accepted.has(current)) return true;
+    if (visiting.has(current)) return false;
+    const arrayValue = Array.isArray(current), prototype = Object.getPrototypeOf(current);
+    if (arrayValue ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
+    const keys = Reflect.ownKeys(current), descriptors = Object.getOwnPropertyDescriptors(current);
+    if (arrayValue && (keys.length !== current.length + 1 || keys[current.length] !== 'length')) return false;
+    visiting.add(current);
+    for (let index = 0; index < keys.length; index++) {
+      const key = keys[index], descriptor = descriptors[key];
+      if (typeof key !== 'string' || !Object.hasOwn(descriptor, 'value')
+        || !(arrayValue && key === 'length') && !descriptor.enumerable
+        || !inspect(descriptor.value, depth + 1)) return false;
+    }
+    visiting.delete(current);
+    accepted.add(current);
+    return true;
+  };
+  return inspect(value, 0);
+}
+
 // map() reads every Array value before the visitor descends into any child.
 // Keep that snapshot order, but avoid a separate [index, value] allocation for
 // every dense ordinary data slot. Descriptor checks do not read a map getter;
 // unusual Arrays retain the complete original map/iterator path below.
-function denseArrayDataSnapshot(value) {
-  if (!standardArrayMethods || types.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
+function denseArrayDataSnapshot(value, immutableData) {
+  if (!standardArrayMethods || !standardArrayIteration()
+    || types.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
   const map = Object.getOwnPropertyDescriptor(Array.prototype, 'map');
   const iterator = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
   const constructor = Object.getOwnPropertyDescriptor(Array.prototype, 'constructor');
   const species = Object.getOwnPropertyDescriptor(Array, Symbol.species);
   if (map?.value !== standardArrayMap || iterator?.value !== standardArrayIterator
     || constructor?.value !== Array || species?.get !== standardArraySpecies || species?.set) return null;
-  const keys = Reflect.ownKeys(value), length = value.length;
-  // Ordinary Array keys put all own indexes before length and any extra key
-  // after it. Together these conditions also exclude holes and Symbols.
-  if (keys.length !== length + 1 || keys[length] !== 'length') return null;
-  for (let index = 0; index < length; index++) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, index);
-    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) return null;
-  }
+  if (!readOnlyJsonGraph(value, immutableData)) return null;
   // Native map creates own data slots, preserving its species/property rules
   // and avoiding inherited numeric setters while allocating only this copy.
   return value.map(entry => entry);
@@ -284,7 +337,7 @@ export function createCanonicalWorldValidator() {
       let entries, dataSnapshot = null;
       if (Array.isArray(current)) {
         if (current.length > WORLD_LIMITS.maxArrayLength) fail(`${path} exceeds maximum length`, 'world_limit');
-        dataSnapshot = denseArrayDataSnapshot(current);
+        dataSnapshot = denseArrayDataSnapshot(current, immutableData);
         entries = dataSnapshot || current.map((entry, index) => [index, entry]);
       } else {
         if (!current || typeof current !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(current))) fail(`${path} is not JSON-safe`);
