@@ -22,17 +22,26 @@ const canonicalTokenMaps = new WeakMap();
 const movementPartyRelations = new WeakMap();
 const targetedMovementRelations = new WeakMap();
 const projectionCollectionProofs = new WeakMap();
+const fullProjectionCollectionProofs = new WeakMap();
 const uniqueProjectionCollections = new WeakSet();
-function registerUniqueProjectionCollection(collection) {
+function registerUniqueProjectionCollection(collection, previous = null) {
   if (!Array.isArray(collection)) return;
   const ids = new Set();
-  for (const item of collection) {
+  let sameOrder = Array.isArray(previous) && previous.length === collection.length && uniqueProjectionCollections.has(previous);
+  const indices = [];
+  for (let index = 0; index < collection.length; index++) {
+    const item = collection[index];
     if (!item || !Object.hasOwn(item, 'id')) return;
     const id = String(item.id);
     if (ids.has(id)) return;
     ids.add(id);
+    if (sameOrder) {
+      if (String(previous[index]?.id) !== id) sameOrder = false;
+      else if (previous[index] !== item) indices.push(index);
+    }
   }
   uniqueProjectionCollections.add(collection);
+  return sameOrder ? Object.freeze({ before: previous, indices: Object.freeze(indices) }) : null;
 }
 const EMPTY_ACTOR_SELECTION = Object.freeze([]);
 const audienceKey = context => JSON.stringify([context.role, context.userId,
@@ -341,6 +350,10 @@ function targetedMovementProjection(state, rawState, context, previousProjection
 
 export function targetedProjectionCollectionChanges(beforeProjection, projection) {
   return projectionCollectionProofs.get(projection)?.get(beforeProjection) || null;
+}
+export function projectionCollectionChanges(beforeProjection, projection) {
+  return targetedProjectionCollectionChanges(beforeProjection, projection)
+    || fullProjectionCollectionProofs.get(projection)?.get(beforeProjection) || null;
 }
 
 function tokenControlled(token, actor, context) {
@@ -787,12 +800,17 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const targetedIndex = vision && context.trustedProjection && typeof context.isCanonicalData === 'function'
     && context.isCanonicalData(rawState) ? new Map() : null;
   // A light move changes illumination, not the rays from a stationary viewer.
-  // Reuse only this recipient's previous geometric result. Own movement, host
-  // exemption, geometry, map scale or any source descriptor change resets it.
-  const rayContext = targetedIndex ? sourceUnchanged && mapMetricsUnchanged && mapPackageUnchanged
-    && previousPolicies?.rayContext?.occluders === sourceOccluders
-    ? previousPolicies.rayContext
-    : { occluders: sourceOccluders, cache: { entries: new WeakMap(), count: 0 } } : null;
+  // Keep at most two positions for this recipient and source. Geometry, map
+  // scale and non-position source descriptors must match; host exemptions
+  // also need the exact derived occluder collection for that position.
+  const rayDescriptor = JSON.stringify({ ...vision, x: undefined, y: undefined });
+  const previousRayContexts = targetedIndex && movementCache && sourceIdentityUnchanged
+    && mapMetricsUnchanged && mapPackageUnchanged && previousPolicies.occluders === occluders
+    && previousPolicies.rayDescriptor === rayDescriptor ? previousPolicies.rayContexts || [] : [];
+  const rayContext = targetedIndex ? previousRayContexts.find(entry => entry.occluders === sourceOccluders
+    && Object.is(entry.x, vision.x) && Object.is(entry.y, vision.y))
+    || { x: vision.x, y: vision.y, occluders: sourceOccluders, cache: { entries: new WeakMap(), count: 0 } } : null;
+  const rayContexts = rayContext ? [rayContext, ...previousRayContexts.filter(entry => entry !== rayContext)].slice(0, 2) : [];
   const visibleTokenIds = new Set();
   const privateActorIds = new Set();
   const referencedActorIds = new Set();
@@ -979,13 +997,25 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     sourceTokenId: String(context.visionSourceTokenId || ''), metersPerUnit,
     mapPackage: context.mapPackage, policies, partyIds: Object.freeze([...parties]),
     partyInputs: partyInputs || viewerPartyInputs(rawWorld),
-    targetedIndex, targetedState: targetedIndex ? rawState : null, occluders, lights, rayContext,
+    targetedIndex, targetedState: targetedIndex ? rawState : null, occluders, lights, rayDescriptor, rayContexts,
   });
   if (targetedIndex) {
-    for (const field of ['actors', 'statusDefinitions', 'journals']) registerUniqueProjectionCollection(world[field]);
-    for (const scene of world.scenes || []) {
-      for (const field of ['tokens', 'markers', 'attackAreas', 'sceneEvents', 'occlusionShapes']) registerUniqueProjectionCollection(scene[field]);
+    // Full projection already checks every selected ID. Use that same pass
+    // to prove leaf ordering, instead of rebuilding ID maps in Document diff.
+    // Membership/reordering/collisions retain the complete original fallback.
+    const collections = new Map();
+    const remember = (after, before) => {
+      const proof = registerUniqueProjectionCollection(after, before);
+      if (proof) collections.set(after, proof);
+    };
+    for (const field of ['actors', 'statusDefinitions', 'journals']) remember(world[field], previousProjection?.preferences?.worldV2?.[field]);
+    for (let index = 0; index < world.scenes.length; index++) {
+      const scene = world.scenes[index], oldScene = previousProjection?.preferences?.worldV2?.scenes?.[index];
+      for (const field of ['tokens', 'markers', 'attackAreas', 'sceneEvents', 'occlusionShapes']) {
+        remember(scene[field], String(oldScene?.id) === String(scene.id) ? oldScene[field] : null);
+      }
     }
+    if (movementCache && collections.size) fullProjectionCollectionProofs.set(state, new WeakMap([[previousProjection, collections]]));
   }
   state.markers = clone(active?.markers || []);
   state.attackAreas = clone(active?.attackAreas || []);

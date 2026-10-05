@@ -52,7 +52,7 @@ import {
   motionPathPreciselyVisible,
   projectStateForAudience,
   advanceFogProjectionMetadata,
-  targetedProjectionCollectionChanges,
+  projectionCollectionChanges,
   serverRuleset,
   sphereGroundRadiusMeters,
   sceneExplorationContext,
@@ -1122,7 +1122,7 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
       type: documentBatch ? 'document.batch.committed' : 'world.operation.committed', operationId, baseRevision, revision, updatedAt,
       changes: fogOnly ? createFogDocumentChanges(beforeProjection, afterProjection, { fog })
         : createDocumentChanges(beforeProjection, afterProjection, null, { motion, fog,
-          collectionChanges: targetedProjectionCollectionChanges(beforeProjection, afterProjection) }),
+          collectionChanges: projectionCollectionChanges(beforeProjection, afterProjection) }),
       ...(motion.length ? { motion } : {}),
       originSessionId,
       audienceRevision: session.audienceRevision,

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectStateForAudience, targetedProjectionCollectionChanges } from '../src/vision/audience.js';
+import { projectStateForAudience, targetedProjectionCollectionChanges, projectionCollectionChanges } from '../src/vision/audience.js';
 import { projectStateForAudience as previousProjection } from './fixtures/audience-before-targeted-movement.mjs';
 import { createCanonicalWorldValidator } from '../deployment/local-server/world-schema.mjs';
 import { createDocumentChanges, createDocumentChangesFull } from '../src/documents/changes.js';
@@ -88,6 +88,9 @@ function checkedProjection({ validate, before, projected, context }, after, ids,
   assert.equal(Boolean(collectionChanges), expectHit);
   const motion = ids.map(tokenId => ({ tokenId, sceneId: 'scene' }));
   assert.deepEqual(createDocumentChanges(projected, result, null, { motion, collectionChanges }),
+    createDocumentChangesFull(projected, oracle, null, { motion }));
+  assert.deepEqual(createDocumentChanges(projected, result, null, { motion,
+    collectionChanges: projectionCollectionChanges(projected, result) }),
     createDocumentChangesFull(projected, oracle, null, { motion }));
   assert.equal(targetedProjectionCollectionChanges({ ...projected }, result), null);
   assert.equal(targetedProjectionCollectionChanges(projected, { ...result }), null);
@@ -235,6 +238,32 @@ test('stationary private rays survive light moves while illumination and source/
     assert.equal(result.hits, 0);
     assert.deepEqual(result.projection, previousProjection(after, scope));
   }
+});
+
+test('returning to the previous position reuses private rays while full projection proves its exact document pair', () => {
+  const state = setup(), moved = patched(state.before, { tokenId: 'source-a', tokenPatch: { x: 40 } });
+  state.validate(moved);
+  const middle = projectStateForAudience(moved, { ...state.context,
+    movementCache: { beforeState: state.before, previousProjection: state.projected, tokenIds: new Set(['source-a']) } });
+  const returned = patched(moved, { tokenId: 'source-a', tokenPatch: { x: 50 } });
+  state.validate(returned);
+  const originalGet = WeakMap.prototype.get;
+  let hits = 0, projection;
+  try {
+    WeakMap.prototype.get = function (key) {
+      const value = originalGet.call(this, key); if (typeof value === 'boolean') hits++; return value;
+    };
+    projection = projectStateForAudience(returned, { ...state.context,
+      movementCache: { beforeState: moved, previousProjection: middle, tokenIds: new Set(['source-a']) } });
+  } finally { WeakMap.prototype.get = originalGet; }
+  assert.ok(hits > 0);
+  const oracle = previousProjection(returned, state.context);
+  assert.deepEqual(projection, oracle);
+  const collectionChanges = projectionCollectionChanges(middle, projection);
+  assert.ok(collectionChanges);
+  assert.deepEqual(createDocumentChanges(middle, projection, null, { collectionChanges }), createDocumentChangesFull(middle, oracle));
+  assert.equal(projectionCollectionChanges({ ...middle }, projection), null);
+  assert.equal(projectionCollectionChanges(middle, { ...projection }), null);
 });
 
 test('source, light, permission, map scale, opaque identity and missing metadata cannot take targeted path', () => {
