@@ -9,6 +9,7 @@ import {
   tokensInsideFeature,
 } from './ui-model.js';
 import { describeActor } from '../actor/index.js';
+import { createOcclusionEditor } from './occlusion-editor.js';
 
 const CORE_BUTTON_CLASS = 'core-interaction-action';
 const STYLE_ID = 'rpgmap-core-interaction-style';
@@ -260,6 +261,13 @@ export function createFeatureInteractionSystem() {
         panel.replaceChildren();
         const section = createElement(documentNode, 'div', 'section');
         section.append(createElement(documentNode, 'h2', '', 'Feature 检查'));
+        if (api.occlusionEditor?.canEdit()) {
+          const editOcclusion = createElement(documentNode, 'button', 'small-button', '编辑遮挡 Tag 与轮廓');
+          editOcclusion.type = 'button';
+          editOcclusion.dataset.occlusionOpen = '';
+          editOcclusion.addEventListener('click', () => api.occlusionEditor.open().catch(error => api.showToast?.(error.message, 'error')));
+          section.append(editOcclusion);
+        }
         if (!selectedFeatureId) {
           section.append(createElement(documentNode, 'p', '', '启用检查工具后，点击任何声明 inspect Capability 的地图 Feature。'));
           const enable = createElement(documentNode, 'button', 'small-button primary', '启用检查工具');
@@ -376,8 +384,10 @@ export function createFeatureInteractionSystem() {
         get selectedTokenId() { return selectedTokenId(); },
       });
       api.interaction = interaction;
+      createOcclusionEditor(api);
 
       const genericPanInspect = event => {
+        if (api.occlusionEditor?.active) return;
         const activeTool = shell?.querySelector?.('[data-tool].active')?.dataset?.tool;
         if (activeTool !== 'pan') return;
         const point = latLngToWorld(event.latlng, api.mapPackage.height);

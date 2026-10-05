@@ -5,6 +5,9 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
+import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
+import { browserBenchmarkMovementTarget, browserBenchmarkPhaseOperations } from './browser-benchmark-movement.mjs';
 
 if (process.platform !== 'win32') throw new Error('Browser performance benchmark requires Windows');
 
@@ -16,11 +19,18 @@ const browserName = String(process.env.RPGMAP_BENCHMARK_BROWSER || 'edge').toLow
 const headless = process.env.RPGMAP_BROWSER_BENCHMARK_HEADLESS === '1';
 const phaseSeconds = Math.max(5, Number(process.env.RPGMAP_BROWSER_BENCHMARK_SECONDS) || 60);
 const shouldAssert = process.argv.includes('--assert');
+const profileSessionIndex = process.env.RPGMAP_BROWSER_BENCHMARK_PROFILE_SESSION === undefined
+  ? null : Number(process.env.RPGMAP_BROWSER_BENCHMARK_PROFILE_SESSION);
 const GM_SECRET = 'BROWSER-BENCHMARK-GM';
 const JOIN_CODE = '246810';
 const ACTOR_COUNT = 100;
 const TOKEN_COUNT = Math.max(1, Math.min(500, Number(process.env.RPGMAP_BROWSER_BENCHMARK_TOKENS) || 500));
 const SESSION_COUNT = Math.max(1, Math.min(7, Number(process.env.RPGMAP_BROWSER_BENCHMARK_SESSIONS) || 7));
+if (profileSessionIndex !== null && (!Number.isInteger(profileSessionIndex)
+  || profileSessionIndex < 0 || profileSessionIndex >= SESSION_COUNT)) {
+  throw new Error('Diagnostic profile session index is invalid');
+}
+if (shouldAssert && profileSessionIndex !== null) throw new Error('Diagnostic profiles cannot be used for acceptance');
 const WAIT_MS = 60_000;
 const SETUP_WAIT_MS = 20_000;
 const CDP_WAIT_MS = Math.max(10_000, Number(process.env.RPGMAP_BROWSER_BENCHMARK_CDP_TIMEOUT_MS) || 60_000);
@@ -135,6 +145,7 @@ function fixture(definitions) {
 }
 
 async function launchServer({ port, mapDir }) {
+  const startedAt = performance.now();
   const child = spawn(process.execPath, [path.join(packageRoot, 'server.mjs')], {
     cwd: packageRoot,
     env: {
@@ -150,19 +161,26 @@ async function launchServer({ port, mapDir }) {
   child.stderr.on('data', chunk => { output += chunk; });
   await retry(async () => {
     if (child.exitCode !== null) throw new Error(`Server exited ${child.exitCode}: ${output.slice(-2000)}`);
+    // The listening line belongs to this child; an old process still shutting
+    // down on the same port must never satisfy the new server's health check.
+    if (!output.includes(`Local   : http://127.0.0.1:${port}`)
+      && !new RegExp(`Local\\s+: http://127\\.0\\.0\\.1:${port}(?:\\s|$)`).test(output)) return false;
     const response = await fetch(`http://127.0.0.1:${port}/api/health`).catch(() => null);
     return response?.ok;
   }, 'benchmark server');
-  return { child, output: () => output };
+  return { child, output: () => output, startupMs: performance.now() - startedAt };
 }
 
 async function stopServer(server) {
-  if (!server || server.child.exitCode !== null) return;
+  const startedAt = performance.now();
+  if (!server || server.child.exitCode !== null) return { shutdownMs: 0, forcedKill: false };
   const exited = new Promise(resolve => server.child.once('exit', resolve));
   if (server.child.connected) server.child.send('rpgmap.shutdown', () => {});
   else server.child.kill('SIGTERM');
   await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 3000))]);
-  if (server.child.exitCode === null) server.child.kill('SIGKILL');
+  const forcedKill = server.child.exitCode === null;
+  if (forcedKill) { server.child.kill('SIGKILL'); await exited; }
+  return { shutdownMs: performance.now() - startedAt, forcedKill };
 }
 
 class BrowserSession {
@@ -180,7 +198,7 @@ class BrowserSession {
       '--disable-backgrounding-occluded-windows', '--disable-features=CalculateNativeWinOcclusion',
       '--window-size=1920,1080', `--window-position=${(this.index % 3) * 32},${Math.floor(this.index / 3) * 32}`,
       `--remote-debugging-port=${this.port}`, `--user-data-dir=${this.profile}`, this.url,
-    ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: false });
+    ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: headless });
     this.stderr = '';
     this.process.stderr.setEncoding('utf8');
     this.process.stderr.on('data', chunk => { this.stderr += chunk; });
@@ -263,6 +281,41 @@ class BrowserSession {
       return true;
     })()`);
   }
+  async moveToken(tokenIndex, phaseName) {
+    const tokenId = `browser-token-${tokenIndex}`;
+    return this.evaluate(`(async () => {
+      const api = document.querySelector('#app').rpgMapApp;
+      const before = api.tokens.get('${tokenId}');
+      const target = (${browserBenchmarkMovementTarget.toString()})(before, ${tokenIndex});
+      if (Number(before.x) === target.x && Number(before.y) === target.y) {
+        throw new Error('Benchmark target must differ from the current Token position');
+      }
+      await api.world.performOperations([{
+        type: 'token.move', payload: { sceneId: 'scene-northern-song-lanzhou-1104', tokenId: '${tokenId}',
+          placement: 'map', x: target.x, y: target.y, movementMode: 'walk' }
+      }], { source: 'benchmark:${phaseName}' });
+      const after = api.tokens.get('${tokenId}');
+      if (!after || Number(after.x) !== target.x || Number(after.y) !== target.y) {
+        throw new Error('Benchmark Token did not reach the committed target');
+      }
+      return { tokenId: '${tokenId}', from: { x: Number(before.x), y: Number(before.y) },
+        to: target, sourceTokenId: api.vision.getSource() };
+    })()`);
+  }
+  async visionSnapshot(tokenIndex) {
+    const tokenId = `browser-token-${tokenIndex}`;
+    return this.evaluate(`(() => {
+      const api = document.querySelector('#app').rpgMapApp;
+      const explored = api.vision.getExplored('browser-party');
+      const rows = Object.values(explored?.rows || {});
+      const canvas = document.querySelector('.rpgmap-vision-fog-perception');
+      return { tokenId: '${tokenId}', sourceTokenId: api.vision.getSource(),
+        source: api.vision.getVisibleRegion(), feedback: api.vision.getFeedbackState(),
+        token: api.tokens.get('${tokenId}'), fogRows: rows.length,
+        fogSpans: rows.reduce((count, spans) => count + spans.length, 0),
+        canvasReady: Boolean(canvas && !canvas.hidden && canvas.width > 0 && canvas.height > 0) };
+    })()`);
+  }
   async screenshot(label) {
     const capture = await this.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     await writeFile(path.join(this.outputRoot, `${label}-${this.name.replaceAll(' ', '-').toLowerCase()}.png`), Buffer.from(capture.data, 'base64'));
@@ -281,6 +334,14 @@ class BrowserSession {
 function metric(snapshot, name) { return snapshot?.metrics?.[name] || null; }
 
 function validatePhase(phase) {
+  const expectedLighting = phase.name === 'los-light' ? 'dark' : 'normal';
+  const expectedLights = phase.name === 'los-light' ? Math.min(3, TOKEN_COUNT) : 0;
+  if (phase.actualMoves !== phase.operations || phase.scene?.lighting !== expectedLighting
+    || phase.scene?.lineOfSightEnabled !== true || phase.scene?.enabledTokenLights !== expectedLights) {
+    throw new Error(`${phase.name} movement/light fixture gate failed: ${JSON.stringify({
+      operations: phase.operations, actualMoves: phase.actualMoves, scene: phase.scene,
+    })}`);
+  }
   for (const session of phase.sessions) {
     const frame = metric(session.diagnostics, 'frame');
     const input = metric(session.diagnostics, 'input.frame');
@@ -288,8 +349,30 @@ function validatePhase(phase) {
     if (!frame || session.diagnostics.averageFps < 58 || frame.p95 > 20) {
       throw new Error(`${phase.name}/${session.name} frame gate failed: ${JSON.stringify({ fps: session.diagnostics.averageFps, frame })}`);
     }
-    if (!input || input.p95 > 16.7) throw new Error(`${phase.name}/${session.name} input gate failed: ${JSON.stringify(input)}`);
+    if (session.inputStimuli !== phase.operations || !input || input.count < session.inputStimuli || input.p95 > 16.7) {
+      throw new Error(`${phase.name}/${session.name} input gate failed: ${JSON.stringify({ stimuli: session.inputStimuli, operations: phase.operations, input })}`);
+    }
     if (longtask?.max > 100) throw new Error(`${phase.name}/${session.name} long task gate failed: ${JSON.stringify(longtask)}`);
+    if (session.vision) {
+      const { vision, moves } = session;
+      const matches = (left, right) => Number.isFinite(Number(left)) && Number.isFinite(Number(right))
+        && Math.abs(Number(left) - Number(right)) <= 1e-6;
+      const drawCount = metric(session.diagnostics, 'vision.draw')?.count || 0;
+      const workerCount = metric(session.diagnostics, 'vision.worker')?.count || 0;
+      const feedbackCount = metric(session.diagnostics, 'vision.feedback')?.count || 0;
+      if (!moves || session.sourceMismatches !== 0
+        || vision.sourceTokenId !== vision.tokenId || vision.source?.tokenId !== vision.tokenId
+        || vision.source?.lineOfSightEnabled !== true || vision.source?.lighting !== expectedLighting
+        || !vision.canvasReady || vision.fogRows <= 0 || vision.fogSpans <= 0
+        || !matches(vision.source?.x, vision.token?.x) || !matches(vision.source?.y, vision.token?.y)
+        || vision.feedback?.rendered !== true || !matches(vision.feedback?.source?.x, vision.token?.x)
+        || !matches(vision.feedback?.source?.y, vision.token?.y)
+        || drawCount < Math.ceil(moves / 2) || workerCount < 1 || feedbackCount < 1) {
+        throw new Error(`${phase.name}/${session.name} moving vision/Fog validity failed: ${JSON.stringify({
+          moves, sourceMismatches: session.sourceMismatches, drawCount, workerCount, feedbackCount, vision,
+        })}`);
+      }
+    }
   }
   const confirms = phase.sessions.map(session => metric(session.diagnostics, 'network.confirm')).filter(Boolean);
   if (!confirms.length || Math.max(...confirms.map(value => value.p95)) > 60) {
@@ -299,11 +382,12 @@ function validatePhase(phase) {
 
 const port = await reservePort();
 const mapDir = await mkdtemp(path.join(os.tmpdir(), 'rpgmap-browser-performance-world-'));
-const outputRoot = path.join(root, 'output', 'playwright', 'v2.4.0-seven-session');
+const outputRoot = path.join(root, 'output', 'playwright', `v${packageJson.version}-seven-session`);
 await mkdir(outputRoot, { recursive: true });
 let server = null;
 let setupSocket = null;
 const sessions = [];
+const buildInfo = await benchmarkBuildInfo(root, packageRoot);
 
 try {
   server = await launchServer({ port, mapDir });
@@ -313,7 +397,7 @@ try {
   setupSocket = new JsonSocket(`ws://127.0.0.1:${port}/ws`);
   await setupSocket.open();
   const welcome = setupSocket.wait(message => message.type === 'welcome', 'GM welcome');
-  setupSocket.send({ type: 'hello', ...schemas, name: 'Benchmark Setup', requestedRole: 'gm', gmSecret: GM_SECRET, joinCode: JOIN_CODE });
+  setupSocket.send({ type: 'hello', capabilities: { occlusion: 1 }, ...schemas, name: 'Benchmark Setup', requestedRole: 'gm', gmSecret: GM_SECRET, joinCode: JOIN_CODE });
   await welcome;
   console.error('[browser-benchmark] setup GM connected');
   const { INFINITE_HORROR_STATUS_DEFINITIONS } = await import(pathToFileURL(
@@ -354,73 +438,144 @@ try {
   await new Promise(resolve => setTimeout(resolve, 5000));
   console.error('[browser-benchmark] foreground sessions warmed up');
 
-  async function runPhase(name, lineOfSightEnabled) {
+  async function runPhase(name, lighting) {
     console.error(`[browser-benchmark] ${name} phase started (${phaseSeconds}s)`);
     const gm = sessions[0];
-    await gm.evaluate(`document.querySelector('#app').rpgMapApp.world.performOperations([{
-      type:'scene.settings.patch', payload:{sceneId:'scene-northern-song-lanzhou-1104',patch:{lineOfSightEnabled:${lineOfSightEnabled}}}
-    }],{source:'benchmark:${name}'})`);
+    await gm.evaluate(`(() => {
+      const api = document.querySelector('#app').rpgMapApp;
+      const world = api.world.get();
+      const scene = world.scenes.find(item => item.id === 'scene-northern-song-lanzhou-1104');
+      const operations = (${browserBenchmarkPhaseOperations.toString()})(scene, ${TOKEN_COUNT}, '${lighting}');
+      return api.world.performOperations(operations, { source: 'benchmark:${name}' });
+    })()`);
     await new Promise(resolve => setTimeout(resolve, 1000));
     await Promise.all(sessions.map(session => session.resetDiagnostics()));
+    const profiledSession = profileSessionIndex === null ? null : sessions[profileSessionIndex];
+    if (profiledSession) {
+      await profiledSession.send('Profiler.enable');
+      await profiledSession.send('Profiler.setSamplingInterval', { interval: 1000 });
+      await profiledSession.send('Profiler.start');
+    }
     const started = performance.now();
     let step = 0;
+    let actualMoves = 0;
+    const movesBySession = new Map(sessions.map(session => [session.index, 0]));
+    const sourceMismatchBySession = new Map(sessions.map(session => [session.index, 0]));
+    const inputStimuliBySession = new Map(sessions.map(session => [session.index, 0]));
     while (performance.now() - started < phaseSeconds * 1000) {
       const cycleStarted = performance.now();
       const session = sessions.length > 1 ? sessions[1 + (step % (sessions.length - 1))] : sessions[0];
       const tokenIndex = Math.max(0, session.index - 1);
-      const tokenId = `browser-token-${tokenIndex}`;
-      const x = 2900 + tokenIndex * 2;
-      const y = 2500 + (step % 2 ? 0.5 : 0);
-      await session.evaluate(`document.querySelector('#app').rpgMapApp.world.performOperations([{
-        type:'token.move',payload:{sceneId:'scene-northern-song-lanzhou-1104',tokenId:'${tokenId}',placement:'map',x:${x},y:${y},movementMode:'walk'}
-      }],{source:'benchmark:${name}'})`);
-      await Promise.all(sessions.map(value => value.stimulateInput()));
+      const moved = await session.moveToken(tokenIndex, name);
+      if (moved.from.x !== moved.to.x || moved.from.y !== moved.to.y) actualMoves += 1;
+      movesBySession.set(session.index, movesBySession.get(session.index) + 1);
+      if (session.role === 'player' && moved.sourceTokenId !== moved.tokenId) {
+        sourceMismatchBySession.set(session.index, sourceMismatchBySession.get(session.index) + 1);
+      }
+      const stimulated = await Promise.all(sessions.map(value => value.stimulateInput()));
+      stimulated.forEach((value, index) => {
+        if (value) inputStimuliBySession.set(sessions[index].index, inputStimuliBySession.get(sessions[index].index) + 1);
+      });
       step += 1;
       const wait = Math.max(0, 500 - (performance.now() - cycleStarted));
       if (wait) await new Promise(resolve => setTimeout(resolve, wait));
     }
     await new Promise(resolve => setTimeout(resolve, 1000));
+    if (profiledSession) {
+      const { profile } = await profiledSession.send('Profiler.stop');
+      await writeFile(path.join(outputRoot, `${name}-browser-profile-${profileSessionIndex}.cpuprofile`),
+        `${JSON.stringify(profile)}\n`, 'utf8');
+      await profiledSession.send('Profiler.disable');
+    }
+    const sceneMetrics = await gm.evaluate(`(() => {
+      const world = document.querySelector('#app').rpgMapApp.world.get();
+      const scene = world.scenes.find(item => item.id === 'scene-northern-song-lanzhou-1104');
+      return { lighting: scene?.settings?.lighting || 'normal', lineOfSightEnabled: scene?.settings?.lineOfSightEnabled === true,
+        enabledTokenLights: (scene?.tokens || []).filter(token => token.light?.enabled === true).length };
+    })()`);
     const measurements = await Promise.all(sessions.map(async session => ({
-      name: session.name, diagnostics: await session.snapshot(), failures: session.failures, exceptions: session.exceptions,
+      name: session.name, moves: movesBySession.get(session.index),
+      sourceMismatches: sourceMismatchBySession.get(session.index),
+      inputStimuli: inputStimuliBySession.get(session.index),
+      diagnostics: await session.snapshot(),
+      vision: session.role === 'player' ? await session.visionSnapshot(session.index - 1) : null,
+      failures: session.failures, exceptions: session.exceptions,
     })));
-    const phase = { name, seconds: phaseSeconds, operations: step, sessions: measurements };
-    if (shouldAssert) validatePhase(phase);
+    const phase = { name, seconds: phaseSeconds, operations: step, actualMoves, scene: sceneMetrics, sessions: measurements };
+    await writeFile(path.join(outputRoot, `${name}.json`), `${JSON.stringify(phase, null, 2)}\n`, 'utf8');
     console.error(`[browser-benchmark] ${name} phase completed`);
     return phase;
   }
 
-  const phases = [await runPhase('normal', false), await runPhase('los-light', true)];
+  const phases = [await runPhase('normal', 'normal'), await runPhase('los-light', 'dark')];
   await sessions[0].screenshot('final');
   if (sessions[1]) await sessions[1].screenshot('final');
 
   const revisionsBefore = await Promise.all(sessions.map(session => session.evaluate(`document.querySelector('#app').rpgMapApp.multiplayer.getStatus().revision`)));
+  const recoveryStateExpression = `(() => {
+    const api = document.querySelector('#app').rpgMapApp;
+    const world = api.world.get();
+    const scene = world.scenes.find(item => item.id === world.activeSceneId);
+    return { worldId: world.id, sceneId: scene?.id, sourceTokenId: api.vision.getSource(),
+      tokens: scene?.tokens, fog: scene?.fog };
+  })()`;
+  const statesBefore = await Promise.all(sessions.map(session => session.evaluate(recoveryStateExpression)));
   const disconnectedAt = performance.now();
-  await stopServer(server); server = null;
+  const shutdown = await stopServer(server); server = null;
   await new Promise(resolve => setTimeout(resolve, 3000));
   server = await launchServer({ port, mapDir });
-  await Promise.all(sessions.map(session => retry(
-    () => session.evaluate(`document.querySelector('#app').rpgMapApp.multiplayer.getStatus().connected === true`),
-    `${session.name} reconnect`, 10_000,
-  )));
+  const reconnectedAt = await Promise.all(sessions.map(async session => {
+    await retry(() => session.evaluate(`(() => { const status = document.querySelector('#app').rpgMapApp.multiplayer.getStatus();
+      return status.connected === true && status.resuming === false && status.applyingRemote === false; })()`),
+    `${session.name} reconnect`, 10_000);
+    return performance.now() - disconnectedAt;
+  }));
   const recoveredMs = performance.now() - disconnectedAt;
   const revisionsAfter = await Promise.all(sessions.map(session => session.evaluate(`document.querySelector('#app').rpgMapApp.multiplayer.getStatus().revision`)));
-  const recovery = { outageDelayMs: 3000, recoveredMs, revisionsBefore, revisionsAfter };
-  if (shouldAssert && recoveredMs > 13_000) throw new Error(`Reconnect gate failed: ${recoveredMs}ms including the 3 second outage`);
-  if (shouldAssert && revisionsBefore.some((value, index) => value !== revisionsAfter[index])) {
-    throw new Error(`Reconnect changed revision without an operation: ${JSON.stringify(recovery)}`);
+  const statesAfter = await Promise.all(sessions.map(session => session.evaluate(recoveryStateExpression)));
+  const projectionMatches = statesBefore.map((value, index) => isDeepStrictEqual(value, statesAfter[index]));
+  const projectionDifferences = statesBefore.map((before, index) => {
+    const after = statesAfter[index];
+    const beforeTokens = new Map((before.tokens || []).map(token => [token.id, token]));
+    const afterTokens = new Map((after.tokens || []).map(token => [token.id, token]));
+    const changedTokens = [...new Set([...beforeTokens.keys(), ...afterTokens.keys()])].flatMap(id => {
+      const left = beforeTokens.get(id), right = afterTokens.get(id);
+      if (isDeepStrictEqual(left, right)) return [];
+      const fields = [...new Set([...Object.keys(left || {}), ...Object.keys(right || {})])]
+        .filter(field => !isDeepStrictEqual(left?.[field], right?.[field]));
+      return [{ id, fields }];
+    });
+    return { worldIdMatches: before.worldId === after.worldId, sceneIdMatches: before.sceneId === after.sceneId,
+      sourceBefore: before.sourceTokenId, sourceAfter: after.sourceTokenId,
+      fogMatches: isDeepStrictEqual(before.fog, after.fog), changedTokens };
+  });
+  const recovery = { outageDelayMs: 3000, recoveredMs, ...shutdown, startupMs: server.startupMs,
+    reconnectedAt, revisionsBefore, revisionsAfter, synchronizationComplete: true, projectionMatches, projectionDifferences };
+  const report = {
+    version: packageJson.version, browser: browserName, headless, browserExecutable: browserExecutable(),
+    packageRoot, build: buildInfo,
+    fixture: { sessions: SESSION_COUNT, actors: ACTOR_COUNT, tokens: TOKEN_COUNT, viewport: '1920x1080' },
+    diagnosticProfileSession: profileSessionIndex,
+    phases, recovery, generatedAt: new Date().toISOString(),
+  };
+  await writeFile(path.join(outputRoot, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify(report, null, 2));
+  if (JSON.stringify(await benchmarkBuildInfo(root, packageRoot)) !== JSON.stringify(buildInfo)) {
+    throw new Error('Browser benchmark candidate changed during measurement');
+  }
+  if (shouldAssert) {
+    for (const phase of phases) validatePhase(phase);
+    if (recoveredMs > 13_000) throw new Error(`Reconnect gate failed: ${recoveredMs}ms including the 3 second outage`);
+    if (revisionsBefore.some((value, index) => value !== revisionsAfter[index])) {
+      throw new Error(`Reconnect changed revision without an operation: ${JSON.stringify(recovery)}`);
+    }
+    if (projectionMatches.some(value => !value)) throw new Error(`Reconnect changed source, Tokens or Fog: ${JSON.stringify(recovery)}`);
   }
   for (const session of sessions) {
     if (session.failures.length || session.exceptions.length) {
       throw new Error(`${session.name} browser errors: ${JSON.stringify({ failures: session.failures, exceptions: session.exceptions })}`);
     }
   }
-  const report = {
-    version: packageJson.version, browser: browserName, headless, browserExecutable: browserExecutable(),
-    fixture: { sessions: SESSION_COUNT, actors: ACTOR_COUNT, tokens: TOKEN_COUNT, viewport: '1920x1080' },
-    phases, recovery, generatedAt: new Date().toISOString(),
-  };
-  await writeFile(path.join(outputRoot, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  console.log(JSON.stringify(report, null, 2));
 } finally {
   setupSocket?.close();
   await Promise.allSettled(sessions.map(session => session.close()));

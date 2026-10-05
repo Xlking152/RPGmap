@@ -5,6 +5,8 @@ import { validateAuthoritativeTokenMovePath } from '../src/server/movement-autho
 import lanzhou from '../reference/maps/lanzhou/runtime.json' with { type: 'json' };
 import { createNavigationGrid, inspectDirectNavigationPath } from '../src/engine/navigation.js';
 import { deriveSceneState } from '../src/engine/state.js';
+import { createMovementAuthority, resolveMovementStatus } from '../src/movement/authority.js';
+import { getActiveRuleset } from '../src/ruleset/index.js';
 
 function context(overrides = {}) {
   const mapPackage = createMinimalReferencePackage();
@@ -30,6 +32,53 @@ test('server movement authority accepts a clear path on a built-in map', () => {
   });
   assert.equal(result.valid, true);
   assert.equal(result.collisionValidation, 'server');
+});
+
+test('movement validation resolves the Actor once for status and movement rules', () => {
+  const baseRuleset = getActiveRuleset();
+  const calls = { migrate: 0, normalize: 0, describe: 0 };
+  let observedActor = null;
+  let observedStatus = null;
+  const ruleset = {
+    ...baseRuleset,
+    actor: {
+      ...baseRuleset.actor,
+      migrateLegacy(...args) {
+        calls.migrate += 1;
+        return baseRuleset.actor.migrateLegacy(...args);
+      },
+      normalizeSystem(...args) {
+        calls.normalize += 1;
+        return baseRuleset.actor.normalizeSystem(...args);
+      },
+    },
+    movement: {
+      ...baseRuleset.movement,
+      describe(actor, context) {
+        calls.describe += 1;
+        observedActor = actor;
+        observedStatus = context.status;
+        return baseRuleset.movement.describe(actor, context);
+      },
+    },
+  };
+  const token = { id: 'token-a', actorId: 'actor-a', actorLink: true, actorDelta: null,
+    placement: 'map', x: 700, y: 430, diameterMeters: 1, elevationMeters: 0 };
+  const scene = { id: 'scene-a', tokens: [token], sceneEvents: [], featureStates: {} };
+  const world = { activeSceneId: scene.id, scenes: [scene], actors: [{ id: 'actor-a', name: 'Actor', system: {} }],
+    statusDefinitions: [] };
+  const expectedStatus = resolveMovementStatus(world, scene, token, ruleset);
+  calls.migrate = 0;
+  calls.normalize = 0;
+  const result = createMovementAuthority(() => createMinimalReferencePackage())({
+    state: { preferences: { worldV2: world } }, world, scene, token,
+    origin: { x: token.x, y: token.y }, waypoints: [{ x: 740, y: 430 }], ruleset,
+  });
+  assert.equal(result.valid, true);
+  assert.ok(result.costMeters > 0);
+  assert.equal(observedActor.id, 'actor-a');
+  assert.deepEqual(observedStatus, expectedStatus);
+  assert.deepEqual(calls, { migrate: 1, normalize: 1, describe: 1 });
 });
 
 test('server movement authority rejects locked and status-blocked Tokens', () => {
@@ -59,6 +108,31 @@ test('unknown external MapPackages use the explicit bounds-only fallback', () =>
   assert.deepEqual(validateAuthoritativeTokenMovePath({
     ...value, waypoints: [{ x: 9999, y: 9999 }],
   }), { valid: true, collisionValidation: 'bounds-only' });
+});
+
+test('shared level-route collision caches match fresh checks across movers, doors, heights and inactive Scenes', () => {
+  const map = { id: 'collision-cache-map', width: 100, height: 100, metersPerUnit: 1,
+    features: [{ id: 'wall', geometry: { type: 'polygon', points: [[40, 10], [44, 10], [44, 90], [40, 90]] },
+      capabilities: { navigation: { blocks: true, blockingHeightMeters: 4, passableWhenOpen: true, collisionGroup: 'structure' } } }] };
+  const shared = createMovementAuthority(() => map);
+  for (const [index, settings] of [
+    {}, {}, { open: true }, { open: false }, { elevation: 5 }, { elevation: 4 },
+    { bypass: ['structure'] }, {}, { open: true, inactive: true }, { open: false, inactive: true },
+  ].entries()) {
+    const token = { id: `token-${index}`, actorId: 'a', placement: 'map', x: 20, y: 50,
+      elevationMeters: settings.elevation || 0, diameterMeters: 1 };
+    const scene = { id: 'tested-scene', mapPackage: { id: map.id }, tokens: [token], sceneEvents: [],
+      featureStates: { wall: { open: settings.open === true } } };
+    const other = { id: 'other', tokens: [], sceneEvents: [], featureStates: { wall: { open: !settings.open } } };
+    const world = { activeSceneId: settings.inactive ? other.id : scene.id, scenes: [scene, other], actors: [] };
+    const args = { state: { preferences: { worldV2: world } }, world, scene, token,
+      origin: token, waypoints: [{ x: 60, y: 50, elevationMeters: token.elevationMeters }],
+      capabilities: { canMove: true, collisionBypassGroups: settings.bypass || [] } };
+    const expected = settings.open === true || settings.elevation > 4 || Boolean(settings.bypass);
+    const actual = shared(args);
+    assert.equal(actual.valid, expected, `case ${index}`);
+    assert.deepEqual(actual, createMovementAuthority(() => map)(args));
+  }
 });
 
 test('Lanzhou server collision uses the same production capability data as the browser', () => {

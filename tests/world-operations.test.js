@@ -314,6 +314,25 @@ test('authoritative operation patches reproduce committed canonical state withou
   assert.equal(Object.hasOwn(patch, 'state'), false);
 });
 
+test('private trusted patches reuse immutable canonical Fog while ordinary patches normalize mutable input', () => {
+  const initial = state(), committed = structuredClone(initial);
+  committed.preferences.worldV2.updatedAt = '2026-10-01T00:00:00.000Z';
+  const fog = { schemaVersion: 1, cellSizeMeters: 5, exploredByParty: { party: { rows: { 1: [[2, 4]] } } } };
+  const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
+  committed.preferences.worldV2.scenes[0].fog = freeze(fog);
+  const normal = createWorldOperationPatch(initial, committed);
+  const trusted = createWorldOperationPatch(initial, committed, { trustedCanonical: true });
+  assert.deepEqual(trusted, normal);
+  assert.strictEqual(trusted.world.scenes.fog[0].fog, fog);
+  assert.notStrictEqual(normal.world.scenes.fog[0].fog, fog);
+  assert.deepEqual(applyWorldOperationPatch(initial, trusted).preferences.worldV2, committed.preferences.worldV2);
+  const mutable = structuredClone(committed);
+  mutable.preferences.worldV2.scenes[0].fog.exploredByParty.party.rows[1] = [[2, 4], [4, 6]];
+  const normalized = createWorldOperationPatch(initial, mutable, { trustedCanonical: true });
+  assert.deepEqual(normalized.world.scenes.fog[0].fog.exploredByParty.party.rows[1], [[2, 6]]);
+  assert.notStrictEqual(normalized.world.scenes.fog[0].fog, mutable.preferences.worldV2.scenes[0].fog);
+});
+
 test('state differences derive generic operations and preserve unsupported boundaries', () => {
   const initial = state();
   const next = structuredClone(initial);

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { classifyVisionChange } from '../src/vision/invalidation.js';
 
 const visionSource = await readFile(new URL('../src/vision/system.js', import.meta.url), 'utf8');
 
@@ -14,18 +15,29 @@ test('Fog renderer separates static exploration memory from the lightweight perc
   assert.match(visionSource, /const drawCurrent = \(context, rawRange, kind\) =>/);
   assert.match(visionSource, /computeVisibilityRows/);
   assert.match(visionSource, /drawCurrentCircle\(context, rangeMeters\)/);
-  assert.match(visionSource, /drawCurrent\(perception, source\?\.vagueGroundRangeMeters/);
-  assert.match(visionSource, /drawCurrent\(perception, source\?\.preciseGroundRangeMeters/);
+  assert.match(visionSource, /const vagueRange = Number\(source\?\.vagueGroundRangeMeters/);
+  assert.match(visionSource, /const preciseRange = Number\(source\?\.preciseGroundRangeMeters/);
+  assert.match(visionSource, /drawCurrent\(perception, vagueRange, 'vague'\)/);
+  assert.match(visionSource, /drawCurrent\(perception, preciseRange, 'precise'\)/);
   assert.doesNotMatch(visionSource, /grayscale|saturat/i);
 });
 
 test('Fog renderer batches frames, clips bounded invalidations, and ignores persistence-only events', () => {
   assert.match(visionSource, /pendingDirtyBounds/);
   assert.match(visionSource, /perception\.rect\(x, y/);
-  assert.match(visionSource, /scheduleRender\(event\?\.detail\?\.dirtyBounds \?\? null/);
   assert.match(visionSource, /requestAnimationFrame/);
   assert.doesNotMatch(visionSource, /api\.on\?\.\('state:saved'/);
-  assert.match(visionSource, /visionSignature\(\) !== lastVisionSignature/);
+  const scene = { id: 's', tokens: [{ id: 'pc', actorId: 'actor', placement: 'map', x: 0, y: 0 }],
+    fog: { cellSizeMeters: 5, exploredByParty: { party: { rows: { 0: [[0, 0]] } } } } };
+  const before = { preferences: { worldV2: { activeSceneId: 's', actors: [], scenes: [scene] },
+    audienceVision: { partyIds: ['party'] } } };
+  const after = { ...before, preferences: { ...before.preferences, worldV2: { ...before.preferences.worldV2,
+    scenes: [{ ...scene, fog: { ...scene.fog, exploredByParty: { party: { rows: { 0: [[0, 1]] } } } } }] } } };
+  const dirtyBounds = { minX: 5, minY: 0, maxX: 10, maxY: 5 };
+  const options = { beforeState: before, afterState: after, sourceTokenId: 'pc', connected: true };
+  assert.deepEqual(classifyVisionChange({ ...options,
+    changeSet: { fog: [{ sceneId: 's', dirtyBounds }] } }).dirtyBounds, dirtyBounds);
+  assert.equal(classifyVisionChange({ ...options, afterState: before, changeSet: {} }).render, false);
 });
 
 test('local vision consumes dual Token overrides and visual Status capabilities', () => {

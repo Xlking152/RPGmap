@@ -224,21 +224,30 @@ export function assertStatusInstance(value, label, { definitions, scope, legacy 
   return effect;
 }
 
-export function assertStatusState(entitySystem) {
+function validateStatusState(entitySystem, documentCache = null) {
   const entities = object(entitySystem, 'entitySystem');
   const definitions = array(entities.statusDefinitions ?? [], 'entitySystem.statusDefinitions', STATUS_LIMITS.maxDefinitions);
-  const definitionIds = new Set();
-  for (let index = 0; index < definitions.length; index += 1) {
-    const definition = assertStatusDefinition(definitions[index], `entitySystem.statusDefinitions[${index}]`);
-    const definitionId = String(definition.id);
-    if (definitionIds.has(definitionId)) fail(`Duplicate status definition: ${definitionId}`, 'duplicate_id');
-    definitionIds.add(definitionId);
+  let definitionsById = documentCache?.collection('statusDefinitions', definitions);
+  if (!definitionsById) {
+    const definitionIds = new Set();
+    for (let index = 0; index < definitions.length; index += 1) {
+      const definition = assertStatusDefinition(definitions[index], `entitySystem.statusDefinitions[${index}]`);
+      const definitionId = String(definition.id);
+      if (definitionIds.has(definitionId)) fail(`Duplicate status definition: ${definitionId}`, 'duplicate_id');
+      definitionIds.add(definitionId);
+    }
+    definitionsById = definitionMap(entities);
+    documentCache?.stageCollection('statusDefinitions', definitions, definitionsById);
   }
-  const definitionsById = definitionMap(entities);
   const legacy = Number(entities.schemaVersion || 0) < 3;
   for (const [scope, targets] of [['actor', entities.actors], ['token', entities.tokens]]) {
+    const collectionKind = scope === 'actor' ? 'statusActors' : 'statusTokens';
+    if (documentCache?.collection(collectionKind, targets, definitions, legacy)) continue;
     for (let targetIndex = 0; targetIndex < targets.length; targetIndex += 1) {
-      const effects = array(targets[targetIndex]?.effects ?? [], `entitySystem.${scope}s[${targetIndex}].effects`, STATUS_LIMITS.maxEffectsPerTarget);
+      const target = targets[targetIndex];
+      const cacheKind = scope === 'actor' ? 'statusActor' : 'statusToken';
+      if (documentCache?.verified(cacheKind, target, definitions, legacy)) continue;
+      const effects = array(target?.effects ?? [], `entitySystem.${scope}s[${targetIndex}].effects`, STATUS_LIMITS.maxEffectsPerTarget);
       const effectIds = new Set();
       const statusIds = new Set();
       for (let effectIndex = 0; effectIndex < effects.length; effectIndex += 1) {
@@ -254,9 +263,20 @@ export function assertStatusState(entitySystem) {
           statusIds.add(definitionId);
         }
       }
+      documentCache?.stage(cacheKind, target, definitions, legacy);
     }
+    documentCache?.stageCollection(collectionKind, targets, true, definitions, legacy);
   }
   return entitySystem;
+}
+
+export function assertStatusState(entitySystem) {
+  return validateStatusState(entitySystem);
+}
+
+// Only the canonical server validator passes its private, commit-on-success cache.
+export function assertCanonicalStatusState(entitySystem, documentCache) {
+  return validateStatusState(entitySystem, documentCache);
 }
 
 function normalizedDefinition(input) {

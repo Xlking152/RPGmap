@@ -121,8 +121,38 @@ jobs:
           $root = Join-Path $PWD "release/unpacked/RPGmap-v$version"
           & node scripts/verify-package.mjs "--root=$root" "--archive=$zip" "--commit=${{ needs.candidate.outputs.commit }}"
           if ($LASTEXITCODE -ne 0) { throw 'Candidate package verification failed.' }
-          & ./scripts/windows-smoke.ps1 -Root $root -Browser edge -TimeoutSeconds 30
+          & node scripts/vision-mask-raster-check.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Continuous mask raster equivalence failed.' }
           & ./scripts/windows-smoke.ps1 -Root $root -Browser chrome -TimeoutSeconds 30
+      - name: Determine v2.5.4 performance gates
+        id: occlusion_gates
+        shell: pwsh
+        run: |
+          $version = '${{ needs.candidate.outputs.version }}'
+          $required = if ([version]$version -ge [version]'2.5.4') { 'true' } else { 'false' }
+          "required=$required" >> $env:GITHUB_OUTPUT
+      - name: Assert large-range LAN performance on the candidate ZIP
+        if: steps.occlusion_gates.outputs.required == 'true'
+        shell: pwsh
+        run: |
+          $version = '${{ needs.candidate.outputs.version }}'
+          $packageRoot = (Resolve-Path -LiteralPath (Join-Path $PWD "release/unpacked/RPGmap-v$version")).Path
+          & node scripts/occlusion-lan-benchmark.mjs "--package=$packageRoot" --rounds=5 --warmup-rounds=1 --assert
+          if ($LASTEXITCODE -ne 0) { throw 'Large-range LAN performance gate failed.' }
+      - name: Assert seven-session Chrome performance on the candidate ZIP
+        if: steps.occlusion_gates.outputs.required == 'true'
+        shell: pwsh
+        env:
+          RPGMAP_BENCHMARK_BROWSER: chrome
+          RPGMAP_BROWSER_BENCHMARK_HEADLESS: '1'
+          RPGMAP_BROWSER_BENCHMARK_SECONDS: '60'
+          RPGMAP_BROWSER_BENCHMARK_TOKENS: '500'
+          RPGMAP_BROWSER_BENCHMARK_SESSIONS: '7'
+        run: |
+          $version = '${{ needs.candidate.outputs.version }}'
+          $env:RPGMAP_BENCHMARK_PACKAGE = (Resolve-Path -LiteralPath (Join-Path $PWD "release/unpacked/RPGmap-v$version")).Path
+          & node scripts/browser-performance-benchmark.mjs --assert
+          if ($LASTEXITCODE -ne 0) { throw 'Seven-session Chrome performance gate failed.' }
 
   publish:
     needs: [candidate, windows-smoke]

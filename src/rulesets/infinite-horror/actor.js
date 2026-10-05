@@ -574,15 +574,33 @@ function resolveBadStatus(actor, form, statusId) {
   };
 }
 
-export function deriveInfiniteHorrorActor(actor, context = {}) {
+function prepareActorDerivation(actor) {
   if (!actor) return null;
   const system = normalizeInfiniteHorrorSystem(
     actor.system && typeof actor.system === 'object'
       ? actor.system
       : migrateInfiniteHorrorActor(actor).system,
   );
-  const normalizedActor = { ...actor, system };
-  const form = currentFormFromSystem(system);
+  return { system, normalizedActor: { ...actor, system }, form: currentFormFromSystem(system) };
+}
+
+// Status resolution uses the same normalized Health, form and threshold rules
+// as full Actor derivation, without calculating unrelated sheet values.
+export function deriveInfiniteHorrorStatusInputs(actor, context = {}) {
+  const prepared = prepareActorDerivation(actor);
+  if (!prepared) return null;
+  const { normalizedActor, form } = prepared;
+  if (!form) return { health: null, badStatuses: [] };
+  return {
+    health: resolveHealthValue(normalizedActor, form, context),
+    badStatuses: (form.badStatuses || []).map(item => resolveBadStatus(normalizedActor, form, item.id)).filter(Boolean),
+  };
+}
+
+export function deriveInfiniteHorrorActor(actor, context = {}) {
+  const prepared = prepareActorDerivation(actor);
+  if (!prepared) return null;
+  const { system, normalizedActor, form } = prepared;
   if (!form) {
     return {
       id: actor.id,

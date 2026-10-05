@@ -1,5 +1,6 @@
 import { WORLD_SCHEMA_VERSION } from './constants.js';
 import { assertFeatureStatePatch, isPlainObject } from './feature-states.js';
+import { normalizeOcclusionShapes } from '../vision/occlusion-model.js';
 
 const ACTOR_TYPES = new Set(['pc', 'monster', 'npc', 'summon', 'other']);
 const VISIBILITY_MODES = new Set(['public', 'party', 'gm', 'users']);
@@ -170,6 +171,7 @@ export function assertPersistedWorldV2(rawWorld, { acceptedSchemaVersions = [2, 
         assertFeatureStatePatch(state);
       }
     }
+    if (scene.occlusionShapes !== undefined) normalizeOcclusionShapes(scene.occlusionShapes);
     uniqueIds(scene.tokens, `worldV2.scenes[${sceneIndex}].tokens`);
     for (const [tokenIndex, rawToken] of scene.tokens.entries()) {
       const token = object(rawToken, `worldV2.scenes[${sceneIndex}].tokens[${tokenIndex}]`);

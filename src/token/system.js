@@ -8,6 +8,7 @@ import {
 } from './model.js';
 import { createInitialActorDelta, mergeActorDeltaPatch, resolveTokenActorDocuments } from './actor.js';
 import { actorUsesIndependentInstances } from '../actor/classification.js';
+import { readRuntimeState } from '../engine/state-access.js';
 
 const clone = structuredClone;
 
@@ -30,7 +31,7 @@ export function createTokenRuntimeSystem() {
       const eventBackedReads = typeof api.on === 'function';
 
       function refreshReadModel(state = null) {
-        readWorld = state?.preferences?.worldV2 || api.world.get();
+        readWorld = state?.preferences?.worldV2 || readRuntimeState(api).preferences?.worldV2 || api.world.get();
         const scenes = Array.isArray(readWorld?.scenes) ? readWorld.scenes : [];
         const scene = scenes.find(item => String(item?.id ?? '') === String(readWorld?.activeSceneId ?? ''));
         readTokens = Array.isArray(scene?.tokens) ? scene.tokens : [];
@@ -76,7 +77,7 @@ export function createTokenRuntimeSystem() {
       async function perform(operation, { source, render = true, kind = 'token' } = {}) {
         if (typeof api.world.performOperations !== 'function') return null;
         await api.world.performOperations([operation], { source, render, kind });
-        refreshReadModel();
+        if (!eventBackedReads) refreshReadModel();
         return true;
       }
 
@@ -136,9 +137,9 @@ export function createTokenRuntimeSystem() {
             error.code = 'token_reposition_gm_only';
             throw error;
           }
-          const world = api.world.get();
+          ensureReadModel();
           if (!await perform({ type: 'token.reposition', payload: {
-            sceneId: world.activeSceneId, tokenId: String(tokenId), placement: 'map', x: point.x, y: point.y,
+            sceneId: readWorld.activeSceneId, tokenId: String(tokenId), placement: 'map', x: point.x, y: point.y,
           } }, { source: 'token:reposition' })) throw new Error('Reposition requires World operations');
           return api.tokens.get(tokenId);
         },

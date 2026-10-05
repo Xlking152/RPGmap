@@ -4,6 +4,7 @@ import { createInitialActorDelta, normalizeActorDelta } from '../token/actor.js'
 import { normalizeTokenAccess } from '../token/access.js';
 import { normalizeTokenLight } from '../token/model.js';
 import { normalizeFogState } from '../vision/fog.js';
+import { normalizeOcclusionShapes } from '../vision/occlusion-model.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { normalizeFeatureStateRecords } from './feature-states.js';
 import { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
@@ -136,6 +137,7 @@ function normalizeScene(raw, {
     attackAreas: canonicalAttackAreas(source.attackAreas),
     sceneEvents: clone(array(source.sceneEvents)),
     featureStates: normalizeFeatureStateRecords(source.featureStates),
+    occlusionShapes: [...normalizeOcclusionShapes(source.occlusionShapes)],
     fog: normalizeFogState(source.fog),
     settings: {
       ...clone(object(source.settings)),

@@ -140,6 +140,8 @@ export function validateRuntimeState(raw, { mapPackage, ruleset } = {}) {
     preferences: cleanPreferences(source.preferences, ruleset),
   };
   delete next.characters;
+  // This belongs to the local persistence envelope, never runtime/public state.
+  delete next._localExploration;
 
   const rawWorld = next.preferences?.[WORLD_STATE_KEY];
   if (rawWorld) {
@@ -212,5 +214,6 @@ export function stringifyTrustedRuntimeState(state, { mapPackage } = {}) {
   }
   const saved = { ...source, preferences: savedPreferences };
   delete saved.characters;
+  delete saved._localExploration;
   return JSON.stringify(saved);
 }

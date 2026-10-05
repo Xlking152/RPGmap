@@ -1,3 +1,4 @@
+import { readConnectionState } from "../multiplayer/connection-state.js";
 import L from 'leaflet';
 import { worldToLatLng, latLngToWorld } from './geometry.js';
 import { featureBounds } from './feature-selection.js';
@@ -6,7 +7,7 @@ import {
   commitRestoreEvent,
   undoLastSceneEvent,
 } from './state.js';
-import { createWorldStatePersistence } from '../app/world-storage.js';
+import { createWorldStatePersistence, createRemoteWorldIsolation } from '../app/world-storage.js';
 import { persistPreparedWorldContent, prepareWorldContentState } from '../app/world-upgrade.js';
 import {
   exportRuntimeState,
@@ -17,6 +18,7 @@ import {
 import { createMapPresentation } from '../render/map-presentation.js';
 import { createSceneRenderer } from '../render/scene-renderer.js';
 import { applyDocumentChanges, documentChangeSet } from '../documents/changes.js';
+import { registerRuntimeStateReader } from './state-access.js';
 
 const MAX_SAVE_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -103,6 +105,7 @@ export function createRpgMapRuntime({
   const bus = new EventTarget();
   let state = null;
   let stateRevision = 0;
+  let trustedSaveRevision = null;
   let currentTool = 'pan';
   let activePanel = 'actors';
   let selectedFeatureId = null;
@@ -110,8 +113,12 @@ export function createRpgMapRuntime({
   let gridFrame = null;
   let importPending = false;
   let recoveryBlocked = false;
+  let remoteWorldIsolation = null;
 
   function assertWritable() {
+    if (remoteWorldIsolation?.active && !readConnectionState(api)?.connected)
+      throw Object.assign(new Error('正在恢复联机连接；请等待续传或主动退出后再编辑离线 World'), { code: 'world_reconnect_pending' });
+    if (persistence.blocked) throw Object.assign(new Error('自动保存已暂停，请先恢复存储'), { code: 'world_persistence_blocked' });
     if (recoveryBlocked) throw Object.assign(new Error('storage_recovery_required'), { code: 'storage_recovery_required' });
     if (importPending) throw Object.assign(new Error('world_import_busy'), { code: 'world_import_busy' });
   }
@@ -355,6 +362,7 @@ export function createRpgMapRuntime({
     assertWritable();
     state = applyDocumentChanges(state, changes, { updatedAt });
     stateRevision += 1;
+    trustedSaveRevision = stateRevision;
     const changeSet = documentChangeSet(changes);
     api.documents?.applyCommitted?.(changes, { revision, operationId });
     return emitAuthoritativeChanges({ source, changeSet, revision });
@@ -362,7 +370,7 @@ export function createRpgMapRuntime({
 
   async function commitAuthoritativeState(nextState, { source = 'authoritative-world', reason = source, render = true } = {}) {
     const normalized = normalizeState(nextState);
-    const multiplayer = api.multiplayer?.getStatus?.();
+    const multiplayer = readConnectionState(api);
     if (multiplayer?.connected) {
       if (typeof api.multiplayer?.performStateOperation === 'function') {
         return api.multiplayer.performStateOperation(normalized, { reason });
@@ -378,7 +386,7 @@ export function createRpgMapRuntime({
 
   async function importState(raw, options = {}) {
     assertWritable();
-    const local = options !== false && options.persist !== false && !api.multiplayer?.getStatus?.().connected;
+    const local = options !== false && options.persist !== false && !readConnectionState(api)?.connected;
     if (local) importPending = true;
     try { return await importPreparedState(raw, options); }
     catch (error) {
@@ -397,7 +405,7 @@ export function createRpgMapRuntime({
     const migrateContent = persist && api.content;
     const prepared = migrateContent ? await prepareWorldContentState(raw, { mapPackage, ruleset }) : prepareRuntimeState(raw, { mapPackage, ruleset });
     const normalized = normalizeState(prepared.state);
-    if (persist && api.multiplayer?.getStatus?.().connected) {
+    if (persist && readConnectionState(api)?.connected) {
       const { persistArchiveContent } = await import('../content/archive.js');
       const content = [...records, ...(prepared.records || []).map(record => ({ reference: `asset:${record.id}`, blob: new Blob([record.bytes], { type: record.type }) }))];
       await persistArchiveContent(content, api.content);
@@ -410,6 +418,7 @@ export function createRpgMapRuntime({
       await persistPreparedWorldContent({ state: normalized, records: [...records, ...(prepared.records || [])], inputRaw: raw, beforeRaw,
         worldId, mapPackage, ruleset, storageAdapter, indexedDB: documentNode.defaultView.indexedDB });
     } else if (persist) persistence.replace(normalized);
+    if (!persist && source === 'server') remoteWorldIsolation.enter();
     state = normalized;
     stateRevision += 1;
     selectedFeatureId = null;
@@ -517,7 +526,12 @@ export function createRpgMapRuntime({
 
   function persistNow({ trustedWorldRevision = null } = {}) {
     if (importPending || recoveryBlocked) return false;
-    return trustedWorldRevision !== null && trustedWorldRevision === stateRevision
+    // A concurrent validated Fog commit may advance the revision while a move
+    // yields for paint. Its current Document state remains safe to serialize.
+    const trusted = Number.isSafeInteger(trustedWorldRevision) && (trustedWorldRevision === stateRevision
+      || (trustedWorldRevision < stateRevision && trustedSaveRevision === stateRevision));
+    api.diagnostics?.record('world.persistTrusted', trusted ? 1 : 0);
+    return trusted
       ? persistence.persistTrustedNow()
       : persistence.persistNow();
   }
@@ -546,6 +560,9 @@ export function createRpgMapRuntime({
     applyAuthoritativeDocumentChanges,
     commitAuthoritativeState,
     persistNow,
+    getLocalExploration: () => persistence.getLocalExploration(),
+    setLocalExploration: value => persistence.setLocalExploration(value),
+    isLocalWorldActive: () => !remoteWorldIsolation.active,
     exportState,
     importState,
     downloadState,
@@ -575,6 +592,14 @@ export function createRpgMapRuntime({
     },
   };
 
+  registerRuntimeStateReader(api, () => state);
+  remoteWorldIsolation = createRemoteWorldIsolation({ persistence, getState: () => state,
+    restoreState(localState) { state = localState; stateRevision += 1; trustedSaveRevision = null; } });
+  on('multiplayer:capabilities', () => {
+    if (!remoteWorldIsolation.updateConnection(readConnectionState(api))) return;
+    renderScene();
+    emit('state:import', { source: 'offline:resume', persist: false, state: clone(state) });
+  });
   container.rpgMapApp = api;
   fitInitialView(false);
   for (const tool of tools) tool?.register?.(api);

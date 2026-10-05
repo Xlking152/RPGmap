@@ -109,7 +109,7 @@ export const INFINITE_HORROR_STATUS_DEFINITIONS = Object.freeze([
   }),
 ]);
 
-import { deriveInfiniteHorrorActor } from './actor.js';
+import { deriveInfiniteHorrorStatusInputs } from './actor.js';
 import { HEALTH_MODE_WOUND_TRACK } from './health.js';
 
 function finite(value, fallback = 0) {
@@ -168,7 +168,7 @@ function deriveBadStatusThresholds(actor, derivedActor) {
 }
 
 export function deriveInfiniteHorrorStatuses(actor, { statuses = [] } = {}) {
-  const derivedActor = deriveInfiniteHorrorActor(actor, { effects: statuses });
+  const derivedActor = deriveInfiniteHorrorStatusInputs(actor, { effects: statuses });
   const health = derivedActor?.health || null;
   const badStatusThresholds = deriveBadStatusThresholds(actor, derivedActor);
   if (!health) return badStatusThresholds;

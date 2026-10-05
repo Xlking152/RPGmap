@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyDocumentChanges, createDocumentChanges, documentChangeSet } from '../src/documents/changes.js';
+import { applyDocumentChanges, createDocumentChanges, createDocumentChangesFull, createFogDocumentChanges, documentChangeSet } from '../src/documents/changes.js';
 import { createDocumentBackendSystem } from '../src/documents/index.js';
 
 function fixture() {
@@ -26,6 +26,116 @@ function roundTrip(before, after, options = {}) {
   assert.deepEqual(before, frozenBefore);
   return { changes, applied };
 }
+
+test('paired Document diff has byte-identical changes to the full diff for large moves and structural fallbacks', () => {
+  const before = fixture();
+  const firstScene = before.preferences.worldV2.scenes[0];
+  for (let index = 2; index <= 500; index += 1) {
+    firstScene.tokens.push({ ...firstScene.tokens[0], id: `t-${index}`, x: 10 + index, y: 20 + index });
+  }
+  const cases = [
+    {
+      name: 'move and sparse fog',
+      mutate(after) {
+        after.preferences.worldV2.scenes[0].tokens[320].x += 1;
+        after.preferences.worldV2.scenes[0].fog.exploredByParty.party = { rows: { 7: [[10, 12]] } };
+        after.preferences.audienceVision = { source: { tokenId: 't-321', x: 331, y: 341 }, partyIds: ['party'] };
+      },
+      options: { motion: [{ sceneId: 's1', tokenId: 't-321' }], fog: [{ sceneId: 's1', dirtyBounds: { minX: 0, minY: 0, maxX: 30, maxY: 30 } }] },
+    },
+    { name: 'nested actor deletion', mutate(after) { delete after.preferences.worldV2.actors[0].system.runtime.extension.remove; } },
+    { name: 'cross-scene duplicate Token ID', mutate(after) { after.preferences.worldV2.scenes[1].tokens[0].y += 2; },
+      options: { motion: [{ sceneId: 's2', tokenId: 't' }] } },
+    { name: 'Token reorder fallback', mutate(after) { after.preferences.worldV2.scenes[0].tokens.reverse(); } },
+    { name: 'Token append fallback', mutate(after) { after.preferences.worldV2.scenes[0].tokens.push({ ...after.preferences.worldV2.scenes[0].tokens[0], id: 'new' }); } },
+    { name: 'optional OcclusionShape collection fallback', mutate(after) { after.preferences.worldV2.scenes[0].occlusionShapes = []; } },
+    { name: 'Chat append fallback', mutate(after) { after.preferences.chatSystem.messages.push({ id: 'new-message', text: 'test' }); } },
+  ];
+  for (const entry of cases) {
+    const after = structuredClone(before);
+    entry.mutate(after);
+    const options = entry.options || {};
+    const quick = createDocumentChanges(before, after, null, options);
+    const full = createDocumentChangesFull(before, after, null, options);
+    assert.equal(JSON.stringify(quick), JSON.stringify(full), entry.name);
+    assert.deepEqual(applyDocumentChanges(before, quick, { updatedAt: after.preferences.worldV2.updatedAt }),
+      applyDocumentChanges(before, full, { updatedAt: after.preferences.worldV2.updatedAt }), entry.name);
+  }
+});
+
+test('unchanged immutable leaf collections skip repeated identity scans while Scene child changes remain complete', () => {
+  const freeze = value => {
+    if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+    Object.values(value).forEach(freeze); return Object.freeze(value);
+  };
+  const before = fixture();
+  before.preferences.worldV2.actors[0].id = 'immutable-leaf-actor';
+  before.preferences.worldV2.scenes.forEach(scene => { scene.tokens[0].actorId = 'immutable-leaf-actor'; });
+  freeze(before);
+  assert.deepEqual(createDocumentChanges(before, before), []); // Qualify shared immutable collections once.
+  const world = before.preferences.worldV2, scene = world.scenes[0];
+  const after = { ...before, preferences: { ...before.preferences, worldV2: { ...world,
+    scenes: [{ ...scene, tokens: [{ ...scene.tokens[0], x: 37 }],
+      fog: { ...scene.fog, exploredByParty: { party: { rows: { 3: [[4, 7]] } } } } }, world.scenes[1]],
+  } } };
+  const originalString = globalThis.String;
+  let idReads = 0;
+  globalThis.String = value => { if (value === 'immutable-leaf-actor') idReads++; return originalString(value); };
+  try {
+    const quick = createDocumentChanges(before, after), quickReads = idReads;
+    idReads = 0;
+    const full = createDocumentChangesFull(before, after);
+    assert.deepEqual(quick, full);
+    assert.equal(quickReads, 0);
+    assert.ok(idReads > 0, 'the full oracle still visits the shared Actor collection');
+    assert.deepEqual(quick.map(change => change.document.type), ['Token', 'Fog']);
+    assert.deepEqual(applyDocumentChanges(before, quick).preferences.worldV2, after.preferences.worldV2);
+  } finally { globalThis.String = originalString; }
+});
+
+test('mutable IDs, frozen accessors and duplicate collections retain the full diff fallback', () => {
+  for (const variant of ['mutable', 'shallow-frozen', 'accessor', 'duplicate']) {
+    const before = fixture(), actors = before.preferences.worldV2.actors;
+    actors.push({ ...structuredClone(actors[0]), id: 'second' });
+    let id = 'second';
+    if (variant === 'accessor') {
+      Object.defineProperty(actors[1], 'id', { enumerable: true, get: () => id });
+      Object.freeze(actors[1]); Object.freeze(actors);
+    } else if (variant === 'shallow-frozen') Object.freeze(actors);
+    else if (variant === 'duplicate') {
+      actors[1].id = 'a'; actors.forEach(Object.freeze); Object.freeze(actors);
+    }
+    createDocumentChanges(before, before);
+    if (variant === 'accessor') id = 'a';
+    else if (variant !== 'duplicate') actors[1].id = 'a';
+    const after = { ...before, preferences: { ...before.preferences, audienceVision: { source: null, partyIds: ['party'] } } };
+    assert.deepEqual(createDocumentChanges(before, after), createDocumentChangesFull(before, after), variant);
+  }
+});
+
+test('focused Fog updates match full recipient deltas through sparse rows, removals and missing documents', () => {
+  for (const variant of ['update', 'create', 'delete', 'unchanged']) {
+    const before = fixture();
+    before.preferences.worldV2.scenes[0].fog.exploredByParty = { party: { rows: { 1: [[1, 3]], 2: [[8, 9]] } } };
+    const after = structuredClone(before);
+    if (variant === 'update') {
+      after.preferences.worldV2.scenes[0].fog.exploredByParty.party.rows = { 1: [[1, 6]], 3: [[2, 4]] };
+    } else if (variant === 'create') delete before.preferences.worldV2.scenes[0].fog;
+    else if (variant === 'delete') delete after.preferences.worldV2.scenes[0].fog;
+    after.preferences.worldV2.updatedAt = 'after';
+    const preserved = structuredClone(before);
+    const options = { fog: [{ sceneId: 's1', dirtyBounds: { minX: 0, minY: 5, maxX: 30, maxY: 10 } },
+      { sceneId: 's1', dirtyBounds: { minX: 10, minY: 0, maxX: 50, maxY: 15 } }] };
+    const focused = createFogDocumentChanges(before, after, options);
+    const full = createDocumentChanges(before, after, null, options);
+    assert.deepEqual(focused, full, variant);
+    const applied = applyDocumentChanges(before, focused, { updatedAt: 'after' });
+    assert.deepEqual(applied, applyDocumentChanges(before, full, { updatedAt: 'after' }));
+    assert.deepEqual(JSON.parse(JSON.stringify(applied.preferences.worldV2)), JSON.parse(JSON.stringify(after.preferences.worldV2)));
+    assert.deepEqual(before, preserved);
+    assert.ok(focused.every(change => change.document.type === 'Fog'));
+  }
+});
 
 test('Document deltas preserve nested deletions, nulls and unrelated template data', () => {
   const before = fixture();

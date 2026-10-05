@@ -1,3 +1,4 @@
+import { readConnectionState } from "../multiplayer/connection-state.js";
 import {
   WORLD_STATE_KEY,
   activeWorldScene,
@@ -14,9 +15,12 @@ import { createDocumentChanges } from '../documents/changes.js';
 import { createMovementAuthority } from '../movement/authority.js';
 import { createVisionBackground } from '../vision/background.js';
 import { mergeExploration, computeFogExplorationAsync } from '../vision/fog.js';
+import { createLocalExplorationQueue } from '../vision/local-exploration.js';
+import { createExplorationOperationCapture } from '../vision/exploration-operations.js';
+import { readRuntimeState } from '../engine/state-access.js';
 
 const clone = structuredClone;
-const TRUSTED_SAVE_TYPES = new Set(['token.create', 'token.movePath', 'scene.fog.explore']);
+const TRUSTED_SAVE_TYPES = new Set(['token.create', 'token.move', 'token.reposition', 'token.movePath', 'scene.fog.explore']);
 
 function currentWorldFromState(state) {
   return state?.preferences?.[WORLD_STATE_KEY] || null;
@@ -105,7 +109,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       }
 
       function snapshot() {
-        const state = api.getState?.() || {};
+        const state = readRuntimeState(api);
         const raw = currentWorldFromState(state);
         const ruleset = raw ? requireRuntimeRuleset(raw, runtimeRuleset) : runtimeRuleset;
         return clone(raw || createWorldV2FromRuntimeState(state, {
@@ -129,6 +133,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           projectWorldV2ToRuntimeState(api.getState?.() || {}, normalized, { mapPackage, ruleset }),
         );
         invalidateExploration();
+        if (!['world-v2:scene.activate', 'world-v2:rename', 'world-v2:scene.create'].includes(source)) localExploration.cancel();
         if (typeof coreCommitAuthoritativeState === 'function') {
           return coreCommitAuthoritativeState(projected, { source, reason, render });
         }
@@ -137,6 +142,12 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       }
 
       const background = createVisionBackground({ diagnostics: api.diagnostics });
+      const localExploration = createLocalExplorationQueue(api, (job, added) => {
+        if (api.isLocalWorldActive?.() === false) throw new Error('联机续传期间保留离线探索任务');
+        return performOperations([
+          { type: 'scene.fog.explore', payload: { ...job.input.payload, sceneId: job.sceneId, partyId: job.input.partyId } },
+        ], { source: 'vision:exploration-commit', addedExploration: added });
+      });
       const measure = api.diagnostics?.measure
         ? (name, callback) => api.diagnostics.measure(name, callback)
         : (_name, callback) => callback();
@@ -147,15 +158,26 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         api.emit?.('vision:exploration-cancel', null);
       }
       for (const event of ['state:import', 'scene:activate', 'vision:source-change']) api.on?.(event, () => { invalidateExploration(); });
-      api.on?.('app:destroy', () => { invalidateExploration(); background?.dispose(); });
+      api.on?.('state:import', ({ detail } = {}) => {
+        if (detail?.persist === false && ['server', 'offline:resume'].includes(detail?.source)) return;
+        localExploration.cancel();
+      });
+      api.on?.('multiplayer:capabilities', () => {
+        if (api.isLocalWorldActive?.() !== false) localExploration.start();
+      });
+      api.on?.('app:destroy', () => { invalidateExploration(); background?.dispose(); localExploration.dispose(); });
 
-      function reduceOperations(state, operations, { source = 'world.operation', now = new Date().toISOString(), computeFogExploration } = {}) {
+      function reduceOperations(state, operations, { source = 'world.operation', now = new Date().toISOString(), computeFogExploration,
+        prepareOperation, onOperationApplied } = {}) {
         return applyWorldOperations(state, operations, {
           now,
           ruleset: runtimeRuleset,
           source: { role: 'offline', source },
           mapMetrics: mapPackage,
+          mapForScene: scene => sameMap(scene, mapPackage)
+            && String(scene.mapPackage?.version || '') === String(mapPackage.version || mapPackage.mapVersion || '') ? mapPackage : null,
           computeFogExploration,
+          prepareOperation, onOperationApplied,
           validateTokenMovePath: args => movementAuthority({ ...args, ruleset: runtimeRuleset }),
           applyStatus(statusState, message, context) {
             const next = clone(statusState);
@@ -176,39 +198,66 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         render = true,
         kind = 'world',
         requestedOperationId = null,
+        addedExploration = null,
       } = {}) {
-        const multiplayer = api.multiplayer?.getStatus?.();
+        const multiplayer = readConnectionState(api);
         if (multiplayer?.connected) {
           if (typeof api.multiplayer?.performOperations !== 'function') {
             throw new Error('当前局域网控制器不支持通用 World 操作');
           }
           return api.multiplayer.performOperations(operations, { kind, requestedOperationId });
         }
+        if (api.isLocalWorldActive?.() === false)
+          throw Object.assign(new Error('请等待联机续传或主动退出后再编辑离线 World'), { code: 'world_reconnect_pending' });
         let computeFogExploration;
-        if (operations.some(operation => ['scene.fog.hide', 'scene.fog.reset'].includes(operation.type))) invalidateExploration();
-        if (operations.length === 1 && operations[0].type === 'scene.fog.explore') {
+        if (addedExploration) computeFogExploration = (_input, fog) => mergeExploration(fog, addedExploration, mapPackage);
+        if (!addedExploration && operations.length === 1 && operations[0].type === 'scene.fog.explore' && source === 'vision:explore') {
+          const sceneId = operations[0].payload.sceneId ?? snapshot().activeSceneId;
+          const operation = { ...operations[0], payload: { ...operations[0].payload, sceneId } };
+          const request = prepareFogOperation(readRuntimeState(api), operation, { ruleset: runtimeRuleset, mapPackage }).input;
+          const region = api.vision?.getVisibleRegion?.();
+          if (region && String(region.tokenId || api.vision?.getSource?.()) === String(request.payload.visionSourceTokenId))
+            request.sourceRangeMeters = Number(region.vagueRangeMeters ?? region.rangeMeters) || 0;
+          const jobId = localExploration.enqueue(request, sceneId);
+          localExploration.persist(); localExploration.start();
+          return { offline: true, queued: true, jobId };
+        }
+        if (!addedExploration && operations.length === 1 && operations[0].type === 'scene.fog.explore') {
           operations = [{ ...operations[0], payload: { ...operations[0].payload,
             sceneId: operations[0].payload.sceneId ?? snapshot().activeSceneId,
           } }];
           const epoch = explorationEpoch;
           const options = { ruleset: runtimeRuleset, mapMetrics: mapPackage };
-          const request = measure('world.fogPrepare', () => prepareFogOperation(api.getState(), operations[0], options).input);
+          const request = measure('world.fogPrepare', () => prepareFogOperation(readRuntimeState(api), operations[0], options).input);
           let added;
           try { added = background ? await background.run(request)
             : await computeFogExplorationAsync(request, {}, { signal: explorationAbort.signal }); }
           catch (error) { if (epoch !== explorationEpoch) return { unchanged: true }; throw error; }
-          if (epoch !== explorationEpoch || api.multiplayer?.getStatus?.()?.connected) return { unchanged: true };
-          const active = currentWorldFromState(api.getState());
+          if (epoch !== explorationEpoch || readConnectionState(api)?.connected) return { unchanged: true };
+          const active = currentWorldFromState(readRuntimeState(api));
           if (String(active?.activeSceneId) !== String(operations[0].payload.sceneId)
             || (source === 'vision:explore' && api.vision?.getSource?.() !== request.payload.visionSourceTokenId)) return { unchanged: true };
-          const currentRequest = measure('world.fogPrepare', () => prepareFogOperation(api.getState(), operations[0], options).input);
+          const currentRequest = measure('world.fogPrepare', () => prepareFogOperation(readRuntimeState(api), operations[0], options).input);
           // Exploration is additive: merge concurrent results into the latest fog.
           // Resets, hides and full World replacements invalidate the epoch instead.
           if (currentRequest.contextVersion !== request.contextVersion || currentRequest.lineOfSightEnabled !== request.lineOfSightEnabled) return { unchanged: true };
           computeFogExploration = (_input, fog) => mergeExploration(fog, added, mapPackage);
         }
-        const before = api.getState?.() || {};
-        const applied = measure('world.reduce', () => reduceOperations(before, operations, { source, computeFogExploration }));
+        const before = readRuntimeState(api);
+        const selectedSource = api.vision?.getSource?.();
+        const explorationCapture = createExplorationOperationCapture({ sourceIds: selectedSource ? [selectedSource] : [],
+          ruleset: runtimeRuleset, mapForScene: scene => sameMap(scene, mapPackage) ? mapPackage : null });
+        const applied = measure('world.reduce', () => reduceOperations(before, operations, { source, computeFogExploration,
+          prepareOperation: explorationCapture.prepareOperation, onOperationApplied: explorationCapture.onOperationApplied }));
+        // Validation must succeed before destructive operations invalidate any
+        // previously confirmed paths. Save the cancellation with the new World.
+        const invalidating = applied.results.filter(result => ['scene.fog.hide', 'scene.fog.reset',
+          'scene.delete', 'scene.reset', 'scene.upsert'].includes(result.action));
+        if (invalidating.length) invalidateExploration();
+        for (const event of explorationCapture.events) {
+          if (event.type === 'cancel') localExploration.cancel(event.sceneId, event.partyId);
+          else for (const input of event.inputs) localExploration.enqueue(input, event.sceneId);
+        }
         const changes = measure('world.changes', () => createDocumentChanges(before, applied.state, null, {
           motion: applied.results.flatMap(result => result.motion || []),
           fog: applied.results.filter(result => Object.hasOwn(result, 'dirtyBounds')),
@@ -228,17 +277,21 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           coreCommitState(hydrateCanonical(applied.state), { source, render });
           api.documents?.applyCommitted?.(changes, { operationId: requestedOperationId });
         }
-        // Local storage serializes the entire World. Let the browser paint after
-        // applying the document before doing that synchronous write, while still
-        // completing the write before this operation resolves to its caller.
+        // Validated movement/Fog writes use the small trusted save path. Finish
+        // those immediately instead of adding a timer between commit and ACK;
+        // heavier full validation can still yield before its synchronous write.
         const trustedWorldRevision = authorityDocuments && applied.operations.length === 1
           && TRUSTED_SAVE_TYPES.has(applied.operations[0].type) ? api.getStateRevision?.() : null;
-        await new Promise(resolve => setTimeout(resolve, 0));
-        measure('world.persist', () => api.persistNow?.({ trustedWorldRevision }));
+        if (trustedWorldRevision === null) await new Promise(resolve => setTimeout(resolve, 0));
+        const persisted = measure('world.persist', () => api.persistNow?.({ trustedWorldRevision }));
+        if (persisted === false) throw new Error('World 操作未能可靠保存，写入已暂停');
+        localExploration.start();
         return { offline: true, operations: clone(applied.operations), results: clone(applied.results), changes };
       }
 
       api.world = {
+        queuesConfirmedExploration: true,
+        getExplorationStatus: () => localExploration.stats(),
         schemaVersion: STATUS_SCHEMA_VERSION,
         get: snapshot,
         getActiveScene() { return clone(activeWorldScene(snapshot())); },
@@ -296,6 +349,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         world: snapshot(),
         created,
       });
+      localExploration.start();
     },
   });
 }

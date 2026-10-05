@@ -45,6 +45,9 @@ for (const file of [
   'world-v2.mjs',
   'websocket-runtime.mjs',
   'world-wal.mjs',
+  'world-checkpoint.mjs',
+  'exploration-queue.mjs',
+  'exploration-worker.mjs',
   'storage-upgrade.mjs',
   'launcher.mjs',
   'start-rpgmap.bat',
@@ -86,6 +89,7 @@ await writeFile(path.join(root, 'VERSION.json'), `${JSON.stringify({
   operationSchema: 4,
   statusSchema: 4,
   accessSchema: 4,
+  occlusionSchema: 1,
   serverMode: 'multiplayer', platform: 'windows', storageMode: 'portable-map-root-server-authoritative',
   launcherMode: 'local-lan-v2', defaultPort: 30000,
 }, null, 2)}\n`);

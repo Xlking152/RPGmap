@@ -26,6 +26,8 @@ import {
   resetFogParty,
 } from '../vision/fog.js';
 import { sceneVisionContext } from '../vision/context.js';
+import { normalizeOcclusionShape, normalizeOcclusionShapes } from '../vision/occlusion-model.js';
+import { assertOcclusionReferences, normalizeOcclusionConfiguration, exportOcclusionConfiguration, featureForOcclusionDoor } from './occlusion-config.js';
 import { visionIgnoresOcclusion } from '../spatial/kernel.js';
 import { migrateWorldSchema3State } from './migration.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
@@ -43,6 +45,7 @@ export {
   documentWritesToWorldOperations,
   normalizeDocumentWrite,
 } from '../documents/protocol.js';
+export { createFogDocumentChanges } from '../documents/changes.js';
 
 export {
   assertFeatureStatePatch,
@@ -93,6 +96,9 @@ const OPERATION_TYPES = new Set([
   'scene.settings.patch',
   'scene.door.use',
   'scene.featureState.patch',
+  'scene.occlusionShape.upsert',
+  'scene.occlusionShape.delete',
+  'scene.occlusion.configure',
   'scene.fog.explore',
   'scene.fog.reset',
   'scene.fog.hide',
@@ -110,14 +116,20 @@ const OPERATION_TYPES = new Set([
 ]);
 
 const STATUS_TYPES = new Set([...OPERATION_TYPES].filter(type => type.startsWith('status.')));
+const CHAT_TYPES = new Set(['chat.append', 'chat.clear']);
+const CHAT_STATE_HOOKS = ['prepareOperation', 'onOperationApplied', 'applyStatus',
+  'validateTokenMovePath', 'describeVision', 'mapForScene', 'computeFogExploration'];
 const COPY_ON_WRITE_TYPES = new Set([
   'token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch',
   'scene.door.use', 'scene.featureState.patch', 'scene.activate',
+  'scene.occlusionShape.upsert', 'scene.occlusionShape.delete', 'scene.occlusion.configure',
   'scene.fog.explore', 'scene.fog.hide', 'scene.fog.reset',
+  ...CHAT_TYPES,
 ]);
 const TOKEN_POSITION_TYPES = new Set(['token.move', 'token.reposition']);
 const GRANULAR_OPERATION_TYPES = new Set([
   'token.move', 'token.reposition', 'token.movePath', 'scene.settings.patch', 'scene.door.use', 'scene.featureState.patch', 'scene.activate',
+  'scene.occlusionShape.upsert', 'scene.occlusionShape.delete', 'scene.occlusion.configure',
   'scene.fog.explore', 'scene.fog.hide', 'scene.fog.reset',
   'status.apply', 'status.remove', 'status.setStacks', 'status.batch',
   'status.definition.upsert', 'status.definition.delete', 'status.definition.import',
@@ -168,6 +180,7 @@ function finite(value, label) {
 }
 
 function same(left, right) {
+  if (left === right) return true;
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
@@ -185,12 +198,24 @@ function worldFromState(state) {
   return world;
 }
 
+function operationMapForScene(context, scene) {
+  if (typeof context.mapForScene === 'function') {
+    const map = context.mapForScene(scene);
+    if (!plainObject(map)) fail(`MapPackage is unavailable for Scene ${scene.id}`, 'map_package_not_found');
+    return map;
+  }
+  return plainObject(context.mapPackage) ? context.mapPackage
+    : plainObject(context.mapMetrics) ? context.mapMetrics : {};
+}
+
 export function markMovementAdjudicationRequired(state, ruleset) {
   if (!ruleset?.movement?.describe) return false;
   const world = worldFromState(state);
   const linkedActors = new Map();
   let changed = false;
-  for (const scene of world.scenes || []) {
+  for (let sceneIndex = 0; sceneIndex < (world.scenes || []).length; sceneIndex++) {
+    let scene = world.scenes[sceneIndex];
+    let sceneCopied = false;
     for (let index = 0; index < (scene.tokens || []).length; index += 1) {
       const token = scene.tokens[index];
       const movement = token?.movement || {};
@@ -208,32 +233,57 @@ export function markMovementAdjudicationRequired(state, ruleset) {
       const unavailable = Boolean(movementCapabilityFailure(descriptor, movement.mode || 'walk'))
         || (Number(token.elevationMeters) > 0 && descriptor.fly !== true);
       if (!unavailable || movement.adjudicationRequired === true) continue;
-      if (!changed) changed = true;
+      if (!changed) { world.scenes = world.scenes.slice(); changed = true; }
+      if (!sceneCopied) {
+        scene = { ...scene, tokens: scene.tokens.slice() };
+        world.scenes[sceneIndex] = scene; sceneCopied = true;
+      }
       scene.tokens[index] = { ...token, movement: { ...structuredClone(movement), adjudicationRequired: true } };
     }
   }
   return changed;
 }
 
-function cloneOperationInput(rawState, operations) {
+function cloneOperationInput(rawState, operations, context) {
   if (operations.some(operation => !COPY_ON_WRITE_TYPES.has(operation.type) && !STATUS_TYPES.has(operation.type))) return clone(rawState);
+  const hasChat = operations.some(operation => CHAT_TYPES.has(operation.type));
+  const chatOnly = hasChat && operations.every(operation => CHAT_TYPES.has(operation.type));
+  // Chat historically cloned the complete transaction input. Share unchanged
+  // documents only with the server's proof of accepted immutable JSON; generic
+  // callers retain structuredClone's accessor, Proxy and failure behavior.
+  if (hasChat && (!chatOnly || typeof context.isCanonicalData !== 'function' || context.isCanonicalData(rawState) !== true)) return clone(rawState);
+  // Existing external hooks may mutate any part of their private transaction.
+  // Accepted input does not prove those hooks obey the server's COW contract.
+  if (hasChat && context.trustedOperationHooks !== true
+    && (context.ruleset != null || CHAT_STATE_HOOKS.some(key => typeof context[key] === 'function'))) return clone(rawState);
   const source = object(rawState, 'state');
   const preferences = { ...object(source.preferences, 'state.preferences') };
   const rawWorld = object(preferences.worldV2, 'state.preferences.worldV2');
-  const world = { ...rawWorld, scenes: [...array(rawWorld.scenes, 'world.scenes')] };
+  const world = { ...rawWorld, scenes: chatOnly ? array(rawWorld.scenes, 'world.scenes') : [...array(rawWorld.scenes, 'world.scenes')] };
   const state = { ...source, preferences };
   preferences.worldV2 = world;
   preferences.entitySystem = plainObject(preferences.entitySystem)
     ? { ...preferences.entitySystem }
     : preferences.entitySystem;
+  if (hasChat && plainObject(preferences.chatSystem)) {
+    preferences.chatSystem = { ...preferences.chatSystem,
+      messages: Array.isArray(preferences.chatSystem.messages) ? [...preferences.chatSystem.messages] : preferences.chatSystem.messages };
+  }
   const sceneChanges = new Map();
+  let currentSceneId = String(world.activeSceneId || '');
   for (const operation of operations) {
-    if (operation.type === 'scene.activate') continue;
-    const sceneId = String(operation.payload?.sceneId || world.activeSceneId || '');
-    const entry = sceneChanges.get(sceneId) || { tokens: false, featureStates: false, settings: false };
+    if (CHAT_TYPES.has(operation.type)) continue;
+    if (operation.type === 'scene.activate') {
+      currentSceneId = String(operation.payload?.sceneId || '');
+      continue;
+    }
+    const sceneId = String(operation.payload?.sceneId || currentSceneId);
+    const entry = sceneChanges.get(sceneId) || { tokens: false, featureStates: false, settings: false, occlusionShapes: false };
     if (['token.move', 'token.reposition', 'token.movePath'].includes(operation.type)) entry.tokens = true;
     if (operation.type === 'scene.featureState.patch' || operation.type === 'scene.door.use') entry.featureStates = true;
     if (operation.type === 'scene.settings.patch') entry.settings = true;
+    if (operation.type.startsWith('scene.occlusion')) entry.occlusionShapes = true;
+    if (operation.type === 'scene.occlusion.configure') entry.featureStates = true;
     sceneChanges.set(sceneId, entry);
   }
   for (const [sceneId, changes] of sceneChanges) {
@@ -243,6 +293,7 @@ function cloneOperationInput(rawState, operations) {
     if (changes.tokens) scene.tokens = [...(scene.tokens || [])];
     if (changes.featureStates) scene.featureStates = { ...(scene.featureStates || {}) };
     if (changes.settings) scene.settings = { ...(scene.settings || {}) };
+    if (changes.occlusionShapes) scene.occlusionShapes = [...(scene.occlusionShapes || [])];
     world.scenes[index] = scene;
   }
   if (operations.some(operation => STATUS_TYPES.has(operation.type))) {
@@ -355,10 +406,11 @@ function pruneCombatReferences(state) {
   const combatSystem = state.preferences?.combatSystem;
   const combat = combatSystem?.combat;
   if (!plainObject(combat) || !Array.isArray(combat.combatants)) return;
-  combat.combatants = combat.combatants.filter(item => tokenIds.has(String(item?.tokenId ?? ''))
+  const combatants = combat.combatants.filter(item => tokenIds.has(String(item?.tokenId ?? ''))
     && (item?.actorId == null || actorIds.has(String(item.actorId))));
-  if (!combat.combatants.length) combatSystem.combat = null;
-  else combat.turnIndex = Math.max(0, Math.min(combat.combatants.length - 1, Number(combat.turnIndex) || 0));
+  state.preferences.combatSystem = { ...combatSystem, combat: combatants.length
+    ? { ...combat, combatants, turnIndex: Math.max(0, Math.min(combatants.length - 1, Number(combat.turnIndex) || 0)) }
+    : null };
 }
 
 function mergeRuntimeToken(canonical, runtime) {
@@ -477,6 +529,10 @@ function projectGranularOperationState(state, operations) {
       if (Object.hasOwn(scene.featureStates || {}, featureId)) {
         state.preferences.featureStates[featureId] = clone(scene.featureStates[featureId]);
       } else delete state.preferences.featureStates[featureId];
+    }
+    if (operation.type === 'scene.occlusion.configure'
+      && String(operation.payload?.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
+      state.preferences.featureStates = clone(scene.featureStates || {});
     }
     if (operation.type === 'scene.settings.patch'
       && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
@@ -790,9 +846,10 @@ function applyCanonicalOperation(state, operation, context = {}) {
           y: point.y + offset.y,
           elevationMeters: (point.elevationMeters ?? leaderOrigin.elevationMeters) + offset.elevationMeters,
         }));
+        const operationMap = operationMapForScene(context, scene);
         for (const [index, point] of route.entries()) {
-          const width = Number(context.mapMetrics?.width);
-          const height = Number(context.mapMetrics?.height);
+          const width = Number(operationMap.width);
+          const height = Number(operationMap.height);
           if ((Number.isFinite(width) && (point.x < 0 || point.x > width))
             || (Number.isFinite(height) && (point.y < 0 || point.y > height))) {
             fail(`Token ${tokenId} waypoint ${index + 1} is outside the Scene`, 'movement_out_of_bounds');
@@ -849,8 +906,9 @@ function applyCanonicalOperation(state, operation, context = {}) {
         next.y = finite(payload.y, 'y');
         if (payload.elevationMeters !== undefined) next.elevationMeters = finite(payload.elevationMeters, 'elevationMeters');
         next.featureId = null;
-        if ((Number.isFinite(context.mapMetrics?.width) && (next.x < 0 || next.x > context.mapMetrics.width))
-          || (Number.isFinite(context.mapMetrics?.height) && (next.y < 0 || next.y > context.mapMetrics.height))) {
+        const operationMap = operationMapForScene(context, scene);
+        if ((Number.isFinite(operationMap.width) && (next.x < 0 || next.x > operationMap.width))
+          || (Number.isFinite(operationMap.height) && (next.y < 0 || next.y > operationMap.height))) {
           fail('Movement destination is outside the Scene', 'movement_out_of_bounds');
         }
       }
@@ -993,10 +1051,9 @@ function applyCanonicalOperation(state, operation, context = {}) {
     if (!['open', 'close'].includes(action)) fail('Door action must be open or close', 'door_action_invalid');
     const token = tokenId ? tokenById(scene, tokenId).token : null;
     if (!isGm && !token) fail('Door interaction requires a controlled Token', 'door_actor_required');
-    const mapPackage = plainObject(context.mapPackage)
-      ? context.mapPackage
-      : plainObject(context.mapMetrics) ? context.mapMetrics : null;
-    const feature = mapPackage?.features?.find(item => String(item?.id ?? '') === featureId) || null;
+    const mapPackage = operationMapForScene(context, scene);
+    const feature = featureForOcclusionDoor(mapPackage, scene, featureId)
+      || mapPackage?.features?.find(item => String(item?.id ?? '') === featureId) || null;
     const validation = validateDoorInteraction({ scene, token, feature, mapPackage, action, source: context.source });
     if (!validation.valid) fail(validation.reason, validation.code);
     scene.featureStates = plainObject(scene.featureStates) ? scene.featureStates : {};
@@ -1019,6 +1076,51 @@ function applyCanonicalOperation(state, operation, context = {}) {
     if (next === null || Object.keys(next).length === 0) delete scene.featureStates[featureId];
     else scene.featureStates[featureId] = next;
     return { action: type, sceneId: String(scene.id), featureId, removed: next === null };
+  }
+
+  if (type.startsWith('scene.occlusion')) {
+    const scene = sceneById(world, payload.sceneId);
+    const role = context.source?.role;
+    if (role != null && !['gm', 'offline'].includes(String(role).toLowerCase())) {
+      fail('Only GM can edit occlusion configuration', 'permission_denied');
+    }
+    const mapPackage = operationMapForScene(context, scene);
+    if (type === 'scene.occlusion.configure') {
+      if (payload.expectedConfiguration !== undefined
+        && !same(exportOcclusionConfiguration(mapPackage, scene), payload.expectedConfiguration)) {
+        fail('Occlusion configuration changed while editing; reload the draft before applying', 'occlusion_configuration_conflict');
+      }
+      const config = normalizeOcclusionConfiguration(payload.configuration, mapPackage, scene);
+      scene.occlusionShapes = config.occlusionShapes;
+      const records = { ...(scene.featureStates || {}) };
+      for (const [featureId, record] of Object.entries(records)) {
+        if (!Object.hasOwn(record, 'vision')) continue;
+        records[featureId] = { ...record };
+        delete records[featureId].vision;
+        if (!Object.keys(records[featureId]).length) delete records[featureId];
+      }
+      for (const [featureId, vision] of Object.entries(config.featureVision)) records[featureId] = { ...records[featureId], vision };
+      scene.featureStates = records;
+      return { action: type, sceneId: String(scene.id), shapeIds: config.occlusionShapes.map(shape => shape.id) };
+    }
+    if (type === 'scene.occlusionShape.upsert') {
+      const shape = normalizeOcclusionShape(payload.shape, { map: mapPackage });
+      const values = new Map((scene.occlusionShapes || []).map(value => [value.id, value]));
+      values.set(shape.id, shape);
+      scene.occlusionShapes = [...normalizeOcclusionShapes([...values.values()])];
+      assertOcclusionReferences(scene.occlusionShapes, mapPackage, scene);
+      return { action: type, sceneId: String(scene.id), shapeId: shape.id };
+    }
+    const shapeId = identifier(payload.shapeId, 'shapeId');
+    const defaults = new Map((mapPackage.occlusionShapes || []).map(value => [String(value.id), value]));
+    const values = new Map([...defaults, ...(scene.occlusionShapes || []).map(value => [value.id, value])]);
+    if (!values.has(shapeId)) fail(`Unknown occlusion shape: ${shapeId}`, 'invalid_reference');
+    const removed = new Set([shapeId]);
+    for (const value of values.values()) if (value.hostShapeId === shapeId) removed.add(value.id);
+    const next = (scene.occlusionShapes || []).filter(value => !removed.has(value.id));
+    for (const id of removed) if (defaults.has(id)) next.push({ ...defaults.get(id), enabled: false });
+    scene.occlusionShapes = [...normalizeOcclusionShapes(next)];
+    return { action: type, sceneId: String(scene.id), shapeId, removedShapeIds: [...removed] };
   }
 
   if (type.startsWith('scene.fog.')) {
@@ -1116,9 +1218,7 @@ export function prepareFogOperation(state, rawOperation, context = {}) {
   const world = worldFromState(state);
   const scene = sceneById(world, payload.sceneId);
   const partyId = identifier(payload.partyId, 'partyId');
-  const map = plainObject(context.mapPackage)
-    ? context.mapPackage
-    : plainObject(context.mapMetrics) ? context.mapMetrics : {};
+  const map = operationMapForScene(context, scene);
   const radiusMeters = type === 'scene.fog.reset' ? 0 : Math.max(0, finite(payload.radiusMeters, 'radiusMeters'));
   const radiusUnits = radiusMeters / Math.max(0.000001, Number(map.metersPerUnit) || 1);
   const dirtyBounds = type === 'scene.fog.reset' ? null : (payload.from && payload.to ? [payload.from, payload.to] : [payload])
@@ -1135,7 +1235,7 @@ export function prepareFogOperation(state, rawOperation, context = {}) {
     ? mergeActorDelta(sourceActor, sourceToken.actorDelta)
     : sourceActor;
   const sourceVision = sourceToken && sourceResolvedActor
-    ? context.ruleset?.vision?.describe?.(sourceResolvedActor, { token: sourceToken, scene, world })
+    ? (context.describeVision || context.ruleset?.vision?.describe)?.(sourceResolvedActor, { token: sourceToken, scene, world })
     : null;
   const lineOfSightEnabled = !visionIgnoresOcclusion(sourceVision);
   const spatial = type === 'scene.fog.explore' ? sceneVisionContext(map, scene) : null;
@@ -1154,11 +1254,13 @@ function* worldOperationSteps(rawState, rawOperations, context = {}) {
   if (!operations.length || operations.length > WORLD_OPERATION_BATCH_LIMIT) {
     fail(`operations must contain 1-${WORLD_OPERATION_BATCH_LIMIT} items`, 'world_operation_limit');
   }
-  const state = cloneOperationInput(rawState, operations);
+  const state = cloneOperationInput(rawState, operations, context);
   worldFromState(state);
   const results = [];
   for (let index = 0; index < operations.length; index += 1) {
     const operation = operations[index];
+    const prepared = context.prepareOperation?.({ state, operation, index });
+    const resultOffset = results.length;
     if (STATUS_TYPES.has(operation.type)) {
       if (typeof context.applyStatus !== 'function') fail('Status operation handler is unavailable', 'status_handler_unavailable');
       const applied = context.applyStatus(state, { type: operation.type, ...clone(operation.payload) }, context);
@@ -1193,6 +1295,10 @@ function* worldOperationSteps(rawState, rawOperations, context = {}) {
         operations.splice(index + 1, 0, ...generated);
       }
     }
+    // These callbacks prepare derived exploration inputs synchronously from
+    // this operation's actual state. Callers retain inputs, never this mutable
+    // transaction state, and apply their side effects only after full success.
+    context.onOperationApplied?.({ state, operation, index, prepared, results: results.slice(resultOffset) });
   }
   const shouldRecheckMovement = operations.some(operation => operation.type.startsWith('actor.')
     || operation.type.startsWith('status.')
@@ -1225,6 +1331,7 @@ export async function applyWorldOperationsAsync(...args) {
 }
 
 function diffById(beforeItems = [], afterItems = []) {
+  if (beforeItems === afterItems) return { upsert: [], remove: [] };
   const before = mapById(beforeItems);
   const after = mapById(afterItems);
   const upsert = [];
@@ -1236,15 +1343,8 @@ function diffById(beforeItems = [], afterItems = []) {
 
 function sceneMetadata(scene) {
   if (!plainObject(scene)) return scene;
-  const value = clone(scene);
-  delete value.tokens;
-  delete value.markers;
-  delete value.attackAreas;
-  delete value.sceneEvents;
-  delete value.featureStates;
-  delete value.fog;
-  delete value.settings;
-  return value;
+  const { tokens, markers, attackAreas, sceneEvents, featureStates, occlusionShapes, fog, settings, ...metadata } = scene;
+  return clone(metadata);
 }
 
 function sceneContent(scene) {
@@ -1256,7 +1356,7 @@ function sceneContent(scene) {
   };
 }
 
-export function createWorldOperationPatch(beforeState, afterState) {
+export function createWorldOperationPatch(beforeState, afterState, { trustedCanonical = false } = {}) {
   const beforeWorld = worldFromState(beforeState);
   const afterWorld = worldFromState(afterState);
   const patch = { schemaVersion: WORLD_OPERATION_SCHEMA_VERSION, world: {} };
@@ -1277,7 +1377,7 @@ export function createWorldOperationPatch(beforeState, afterState) {
   }
   const beforeScenes = mapById(beforeWorld.scenes);
   const afterScenes = mapById(afterWorld.scenes);
-  const scenes = { upsert: [], remove: [], tokens: [], content: [], featureStates: [], fog: [] };
+  const scenes = { upsert: [], remove: [], tokens: [], content: [], featureStates: [], occlusionShapes: [], fog: [] };
   for (const [sceneId, scene] of afterScenes) {
     const previous = beforeScenes.get(sceneId);
     if (!previous || !same(sceneMetadata(previous), sceneMetadata(scene))) {
@@ -1292,10 +1392,16 @@ export function createWorldOperationPatch(beforeState, afterState) {
       Object.entries(scene.featureStates || {}).map(([id, state]) => ({ id, state })),
     );
     if (featureStates.upsert.length || featureStates.remove.length) scenes.featureStates.push({ sceneId, ...featureStates });
-    if (!same(previous.fog, scene.fog)) scenes.fog.push({ sceneId, fog: normalizeFogState(scene.fog) });
+    const shapes = diffById(previous.occlusionShapes || [], scene.occlusionShapes || []);
+    if (shapes.upsert.length || shapes.remove.length) scenes.occlusionShapes.push({ sceneId, ...shapes });
+    if (!same(previous.fog, scene.fog)) scenes.fog.push({ sceneId,
+      // The server's validated, deeply frozen canonical stream already contains
+      // normalized Fog. Retain that immutable value in private WAL/resume data;
+      // mutable callers and the default import/replay path still normalize it.
+      fog: trustedCanonical && Object.isFrozen(scene.fog) ? scene.fog : normalizeFogState(scene.fog) });
   }
   for (const sceneId of beforeScenes.keys()) if (!afterScenes.has(sceneId)) scenes.remove.push(sceneId);
-  if (scenes.upsert.length || scenes.remove.length || scenes.tokens.length || scenes.content.length || scenes.featureStates.length || scenes.fog.length) {
+  if (scenes.upsert.length || scenes.remove.length || scenes.tokens.length || scenes.content.length || scenes.featureStates.length || scenes.occlusionShapes.length || scenes.fog.length) {
     patch.world.scenes = scenes;
   }
   if (!same(beforeState?.preferences?.combatSystem, afterState?.preferences?.combatSystem)) {
@@ -1367,6 +1473,11 @@ export function applyWorldOperationPatch(rawState, rawPatch, { mutate = false, p
         assertFeatureStatePatch(value);
         scene.featureStates[featureId] = clone(value);
       }
+    }
+    for (const shapePatch of worldPatch.scenes.occlusionShapes || []) {
+      const scene = scenes.get(identifier(shapePatch.sceneId, 'sceneId'));
+      if (!scene) fail(`Patch references missing Scene: ${shapePatch.sceneId}`, 'invalid_reference');
+      scene.occlusionShapes = [...normalizeOcclusionShapes(applyIdPatch(scene.occlusionShapes || [], shapePatch))];
     }
     for (const fogPatch of worldPatch.scenes.fog || []) {
       const scene = scenes.get(identifier(fogPatch.sceneId, 'sceneId'));
@@ -1538,6 +1649,9 @@ export function deriveWorldOperations(beforeState, afterState) {
     if (!same(sceneContent(previous), sceneContent(scene))) {
       operations.push({ type: 'scene.content.replace', payload: { sceneId, ...sceneContent(scene) } });
     }
+    const shapeDiff = diffById(previous.occlusionShapes || [], scene.occlusionShapes || []);
+    for (const shape of shapeDiff.upsert) operations.push({ type: 'scene.occlusionShape.upsert', payload: { sceneId, shape } });
+    for (const shapeId of shapeDiff.remove) operations.push({ type: 'scene.occlusionShape.delete', payload: { sceneId, shapeId } });
     const beforeFeatureStates = plainObject(previous.featureStates) ? previous.featureStates : {};
     const afterFeatureStates = plainObject(scene.featureStates) ? scene.featureStates : {};
     for (const [featureId, value] of Object.entries(afterFeatureStates)) {

@@ -62,6 +62,8 @@ jobs:
       - name: Verify packaged Local/LAN server, World Manager and Lanzhou Runtime
         shell: pwsh
         run: |
+          node scripts/vision-mask-raster-check.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Continuous mask raster equivalence failed.' }
           $version = node -p "require('./package.json').version"
           $root = Join-Path $PWD "artifact/RPGmap-v$version"
-          & ./scripts/windows-smoke.ps1 -Root $root -TimeoutSeconds 30
+          & ./scripts/windows-smoke.ps1 -Root $root -TimeoutSeconds 30 -Browser chrome

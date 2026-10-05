@@ -1,4 +1,5 @@
 import { deriveSceneState } from '../engine/state.js';
+import { effectiveFeatureOpen } from '../world/feature-states.js';
 import {
   deriveVisionOccluders,
   inspectLineOfSight,
@@ -73,9 +74,7 @@ export function validateDoorInteraction({ scene, token, feature, mapPackage, act
     const visibility = feature.visibility || {};
     if (feature.hidden === true || visibility.mode === 'gm') return failure('door_not_visible');
   }
-  const currentlyOpen = state.open === true
-    || (state.open === undefined && (feature.interaction?.initialOpen === true
-      || feature.interaction?.initialState?.open === true));
+  const currentlyOpen = effectiveFeatureOpen(state, feature);
   if ((action === 'open') === currentlyOpen) return failure('door_state_conflict');
   const fallbackTarget = pointForFeature(feature);
   const polygon = polygonForFeature(feature);
@@ -101,8 +100,8 @@ export function validateDoorInteraction({ scene, token, feature, mapPackage, act
   if (!isGm) {
     const occluders = deriveVisionOccluders(mapPackage, scene, derived);
     const sight = inspectLineOfSight({
-      from: actorPoint, to: target, occluders, metersPerUnit,
-      excludedFeatureIds: [String(feature.id)],
+      from: { ...actorPoint, allowHostExemption: true }, to: target, occluders, metersPerUnit,
+      excludedFeatureIds: [String(feature.id)], applySourceHostExemption: true,
     });
     if (!sight.clear) return failure('door_line_of_sight_blocked');
   }

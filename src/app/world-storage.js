@@ -54,8 +54,17 @@ export function createWorldStatePersistence({
 
   const storageKey = worldId ? canonicalWorldStorageKey(worldId) : worldStateStorageKey(mapPackage);
   let saveTimer = null;
+  let suspended = false;
   let blocked = initialLoad?.blocked === true;
   let pendingInitialLoad = initialLoad;
+  let localExploration = null;
+  function readLocalExploration(raw) {
+    const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    localExploration = value?._localExploration ? structuredClone(value._localExploration) : null;
+  }
+  function withLocalExploration(serialized) {
+    return localExploration ? `${serialized.slice(0, -1)},"_localExploration":${JSON.stringify(localExploration)}}` : serialized;
+  }
 
   function preserveRaw(raw, suffix) {
     const backupKey = `${storageKey}:backup:${suffix}`;
@@ -65,6 +74,7 @@ export function createWorldStatePersistence({
 
   function load(options = {}) {
     if (pendingInitialLoad && !Object.prototype.hasOwnProperty.call(options, 'raw')) {
+      try { readLocalExploration(storageAdapter.get(storageKey)); } catch { localExploration = null; }
       const loaded = pendingInitialLoad;
       pendingInitialLoad = null;
       return { state: loaded.state, notice: loaded.notice || null };
@@ -72,12 +82,13 @@ export function createWorldStatePersistence({
     let raw = null;
     try {
       raw = Object.prototype.hasOwnProperty.call(options, 'raw') ? options.raw : storageAdapter.get(storageKey);
+      readLocalExploration(raw);
       if (!raw) return { state: initialWorldState(mapPackage, ruleset, { worldId: worldId || 'world-default', worldName }), notice: null };
       const prepared = prepareRuntimeState(raw, { mapPackage, ruleset });
       if (!prepared.migrated) return { state: prepared.state, notice: null };
       try {
         preserveRaw(raw, `legacy-${prepared.fromVersion || 'save-v2'}`);
-        storageAdapter.set(storageKey, JSON.stringify(exportRuntimeState(prepared.state, { mapPackage, ruleset })));
+        storageAdapter.set(storageKey, withLocalExploration(JSON.stringify(exportRuntimeState(prepared.state, { mapPackage, ruleset }))));
         return {
           state: prepared.state,
           notice: {
@@ -119,13 +130,13 @@ export function createWorldStatePersistence({
   }
 
   function writeCurrentState(trusted = false) {
-    if (blocked) return false;
+    if (blocked || suspended) return false;
     try {
       const current = getState();
       const serialized = trusted && typeof stringifyTrustedState === 'function'
         ? stringifyTrustedState(current)
         : JSON.stringify(exportRuntimeState(current, { mapPackage, ruleset }));
-      storageAdapter.set(storageKey, serialized);
+      storageAdapter.set(storageKey, withLocalExploration(serialized));
       onSaved();
       return true;
     } catch (error) {
@@ -136,7 +147,7 @@ export function createWorldStatePersistence({
   }
 
   function schedule() {
-    if (blocked) return false;
+    if (blocked || suspended) return false;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = null;
@@ -162,11 +173,13 @@ export function createWorldStatePersistence({
   }
 
   function replace(nextState) {
+    if (suspended) throw Object.assign(new Error('联机投影不能覆盖离线 World 存档'), { code: 'world_persistence_suspended' });
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;
     }
     storageAdapter.set(storageKey, JSON.stringify(exportRuntimeState(nextState, { mapPackage, ruleset })));
+    localExploration = null;
     blocked = false;
     return true;
   }
@@ -185,7 +198,41 @@ export function createWorldStatePersistence({
     persistTrustedNow,
     replace,
     cancel,
+    suspend() { cancel(); suspended = true; },
+    resume() { suspended = false; },
+    getLocalExploration() { return structuredClone(localExploration); },
+    setLocalExploration(value) { localExploration = structuredClone(value); },
     get blocked() { return blocked; },
+    get suspended() { return suspended; },
+  };
+}
+
+// Server projections remain a temporary overlay, including during reconnect.
+// The detached local World and its private jobs keep one authoritative save.
+export function createRemoteWorldIsolation({ persistence, getState, restoreState } = {}) {
+  let localState = null, active = false;
+  return {
+    enter() {
+      if (active) return false;
+      persistence.cancel();
+      const saved = persistence.persistNow();
+      localState = structuredClone(getState());
+      active = true;
+      persistence.suspend();
+      return saved;
+    },
+    updateConnection({ connected = false, retainsServerState = false } = {}) {
+      if (connected || retainsServerState) { this.enter(); return false; }
+      if (!active) return false;
+      // Restore before resuming persistence or delivering events that can
+      // restart the saved exploration queue.
+      restoreState(localState);
+      localState = null;
+      active = false;
+      persistence.resume();
+      return true;
+    },
+    get active() { return active; },
   };
 }
 

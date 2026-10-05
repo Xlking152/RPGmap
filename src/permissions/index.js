@@ -1,3 +1,4 @@
+import { readConnectionState } from "../multiplayer/connection-state.js";
 import { canPermission } from './model.js';
 
 export * from './model.js';
@@ -14,12 +15,12 @@ export function createPermissionSystem() {
     register(api) {
       api.permissions = Object.freeze({
         actorLevel(actorId) {
-          const status = api.multiplayer?.getStatus?.() || {};
+          const status = readConnectionState(api) || {};
           if (status.connected !== true || status.session?.role === 'gm') return 'gm';
           return api.multiplayer?.getActorAccessLevel?.(actorId) || 'none';
         },
         can(action, context = {}) {
-          const status = api.multiplayer?.getStatus?.() || {};
+          const status = readConnectionState(api) || {};
           const connected = status.connected === true;
           const role = connected ? status.session?.role || 'player' : 'gm';
           const token = context.token || (context.tokenId ? api.tokens?.get?.(context.tokenId) : null);

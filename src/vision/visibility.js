@@ -1,17 +1,24 @@
 import { visibleFogRowsForCircleSteps, circleFogRows, intersectFogRows, FOG_CELL_SIZE_METERS } from './fog.js';
-import { normalizeVisionOccluder, perceptionLevelAtPoint } from '../spatial/kernel.js';
+import { normalizeVisionOccluder, perceptionLevelAtPoint, visionOccludersForSource } from '../spatial/kernel.js';
+import { computeContinuousVisibility } from './continuous.js';
 import { finishWorkSync, finishWorkAsync } from './work.js';
 
 // Both ranges share one geometric solution. Precise perception additionally
 // intersects the true 3D sphere (the historical coarse Fog circle includes its edge cell).
-export function* computeVisibilityRowsSteps({ source, map, occluders = [], lights = [], ignoresOcclusion = false }) {
+export function* computeVisibilityRowsSteps({ source, map, occluders = [], lights = [], ignoresOcclusion = false, continuous = false }) {
   const preciseRange = Number(source.preciseGroundRangeMeters ?? source.preciseRangeMeters ?? source.rangeMeters) || 0;
   const vagueRange = Number(source.vagueGroundRangeMeters ?? source.vagueRangeMeters ?? source.rangeMeters) || 0;
   const prepared = Object.isFrozen(occluders) ? occluders : Object.freeze(occluders.map(normalizeVisionOccluder).filter(Boolean));
+  const contour = continuous ? computeContinuousVisibility({ source, map, occluders: prepared, lights, ignoresOcclusion }) : null;
+  // Realtime masks are continuous. Build the historical grid only when a
+  // degenerate contour actually needs its exact-ray fallback.
+  if (contour && !contour.fallback && !contour.illumination.regions.some(region => region.fallback))
+    return { precise: [], vague: [], continuous: contour };
+  const effective = visionOccludersForSource({ ...source, allowHostExemption: true }, prepared, map.metersPerUnit);
   const circle = range => ({ x: Number(source.x), y: Number(source.y), radiusMeters: range });
   const shared = yield* visibleFogRowsForCircleSteps(circle(Math.max(preciseRange, vagueRange)), map, {
     sourceElevationMeters: Number(source.elevationMeters) || 0,
-    occluders: ignoresOcclusion || source.lineOfSightEnabled === false ? [] : prepared,
+    occluders: ignoresOcclusion || source.lineOfSightEnabled === false ? [] : effective,
   });
   const vague = vagueRange >= preciseRange ? shared : intersectFogRows(shared, circleFogRows(circle(vagueRange), map));
   const candidates = preciseRange >= vagueRange ? shared : intersectFogRows(shared, circleFogRows(circle(preciseRange), map));
@@ -51,7 +58,9 @@ export function* computeVisibilityRowsSteps({ source, map, occluders = [], light
     if (output.length) precise[rowKey] = output;
     yield;
   }
-  return { precise: Object.entries(precise), vague: Object.entries(vague) };
+  const result = { precise: Object.entries(precise), vague: Object.entries(vague) };
+  if (continuous) result.continuous = contour;
+  return result;
 }
 
 export function computeVisibilityRows(input) {

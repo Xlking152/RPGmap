@@ -14,8 +14,8 @@ const combat = readFileSync(new URL('../src/combat/controller.js', import.meta.u
 test('ordinary Token events update only keyed Token, status, and summary views', () => {
   assert.match(tokenLayer, /function renderToken\(tokenId/);
   assert.match(tokenLayer, /for \(const id of pendingRenderIds\) renderToken\(id/);
-  assert.match(tokenLayer, /function renderTokenPosition\(tokenId\)/);
-  assert.match(tokenLayer, /pendingPositionIds\.add\(id\)/);
+  assert.match(tokenLayer, /function renderTokenPosition\(tokenId\b/);
+  assert.match(tokenLayer, /renderTokenPosition\(id, token\)/);
   assert.match(tokenLayer, /if \(motion\.prediction && sameTokenPoint\(canonical, motion\.target\)\) renderToken/);
   assert.match(tokenLayer, /eventRenderFrame = requestFrame/);
   assert.match(tokenLayer, /const changed = new Set\(\[\.\.\.previous, \.\.\.selectedIds\]\)/);
