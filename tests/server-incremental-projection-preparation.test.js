@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createDocumentChanges, createFogDocumentChanges } from '../src/documents/changes.js';
-import { projectStateForAudience, advanceFogProjectionMetadata, targetedProjectionCollectionChanges, projectionCollectionChanges } from '../src/vision/audience.js';
+import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, targetedProjectionCollectionChanges, projectionCollectionChanges } from '../src/vision/audience.js';
 import { createPreviousProjectionFunctions } from './fixtures/server-incremental-before-preparation.js';
 
 const server = readFileSync(new URL('../deployment/local-server/server.mjs', import.meta.url), 'utf8');
@@ -11,7 +11,7 @@ const functionSource = server.slice(server.indexOf('function lightweightProjecti
 const currentFactory = new Function('dependencies', `
   const { sessions, audienceStateFor, projectMotionForSession, createFogDocumentChanges,
     createDocumentChanges, sendSocket, rememberResumeCommit, committedPatches,
-    describeVisionForToken, advanceFogProjectionMetadata, targetedProjectionCollectionChanges, projectionCollectionChanges, visionMapForScene,
+    describeVisionForToken, describeServerVision, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, targetedProjectionCollectionChanges, projectionCollectionChanges, visionMapForScene,
     findUser, assertCanonicalWorldState, structuredClone, metrics } = dependencies;
   ${functionSource}
   const shell = lightweightProjectionShell;
@@ -61,7 +61,8 @@ function harness(previous = false, overrides = {}) {
     calls: [], responses: [], resumptions: [] };
   const dependencies = {
     sessions: new Map(), committedPatches: new WeakMap(), metrics,
-    advanceFogProjectionMetadata, targetedProjectionCollectionChanges, projectionCollectionChanges, visionMapForScene: () => null, findUser: () => null,
+    advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, targetedProjectionCollectionChanges, projectionCollectionChanges,
+    describeServerVision: () => ({}), visionMapForScene: () => null, findUser: () => null,
     assertCanonicalWorldState: { isImmutableData: () => false },
     structuredClone(value) { metrics.clones++; return structuredClone(value); },
     describeVisionForToken(state, id) {
@@ -71,6 +72,7 @@ function harness(previous = false, overrides = {}) {
     },
     audienceStateFor(session, state, options = {}) {
       metrics.caches.push(options.movementCache);
+      (metrics.freshDetection ||= []).push(options.forceFreshDetection);
       metrics.calls.push(`full:${session.id}`);
       const next = structuredClone(state);
       next.preferences.audienceVision = { partyIds: [session.id], source: null };
@@ -176,16 +178,13 @@ test('movement preparation matches the previous output across sources, scenes, F
   }
 });
 
-test('Fog, public chat and ordinary Actor/Token status paths keep their full previous output', () => {
-  for (const kind of ['fog', 'chat', 'actor-status', 'token-status', 'source-status', 'missing-status-target']) {
+test('Fog and ordinary Actor/Token status paths keep their full previous output', () => {
+  for (const kind of ['fog', 'actor-status', 'token-status', 'source-status', 'missing-status-target']) {
     const values = fixture();
     let operations, results = [];
     if (kind === 'fog') {
       operations = [{ type: 'scene.fog.explore', payload: {} }];
       values.after.preferences.worldV2.scenes[0].fog.exploredByParty.p.rows[1].push([4, 5]);
-    } else if (kind === 'chat') {
-      operations = [{ type: 'chat.append', payload: {} }]; results = [{ chatId: 'chat' }];
-      values.after.preferences.chatSystem.messages.push({ id: 'chat', data: null, text: 'hello' });
     } else {
       operations = [{ type: 'status.add', payload: { scope: kind === 'actor-status' ? 'actor' : 'token',
         targetId: kind === 'actor-status' ? 'actor-target' : kind === 'source-status' ? 'source'
@@ -195,6 +194,13 @@ test('Fog, public chat and ordinary Actor/Token status paths keep their full pre
     }
     compareIncremental(values, operations, results);
   }
+});
+
+test('public chat without a canonical predecessor proof uses complete projection', () => {
+  const values = fixture(), current = harness();
+  values.after.preferences.chatSystem.messages.push({ id: 'chat', data: null, text: 'hello' });
+  assert.equal(current.tryIncrementalAudienceProjection(session, values.projection, values.after,
+    [{ type: 'chat.append', payload: {} }], [{ chatId: 'chat' }], values.before), null);
 });
 
 function broadcastFixture() {
@@ -396,5 +402,20 @@ test('mixed and nonmovement broadcasts keep the previous fallback without granti
     assert.ok(current.metrics.caches.every(value => value === undefined));
     assert.deepEqual(current.metrics.responses, previous.metrics.responses);
     assert.deepEqual(current.metrics.calls, previous.metrics.calls);
+  }
+});
+
+test('ordinary status full fallback receives an exact predecessor and always refreshes perception', () => {
+  for (const type of ['status.apply', 'status.remove']) {
+    const values = broadcastFixture();
+    const current = harness(false, { sessions: values.sessions });
+    current.broadcastOperationCommit({ beforeState: values.before, afterState: values.after,
+      operationId: 'status-fallback', baseRevision: 1, revision: 2, updatedAt: 'after',
+      results: [{ action: type }], operations: [{ type, payload: { scope: 'actor', targetId: 'absent' } }],
+      originSessionId: 'player-0', documentBatch: true });
+    assert.ok(current.metrics.caches.length > 0);
+    assert.ok(current.metrics.caches.every(cache => cache?.beforeState === values.before && cache.previousProjection
+      && cache.tokenIds.size === 0));
+    assert.ok(current.metrics.freshDetection.every(value => value === true));
   }
 });

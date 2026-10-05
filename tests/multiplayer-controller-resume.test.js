@@ -62,6 +62,7 @@ async function runtime(t, { internalReader = false } = {}) {
   let state = projectedState(), timerId = 0;
   const timers = new Map(), storage = new Map([['rpgmap:multiplayer:visionSourceTokenId', 'scout']]);
   const view = { location: { protocol: 'http:', host: '127.0.0.1:30000', hostname: '127.0.0.1' },
+    performance: globalThis.performance,
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     setTimeout(callback) { const id = ++timerId; timers.set(id, callback); return id; },
     clearTimeout: id => timers.delete(id), setInterval: () => ++timerId, clearInterval() {},
@@ -225,4 +226,156 @@ for (const internalReader of [false, true]) test(`permission queries preserve li
   assert.equal(capabilities.canPlaceActor('actor'), true);
   client.state.preferences.worldV2.scenes[0].tokens[0].controllerUserIds = [];
   assert.equal(capabilities.canControlToken('scout'), false);
+});
+
+const documentRequests = socket => socket.messages.filter(message => message.type === 'document.batch');
+const revisionDenial = (operationId, revision, state) => ({ type: 'document.batch.denied', operationId,
+  code: 'revision_conflict', message: 'World changed', revision, ...(state ? { state } : {}) });
+
+async function confirmRequest(socket, client, operationId, revision, change = () => {}) {
+  const before = structuredClone(client.state), after = structuredClone(before); change(after);
+  await socket.receive({ type: 'document.batch.committed', operationId, baseRevision: revision - 1, revision,
+    updatedAt: `revision-${revision}`, changes: createDocumentChanges(before, after) });
+  await socket.receive({ type: 'document.batch.ack', operationId, revision, results: [] });
+}
+
+test('public chat waits for a confirmed conflict snapshot and retries the same intent with one confirmation timer', async t => {
+  const client = await runtime(t), socket = FakeWebSocket.instances.at(-1), starts = [], ends = [], pending = new Map();
+  let clock = 10, completed = false;
+  client.api.diagnostics = { enabled: true, record() {},
+    begin(name, id) { starts.push([name, id]); pending.set(id, clock); },
+    end(name, id) { if (pending.has(id)) { ends.push([name, id, clock - pending.get(id)]); pending.delete(id); } } };
+  const result = client.api.multiplayer.performOperations([{ type: 'chat.append', payload: { text: 'Keep this message' } }],
+    { kind: 'chat', requestedOperationId: 'retry-chat' }).then(value => { completed = true; return value; });
+  const original = structuredClone(documentRequests(socket)[0]);
+  clock = 20; await socket.receive(revisionDenial(original.operationId, 5));
+  assert.equal(completed, false); assert.equal(documentRequests(socket).length, 1);
+  assert.equal(socket.messages.at(-1).type, 'world.snapshot.request');
+  const latest = structuredClone(client.state);
+  latest.preferences.worldV2.scenes[0].fog.exploredByParty.party.rows[0] = [[0, 7]];
+  clock = 40; await socket.receive({ type: 'world.snapshot', state: latest, revision: 5 });
+  assert.equal(documentRequests(socket).length, 2);
+  assert.deepEqual(documentRequests(socket)[1], { ...original, baseRevision: 5 });
+  assert.equal(client.api.multiplayer.getStatus().pendingOperationCount, 1);
+  clock = 70;
+  await confirmRequest(socket, client, original.operationId, 6, state => {
+    state.preferences.chatSystem.messages.push({ id: 'server-chat', text: 'Keep this message', data: null });
+  });
+  assert.equal((await result).operationId, original.operationId);
+  assert.equal(completed, true); assert.equal(client.api.multiplayer.getStatus().pendingOperationCount, 0);
+  assert.equal(client.state.preferences.chatSystem.messages.length, 1);
+  assert.deepEqual(starts, [['network.confirm', original.operationId]]);
+  assert.deepEqual(ends, [['network.confirm', original.operationId, 60]]);
+  assert.equal(client.events.filter(event => event.type === 'world:operation-result').length, 1);
+});
+
+for (const type of ['status.apply', 'status.remove']) test(`${type} reuses already confirmed Fog revision without a snapshot reload`, async t => {
+  const client = await runtime(t), socket = FakeWebSocket.instances.at(-1);
+  const result = client.api.multiplayer.performStatusOperation(type, {
+    operationId: `retry-${type}`, scope: 'actor', targetId: 'actor', definitionId: 'ordinary',
+  });
+  const original = structuredClone(documentRequests(socket)[0]);
+  await confirmRequest(socket, client, 'background-fog', 5, state => {
+    state.preferences.worldV2.scenes[0].fog.exploredByParty.party.rows[0] = [[0, 7]];
+  });
+  const imports = client.imports.length;
+  await socket.receive(revisionDenial(original.operationId, 5));
+  assert.equal(documentRequests(socket).length, 2);
+  assert.deepEqual(documentRequests(socket)[1], { ...original, baseRevision: 5 });
+  assert.equal(socket.messages.filter(message => message.type === 'world.snapshot.request').length, 0);
+  assert.equal(client.imports.length, imports);
+  await confirmRequest(socket, client, original.operationId, 6);
+  assert.equal((await result).revision, 6);
+});
+
+test('retrying chat preserves queued operation ordering until the first authoritative commit and ACK', async t => {
+  const client = await runtime(t), socket = FakeWebSocket.instances.at(-1);
+  const first = client.api.multiplayer.performOperations([{ type: 'chat.append', payload: { text: 'First' } }],
+    { requestedOperationId: 'first-chat' });
+  const second = client.api.multiplayer.performOperations([{ type: 'chat.append', payload: { text: 'Second' } }],
+    { requestedOperationId: 'second-chat' });
+  await socket.receive(revisionDenial('first-chat', 5, client.state));
+  assert.deepEqual(documentRequests(socket).map(message => message.operationId), ['first-chat', 'first-chat']);
+  await confirmRequest(socket, client, 'first-chat', 6); await first;
+  assert.deepEqual(documentRequests(socket).map(message => message.operationId), ['first-chat', 'first-chat', 'second-chat']);
+  assert.equal(documentRequests(socket)[2].baseRevision, 6);
+  await confirmRequest(socket, client, 'second-chat', 7); await second;
+});
+
+test('revision retries are bounded and retain the original operation ID until final failure', async t => {
+  const client = await runtime(t), socket = FakeWebSocket.instances.at(-1);
+  const result = client.api.multiplayer.performOperations([{ type: 'chat.append', payload: { text: 'Bounded' } }],
+    { requestedOperationId: 'bounded-chat' });
+  const rejected = assert.rejects(result, { code: 'revision_conflict' });
+  for (let revision = 5; revision <= 8; revision++) await socket.receive(revisionDenial('bounded-chat', revision, client.state));
+  await rejected;
+  assert.deepEqual(documentRequests(socket).map(message => [message.operationId, message.baseRevision]),
+    [['bounded-chat', 4], ['bounded-chat', 5], ['bounded-chat', 6], ['bounded-chat', 7]]);
+  assert.equal(client.api.multiplayer.getStatus().pendingOperationCount, 0);
+});
+
+for (const code of ['status_target_not_controlled', 'status_definition_not_found', 'entity_conflict', 'persist_failed']) {
+  test(`a retried Status intent still fails immediately on ${code}`, async t => {
+    const client = await runtime(t), socket = FakeWebSocket.instances.at(-1);
+    const result = client.api.multiplayer.performStatusOperation('status.apply', {
+      operationId: 'denied-status', scope: 'actor', targetId: 'actor', definitionId: 'ordinary',
+    });
+    const rejected = assert.rejects(result, { code });
+    await socket.receive(revisionDenial('denied-status', 5, client.state));
+    await socket.receive({ type: 'document.batch.denied', operationId: 'denied-status', revision: 5, code });
+    await rejected;
+    assert.equal(documentRequests(socket).length, 2);
+    assert.equal(client.api.multiplayer.getStatus().pendingOperationCount, 0);
+  });
+}
+
+for (const operations of [
+  [{ type: 'status.setStacks', payload: { scope: 'actor', targetId: 'actor', definitionId: 'ordinary', stacks: 2 } }],
+  [{ type: 'status.definition.delete', payload: { definitionId: 'ordinary' } }],
+  [{ type: 'token.move', payload: { sceneId: 'scene', tokenId: 'scout', x: 50, y: 20 } }],
+  [{ type: 'chat.append', payload: { text: 'Mixed' } }, { type: 'chat.clear', payload: {} }],
+  [{ type: 'actor.upsert', payload: { actor: { id: 'actor', name: 'Replacement' } } }],
+]) test(`absolute, movement or mixed ${operations.at(-1).type} intents never automatically retry`, async t => {
+  const client = await runtime(t), socket = FakeWebSocket.instances.at(-1);
+  const result = client.api.multiplayer.performOperations(operations, { requestedOperationId: 'unsafe-retry' });
+  const rejected = assert.rejects(result, { code: 'revision_conflict' });
+  await socket.receive(revisionDenial('unsafe-retry', 5, client.state)); await rejected;
+  assert.equal(documentRequests(socket).length, 1);
+});
+
+test('conditional direct document writes preserve their precondition and are not automatically retried', async t => {
+  const client = await runtime(t), socket = FakeWebSocket.instances.at(-1);
+  const writes = [{ action: 'update', document: { type: 'Status', id: 'actor', parent: null }, intent: 'status.remove',
+    data: { scope: 'actor', targetId: 'actor', definitionId: 'ordinary' }, precondition: { expectedEffects: [] } }];
+  const result = client.api.multiplayer.performDocumentBatch(writes, { requestedOperationId: 'conditional-status' });
+  const rejected = assert.rejects(result, { code: 'revision_conflict' });
+  await socket.receive(revisionDenial('conditional-status', 5, client.state)); await rejected;
+  assert.equal(documentRequests(socket).length, 1);
+  assert.deepEqual(documentRequests(socket)[0].writes, writes);
+});
+
+for (const change of ['world', 'scene']) test(`a Status conflict cannot carry an old intention into a changed ${change}`, async t => {
+  const client = await runtime(t), socket = FakeWebSocket.instances.at(-1);
+  const result = client.api.multiplayer.performStatusOperation('status.remove', {
+    operationId: 'old-status', scope: 'actor', targetId: 'actor', definitionId: 'ordinary',
+  });
+  const rejected = assert.rejects(result, { code: change === 'world' ? 'operation_rebase_failed' : 'status_rebase_failed' });
+  const latest = structuredClone(client.state);
+  if (change === 'world') latest.preferences.worldV2.id = 'other-world';
+  else latest.preferences.worldV2.activeSceneId = 'other-scene';
+  await socket.receive(revisionDenial('old-status', 5, latest)); await rejected;
+  assert.equal(documentRequests(socket).length, 1);
+});
+
+test('disconnect while a conflict snapshot imports cancels the intent without resending', async t => {
+  const client = await runtime(t), socket = FakeWebSocket.instances.at(-1);
+  const result = client.api.multiplayer.performOperations([{ type: 'chat.append', payload: { text: 'Cancelled' } }],
+    { requestedOperationId: 'cancelled-retry' });
+  const rejected = assert.rejects(result, { code: 'operation_cancelled' });
+  let completeImport;
+  client.api.importState = () => new Promise(resolve => { completeImport = resolve; });
+  await socket.receive(revisionDenial('cancelled-retry', 5, client.state));
+  assert.equal(typeof completeImport, 'function');
+  client.api.multiplayer.disconnect(); completeImport(); await settle(); await rejected;
+  assert.equal(documentRequests(socket).length, 1);
 });

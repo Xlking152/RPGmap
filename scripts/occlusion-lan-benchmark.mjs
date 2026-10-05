@@ -109,7 +109,7 @@ async function observeExploration(runtime) {
   const initial = await durableWorld(runtime);
   const handle = await open(path.join(runtime.mapDir, 'world.operations.ndjson'), 'r');
   const jobs = new Map(Object.entries(initial.exploration.jobs));
-  const created = new Map(), completed = new Set();
+  const created = new Map(), completed = new Set(), probes = new Map();
   let offset = 0, tail = '', latestRevision = initial.revision, scheduled = false, closed = false, failure = null;
   let chain = Promise.resolve();
   const readNew = async () => {
@@ -150,6 +150,15 @@ async function observeExploration(runtime) {
       const record = JSON.parse(line);
       if (record.revision <= latestRevision) continue;
       latestRevision = record.revision;
+      if (String(record.operationId || '').startsWith('occlusion-lan-probe-')) {
+        // WAL order proves these operations committed while path samples were
+        // still pending, rather than trusting a stale client queue snapshot.
+        const jobProgressAtCommit = [...jobs].filter(([id, job]) => id.startsWith('occlusion-lan-move-')
+          && job.cursor < job.totalSamples).map(([id, job]) => ({ id, cursor: job.cursor, totalSamples: job.totalSamples }));
+        probes.set(record.operationId, { revision: record.revision, jobProgressAtCommit,
+          activeJobIdsAtCommit: jobProgressAtCommit.map(job => job.id),
+          remainingSamplesAtCommit: jobProgressAtCommit.reduce((sum, job) => sum + job.totalSamples - job.cursor, 0) });
+      }
       const delta = record.explorationDelta;
       if (!delta) continue;
       if (delta.replace) { jobs.clear(); for (const [id, job] of Object.entries(delta.replace.jobs || {})) jobs.set(id, job); }
@@ -180,7 +189,7 @@ async function observeExploration(runtime) {
     setImmediate(() => { scheduled = false; if (!closed) flush().catch(() => {}); });
   });
   await flush();
-  return { jobs, created, completed, flush,
+  return { jobs, created, completed, probes, flush,
     async close() { closed = true; watcher.close(); await chain; await handle.close(); } };
 }
 
@@ -246,6 +255,12 @@ async function scenario(sourceCount) {
     revision = Math.max(revision, warmed.revision);
     const recipients = [gm, ...players].map(client => client.socket);
     const samples = [], ackTimes = [], fanoutTimes = [], queueTimes = [], durableQueueTimes = [], verificationTimes = [];
+    const probeRecords = [];
+    const statusId = 'status-strengthened';
+    const probeDefinition = INFINITE_HORROR_STATUS_DEFINITIONS.find(definition => definition.id === statusId);
+    assert(probeDefinition && probeDefinition.changes.length === 0
+      && Object.keys(probeDefinition.capabilities).length === 0,
+    'Concurrent status probe must not alter movement, lighting or perception');
     let previous = route.lanes.slice(0, sourceCount).map(position => ({ ...position, elevationMeters: 0 }));
     for (let iteration = 0; iteration < rounds + warmupRounds; iteration++) {
       const resetId = `occlusion-lan-reset-${sourceCount}-${iteration}`;
@@ -268,6 +283,41 @@ async function scenario(sourceCount) {
           precondition: { expectedOrigins: { [`token-${index}`]: previous[index] } } }],
       })));
       const movementWindowEndUs = Number(process.hrtime.bigint() / 1000n);
+      const otherPlayerSamples = [];
+      // Four status/chat pairs exercise ordinary Player transactions while
+      // the acknowledged 425 m paths are still exploring. No extra movement
+      // or vision changes may add samples to the original path/Fog oracle.
+      for (let probeIndex = 0; probeIndex < 4; probeIndex++) {
+        const playerIndex = 1 + ((iteration * 4 + probeIndex) % (playerCount - 1));
+        for (const type of ['status', 'chat']) {
+          await observer.flush();
+          const operationId = `occlusion-lan-probe-${sourceCount}-${iteration}-${type}-${probeIndex}`;
+          const targetActorId = type === 'status' ? `actor-${playerIndex}` : null;
+          const write = type === 'status' ? {
+            action: 'update', document: { type: 'Status', id: targetActorId, parent: null },
+            intent: 'status.apply', data: { scope: 'actor', targetId: targetActorId, statusId }, precondition: {},
+          } : {
+            action: 'append', document: { type: 'ChatMessage', id: `${operationId}-message`, parent: null },
+            intent: 'chat.append', data: { text: `Exploration active ${sourceCount}/${iteration}/${probeIndex}` }, precondition: {},
+          };
+          const measuredProbe = await measureDocumentBatch(players[playerIndex].socket, recipients, {
+            type: 'document.batch', operationSchema: schemas.operationSchema, operationId, baseRevision: revision,
+            writes: [write],
+          }, { revisionConflictRetries: 3 });
+          revision = Math.max(revision, Number(measuredProbe.ack.revision) || 0);
+          await observer.flush();
+          const proof = observer.probes.get(operationId);
+          assert(proof && proof.revision === measuredProbe.ack.revision
+            && proof.remainingSamplesAtCommit > 0 && proof.activeJobIdsAtCommit.length > 0
+            && proof.activeJobIdsAtCommit.every(id => ids.some(moveId => id === `${moveId}:0`)),
+          `Ordinary ${type} did not commit while this round's exploration was active: ${operationId}`);
+          otherPlayerSamples.push({ operationId, type, senderPlayer: playerIndex + 1, targetActorId,
+            ackMs: Number(measuredProbe.ackMs.toFixed(3)), fanoutMs: Number(measuredProbe.fanoutMs.toFixed(3)),
+            initialBaseRevision: measuredProbe.initialBaseRevision, retryCount: measuredProbe.retryCount,
+            revisionConflicts: measuredProbe.revisionConflicts.map(conflict => ({ ...conflict,
+              elapsedMs: Number(conflict.elapsedMs.toFixed(3)) })), ...proof });
+        }
+      }
       const drainTiming = {};
       const drained = await waitForDrain(runtime, observer, {
         expectedJobIds: ids.map(id => `${id}:0`), timing: drainTiming,
@@ -301,6 +351,7 @@ async function scenario(sourceCount) {
         storageVerificationCpuWindow: { startTimeUs: drainTiming.observedDrainTimeUs, endTimeUs: explorationWindowEndUs },
         requestLatencies: measured.map((item, index) => ({ tokenId: `token-${index}`,
           ackMs: Number(item.ackMs.toFixed(3)), fanoutMs: Number(item.fanoutMs.toFixed(3)) })),
+        otherPlayerSamples,
         durableJobs: sourceCount, processedSamples: sourceCount * 171, jobsRemaining: 0, contextsRemaining: 0,
         durableJobProofs,
         referenceFogMatches: true, fogHash: fogHash(actualFog),
@@ -312,6 +363,7 @@ async function scenario(sourceCount) {
         durableQueueTimes.push(durableExplorationMs);
         verificationTimes.push(drainTiming.storageVerificationMs);
         samples.push(sample);
+        probeRecords.push(...otherPlayerSamples);
       }
       previous = target;
       if (process.argv.includes('--debug')) console.error(JSON.stringify({ scenario: sourceCount, ...sample }));
@@ -321,7 +373,14 @@ async function scenario(sourceCount) {
       cpuProfileDirectory: profileDir, profileProcessId: profileDir ? runtime.child.pid : null,
       movementAck: summarizeLatency(ackTimes), allClientFanout: summarizeLatency(fanoutTimes),
       completeExploration: summarizeLatency(queueTimes), durableExploration: summarizeLatency(durableQueueTimes),
-      storageVerification: summarizeLatency(verificationTimes), processedSamples: rounds * sourceCount * 171, samples };
+      storageVerification: summarizeLatency(verificationTimes), processedSamples: rounds * sourceCount * 171,
+      otherPlayerOperations: {
+        perRound: { status: 4, chat: 4 }, warmupSamples: warmupRounds * 8, samples: probeRecords.length,
+        ackMeasurement: Object.fromEntries(['status', 'chat', 'aggregate'].map(type => [type,
+          summarizeLatency(probeRecords.filter(record => type === 'aggregate' || record.type === type).map(record => record.ackMs))])),
+        measurement: Object.fromEntries(['status', 'chat', 'aggregate'].map(type => [type,
+          summarizeLatency(probeRecords.filter(record => type === 'aggregate' || record.type === type).map(record => record.fanoutMs))])),
+      }, samples };
   } catch (error) {
     if (runtime.stderr()) console.error(runtime.stderr());
     throw error;
@@ -335,7 +394,7 @@ const report = { repo: root, packageRoot, version: JSON.parse(await readFile(pat
   build: buildInfo,
   fixture: { actors: actorCount, tokens: tokenCount, players: playerCount, mapId: map.id, occluders: occluders.length,
     nearbyOccluders: route.nearby, lanes: route.lanes, fogCellSizeMeters: 5, pathSampleSpacingMeters: 2.5 },
-  scope: 'Loopback WebSocket/WAL measurement. Movement is acknowledged before background Fog; queue completion is checked against all 171 samples and full-path Fog union. Durable WAL job drain is timed separately from read-only checkpoint/WAL replay; completeExploration includes both for comparison with earlier reports. It does not measure Wi-Fi transport, browser input latency, Canvas or FPS. Large-range scenarios are reported separately; --assert requires ACK and final fanout p95 <=60 ms in each scenario.',
+  scope: 'Loopback WebSocket/WAL measurement. Movement is acknowledged before background Fog; queue completion is checked against all 171 samples and full-path Fog union. Durable WAL job drain is timed separately from read-only checkpoint/WAL replay; completeExploration includes both for comparison with earlier reports. It does not measure Wi-Fi transport, browser input latency, Canvas or FPS. Large-range scenarios also measure four status/chat pairs from other Player sessions per round while their WAL commits still have unfinished exploration samples. Ordinary intents may retry a revision conflict up to three times with the same operation ID; all denied attempts remain inside the first-submission-to-ACK/fanout clock and are reported in raw samples. No additional moves or Fog samples are added. --assert requires movement and ordinary status/chat/aggregate ACK and final fanout p95 <=60 ms in each scenario.',
   scenarios: { singleSource: await scenario(1), sixConcurrentSources: await scenario(6) } };
 assert.deepEqual(await benchmarkBuildInfo(root, packageRoot), buildInfo, 'Benchmark candidate changed during measurement');
 for (const result of Object.values(report.scenarios)) {
@@ -355,6 +414,14 @@ if (process.argv.includes('--assert')) {
   for (const [name, result] of Object.entries(report.scenarios)) {
     if (result.movementAck.p95Ms > 60 || result.allClientFanout.p95Ms > 60) {
       throw new Error(`${name} LAN performance gate failed: ACK p95 ${result.movementAck.p95Ms} ms, final fanout p95 ${result.allClientFanout.p95Ms} ms; both must be <=60 ms`);
+    }
+    for (const type of ['status', 'chat', 'aggregate']) {
+      const ack = result.otherPlayerOperations.ackMeasurement[type], fanout = result.otherPlayerOperations.measurement[type];
+      assert.equal(ack.count, rounds * (type === 'aggregate' ? 8 : 4));
+      assert.equal(fanout.count, ack.count);
+      if (ack.p95Ms > 60 || fanout.p95Ms > 60) {
+        throw new Error(`${name} concurrent ${type} performance gate failed: ACK p95 ${ack.p95Ms} ms, fanout p95 ${fanout.p95Ms} ms; both must be <=60 ms`);
+      }
     }
   }
 }

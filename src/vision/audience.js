@@ -320,7 +320,7 @@ function targetedMovementProjection(state, rawState, context, previousProjection
   projectionAudiences.set(state.preferences.audienceVision, stamp);
   for (const [token, entry] of policyEntries) previousPolicies.policies.set(token, entry);
   projectionPolicies.set(state.preferences.audienceVision, { ...previousPolicies,
-    targetedState: rawState, partyInputs: { actors: world.actors, scenes: world.scenes } });
+    targetedState: rawState, canonicalState: rawState, partyInputs: { actors: world.actors, scenes: world.scenes } });
   state.markers = previousProjection.markers;
   state.attackAreas = previousProjection.attackAreas;
   state.audienceProjection = true;
@@ -732,6 +732,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     // Reject the whole cache when an older projection is paired with a newer
     // World, so the full fallback cannot mistakenly reuse its historical Fog.
     && (!requestedPolicies?.targetedIndex || requestedPolicies.targetedState === requestedCache.beforeState)
+    && (!requestedPolicies?.canonicalState || requestedPolicies.canonicalState === requestedCache.beforeState)
     ? requestedCache : null;
   const previousWorld = movementCache?.beforeState?.preferences?.worldV2;
   const previousProjection = movementCache?.previousProjection;
@@ -762,7 +763,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     === JSON.stringify(vision);
   const mapMetricsUnchanged = previousPolicies?.metersPerUnit === metersPerUnit;
   const mapPackageUnchanged = previousPolicies?.mapPackage === context.mapPackage;
-  if (targetedRelation && sourceUnchanged && mapMetricsUnchanged && mapPackageUnchanged) {
+  if (!context.forceFreshDetection && targetedRelation && sourceUnchanged && mapMetricsUnchanged && mapPackageUnchanged) {
     // currentVision still invokes the Ruleset description hook on every call.
     // Only an unchanged result and the complete canonical relation can avoid
     // full projection preparation; category changes retain the original path.
@@ -795,10 +796,11 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const movedIds = movementCache?.tokenIds || new Set();
   const lightMoved = movementCache && !targetedRelation && (rawActive?.tokens || []).some(token => movedIds.has(String(token.id))
     && (token.light?.enabled === true || oldActive?.tokens?.find(item => String(item.id) === String(token.id))?.light?.enabled === true));
-  const reuseDetection = Boolean(sourceUnchanged && partiesUnchanged && definitionsUnchanged && geometryUnchanged
+  const reuseDetection = Boolean(!context.forceFreshDetection && sourceUnchanged && partiesUnchanged && definitionsUnchanged && geometryUnchanged
     && mapMetricsUnchanged && mapPackageUnchanged && !lightMoved);
-  const targetedIndex = vision && context.trustedProjection && typeof context.isCanonicalData === 'function'
-    && context.isCanonicalData(rawState) ? new Map() : null;
+  const canonicalProjection = context.trustedProjection && typeof context.isCanonicalData === 'function'
+    && context.isCanonicalData(rawState);
+  const targetedIndex = vision && canonicalProjection ? new Map() : null;
   // A light move changes illumination, not the rays from a stationary viewer.
   // Keep at most two positions for this recipient and source. Geometry, map
   // scale and non-position source descriptors must match; host exemptions
@@ -997,9 +999,10 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     sourceTokenId: String(context.visionSourceTokenId || ''), metersPerUnit,
     mapPackage: context.mapPackage, policies, partyIds: Object.freeze([...parties]),
     partyInputs: partyInputs || viewerPartyInputs(rawWorld),
-    targetedIndex, targetedState: targetedIndex ? rawState : null, occluders, lights, rayDescriptor, rayContexts,
+    targetedIndex, targetedState: targetedIndex ? rawState : null,
+    canonicalState: canonicalProjection ? rawState : null, occluders, lights, rayDescriptor, rayContexts,
   });
-  if (targetedIndex) {
+  if (canonicalProjection) {
     // Full projection already checks every selected ID. Use that same pass
     // to prove leaf ordering, instead of rebuilding ID maps in Document diff.
     // Membership/reordering/collisions retain the complete original fallback.
@@ -1021,6 +1024,85 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   state.attackAreas = clone(active?.attackAreas || []);
   state.audienceProjection = true;
   return state;
+}
+
+// Only a proved public append can carry private perception metadata forward.
+// Chat trimming, protected entity data and any non-chat mutation retain full
+// projection. The new audience key never changes the predecessor's metadata.
+export function advancePublicChatProjectionMetadata(previousProjection, projection, beforeState, afterState, rawContext = {}) {
+  const audience = projection?.preferences?.audienceVision;
+  const previousAudience = previousProjection?.preferences?.audienceVision;
+  const metadata = projectionPolicies.get(previousAudience);
+  const context = { ...rawContext, userId: rawContext.userId == null ? '' : String(rawContext.userId) };
+  const stamp = audienceKey(context), canonical = context.isCanonicalData;
+  const metersPerUnit = Math.max(0.000001, Number(context.mapMetrics?.metersPerUnit) || 1);
+  if (!context.trustedProjection || !metadata || !audience || projection === previousProjection || audience !== previousAudience
+    || !permissionsCacheable(context.user) || projectionAudiences.get(previousAudience) !== stamp
+    || metadata.canonicalState !== beforeState || metadata.targetedIndex && metadata.targetedState !== beforeState
+    || metadata.sourceTokenId !== String(context.visionSourceTokenId || '')
+    || metadata.mapPackage !== context.mapPackage || metadata.metersPerUnit !== metersPerUnit
+    || typeof canonical !== 'function' || !canonical(beforeState) || !canonical(afterState)) return null;
+  const beforeWorld = beforeState.preferences?.worldV2, afterWorld = afterState.preferences?.worldV2;
+  const beforeEntity = beforeState.preferences?.entitySystem, afterEntity = afterState.preferences?.entitySystem;
+  if (!beforeWorld || !afterWorld || metadata.partyInputs?.actors !== beforeWorld.actors || metadata.partyInputs?.scenes !== beforeWorld.scenes
+    || !sameOtherFields(beforeState, afterState, new Set(['preferences']))
+    || !sameOtherFields(beforeState.preferences, afterState.preferences, new Set(['worldV2', 'chatSystem', 'entitySystem']))
+    || !sameOtherFields(beforeWorld, afterWorld, new Set(['updatedAt']))
+    || !plainObject(beforeEntity) || !plainObject(afterEntity) || !sameOtherFields(beforeEntity, afterEntity, new Set())
+    || !Array.isArray(audience.partyIds) || audience.partyIds.length !== metadata.partyIds.length
+    || audience.partyIds.some((partyId, index) => partyId !== metadata.partyIds[index])) return null;
+  // Re-run the descriptor hook: a time/user-dependent hook is not proved
+  // invariant merely because the canonical Actor and Token references match.
+  const vision = currentVision(afterWorld, context, actorMap(afterWorld, true));
+  if (JSON.stringify(vision) !== JSON.stringify(previousAudience.source || null)) return null;
+  const beforeChat = beforeState.preferences.chatSystem, afterChat = afterState.preferences.chatSystem;
+  const beforeProjectedChat = previousProjection.preferences.chatSystem, projectedChat = projection.preferences.chatSystem;
+  if (![beforeChat, afterChat, beforeProjectedChat, projectedChat].every(plainObject)
+    || !sameOtherFields(beforeChat, afterChat, new Set(['messages']))
+    || !sameOtherFields(beforeProjectedChat, projectedChat, new Set(['messages']))) return null;
+  const oldMessages = beforeChat.messages, newMessages = afterChat.messages;
+  const oldSelected = beforeProjectedChat.messages, selected = projectedChat.messages;
+  if (![oldMessages, newMessages, oldSelected, selected].every(Array.isArray)
+    || newMessages.length <= oldMessages.length || newMessages.length > 500
+    || oldMessages.some((message, index) => newMessages[index] !== message)) return null;
+  const appended = newMessages.slice(oldMessages.length), ids = new Set();
+  for (const message of newMessages) {
+    if (!message || !Object.hasOwn(message, 'id') || ids.has(String(message.id))) return null;
+    ids.add(String(message.id));
+  }
+  if (appended.some(message => message.data != null) || selected.length !== oldSelected.length + appended.length
+    || oldSelected.some((message, index) => selected[index] !== message)
+    || appended.some((message, index) => !jsonPermissionValue(selected[oldSelected.length + index])
+      || JSON.stringify(selected[oldSelected.length + index]) !== JSON.stringify(message))) return null;
+  const oldWorld = previousProjection.preferences.worldV2, world = projection.preferences.worldV2;
+  if (!oldWorld || !world || !Array.isArray(oldWorld.actors) || !Array.isArray(world.actors)
+    || !Array.isArray(oldWorld.scenes) || !Array.isArray(world.scenes)
+    || !sameOtherFields(previousProjection, projection, new Set(['preferences']))
+    || !sameOtherFields(previousProjection.preferences, projection.preferences, new Set(['worldV2', 'chatSystem', 'entitySystem']))
+    || !sameOtherFields(oldWorld, world, new Set(['actors', 'scenes', 'updatedAt'])) || world.updatedAt !== afterWorld.updatedAt
+    || oldWorld.actors.length !== world.actors.length || oldWorld.actors.some((actor, index) => actor !== world.actors[index])
+    || oldWorld.scenes.length !== world.scenes.length || oldWorld.scenes.some((scene, index) => scene !== world.scenes[index])
+    || !plainObject(previousProjection.preferences.entitySystem) || !plainObject(projection.preferences.entitySystem)
+    || !sameOtherFields(previousProjection.preferences.entitySystem, projection.preferences.entitySystem, new Set())) return null;
+  const next = { ...projection, preferences: { ...projection.preferences, audienceVision: { ...audience } } };
+  projectionAudiences.set(next.preferences.audienceVision, stamp);
+  projectionPolicies.set(next.preferences.audienceVision, { ...metadata,
+    targetedState: metadata.targetedIndex ? afterState : null, canonicalState: afterState,
+    partyInputs: { actors: afterWorld.actors, scenes: afterWorld.scenes } });
+  const collections = new Map();
+  const remember = (after, before) => {
+    const proof = registerUniqueProjectionCollection(after, before);
+    if (proof) collections.set(after, proof);
+  };
+  for (const field of ['actors', 'statusDefinitions', 'journals']) remember(world[field], oldWorld[field]);
+  for (let index = 0; index < world.scenes.length; index++) {
+    for (const field of ['tokens', 'markers', 'attackAreas', 'sceneEvents', 'occlusionShapes']) {
+      remember(world.scenes[index][field], oldWorld.scenes[index][field]);
+    }
+  }
+  remember(selected, oldSelected);
+  fullProjectionCollectionProofs.set(next, new WeakMap([[previousProjection, collections]]));
+  return next;
 }
 
 // Fog commits replace canonical containers without changing perception inputs.
@@ -1045,6 +1127,7 @@ export function advanceFogProjectionMetadata(previousProjection, projection, bef
   if (!beforeWorld || !afterWorld || metadata.partyInputs?.actors !== beforeWorld.actors
     || metadata.partyInputs?.scenes !== beforeWorld.scenes
     || metadata.targetedIndex && metadata.targetedState !== beforeState
+    || metadata.canonicalState && metadata.canonicalState !== beforeState
     || !sameOtherFields(beforeState, afterState, new Set(['preferences']))
     || !sameOtherFields(beforeState.preferences, afterState.preferences, new Set(['worldV2']))
     || !sameOtherFields(beforeWorld, afterWorld, new Set(['scenes', 'updatedAt']))
@@ -1089,6 +1172,7 @@ export function advanceFogProjectionMetadata(previousProjection, projection, bef
   projectionAudiences.set(next.preferences.audienceVision, stamp);
   projectionPolicies.set(next.preferences.audienceVision, { ...metadata,
     targetedState: metadata.targetedIndex ? afterState : null,
+    canonicalState: metadata.canonicalState ? afterState : null,
     partyInputs: { actors: afterWorld.actors, scenes: afterWorld.scenes } });
   return next;
 }

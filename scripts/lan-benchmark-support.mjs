@@ -163,7 +163,74 @@ export function summarizeLatency(values) {
   return { count: sorted.length, medianMs: Number(percentile(0.5).toFixed(3)), p95Ms: Number(percentile(0.95).toFixed(3)) };
 }
 
-export async function measureDocumentBatch(sender, recipients, request) {
+// The optional conflict retry models an explicit client re-submission of the
+// same uncommitted intent. Keep the original clock across every denied attempt.
+function measureDocumentBatchWithConflictRetry(sender, recipients, request, maximumRetries) {
+  const operationId = request.operationId, startedAt = performance.now();
+  const revisionConflicts = [], delivered = new Map(), sockets = [...new Set([sender, ...recipients])];
+  let acknowledgement = null, finished = false, submitted = request;
+  return new Promise((resolve, reject) => {
+    const listeners = new Map();
+    const cleanup = () => {
+      clearTimeout(timer);
+      for (const [socket, handlers] of listeners) {
+        for (const [type, handler] of Object.entries(handlers)) socket.removeEventListener(type, handler);
+      }
+    };
+    const fail = error => { if (!finished) { finished = true; cleanup(); reject(error); } };
+    const finish = () => {
+      if (finished || !acknowledgement || delivered.size !== new Set(recipients).size) return;
+      finished = true; cleanup();
+      const results = recipients.map(socket => delivered.get(socket));
+      resolve({ ackMs: acknowledgement.ms, fanoutMs: Math.max(...results.map(item => item.ms)),
+        ack: acknowledgement.message, messages: results.map(item => item.message),
+        initialBaseRevision: request.baseRevision, retryCount: revisionConflicts.length, revisionConflicts });
+    };
+    const timer = setTimeout(() => fail(new Error(`${operationId} conflict retry timed out`)), WAIT_MS);
+    for (const socket of sockets) {
+      const onMessage = event => {
+        const message = benchmarkMessage(event);
+        if (!message || finished) return;
+        if (message.type === 'error') return fail(new Error(`${operationId} failed after submission: ${JSON.stringify(message)}`));
+        if (message.operationId !== operationId) return;
+        if (socket === sender && message.type.endsWith('.denied')) {
+          if (message.code !== 'revision_conflict' || revisionConflicts.length >= maximumRetries
+            || !Number.isSafeInteger(message.revision) || message.revision <= submitted.baseRevision) {
+            return fail(new Error(`${operationId} rejected: ${JSON.stringify(message)}`));
+          }
+          revisionConflicts.push({ revision: message.revision, elapsedMs: performance.now() - startedAt });
+          submitted = { ...request, baseRevision: message.revision };
+          // No attempt has committed. Preserve operation ID and intent so the
+          // server's idempotency check can never apply a status/chat twice.
+          queueMicrotask(() => {
+            if (finished) return;
+            try { sender.send(submitted); } catch (error) { fail(error); }
+          });
+          return;
+        }
+        if (socket === sender && message.type === 'document.batch.ack') {
+          acknowledgement ||= { message, ms: performance.now() - startedAt };
+        }
+        if (recipients.includes(socket) && message.type === 'document.batch.committed' && !delivered.has(socket)) {
+          delivered.set(socket, { message, ms: performance.now() - startedAt });
+        }
+        finish();
+      };
+      const onError = event => fail(event?.error || new Error(`${operationId} socket failed`));
+      const onClose = () => fail(new Error(`${operationId} socket closed`));
+      const handlers = { message: onMessage, error: onError, close: onClose };
+      listeners.set(socket, handlers);
+      for (const [type, handler] of Object.entries(handlers)) socket.addEventListener(type, handler);
+    }
+    try { sender.send(submitted); } catch (error) { fail(error); }
+  });
+}
+
+export async function measureDocumentBatch(sender, recipients, request, { revisionConflictRetries = 0 } = {}) {
+  if (!Number.isSafeInteger(revisionConflictRetries) || revisionConflictRetries < 0 || revisionConflictRetries > 10) {
+    throw new Error('revisionConflictRetries must be an integer from 0 to 10');
+  }
+  if (revisionConflictRetries) return measureDocumentBatchWithConflictRetry(sender, recipients, request, revisionConflictRetries);
   const { operationId } = request;
   const startedAt = performance.now();
   const acknowledged = waitForMessage(sender, message => message.type === 'document.batch.ack'

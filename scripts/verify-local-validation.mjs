@@ -93,7 +93,7 @@ function largeLan(report) {
       && scenario.lights === 3 && scenario.rangeMeters === 1000 && scenario.distanceMeters === 425
       && scenario.rounds === 5 && scenario.warmupRounds === 1 && scenario.warmupProcessedSamples === sources * 171
       && scenario.processedSamples === 5 * sources * 171 && scenario.samples?.length === 5, `${name} requires five complete warmed rounds`);
-    const requests = [];
+    const requests = [], otherPlayerRequests = [];
     for (const [index, sample] of scenario.samples.entries()) {
       requireCondition(sample.round === index + 1 && sample.warmup === false && sample.durableJobs === sources
         && sample.processedSamples === sources * 171 && sample.jobsRemaining === 0 && sample.contextsRemaining === 0
@@ -103,6 +103,38 @@ function largeLan(report) {
       requireCondition(sample.requestLatencies.every(request => finite(request.ackMs) && request.ackMs >= 0
         && finite(request.fanoutMs) && request.fanoutMs >= 0), `${name} raw latencies missing`);
       requests.push(...sample.requestLatencies);
+      requireCondition(sample.otherPlayerSamples?.length === 8, `${name} ordinary operations during exploration missing`);
+      for (const [probeIndex, probe] of sample.otherPlayerSamples.entries()) {
+        const type = probeIndex % 2 === 0 ? 'status' : 'chat';
+        const expectedJobIds = new Set(sample.durableJobProofs.map(job => job.id));
+        requireCondition(probe.type === type && typeof probe.operationId === 'string'
+          && probe.operationId.startsWith('occlusion-lan-probe-') && Number.isSafeInteger(probe.senderPlayer)
+          && probe.senderPlayer >= 2 && probe.senderPlayer <= 6
+          && probe.targetActorId === (type === 'status' ? `actor-${probe.senderPlayer - 1}` : null)
+          && Number.isSafeInteger(probe.revision) && probe.revision > 0
+          && Number.isSafeInteger(probe.initialBaseRevision) && probe.initialBaseRevision >= 0
+          && probe.revision > probe.initialBaseRevision && Number.isSafeInteger(probe.retryCount)
+          && probe.retryCount >= 0 && probe.retryCount <= 3
+          && probe.revisionConflicts?.length === probe.retryCount
+          && finite(probe.ackMs) && probe.ackMs >= 0 && finite(probe.fanoutMs) && probe.fanoutMs >= 0
+          && probe.jobProgressAtCommit?.length > 0 && probe.jobProgressAtCommit.length <= sources
+          && probe.jobProgressAtCommit.every(job => expectedJobIds.has(job.id) && job.totalSamples === 171
+            && Number.isSafeInteger(job.cursor) && job.cursor >= 0 && job.cursor < job.totalSamples),
+        `${name} ordinary ${type} did not prove unfinished path samples at its WAL commit`);
+        let previousConflictRevision = probe.initialBaseRevision, previousConflictOffset = 0;
+        for (const conflict of probe.revisionConflicts) {
+          requireCondition(Number.isSafeInteger(conflict.revision) && conflict.revision > previousConflictRevision
+            && conflict.revision < probe.revision && finite(conflict.elapsedMs)
+            && conflict.elapsedMs >= previousConflictOffset && conflict.elapsedMs <= probe.ackMs,
+          `${name} ordinary ${type} conflict retry timing/revision invalid`);
+          previousConflictRevision = conflict.revision; previousConflictOffset = conflict.elapsedMs;
+        }
+        equal(probe.activeJobIdsAtCommit, probe.jobProgressAtCommit.map(job => job.id), `${name} active path IDs disagree`);
+        requireCondition(new Set(probe.activeJobIdsAtCommit).size === probe.activeJobIdsAtCommit.length
+          && probe.remainingSamplesAtCommit === probe.jobProgressAtCommit.reduce((sum, job) => sum + job.totalSamples - job.cursor, 0),
+        `${name} unfinished path sample count disagrees`);
+      }
+      otherPlayerRequests.push(...sample.otherPlayerSamples);
     }
     for (const [key, raw] of [['movementAck', 'ackMs'], ['allClientFanout', 'fanoutMs']]) {
       latency(scenario[key], `${name} ${key}`, 5 * sources);
@@ -110,7 +142,78 @@ function largeLan(report) {
       const p95 = Number(sorted[Math.ceil(sorted.length * 0.95) - 1].toFixed(3));
       requireCondition(p95 === scenario[key].p95Ms, `${name} ${key} raw samples disagree with summary`);
     }
+    const ordinary = scenario.otherPlayerOperations;
+    equal(ordinary?.perRound, { status: 4, chat: 4 }, `${name} ordinary operation mix invalid`);
+    requireCondition(ordinary?.warmupSamples === 8 && ordinary.samples === 40
+      && new Set(otherPlayerRequests.map(request => request.operationId)).size === 40,
+    `${name} ordinary operation warmup/count invalid`);
+    for (const type of ['status', 'chat', 'aggregate']) {
+      const raw = otherPlayerRequests.filter(request => type === 'aggregate' || request.type === type);
+      const count = type === 'aggregate' ? 40 : 20;
+      requireCondition(raw.length === count, `${name} ordinary ${type} count invalid`);
+      for (const [summaryKey, rawKey] of [['ackMeasurement', 'ackMs'], ['measurement', 'fanoutMs']]) {
+        const summary = ordinary[summaryKey]?.[type];
+        latency(summary, `${name} ordinary ${type} ${summaryKey}`, count);
+        const sorted = raw.map(request => request[rawKey]).sort((a, b) => a - b);
+        requireCondition(summary.medianMs === Number(sorted[Math.ceil(count * 0.5) - 1].toFixed(3))
+          && summary.p95Ms === Number(sorted[Math.ceil(count * 0.95) - 1].toFixed(3)),
+        `${name} ordinary ${type} raw samples disagree with summary`);
+      }
+    }
   }
+}
+
+function chromeSmoke(report) {
+  requireCondition(report.mapReady === true && report.leaflet === true, 'Chrome smoke map did not load');
+  const occlusion = report.occlusion;
+  requireCondition(occlusion?.zoom?.length === 4, 'Chrome smoke DPR coverage missing');
+  equal(occlusion.zoom.map(item => item.dpr), [1, 1.25, 1.5, 2], 'Chrome smoke DPR coverage differs');
+  requireCondition(occlusion.zoom.every(item => item.zoomLevels === 37 && item.maxCenterAlpha === 0
+    && Number.isSafeInteger(item.animations) && item.animations > 0
+    && finite(item.maxProjectionError) && item.maxProjectionError >= 0 && item.maxProjectionError <= 1
+    && finite(item.maxAnimationError) && item.maxAnimationError >= 0 && item.maxAnimationError <= 1),
+  'Chrome smoke zoom/animation gate failed');
+  requireCondition(['drew', 'undoRedo', 'committed', 'reopened'].every(key => occlusion.editor?.[key] === true),
+    'Chrome smoke editor proof missing');
+  const feedback = occlusion.feedback;
+  requireCondition(feedback?.ranges?.length === 3, 'Chrome smoke range coverage missing');
+  equal(feedback.ranges.map(range => range.rangeMeters), [120, 500, 1000], 'Chrome smoke range coverage differs');
+  for (const range of feedback.ranges) {
+    requireCondition(range.effectiveRangeMeters === range.rangeMeters && range.samplesMs?.length === 20
+      && range.samplesMs.every(value => finite(value) && value >= 0) && range.phases?.length === 20,
+    `Chrome smoke ${range.rangeMeters} raw feedback samples missing`);
+    const raw = [];
+    for (const [index, phase] of range.phases.entries()) {
+      requireCondition(phase.index === index && finite(phase.totalMs) && phase.totalMs >= 0
+        && finite(phase.commitMs) && phase.commitMs >= 0 && finite(phase.maskWaitMs) && phase.maskWaitMs >= 0
+        && Math.abs(phase.totalMs - phase.commitMs - phase.maskWaitMs) <= 1e-6
+        && Number.isSafeInteger(phase.expectedRevision) && phase.expectedRevision > 0
+        && phase.feedbackState?.rendered === true && phase.feedbackState.stateRevision >= phase.expectedRevision
+        && finite(phase.feedbackState.x) && finite(phase.feedbackState.y)
+        && finite(phase.previousVisual?.x) && finite(phase.previousVisual?.y)
+        && finite(phase.target?.x) && finite(phase.target?.y)
+        && (phase.target.x !== phase.previousVisual.x || phase.target.y !== phase.previousVisual.y),
+      `Chrome smoke ${range.rangeMeters} moving complete-mask proof invalid`);
+      raw.push(phase.totalMs);
+    }
+    const sorted = raw.sort((a, b) => a - b);
+    equal(range.samplesMs, sorted, `Chrome smoke ${range.rangeMeters} raw phases disagree with samples`);
+    requireCondition(range.p95Ms === sorted[18] && range.p95Ms <= (range.rangeMeters === 1000 ? 100 : 50),
+      `Chrome smoke ${range.rangeMeters} p95 gate failed`);
+  }
+  requireCondition(Number.isSafeInteger(feedback.blackFlash?.inspectedFrames) && feedback.blackFlash.inspectedFrames > 0
+    && feedback.blackFlash.maxCenterAlpha === 0 && feedback.queue?.queued === 0 && feedback.queue.running === false,
+  'Chrome smoke black-flash/queue gate failed');
+}
+
+function maskRaster(report) {
+  requireCondition(report.cases === 2304 && report.framesPerCase === 2 && report.differingPixels === 0
+    && report.maxChannelError === 0 && report.maxAlphaError === 0 && report.maxPremultipliedError === 0,
+  'Continuous mask raster gate failed');
+}
+
+function dependencyAudit(report, name) {
+  requireCondition(report.metadata?.vulnerabilities?.total === 0, `${name} dependency audit gate failed`);
 }
 
 function browser(report) {
@@ -230,6 +333,11 @@ export async function verifyLocalValidation({ directory, version, commit, source
     const report = await readEvidence(validation.evidence?.[name], name);
     requireBuild(report, build, version, name); verify(report);
   }
+  chromeSmoke(await readEvidence(validation.evidence?.chromeSmoke, 'Chrome smoke'));
+  maskRaster(await readEvidence(validation.evidence?.maskRaster, 'mask raster'));
+  const auditEvidence = validation.evidence?.dependencyAudit;
+  dependencyAudit(await readEvidence(auditEvidence?.all, 'all dependency audit'), 'All');
+  dependencyAudit(await readEvidence(auditEvidence?.production, 'production dependency audit'), 'Production');
   const evidence = validation.evidence?.visionBenchmark;
   await vision(await readEvidence(evidence?.baseline, 'vision baseline'), await readEvidence(evidence?.candidate, 'vision candidate'),
     validation, sourceRoot);

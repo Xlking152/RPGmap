@@ -266,6 +266,55 @@ test('returning to the previous position reuses private rays while full projecti
   assert.equal(projectionCollectionChanges(middle, { ...projection }), null);
 });
 
+test('status fallback reuses only qualified private geometry while refreshing light and actor policy', () => {
+  const state = setup();
+  const after = patched(state.before, { worldPatch: { actors: actorList(state.before).map(actor => actor.id === 'hostile'
+    ? { ...actor, name: 'Status changed', system: { ...actor.system, privateNotes: 'new private status' } } : actor) } });
+  state.validate(after);
+  const originalGet = WeakMap.prototype.get;
+  let hits = 0, projection;
+  try {
+    WeakMap.prototype.get = function (key) {
+      const value = originalGet.call(this, key); if (typeof value === 'boolean') hits++; return value;
+    };
+    projection = projectStateForAudience(after, { ...state.context, forceFreshDetection: true,
+      movementCache: { beforeState: state.before, previousProjection: state.projected, tokenIds: new Set() } });
+  } finally { WeakMap.prototype.get = originalGet; }
+  assert.ok(hits > 0, 'full status projection reuses geometry, not old perception');
+  const oracle = previousProjection(after, state.context);
+  assert.deepEqual(projection, oracle);
+  assert.deepEqual(createDocumentChanges(state.projected, projection, null,
+    { collectionChanges: projectionCollectionChanges(state.projected, projection) }), createDocumentChangesFull(state.projected, oracle));
+  assert.equal(JSON.stringify(projection).includes('new private status'), false);
+
+  const dark = patched(state.before, { scenePatch: { settings: { ...sceneOf(state.before).settings, lighting: 'dark' } } });
+  state.validate(dark);
+  const lit = projectStateForAudience(dark, state.context);
+  const lightsOff = patched(dark, { tokenId: 'lamp', tokenPatch: { light: { ...sceneOf(dark).tokens.find(token => token.id === 'lamp').light, enabled: false } } });
+  state.validate(lightsOff);
+  const fresh = projectStateForAudience(lightsOff, { ...state.context, forceFreshDetection: true,
+    movementCache: { beforeState: dark, previousProjection: lit, tokenIds: new Set() } });
+  assert.deepEqual(fresh, previousProjection(lightsOff, state.context));
+  assert.notDeepEqual(sceneOf(fresh).tokens, sceneOf(lit).tokens, 'light changes must recompute target perception');
+});
+
+test('no-source full projection proofs reject a stale canonical predecessor and old Fog', () => {
+  const state = setup({ visionSourceTokenId: null });
+  const newer = patched(state.before, { scenePatch: { fog: { ...sceneOf(state.before).fog,
+    exploredByParty: { ...sceneOf(state.before).fog.exploredByParty, 'party-a': { rows: { 3: [[40, 50]] } } } } } });
+  state.validate(newer);
+  const after = move(newer, ['near']); state.validate(after);
+  const stale = projectStateForAudience(after, { ...state.context, forceFreshDetection: true,
+    movementCache: { beforeState: newer, previousProjection: state.projected, tokenIds: new Set() } });
+  assert.deepEqual(stale, previousProjection(after, state.context));
+  assert.equal(projectionCollectionChanges(state.projected, stale), null);
+  const current = projectStateForAudience(newer, state.context);
+  const fresh = projectStateForAudience(after, { ...state.context, forceFreshDetection: true,
+    movementCache: { beforeState: newer, previousProjection: current, tokenIds: new Set() } });
+  assert.ok(projectionCollectionChanges(current, fresh));
+  assert.deepEqual(fresh, previousProjection(after, state.context));
+});
+
 test('source, light, permission, map scale, opaque identity and missing metadata cannot take targeted path', () => {
   for (const id of ['source-a', 'lamp']) {
     const state = setup();

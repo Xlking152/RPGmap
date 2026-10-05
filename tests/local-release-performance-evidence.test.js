@@ -62,11 +62,26 @@ function largeScenario(sourceCount) {
     requestLatencies: Array.from({ length: sourceCount }, (_, source) => ({ tokenId: `token-${source}`, ackMs: 10 + source, fanoutMs: 20 + source })),
     durableJobProofs: Array.from({ length: sourceCount }, (_, source) => ({ id: `job-${index}-${source}`,
       cursorAtCreation: 0, totalSamples: 171, completedDurably: true })),
+    otherPlayerSamples: Array.from({ length: 8 }, (_, probeIndex) => {
+      const type = probeIndex % 2 === 0 ? 'status' : 'chat', senderPlayer = 2 + Math.floor(probeIndex / 2);
+      return { operationId: `occlusion-lan-probe-${sourceCount}-${index}-${probeIndex}`, type, senderPlayer,
+        targetActorId: type === 'status' ? `actor-${senderPlayer - 1}` : null, revision: 10 + index * 10 + probeIndex,
+        ackMs: 10 + probeIndex, fanoutMs: 20 + probeIndex,
+        initialBaseRevision: 0, retryCount: 0, revisionConflicts: [],
+        activeJobIdsAtCommit: [`job-${index}-0`], remainingSamplesAtCommit: 170,
+        jobProgressAtCommit: [{ id: `job-${index}-0`, cursor: 1, totalSamples: 171 }] };
+    }),
   }));
   const requests = samples.flatMap(sample => sample.requestLatencies);
+  const probes = samples.flatMap(sample => sample.otherPlayerSamples);
+  const otherPlayerOperations = { perRound: { status: 4, chat: 4 }, warmupSamples: 8, samples: 40,
+    ackMeasurement: Object.fromEntries(['status', 'chat', 'aggregate'].map(type => [type,
+      latencies(probes.filter(probe => type === 'aggregate' || probe.type === type).map(probe => probe.ackMs))])),
+    measurement: Object.fromEntries(['status', 'chat', 'aggregate'].map(type => [type,
+      latencies(probes.filter(probe => type === 'aggregate' || probe.type === type).map(probe => probe.fanoutMs))])) };
   return { sourceCount, parties: sourceCount, lighting: 'dark', lights: 3, rangeMeters: 1000, distanceMeters: 425,
     rounds: 5, warmupRounds: 1, warmupProcessedSamples: sourceCount * 171, processedSamples: 5 * sourceCount * 171,
-    movementAck: latencies(requests.map(request => request.ackMs)), allClientFanout: latencies(requests.map(request => request.fanoutMs)), samples };
+    movementAck: latencies(requests.map(request => request.ackMs)), allClientFanout: latencies(requests.map(request => request.fanoutMs)), otherPlayerOperations, samples };
 }
 function phase(name, lighting) {
   return { name, seconds: 60, operations: 120, actualMoves: 120,
@@ -122,13 +137,30 @@ async function fixture(t, compressed = false) {
     visibility: Object.fromEntries([120, 500, 1000, 10000].map(range => [range, timing()])), multiLight500: timing(), sweep: timing(10) };
   const candidate = { ...structuredClone(base), version: '2.5.4', sourceCommit: commit, sweep: timing(9),
     continuous: { ...Object.fromEntries([120, 500, 1000, 10000].map(range => [range, timing()])), multiLight1000: timing() } };
+  const smoke = { mapReady: true, leaflet: true, occlusion: {
+    zoom: [1, 1.25, 1.5, 2].map(dpr => ({ dpr, zoomLevels: 37, maxCenterAlpha: 0,
+      animations: 1, maxProjectionError: 0.5, maxAnimationError: 0.9 })),
+    editor: { drew: true, undoRedo: true, committed: true, reopened: true },
+    feedback: { ranges: [120, 500, 1000].map(rangeMeters => ({ rangeMeters, effectiveRangeMeters: rangeMeters,
+      samplesMs: Array.from({ length: 20 }, (_, index) => 20 + index), p95Ms: 38,
+      phases: Array.from({ length: 20 }, (_, index) => ({ index, totalMs: 20 + index, commitMs: 5,
+        maskWaitMs: 15 + index, expectedRevision: index + 1,
+        previousVisual: { x: index, y: 0 }, target: { x: index + 1, y: 0 },
+        feedbackState: { rendered: true, stateRevision: index + 1, x: index + 1, y: 0 } })) })),
+      blackFlash: { inspectedFrames: 44, maxCenterAlpha: 0 }, queue: { queued: 0, running: false } } } };
+  const raster = { cases: 2304, framesPerCase: 2, differingPixels: 0,
+    maxChannelError: 0, maxAlphaError: 0, maxPremultipliedError: 0 };
+  const audit = { metadata: { vulnerabilities: { total: 0 } } };
   const validation = { version: '2.5.4', commit, baselineCommit, sha256: hash(archive),
     checks: Object.fromEntries(['tests', 'build', 'bundle', 'package', 'benchmark', 'lanBenchmark', 'chrome',
       'visionBenchmark', 'occlusionLanBenchmark', 'browserBenchmark'].map(check => [check, 'passed'])),
     evidence: { lanBenchmark: 'lan.json', occlusionLanBenchmark: 'large-lan.json', browserBenchmark: 'browser.json',
-      visionBenchmark: { baseline: 'vision-v253.json', candidate: 'vision-v254.json' } } };
+      visionBenchmark: { baseline: 'vision-v253.json', candidate: 'vision-v254.json' },
+      chromeSmoke: 'chrome-smoke.json', maskRaster: 'raster.json',
+      dependencyAudit: { all: 'audit.json', production: 'audit-production.json' } } };
   const reports = { 'lan.json': lan, 'large-lan.json': large, 'browser.json': browser,
-    'vision-v253.json': base, 'vision-v254.json': candidate };
+    'vision-v253.json': base, 'vision-v254.json': candidate, 'chrome-smoke.json': smoke, 'raster.json': raster,
+    'audit.json': audit, 'audit-production.json': structuredClone(audit) };
   const save = async () => {
     await writeFile(path.join(directory, 'local-validation.json'), JSON.stringify(validation));
     await Promise.all(Object.entries(reports).map(([file, report]) => writeFile(path.join(directory, file), JSON.stringify(report))));
@@ -256,4 +288,54 @@ test('evidence cannot escape the downloaded candidate directory', async t => {
   const candidate = await fixture(t);
   candidate.validation.evidence.lanBenchmark = '../old-report.json'; await candidate.save();
   await assert.rejects(candidate.verify(), /outside candidate/);
+});
+
+test('ordinary probes must commit during unfinished large-range exploration', async t => {
+  const candidate = await fixture(t), original = structuredClone(candidate.reports['large-lan.json']);
+  for (const [change, message] of [
+    [scenario => { delete scenario.samples[0].otherPlayerSamples; }, /operations during exploration missing/],
+    [scenario => { scenario.samples[0].otherPlayerSamples[0].jobProgressAtCommit[0].cursor = 171; }, /unfinished path samples/],
+    [scenario => { scenario.samples[0].otherPlayerSamples[0].activeJobIdsAtCommit = ['unrelated-job']; }, /active path IDs/],
+    [scenario => { scenario.samples[0].otherPlayerSamples[0].remainingSamplesAtCommit = 0; }, /sample count disagrees/],
+    [scenario => {
+      Object.assign(scenario.samples[0].otherPlayerSamples[0], {
+        retryCount: 1, revisionConflicts: [{ revision: 1, elapsedMs: 11 }],
+      });
+    }, /conflict retry timing\/revision invalid/],
+    [scenario => { scenario.otherPlayerOperations.ackMeasurement.status.p95Ms = 60.001; }, /ordinary status.*latency gate/],
+    [scenario => { scenario.samples[0].otherPlayerSamples[0].ackMs = 59; }, /raw samples disagree/],
+  ]) {
+    candidate.reports['large-lan.json'] = structuredClone(original);
+    change(candidate.reports['large-lan.json'].scenarios.sixConcurrentSources); await candidate.save();
+    await assert.rejects(candidate.verify(), message);
+  }
+});
+
+test('Chrome smoke rejects missing or duplicate DPR/ranges, fake feedback and incomplete masks', async t => {
+  const candidate = await fixture(t), original = structuredClone(candidate.reports['chrome-smoke.json']);
+  for (const [change, message] of [
+    [report => { report.occlusion.zoom[3].dpr = 1; }, /DPR coverage differs/],
+    [report => { report.occlusion.feedback.ranges = []; }, /range coverage missing/],
+    [report => { report.occlusion.feedback.ranges[2].rangeMeters = 500; }, /range coverage differs/],
+    [report => { report.occlusion.feedback.ranges[0].samplesMs.pop(); }, /raw feedback samples missing/],
+    [report => { report.occlusion.feedback.ranges[0].p95Ms = 1; }, /p95 gate failed/],
+    [report => { report.occlusion.feedback.ranges[0].phases[0].feedbackState.rendered = false; }, /complete-mask proof invalid/],
+    [report => { report.occlusion.feedback.blackFlash.inspectedFrames = 0; }, /black-flash\/queue gate/],
+    [report => { report.occlusion.editor.committed = false; }, /editor proof/],
+  ]) {
+    candidate.reports['chrome-smoke.json'] = structuredClone(original); change(candidate.reports['chrome-smoke.json']);
+    await candidate.save(); await assert.rejects(candidate.verify(), message);
+  }
+});
+
+test('release requires original zero-error raster and both zero-vulnerability audits', async t => {
+  const candidate = await fixture(t);
+  candidate.reports['raster.json'].framesPerCase = 1; await candidate.save();
+  await assert.rejects(candidate.verify(), /raster gate failed/);
+  candidate.reports['raster.json'].framesPerCase = 2;
+  candidate.reports['audit-production.json'].metadata.vulnerabilities.total = 1; await candidate.save();
+  await assert.rejects(candidate.verify(), /Production dependency audit gate/);
+  candidate.reports['audit-production.json'].metadata.vulnerabilities.total = 0;
+  delete candidate.validation.evidence.chromeSmoke; await candidate.save();
+  await assert.rejects(candidate.verify(), /Chrome smoke evidence file missing/);
 });

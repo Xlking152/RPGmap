@@ -52,6 +52,7 @@ import {
   motionPathPreciselyVisible,
   projectStateForAudience,
   advanceFogProjectionMetadata,
+  advancePublicChatProjectionMetadata,
   projectionCollectionChanges,
   serverRuleset,
   sphereGroundRadiusMeters,
@@ -929,7 +930,15 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
         ...appended.map(message => structuredClone(message)),
       ],
     };
-    return next;
+    const canonicalScene = canonicalWorldScene(afterState, next.preferences.worldV2.activeSceneId);
+    const mapPackage = visionMapForScene(canonicalScene);
+    return advancePublicChatProjectionMetadata(beforeProjection, next, beforeState, afterState, {
+      role: session.role, userId: session.userId,
+      user: session.userId ? findUser(session.userId) : null,
+      visionSourceTokenId: session.visionSourceTokenId, describeVision: describeServerVision,
+      mapPackage, mapMetrics: { metersPerUnit: mapPackage?.metersPerUnit || 1 },
+      trustedProjection: true, isCanonicalData: assertCanonicalWorldState.isImmutableData,
+    });
   }
 
   const movementTargets = preparedMovementTargets === undefined
@@ -1101,6 +1110,7 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
   const pureMovement = operations.length && operations.every(operation => ['token.move', 'token.movePath', 'token.reposition'].includes(operation.type))
     && results.every(result => ['token.move', 'token.movePath', 'token.reposition'].includes(result.action));
   const tokenIds = pureMovement ? new Set(results.flatMap(result => result.tokenIds || [result.tokenId]).map(String)) : null;
+  const ordinaryStatus = operations.length && operations.every(operation => ['status.apply', 'status.remove'].includes(operation.type));
   const recipients = [...sessions];
   const originIndex = recipients.findIndex(([, session]) => session.id === originSessionId);
   if (originIndex > 0) recipients.unshift(...recipients.splice(originIndex, 1));
@@ -1110,9 +1120,13 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
     const incrementalProjection = tryIncrementalAudienceProjection(
       session, beforeProjection, afterState, operations, results, beforeState, movementTargets,
     );
-    const afterProjection = incrementalProjection || audienceStateFor(session, afterState, pureMovement ? {
+    const afterProjection = incrementalProjection || audienceStateFor(session, afterState, pureMovement || ordinaryStatus ? {
       movementCache: { beforeState, previousProjection: beforeProjection,
-        tokenIds },
+        tokenIds: tokenIds || new Set() },
+      // Status hooks can affect other Tokens or lights. Recheck every target's
+      // perception; only private geometry rays and immutable policy inputs
+      // with their exact canonical predecessor may be reused.
+      forceFreshDetection: !pureMovement,
     } : {});
     session.audienceProjection = afterProjection;
     const motion = documentBatch

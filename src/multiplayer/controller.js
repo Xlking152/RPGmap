@@ -15,6 +15,16 @@ import { hasWorldOperationRevisionGap, shouldApplyOwnServerSnapshot } from './re
 import { readRuntimeState } from '../engine/state-access.js';
 
 const STYLE_ID = 'rpgmap-multiplayer-style';
+const REVISION_CONFLICT_RETRY_LIMIT = 3;
+const REVISION_RETRY_INTENTS = new Set(['chat.append', 'status.apply', 'status.remove']);
+
+function canRetryDocumentIntent(operation) {
+  return operation?.documentBatch === true && Array.isArray(operation.writes) && operation.writes.length > 0
+    && operation.writes.every(write => REVISION_RETRY_INTENTS.has(write?.intent)
+      // These intents are reapplied to current authoritative targets. Never
+      // discard a caller's conditional write or retry an absolute replacement.
+      && Object.keys(write.precondition || {}).length === 0);
+}
 
 function installStyles(documentNode) {
   if (documentNode.getElementById(STYLE_ID)) return;
@@ -630,11 +640,63 @@ export function createMultiplayerController() {
         });
       }
 
+      function resumeRevisionConflictOperation(operation, applied = true) {
+        if (activeOperation !== operation) return;
+        let error = null;
+        const world = lastServerState?.preferences?.worldV2;
+        if (!applied || !world || String(world.id) !== operation.retryWorldId) {
+          error = Object.assign(new Error('无法在当前 World 中重试操作，请重新提交'), { code: 'operation_rebase_failed' });
+        } else if (operation.writes.some(write => write.intent.startsWith('status.'))
+          && (!getCapabilities().canManageStatuses || String(world.activeSceneId || '') !== operation.retrySceneId)) {
+          error = Object.assign(new Error('状态权限或当前 Scene 已变化，请重新提交'), { code: 'status_rebase_failed' });
+        } else if (!connected || session?.role !== 'gm' && session?.identityStatus !== 'active') {
+          error = Object.assign(new Error('当前身份不能重试联机操作'), { code: 'identity_required' });
+        }
+        if (error) {
+          api.diagnostics?.end('network.confirm', operation.operationId);
+          finishOperation(error);
+          rejectQueuedOperations(error);
+          return;
+        }
+        operation.awaitingRetrySnapshot = false;
+        operation.acknowledged = false;
+        operation.patchApplied = false;
+        operation.revision = null;
+        operation.results = [];
+        // Keep the original ID and writes. Authoritative authorization, target
+        // existence and Status definition rules run again at the new revision.
+        activeOperation = null;
+        operationQueue.unshift(operation);
+        flushPendingNetworkWork();
+      }
+
+      function retryRevisionConflict(operation, message) {
+        const nextRevision = Number(message.revision);
+        if (message.code !== 'revision_conflict' || operation.acknowledged || operation.patchApplied
+          || operation.awaitingRetrySnapshot || !canRetryDocumentIntent(operation)
+          || (operation.revisionRetries || 0) >= REVISION_CONFLICT_RETRY_LIMIT
+          || !Number.isSafeInteger(nextRevision) || nextRevision <= operation.sentBaseRevision) return false;
+        operation.revisionRetries = (operation.revisionRetries || 0) + 1;
+        operation.retryAtRevision = nextRevision;
+        if (lastServerState && revision >= nextRevision && !applyingRemote) {
+          // The same socket may already have delivered the intervening Fog
+          // commit. Its confirmed state is sufficient; no full reload is needed.
+          resumeRevisionConflictOperation(operation);
+        } else if (message.state && typeof message.state === 'object') {
+          applyRemoteState(message.state, nextRevision, '操作并发更新').then(applied => resumeRevisionConflictOperation(operation, applied));
+        } else {
+          operation.awaitingRetrySnapshot = true;
+          send({ type: 'world.snapshot.request' });
+        }
+        return true;
+      }
+
       function flushOperations() {
         if (!connected || applyingRemote || inFlight || pendingPush || activeAtomicWorldOperation
           || activeOperation || !operationQueue.length) return;
         const operation = operationQueue.shift();
         activeOperation = operation;
+        operation.sentBaseRevision = revision;
         const message = operation.documentBatch
           ? {
               type: 'document.batch',
@@ -652,9 +714,14 @@ export function createMultiplayerController() {
         if (!send(message)) {
           activeOperation = null;
           operationQueue.unshift(operation);
-        } else if (api.diagnostics?.enabled) {
-          api.diagnostics.begin('network.confirm', operation.operationId);
-          api.diagnostics.record('network.requestBytes', new TextEncoder().encode(JSON.stringify(message)).byteLength);
+        } else {
+          if (!operation.requestSent) {
+            operation.requestSent = true;
+            if (api.diagnostics?.enabled) api.diagnostics.begin('network.confirm', operation.operationId);
+          }
+          if (api.diagnostics?.enabled) {
+            api.diagnostics.record('network.requestBytes', new TextEncoder().encode(JSON.stringify(message)).byteLength);
+          }
         }
       }
 
@@ -679,6 +746,8 @@ export function createMultiplayerController() {
             acknowledged: false,
             patchApplied: false,
             awaitingCanonicalSnapshot: false,
+            retryWorldId: String(world?.id || ''),
+            retrySceneId: String(world?.activeSceneId || ''),
             revision: null,
             results: [],
           });
@@ -693,6 +762,7 @@ export function createMultiplayerController() {
         const values = Array.isArray(writes) ? structuredClone(writes) : [];
         if (!values.length) return Promise.resolve({ unchanged: true, revision, results: [] });
         const id = String(requestedOperationId || operationId('document'));
+        const world = (lastServerState || api.getState())?.preferences?.worldV2;
         return new Promise((resolve, reject) => {
           operationQueue.push({
             operationId: id,
@@ -705,6 +775,8 @@ export function createMultiplayerController() {
             acknowledged: false,
             patchApplied: false,
             awaitingCanonicalSnapshot: false,
+            retryWorldId: String(world?.id || ''),
+            retrySceneId: String(world?.activeSceneId || ''),
             revision: null,
             results: [],
           });
@@ -1129,8 +1201,9 @@ export function createMultiplayerController() {
         }
 
         if (message.type === 'world.operation.denied' || message.type === 'document.batch.denied') {
-          api.diagnostics?.end('network.confirm', message.operationId);
           if (!activeOperation || String(message.operationId || '') !== String(activeOperation.operationId)) return;
+          if (retryRevisionConflict(activeOperation, message)) return;
+          api.diagnostics?.end('network.confirm', message.operationId);
           const error = new Error(message.message || '服务器拒绝了 World 操作');
           error.code = message.code || 'world_operation_denied';
           if (Array.isArray(message.conflictIds)) error.conflictIds = message.conflictIds.map(String);
@@ -1150,6 +1223,17 @@ export function createMultiplayerController() {
         if (message.type === 'world.snapshot') {
           const own = session?.id && message.originSessionId === session.id;
           const incomingRevision = Number(message.revision) || revision;
+          if (activeOperation?.awaitingRetrySnapshot && !message.operationId) {
+            const operation = activeOperation;
+            if (!Number.isSafeInteger(Number(message.revision)) || incomingRevision < operation.retryAtRevision) {
+              resumeRevisionConflictOperation(operation, false);
+            } else if (lastServerState && revision >= incomingRevision && !applyingRemote) {
+              resumeRevisionConflictOperation(operation);
+            } else {
+              applyRemoteState(message.state, incomingRevision, '操作并发更新').then(applied => resumeRevisionConflictOperation(operation, applied));
+            }
+            return;
+          }
           const atomicWorldOperation = activeAtomicWorldOperation
             && message.operationId
             && String(message.operationId) === String(activeAtomicWorldOperation.operationId);
