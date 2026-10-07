@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { groundShadowRows, groundShadowRowsSteps } from '../src/vision/ground-shadow.js';
+import { groundShadowRows, groundShadowRowsSteps, projectVisionOcclusion } from '../src/vision/ground-shadow.js';
 import { groundShadowRows as referenceRows,
-  groundShadowRowsSteps as referenceSteps } from './fixtures/ground-shadow-before-row-optimization.js';
+  groundShadowRowsSteps as referenceSteps, projectVisionOcclusion as referenceProjection } from './fixtures/ground-shadow-before-row-optimization.js';
 import { circleFogRows } from '../src/vision/fog.js';
 import { normalizeVisionOccluder } from '../src/spatial/kernel.js';
 import { finishWorkAsync } from '../src/vision/work.js';
@@ -54,6 +54,26 @@ function compare(source, radius, occluders, scale, narrow = false) {
   assert.deepEqual({ source, rows, occluders }, prior, 'row work never changes public input');
   return actual;
 }
+
+test('normalized ring winding is prepared once across source positions and stays equal to the uncached projection', () => {
+  const prepared = Object.freeze(geometry()[3].map(normalizeVisionOccluder));
+  const rings = new Set(prepared.flatMap(occluder => occluder.polygons.flat()));
+  const reduce = Array.prototype.reduce, results = [];
+  let areaReads = 0;
+  Array.prototype.reduce = function (...arguments_) {
+    if (rings.has(this)) areaReads++;
+    return reduce.apply(this, arguments_);
+  };
+  try {
+    for (let x = 10; x < 30; x++) {
+      const input = { source: { x, y: 160, elevationMeters: 4 }, radiusUnits: 130,
+        occluders: prepared, metersPerUnit: 1, includeFacades: false };
+      results.push({ input, actual: projectVisionOcclusion(input) });
+    }
+    assert.equal(areaReads, rings.size);
+  } finally { Array.prototype.reduce = reduce; }
+  for (const { input, actual } of results) assert.deepEqual(actual, referenceProjection(input));
+});
 
 test('optimized row work matches the old complete output for holes, fragments, heights, hosts and map scales', () => {
   const sources = [

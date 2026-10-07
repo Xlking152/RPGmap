@@ -28,10 +28,13 @@ export function createContinuousMaskRenderer(documentNode) {
   const preparedKeys = {};
   let alignedViewport = null;
   let currentLightingKey = null, preparedLightingKey = null;
+  let coloredKey = null, coloredStyle = null, coloredKind = null;
+  const copyClips = new Map();
   function resetMasks() {
     for (const key of Object.keys(masks)) { masks[key].canvas.width = masks[key].canvas.height = 0; delete masks[key]; }
     for (const key of Object.keys(preparedKeys)) delete preparedKeys[key];
     preparedLightingKey = null;
+    coloredKey = coloredStyle = coloredKind = null; copyClips.clear();
     facadeMasks.clear(); geometryIds = new WeakMap(); nextGeometryId = cachedVertices = cachedVersions = 0;
   }
   function drawPrepared(target, canvas, bounds, width, height, dpr) {
@@ -46,7 +49,18 @@ export function createContinuousMaskRenderer(documentNode) {
     // canvas transform can introduce a subpixel sample (including alpha 1 on
     // a black pixel). Copy aligned frames on the actual backing pixel grid.
     target.save(); target.setTransform(1, 0, 0, 1, 0, 0);
-    target.drawImage(canvas, left, top, pixelsX, pixelsY, left, top, pixelsX, pixelsY);
+    if (typeof globalThis.Path2D === 'function') {
+      const key = `${left}:${top}:${pixelsX}:${pixelsY}`;
+      let clip = copyClips.get(key);
+      if (!clip) {
+        clip = new globalThis.Path2D(); clip.rect(left, top, pixelsX, pixelsY);
+        copyClips.set(key, clip);
+        if (copyClips.size > 2) copyClips.delete(copyClips.keys().next().value);
+      }
+      // An integer-pixel destination clip permits an unscaled image copy.
+      // The retained full surface preserves Canvas's exact path rasterization.
+      target.clip(clip); target.drawImage(canvas, 0, 0);
+    } else target.drawImage(canvas, left, top, pixelsX, pixelsY, left, top, pixelsX, pixelsY);
     target.restore();
   }
   function size(surface, width, height, dpr, bounds = null) {
@@ -179,6 +193,7 @@ export function createContinuousMaskRenderer(documentNode) {
               context.drawImage(lightUnion(regions, false, viewport, width, height, dpr), 0, 0, width, height);
               // Build the normal-light union separately, then intersect it with
               // the same circle/shadow mask so light cannot reveal behind walls.
+              coloredKey = coloredStyle = coloredKind = null;
               size(tint, width, height, dpr, paintBounds);
               clipSurface(tint.context, paintBounds);
               circle(tint.context, viewport, source.x, source.y, radiusUnits); tint.context.fill();
@@ -203,14 +218,19 @@ export function createContinuousMaskRenderer(documentNode) {
       }
       if (target.globalCompositeOperation === 'destination-out') drawPrepared(target, mask.canvas, bounds, width, height, dpr);
       else {
-        size(tint, width, height, dpr, paintBounds);
-        clipSurface(tint.context, paintBounds);
-        tint.context.drawImage(mask.canvas, 0, 0, width, height);
-        tint.context.globalCompositeOperation = 'source-in';
-        tint.context.fillStyle = target.fillStyle;
-        if (paintBounds) tint.context.fillRect(paintBounds.x, paintBounds.y, paintBounds.width, paintBounds.height);
-        else tint.context.fillRect(0, 0, width, height);
-        tint.context.restore();
+        const cacheable = aligned && typeof target.fillStyle === 'string';
+        if (!cacheable || coloredKind !== cacheKind || coloredKey !== key || coloredStyle !== target.fillStyle) {
+          size(tint, width, height, dpr, paintBounds);
+          clipSurface(tint.context, paintBounds);
+          tint.context.drawImage(mask.canvas, 0, 0, width, height);
+          tint.context.globalCompositeOperation = 'source-in';
+          tint.context.fillStyle = target.fillStyle;
+          if (paintBounds) tint.context.fillRect(paintBounds.x, paintBounds.y, paintBounds.width, paintBounds.height);
+          else tint.context.fillRect(0, 0, width, height);
+          tint.context.restore();
+          coloredKey = cacheable ? key : null; coloredStyle = cacheable ? target.fillStyle : null;
+          coloredKind = cacheable ? cacheKind : null;
+        }
         drawPrepared(target, tint.canvas, bounds, width, height, dpr);
       }
     },

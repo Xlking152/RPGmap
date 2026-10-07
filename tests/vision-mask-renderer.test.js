@@ -56,6 +56,75 @@ test('precise and vague masks retain two bounded frames and release their surfac
   assert.ok(document.canvases.filter(canvas => canvas.getContext('2d') !== target).every(canvas => canvas.width === 0 && canvas.height === 0));
 });
 
+test('unchanged colored masks reuse the existing tint surface and refresh after precise lighting', () => {
+  const document = fakeDocument(), renderer = createContinuousMaskRenderer(document);
+  const target = document.createElement('canvas').getContext('2d');
+  const input = { viewport, width: 400, height: 300, dpr: 1.25, source: { x: 0, y: 0 }, radiusUnits: 20,
+    geometry: { blocked: false, shadows: [], facades: [], illumination: { mode: 'all', regions: [] } } };
+  target.globalCompositeOperation = 'source-over'; target.fillStyle = 'rgba(218,226,228,0.20)';
+  renderer.draw(target, { ...input, key: 'vague', kind: 'vague' });
+  const colored = document.canvases[2], coloredContext = colored.getContext('2d');
+  for (let i = 0; i < 10; i++) {
+    target.globalCompositeOperation = 'destination-out';
+    renderer.draw(target, { ...input, key: 'precise', kind: 'precise',
+      geometry: { ...input.geometry, illumination: { mode: 'dark-and-normal', regions: [] } } });
+    target.globalCompositeOperation = 'source-over';
+    renderer.draw(target, { ...input, key: 'vague', kind: 'vague' });
+  }
+  assert.equal(coloredContext.calls.filter(call => call.name === 'drawImage').length, 3);
+  assert.equal(coloredContext.calls.filter(call => call.name === 'fillRect').length, 2);
+  assert.equal(document.canvases.length, 6, 'two sight masks reuse the existing three scratch surfaces');
+  target.fillStyle = 'rgba(0,0,0,0.3)';
+  renderer.draw(target, { ...input, key: 'vague', kind: 'vague' });
+  assert.equal(coloredContext.calls.filter(call => call.name === 'fillRect').length, 3);
+  renderer.reset();
+  renderer.draw(target, { ...input, key: 'vague', kind: 'vague' });
+  assert.equal(coloredContext.calls.filter(call => call.name === 'fillRect').length, 4);
+  renderer.dispose();
+  assert.ok(document.canvases.filter(canvas => canvas.getContext('2d') !== target).every(canvas => !canvas.width && !canvas.height));
+});
+
+test('partially offscreen circles retain the original viewport raster boundary', () => {
+  const document = fakeDocument(), renderer = createContinuousMaskRenderer(document);
+  const target = document.createElement('canvas').getContext('2d'); target.globalCompositeOperation = 'destination-out';
+  renderer.draw(target, { key: 'edge', kind: 'precise', width: 400, height: 300, dpr: 2,
+    viewport: { scaleX: 1, project: (x, y) => ({ x: 405.12 + x, y: 301.23 + y }) },
+    source: { x: .5, y: .75 }, radiusUnits: 120,
+    geometry: { blocked: false, shadows: [], facades: [], illumination: { mode: 'all', regions: [] } } });
+  const copy = target.calls.find(call => call.name === 'drawImage');
+  assert.equal(copy.args[0].width, 800); assert.equal(copy.args[0].height, 600);
+  assert.equal(copy.args[1], copy.args[5]); assert.equal(copy.args[2], copy.args[6]);
+  renderer.dispose();
+});
+
+test('native integer-pixel copy clips retain the caller path and reuse only two rectangles', () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'Path2D'), paths = [];
+  Object.defineProperty(globalThis, 'Path2D', { configurable: true, value: class {
+    constructor() { paths.push(this); }
+    rect(...arguments_) { this.rectangle = arguments_; }
+  } });
+  const document = fakeDocument(), renderer = createContinuousMaskRenderer(document);
+  const target = document.createElement('canvas').getContext('2d'); target.globalCompositeOperation = 'destination-out';
+  const input = { key: 'same', kind: 'precise', viewport, source: { x: 0, y: 0 }, radiusUnits: 20,
+    width: 400, height: 300, dpr: 1.25,
+    geometry: { blocked: false, shadows: [], facades: [], illumination: { mode: 'all', regions: [] } } };
+  try {
+    for (let i = 0; i < 3; i++) renderer.draw(target, input);
+    assert.equal(paths.length, 1);
+    assert.ok(paths[0].rectangle.every(Number.isInteger));
+    assert.equal(target.calls.filter(call => call.name === 'beginPath').length, 0);
+    assert.ok(target.calls.filter(call => call.name === 'drawImage').every(call => call.args.length === 3));
+    for (const radiusUnits of [30, 40, 20]) renderer.draw(target, { ...input, key: `radius-${radiusUnits}`, radiusUnits });
+    assert.equal(paths.length, 4, 'the oldest rectangle is discarded after two distinct bounds');
+    renderer.reset(); renderer.draw(target, input);
+    assert.equal(paths.length, 5, 'reset clears the clip cache');
+  } finally {
+    renderer.dispose();
+    if (previous) Object.defineProperty(globalThis, 'Path2D', previous);
+    else delete globalThis.Path2D;
+  }
+});
+
 test('fractional backing dimensions preserve the full-image edge resampling path', () => {
   const document = fakeDocument(), renderer = createContinuousMaskRenderer(document);
   const target = document.createElement('canvas').getContext('2d');

@@ -4,6 +4,17 @@ import { finishWorkSync } from './work.js';
 
 const ascendingNumber = (a, b) => a - b;
 const ascendingInterval = (a, b) => a[0] - b[0];
+const ringAreas = new WeakMap();
+
+function normalizedRingArea(ring) {
+  const cached = ringAreas.get(ring);
+  if (cached !== undefined) return cached;
+  // Only privately normalized, recursively frozen rings reach this helper.
+  // Their winding is independent of the observer; retain the exact sum order.
+  const area = ring.reduce((sum, p, i) => { const q = ring[(i + 1) % ring.length]; return sum + p[0] * q[1] - q[0] * p[1]; }, 0);
+  ringAreas.set(ring, area);
+  return area;
+}
 
 /** Continuous shadows use the same edge projection as authoritative five-metre Fog. */
 export function projectVisionOcclusion({ source, radiusUnits, occluders = [], metersPerUnit = 1,
@@ -27,11 +38,11 @@ export function projectVisionOcclusion({ source, radiusUnits, occluders = [], me
   }
   const extent = radiusUnits + paddingUnits;
   const candidates = [];
-  const add = (rings, id) => { shadows.push(rings); owners.push(id); };
+  const add = (rings, id) => { shadows.push(rings); if (includeFacades) owners.push(id); };
   for (const raw of queryOccluders(visibleOccluders, [source.x - extent, source.y - extent, source.x + extent, source.y + extent])) {
     const obstacle = normalizeVisionOccluder(raw);
     if (!obstacle) continue;
-    candidates.push(obstacle);
+    if (includeFacades) candidates.push(obstacle);
     for (const rings of obstacle.polygons) {
       const outer = rings[0];
       if (outer.every(p => p[0] < source.x - extent) || outer.every(p => p[0] > source.x + extent)
@@ -39,7 +50,7 @@ export function projectVisionOcclusion({ source, radiusUnits, occluders = [], me
       add(rings, obstacle.id);
       for (let ringIndex = 0; ringIndex < rings.length; ringIndex++) {
         const ring = rings[ringIndex];
-        const area = ring.reduce((sum, p, i) => { const q = ring[(i + 1) % ring.length]; return sum + p[0] * q[1] - q[0] * p[1]; }, 0);
+        const area = normalizedRingArea(ring);
         for (let i = 0; i < ring.length; i++) {
         const a = ring[i], b = ring[(i + 1) % ring.length];
         const dx = b[0] - a[0], dy = b[1] - a[1];
@@ -106,12 +117,17 @@ export function* groundShadowRowsSteps(source, radiusUnits, occluders, cellUnits
   if (projection.fallback) return null;
   const shapes = projection.shadows.map(rings => {
     const edges = [];
+    let minY = Infinity, maxY = -Infinity;
     for (const ring of rings) for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
       const a = ring[i], b = ring[j];
-      if (a[1] !== b[1]) edges.push({ ax: a[0], ay: a[1], dx: b[0] - a[0], dy: b[1] - a[1],
-        minY: Math.min(a[1], b[1]), maxY: Math.max(a[1], b[1]) });
+      if (a[1] !== b[1]) {
+        const edge = { ax: a[0], ay: a[1], dx: b[0] - a[0], dy: b[1] - a[1],
+          minY: Math.min(a[1], b[1]), maxY: Math.max(a[1], b[1]) };
+        edges.push(edge);
+        minY = Math.min(minY, edge.minY); maxY = Math.max(maxY, edge.maxY);
+      }
     }
-    return { edges, minY: Math.min(...edges.map(e => e.minY)), maxY: Math.max(...edges.map(e => e.maxY)) };
+    return { edges, minY, maxY };
   });
   const result = {};
   shapes.sort((a, b) => a.minY - b.minY);
