@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
 import { browserBenchmarkMovementTarget, browserBenchmarkPhaseOperations } from './browser-benchmark-movement.mjs';
+import { withinMillisecondsBudget } from './performance-budget.mjs';
 
 if (process.platform !== 'win32') throw new Error('Browser performance benchmark requires Windows');
 
@@ -349,7 +350,7 @@ function validatePhase(phase) {
     if (!frame || session.diagnostics.averageFps < 58 || frame.p95 > 20) {
       throw new Error(`${phase.name}/${session.name} frame gate failed: ${JSON.stringify({ fps: session.diagnostics.averageFps, frame })}`);
     }
-    if (session.inputStimuli !== phase.operations || !input || input.count < session.inputStimuli || input.p95 > 16.7) {
+    if (session.inputStimuli !== phase.operations || !input || input.count < session.inputStimuli || !withinMillisecondsBudget(input.p95, 16.7)) {
       throw new Error(`${phase.name}/${session.name} input gate failed: ${JSON.stringify({ stimuli: session.inputStimuli, operations: phase.operations, input })}`);
     }
     if (longtask?.max > 100) throw new Error(`${phase.name}/${session.name} long task gate failed: ${JSON.stringify(longtask)}`);

@@ -72,7 +72,7 @@ test('automatic v2.5.4 publishing gates the exact Windows ZIP on large-range LAN
   assert.match(browser, /browser-performance-benchmark\.mjs --assert/);
   assert.match(workflow, /publish:\s*\n\s*needs: \[candidate, windows-smoke\]/);
   assert.match(occlusionLanSource, /result\.movementAck\.p95Ms > 60 \|\| result\.allClientFanout\.p95Ms > 60/);
-  assert.match(browserBenchmarkSource, /input\.p95 > 16\.7/);
+  assert.match(browserBenchmarkSource, /!withinMillisecondsBudget\(input\.p95, 16\.7\)/);
   assert.match(browserBenchmarkSource, /session\.diagnostics\.averageFps < 58 \|\| frame\.p95 > 20/);
   assert.match(browserBenchmarkSource, /recoveredMs > 13_000/);
 });

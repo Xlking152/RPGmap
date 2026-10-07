@@ -397,6 +397,7 @@ test('Chrome metrics preserve strict FPS, frame, input, long-task and network li
     [session => { session.diagnostics.averageFps = 57.999; }, /frame gate/],
     [session => { session.diagnostics.metrics.frame.p95 = 20.001; }, /frame gate/],
     [session => { session.diagnostics.metrics['input.frame'].p95 = 16.701; }, /input gate/],
+    [session => { session.diagnostics.metrics['input.frame'].p95 = 16.700001; }, /input gate/],
     [session => { session.diagnostics.metrics.longtask.max = 100.001; }, /long task gate/],
     [session => { session.diagnostics.metrics['network.confirm'].p95 = 60.001; }, /confirmation gate/],
   ];
@@ -404,6 +405,12 @@ test('Chrome metrics preserve strict FPS, frame, input, long-task and network li
     candidate.reports['browser.json'] = structuredClone(original); change(candidate.reports['browser.json'].phases[0].sessions[1]);
     await candidate.save(); await assert.rejects(candidate.verify(), message);
   }
+});
+
+test('raw Chrome timestamp subtraction noise at 16.7 ms preserves the original input budget', async t => {
+  const candidate = await fixture(t);
+  candidate.reports['browser.json'].phases[0].sessions[1].diagnostics.metrics['input.frame'].p95 = 16.700000047683716;
+  await candidate.save(); await assert.doesNotReject(candidate.verify());
 });
 
 test('v2.5.5 Chrome FPS must match its finite positive observed frame mean', async t => {

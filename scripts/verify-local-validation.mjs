@@ -7,6 +7,7 @@ import { inflateRawSync } from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { worldWalChecksum } from '../deployment/local-server/world-wal.mjs';
+import { withinMillisecondsBudget } from './performance-budget.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const execFileAsync = promisify(execFile);
@@ -641,7 +642,7 @@ function browser(report, { requireFrameMean = false } = {}) {
         && Math.abs(session.diagnostics.averageFps - 1000 / metric('frame').mean) <= 1e-6,
       `${expectedName}/${session.name} Chrome FPS differs from the observed frame mean`);
       requireCondition(session.inputStimuli === phase.operations && finite(metric('input.frame')?.p95)
-        && metric('input.frame').p95 >= 0 && metric('input.frame').p95 <= 16.7
+        && withinMillisecondsBudget(metric('input.frame').p95, 16.7)
         && metric('input.frame').count >= session.inputStimuli, `${expectedName}/${session.name} Chrome input gate failed`);
       requireCondition(!metric('longtask') || (finite(metric('longtask').max) && metric('longtask').max >= 0 && metric('longtask').max <= 100),
         `${expectedName}/${session.name} Chrome long task gate failed`);

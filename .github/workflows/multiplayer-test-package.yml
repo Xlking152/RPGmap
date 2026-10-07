@@ -64,10 +64,28 @@ jobs:
         env:
           RPGMAP_SOURCE_COMMIT: ${{ github.sha }}
       - name: Verify packaged Local/LAN server, World Manager and Lanzhou Runtime
+        id: packaged-smoke
         shell: pwsh
         run: |
           node scripts/vision-mask-raster-check.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Continuous mask raster equivalence failed.' }
           $version = node -p "require('./package.json').version"
           $root = Join-Path $PWD "artifact/RPGmap-v$version"
-          & ./scripts/windows-smoke.ps1 -Root $root -TimeoutSeconds 30 -Browser chrome
+          & ./scripts/windows-smoke.ps1 -Root $root -TimeoutSeconds 30 -Browser chrome -SingleAttempt
+      - name: Diagnose failed Chrome destruction stress without promoting its measurements
+        if: failure() && steps.packaged-smoke.outcome == 'failure'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          RPGMAP_SMOKE_RUINS_CPU_PROFILE: artifact/ruins-ci-diagnostic.cpuprofile
+        run: |
+          $version = node -p "require('./package.json').version"
+          $root = Join-Path $PWD "artifact/RPGmap-v$version"
+          & ./scripts/windows-smoke.ps1 -Root $root -TimeoutSeconds 30 -Browser chrome -SingleAttempt
+      - name: Retain failed Chrome CPU diagnostics
+        if: always() && steps.packaged-smoke.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Chrome-destruction-diagnostic-${{ github.sha }}
+          path: artifact/ruins-ci-diagnostic.cpuprofile*
+          if-no-files-found: warn
