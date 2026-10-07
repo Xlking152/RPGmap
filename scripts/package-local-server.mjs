@@ -48,6 +48,7 @@ for (const file of [
   'world-checkpoint.mjs',
   'exploration-queue.mjs',
   'exploration-worker.mjs',
+  'exploration-fog-transfer.mjs',
   'storage-upgrade.mjs',
   'launcher.mjs',
   'start-rpgmap.bat',

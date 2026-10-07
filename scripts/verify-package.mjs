@@ -39,6 +39,7 @@ const EXPECTED_ROOT_ENTRIES = [
   'world-operations.mjs',
   'exploration-queue.mjs',
   'exploration-worker.mjs',
+  'exploration-fog-transfer.mjs',
   'movement-authority.mjs',
   'world-wal.mjs',
   'world-checkpoint.mjs',

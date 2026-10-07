@@ -84,6 +84,7 @@ import { hasRetainedContentReference } from './content-history.mjs';
 import { commitStorageUpgrade, recoverStorageUpgrade } from './storage-upgrade.mjs';
 import { emptyExploration, validateExploration, enqueueExploration, explorationDelta,
   invalidateExploration, finishExplorationChunk, selectExplorationJob } from './exploration-queue.mjs';
+import { createExplorationFogSender } from './exploration-fog-transfer.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '0.0.0.0';
@@ -1714,6 +1715,7 @@ let explorationLane = null;
 let explorationRetryTimer = null;
 let pendingExploration = [];
 let lastExplorationCommitAt = 0;
+const explorationFogSender = createExplorationFogSender(assertCanonicalWorldState.isImmutableData);
 const worldCheckpoint = createWorldCheckpoint({
   getWorld: () => world,
   serialize(task) {
@@ -1743,19 +1745,23 @@ function workerExploration(job, context, exploredRows) {
     explorationWorker.on('message', message => {
       if (message.requestId !== explorationRequest?.id) return;
       const request = explorationRequest; explorationRequest = null;
-      if (message.error) request.reject(new Error(message.error)); else request.resolve(message.result);
+      if (message.error) {
+        explorationFogSender.clear(); request.reject(new Error(message.error));
+      } else request.resolve(message.result);
     });
     const instance = explorationWorker;
     const failed = error => {
       if (explorationWorker !== instance) return;
       explorationRequest?.reject(error); explorationRequest = null;
       explorationWorker = null; explorationWorkerContextId = null;
+      explorationFogSender.clear();
       instance.terminate();
     };
     instance.on('error', failed);
     instance.on('exit', code => {
       if (explorationWorker !== instance) return;
       explorationWorker = null; explorationWorkerContextId = null;
+      explorationFogSender.clear();
       if (explorationRequest) {
         explorationRequest.reject(new Error(`Exploration Worker stopped (${code})`)); explorationRequest = null;
       }
@@ -1764,9 +1770,15 @@ function workerExploration(job, context, exploredRows) {
   return new Promise((resolve, reject) => {
     const id = ++explorationSequence;
     explorationRequest = { id, resolve, reject };
-    explorationWorker.postMessage({ requestId: id, job, contextId: job.contextId,
-      ...(explorationWorkerContextId === job.contextId ? {} : { context }), exploredRows, budgetMs: 8 });
-    explorationWorkerContextId = job.contextId;
+    try {
+      const fogKey = JSON.stringify([job.worldEpoch, job.sceneId, job.partyId, job.epoch]);
+      const fogTransfer = explorationFogSender.prepare(fogKey, exploredRows);
+      explorationWorker.postMessage({ requestId: id, job, contextId: job.contextId,
+        ...(explorationWorkerContextId === job.contextId ? {} : { context }), ...fogTransfer, budgetMs: 8 });
+      explorationWorkerContextId = job.contextId;
+    } catch (error) {
+      explorationRequest = null; explorationWorkerContextId = null; explorationFogSender.clear(); reject(error);
+    }
   });
 }
 
@@ -2530,6 +2542,7 @@ function shutdown() {
   shuttingDown = true;
   worldCheckpoint.close();
   explorationClosed = true;
+  explorationFogSender.clear();
   clearTimeout(explorationRetryTimer);
   explorationWorker?.terminate();
   const connections = [...sessions.keys()];
