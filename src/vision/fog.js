@@ -1,6 +1,7 @@
 import { inspectLineOfSight, visionOccludersForSource, sphereGroundRadiusMeters } from '../spatial/kernel.js';
 import { groundShadowRowsSteps } from './ground-shadow.js';
 import { finishWorkSync, finishWorkAsync } from './work.js';
+import { cloneWithReplacements } from '../engine/detached-metadata.js';
 
 export const FOG_SCHEMA_VERSION = 1;
 export const FOG_CELL_SIZE_METERS = 5;
@@ -114,17 +115,48 @@ function normalizeRows(raw, map = {}) {
   return rows;
 }
 
+function plainMetadata(value) {
+  if (!value || typeof value !== 'object') return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function numericRows(value) {
+  if (!plainMetadata(value)) return false;
+  for (const spans of Object.values(value)) {
+    if (!Array.isArray(spans) || Object.keys(spans).length !== spans.length) return false;
+    for (const span of spans) {
+      if (!Array.isArray(span) || span.length !== 2 || Object.keys(span).length !== 2
+        || typeof span[0] !== 'number' || typeof span[1] !== 'number') return false;
+    }
+  }
+  return true;
+}
+
+function normalizedFogRecord(record, map) {
+  const source = object(record);
+  // Ordinary numeric grids are rebuilt by normalizeRows, so copying their
+  // discarded rows first is unnecessary. Unusual input retains the original
+  // clone boundary, including unsupported values in rows that get discarded.
+  if (!numericRows(source.rows)) return { ...clone(source), rows: normalizeRows(record?.rows, map) };
+  return cloneWithReplacements(source, { rows: normalizeRows(record?.rows, map) });
+}
+
 export function normalizeFogState(raw = {}, map = {}) {
   const source = object(raw);
   const exploredByParty = {};
+  let replacePartyMetadata = plainMetadata(source.exploredByParty);
   for (const [rawPartyId, record] of Object.entries(object(source.exploredByParty))) {
     const partyId = String(rawPartyId).trim().slice(0, 80);
+    if (!partyId || !plainMetadata(record)) replacePartyMetadata = false;
     if (!partyId) continue;
-    exploredByParty[partyId] = {
-      ...clone(object(record)),
-      rows: normalizeRows(record?.rows, map),
-    };
+    exploredByParty[partyId] = normalizedFogRecord(record, map);
   }
+  if (replacePartyMetadata) return cloneWithReplacements(source, {
+    schemaVersion: FOG_SCHEMA_VERSION,
+    cellSizeMeters: FOG_CELL_SIZE_METERS,
+    exploredByParty,
+  });
   return {
     ...clone(source),
     schemaVersion: FOG_SCHEMA_VERSION,

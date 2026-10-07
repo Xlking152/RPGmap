@@ -1,4 +1,5 @@
-import { createDamagePreview, commitDamageEvent } from '../engine/state.js';
+import { commitDamageEvent, damagePreviewSignature, normalizeAttackArea, deriveSceneState } from '../engine/state.js';
+import { featureToPolygon } from '../engine/geometry.js';
 import { recordFeatureInteractionEffects } from './effects.js';
 import {
   FEATURE_STATE_KEY,
@@ -15,8 +16,8 @@ export const FEATURE_ACTION_META = Object.freeze({
   inspect: Object.freeze({ id: 'inspect', label: '检查', kind: 'read' }),
   enter: Object.freeze({ id: 'enter', label: '进入', kind: 'movement' }),
   exit: Object.freeze({ id: 'exit', label: '离开', kind: 'movement' }),
-  damage: Object.freeze({ id: 'damage', label: '破坏对象', kind: 'scene' }),
-  restore: Object.freeze({ id: 'restore', label: '恢复对象', kind: 'scene' }),
+  damage: Object.freeze({ id: 'damage', label: '整体破坏', kind: 'scene' }),
+  restore: Object.freeze({ id: 'restore', label: '恢复此对象', kind: 'scene' }),
   open: Object.freeze({ id: 'open', label: '打开', kind: 'state' }),
   close: Object.freeze({ id: 'close', label: '关闭', kind: 'state' }),
 });
@@ -32,7 +33,18 @@ function entityState(state) {
 
 function tokenById(state, tokenId) {
   if (tokenId == null) return null;
-  return (entityState(state).tokens || []).find(token => String(token?.id) === String(tokenId)) || null;
+  const world = state?.preferences?.worldV2;
+  const scene = world?.scenes?.find(item => String(item.id) === String(world.activeSceneId));
+  return (scene ? scene.tokens || [] : entityState(state).tokens || [])
+    .find(token => String(token?.id) === String(tokenId)) || null;
+}
+
+/** Internal synchronous read context. Callers must never mutate its state. */
+export function createFeatureReadContext(rawState) {
+  const world = rawState?.preferences?.worldV2;
+  const scene = world?.scenes?.find(item => String(item.id) === String(world.activeSceneId));
+  const state = scene ? { ...rawState, sceneEvents: scene.sceneEvents || [] } : rawState;
+  return { state, derivedScene: deriveSceneState(state?.sceneEvents || []) };
 }
 
 function tokenFeatureId(token) {
@@ -40,7 +52,8 @@ function tokenFeatureId(token) {
   return token.featureId == null ? null : String(token.featureId);
 }
 
-function actionEnabled(feature, action) {
+/** Declaration only; runtime status and permissions are checked separately. */
+export function declaredFeatureAction(feature, action) {
   const actions = feature?.capabilities?.actions;
   if (actions && typeof actions[action] === 'boolean') return actions[action];
   if (action === 'inspect') return feature?.capabilities?.inspectable ?? feature?.inspectable !== false;
@@ -50,8 +63,8 @@ function actionEnabled(feature, action) {
   return false;
 }
 
-export function getFeatureRuntimeState(state, feature) {
-  const featureState = getFeatureState(state, feature);
+export function getFeatureRuntimeState(state, feature, derivedScene = null) {
+  const featureState = getFeatureState(state, feature, derivedScene);
   recordFeatureInteractionEffects(feature, featureState);
   return featureState;
 }
@@ -77,58 +90,68 @@ function descriptor(action, enabled, reason = '') {
   });
 }
 
-export function listFeatureInteractions({ mapPackage, state, featureId, tokenId = null, resolveStatus = null } = {}) {
+export function listFeatureInteractions({ mapPackage, state, featureId, tokenId = null, resolveStatus = null, derivedScene = null } = {}) {
   const feature = featureById(mapPackage, featureId);
   if (!feature) return Object.freeze([]);
 
-  const featureState = getFeatureRuntimeState(state, feature);
+  const featureState = getFeatureRuntimeState(state, feature, derivedScene);
   const token = tokenId ? tokenById(state, tokenId) : null;
   const actions = [];
+  // Every descriptor in this synchronous list reads the same Token. Keep one
+  // coherent snapshot for this call; a later list or execution resolves again.
+  let statusResolved = false, statusSnapshot;
+  const resolveListStatus = typeof resolveStatus === 'function' ? context => {
+    if (!statusResolved) {
+      statusSnapshot = resolveStatus(context);
+      statusResolved = true;
+    }
+    return statusSnapshot;
+  } : resolveStatus;
   const statusReason = action => {
-    const result = evaluateFeatureStatusRule({ feature, action, tokenId, resolveStatus });
+    const result = evaluateFeatureStatusRule({ feature, action, tokenId, resolveStatus: resolveListStatus });
     return result.ok ? '' : result.reason;
   };
 
-  if (actionEnabled(feature, 'inspect')) {
+  if (declaredFeatureAction(feature, 'inspect')) {
     const reason = statusReason('inspect');
     actions.push(descriptor('inspect', !reason, reason));
   }
 
-  if (actionEnabled(feature, 'enter')) {
+  if (declaredFeatureAction(feature, 'enter')) {
     let reason = '';
     if (!Array.isArray(feature.entrance) || feature.entrance.length < 2) reason = 'Feature 未声明 entrance';
     else if (featureState.destroyed) reason = '对象已经被摧毁';
-    else if (actionEnabled(feature, 'open') && !featureState.open) reason = '对象当前处于关闭状态';
+    else if (declaredFeatureAction(feature, 'open') && !featureState.open) reason = '对象当前处于关闭状态';
     else if (!token) reason = '请先选择 Token';
     else if (token.placement !== 'map') reason = 'Token 当前不在地图上';
     else reason = statusReason('enter');
     actions.push(descriptor('enter', !reason, reason));
   }
 
-  if (actionEnabled(feature, 'exit')) {
+  if (declaredFeatureAction(feature, 'exit')) {
     const inside = tokenFeatureId(token) === String(feature.id);
     const reason = inside ? statusReason('exit') : '所选 Token 当前不在该 Feature 内';
     actions.push(descriptor('exit', !reason, reason));
   }
 
-  if (actionEnabled(feature, 'damage')) {
+  if (declaredFeatureAction(feature, 'damage')) {
     const reason = featureState.destroyed ? '对象已经被摧毁' : statusReason('damage');
     actions.push(descriptor('damage', !reason, reason));
   }
 
-  if (actionEnabled(feature, 'restore')) {
+  if (declaredFeatureAction(feature, 'restore')) {
     const reason = !featureState.damaged ? '对象当前完整' : statusReason('restore');
     actions.push(descriptor('restore', !reason, reason));
   }
 
-  if (actionEnabled(feature, 'open')) {
+  if (declaredFeatureAction(feature, 'open')) {
     const reason = featureState.destroyed
       ? '对象已经被摧毁'
       : featureState.open ? '对象已经打开' : statusReason('open');
     actions.push(descriptor('open', !reason, reason));
   }
 
-  if (actionEnabled(feature, 'close')) {
+  if (declaredFeatureAction(feature, 'close')) {
     const reason = featureState.destroyed
       ? '对象已经被摧毁'
       : !featureState.open ? '对象已经关闭' : statusReason('close');
@@ -138,54 +161,67 @@ export function listFeatureInteractions({ mapPackage, state, featureId, tokenId 
   return Object.freeze(actions);
 }
 
-function featureCenter(feature) {
+function geometryPoints(feature) {
+  const result = [];
+  const collect = value => {
+    if (Array.isArray(value) && value.length >= 2 && Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1]))) {
+      result.push({ x: Number(value[0]), y: Number(value[1]) });
+    } else if (Array.isArray(value)) value.forEach(collect);
+  };
+  collect(featureToPolygon(feature));
+  return result;
+}
+
+function featureCenter(feature, points) {
   if (Array.isArray(feature?.center) && feature.center.length >= 2) {
     return { x: Number(feature.center[0]), y: Number(feature.center[1]) };
   }
-  const points = feature?.geometry?.points || [];
   if (!points.length) throw new TypeError(`Feature "${feature?.id || '?'}" has no center or polygon`);
   const sum = points.reduce((accumulator, point) => ({
-    x: accumulator.x + Number(point[0]),
-    y: accumulator.y + Number(point[1]),
+    x: accumulator.x + point.x,
+    y: accumulator.y + point.y,
   }), { x: 0, y: 0 });
   return { x: sum.x / points.length, y: sum.y / points.length };
 }
 
-function wholeFeatureRadius(feature, center) {
-  const points = feature?.geometry?.points || [];
+function wholeFeatureRadius(points, center) {
   if (!points.length) return 10;
   return Math.max(10, ...points.map(point => Math.hypot(
-    Number(point[0]) - center.x,
-    Number(point[1]) - center.y,
+    point.x - center.x,
+    point.y - center.y,
   ))) + 2;
 }
 
 export function damageFeatureState(state, mapPackage, featureId) {
   const feature = featureById(mapPackage, featureId);
   if (!feature) throw new TypeError(`Unknown Feature "${featureId}"`);
-  if (!actionEnabled(feature, 'damage')) throw new TypeError(`Feature "${featureId}" is not destructible`);
+  if (!declaredFeatureAction(feature, 'damage')) throw new TypeError(`Feature "${featureId}" is not destructible`);
   if (getFeatureRuntimeState(state, feature).destroyed) return state;
 
-  const center = featureCenter(feature);
+  const points = geometryPoints(feature);
+  const center = featureCenter(feature, points);
   const area = {
     id: `interaction-damage-${feature.id}`,
     type: 'circle',
     center,
-    radius: wholeFeatureRadius(feature, center),
+    radius: wholeFeatureRadius(points, center),
   };
-  const preview = createDamagePreview(area, [feature], null);
+  // An explicit object action affects exactly this ID. It does not need to
+  // intersect a synthetic attack with every fragment of a large wall.
+  const preview = { areaSnapshot: normalizeAttackArea(area), categories: null,
+    signature: damagePreviewSignature(area, null), objectIds: [String(feature.id)], clipHits: [] };
   return commitDamageEvent(state, area, preview);
 }
 
-export function featureInteractionSnapshot({ mapPackage, state, featureId, tokenId = null, resolveStatus = null } = {}) {
+export function featureInteractionSnapshot({ mapPackage, state, featureId, tokenId = null, resolveStatus = null, derivedScene = null } = {}) {
   const feature = featureById(mapPackage, featureId);
   if (!feature) return null;
-  const featureState = getFeatureRuntimeState(state, feature);
+  const featureState = getFeatureRuntimeState(state, feature, derivedScene);
   return Object.freeze({
-    feature,
+    feature: structuredClone(feature),
     featureState,
     sceneStatus: featureState.status,
     interactionState: Object.freeze({ open: featureState.open }),
-    actions: listFeatureInteractions({ mapPackage, state, featureId, tokenId, resolveStatus }),
+    actions: listFeatureInteractions({ mapPackage, state, featureId, tokenId, resolveStatus, derivedScene }),
   });
 }

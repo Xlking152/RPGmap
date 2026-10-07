@@ -1,6 +1,8 @@
 import { latLngToWorld } from '../engine/geometry.js';
 import { inspectableFeaturesAtPoint } from '../engine/feature-selection.js';
+import { readRuntimeState } from '../engine/state-access.js';
 import { createFeatureOperations } from './operations.js';
+import { declaredFeatureAction } from './model.js';
 import {
   featureCategoryLabel,
   featureDetailRows,
@@ -94,9 +96,25 @@ export function createFeatureInteractionSystem() {
 
       let selectedFeatureId = null;
       let destroyed = false;
+      let visualRevision = null;
+      let inspectionContext = null;
       const off = [];
 
       const selectedTokenId = () => api.selection?.getPrimaryTokenId?.() || null;
+      const committedRevision = () => {
+        const revision = api.getStateRevision?.();
+        return Number.isSafeInteger(revision) ? revision : null;
+      };
+
+      // Canonical and permission/status events always force their own refresh.
+      // Only the following local post-ACK notifications may reuse that work.
+      function refreshCommitted() {
+        if (destroyed) return;
+        const revision = committedRevision();
+        if (revision === null || visualRevision !== revision) syncFeatureVisualState();
+        if (revision === null || inspectionContext?.revision !== revision
+          || inspectionContext.featureId !== selectedFeatureId || inspectionContext.tokenId !== selectedTokenId()) renderInspection();
+      }
 
       const replaceRuntimeState = async (next, context = {}) => {
         const featureId = selectedFeatureId;
@@ -114,6 +132,8 @@ export function createFeatureInteractionSystem() {
       const operations = createFeatureOperations({
         mapPackage: api.mapPackage,
         getState: () => api.getState(),
+        readState: () => readRuntimeState(api),
+        getStateRevision: () => api.getStateRevision?.(),
         replaceState: replaceRuntimeState,
         performOperations: (worldOperations, options = {}) => api.world.performOperations(worldOperations, options),
         selectFeature: (featureId, options = {}) => api.selectFeature?.(featureId, {
@@ -184,6 +204,8 @@ export function createFeatureInteractionSystem() {
 
       function syncFeatureVisualState() {
         if (!shell?.querySelectorAll) return;
+        const prepared = operations.readContext();
+        const revision = committedRevision();
         const nodesById = new Map();
         for (const node of shell.querySelectorAll('[data-feature-id]')) {
           const id = String(node.dataset?.featureId ?? '');
@@ -193,7 +215,7 @@ export function createFeatureInteractionSystem() {
           nodesById.set(id, list);
         }
         for (const feature of api.mapPackage?.features || []) {
-          const featureState = operations.stateForFeature(feature.id);
+          const featureState = operations.stateForFeature(feature.id, prepared);
           if (!featureState) continue;
           const openable = Boolean(feature.capabilities?.openable
             || feature.capabilities?.actions?.open || feature.capabilities?.actions?.close);
@@ -206,11 +228,12 @@ export function createFeatureInteractionSystem() {
             else node.removeAttribute('data-interaction-open');
           }
         }
+        visualRevision = revision;
       }
 
       function actionsForFeature(featureId, context = {}) {
         const tokenId = context.tokenId ?? selectedTokenId();
-        return operations.actionsForFeature(featureId, { tokenId }).map(descriptor => {
+        return operations.actionsForFeature(featureId, { tokenId, readContext: context.readContext }).map(descriptor => {
           const permission = actionPermission(descriptor.id, tokenId);
           return descriptor.enabled && !permission.ok
             ? Object.freeze({ ...descriptor, enabled: false, reason: permission.reason })
@@ -223,22 +246,30 @@ export function createFeatureInteractionSystem() {
       }
 
       async function execute(action, options = {}) {
-        const featureId = options.featureId ?? selectedFeatureId;
-        const tokenId = options.tokenId ?? selectedTokenId();
-        const permission = actionPermission(action, tokenId);
-        if (!permission.ok) {
-          const denied = Object.freeze({ action, featureId, tokenId, ok: false, reason: permission.reason });
-          setFeedback(shell, permission.reason);
-          api.emit?.('interaction:executed', denied);
-          return denied;
+        try {
+          const featureId = options.featureId ?? selectedFeatureId;
+          const tokenId = options.tokenId ?? selectedTokenId();
+          const permission = actionPermission(action, tokenId);
+          if (!permission.ok) {
+            const denied = Object.freeze({ action, featureId, tokenId, ok: false, reason: permission.reason });
+            setFeedback(shell, permission.reason);
+            renderInspection();
+            api.emit?.('interaction:executed', denied);
+            return denied;
+          }
+          const execution = await operations.execute(action, { ...options, featureId, tokenId });
+          if (execution.ok && execution.message) setFeedback(shell, execution.message);
+          else if (!execution.ok && execution.reason) setFeedback(shell, execution.reason);
+          if (execution.ok) refreshCommitted();
+          else { syncFeatureVisualState(); renderInspection(); }
+          api.emit?.('interaction:executed', execution);
+          return execution;
+        } catch (error) {
+          // A failed button has no new revision to invalidate the successful
+          // render stamp, but its temporary disabled state still needs repair.
+          renderInspection();
+          throw error;
         }
-        const execution = await operations.execute(action, { ...options, featureId, tokenId });
-        if (execution.ok && execution.message) setFeedback(shell, execution.message);
-        else if (!execution.ok && execution.reason) setFeedback(shell, execution.reason);
-        syncFeatureVisualState();
-        renderInspection();
-        api.emit?.('interaction:executed', execution);
-        return execution;
       }
 
       function createActionButton(descriptor, featureId) {
@@ -251,13 +282,15 @@ export function createFeatureInteractionSystem() {
           event.preventDefault();
           event.stopPropagation();
           button.disabled = true;
-          void execute(descriptor.id, { featureId }).finally(renderInspection);
+          void execute(descriptor.id, { featureId }).catch(error => api.showToast?.(error.message || String(error), 'error'));
         });
         return button;
       }
 
       function renderInspection() {
         if (!panel || destroyed) return;
+        const prepared = operations.readContext();
+        const renderedContext = { revision: committedRevision(), featureId: selectedFeatureId, tokenId: selectedTokenId() };
         panel.replaceChildren();
         const section = createElement(documentNode, 'div', 'section');
         section.append(createElement(documentNode, 'h2', '', 'Feature 检查'));
@@ -268,6 +301,7 @@ export function createFeatureInteractionSystem() {
           editOcclusion.addEventListener('click', () => api.occlusionEditor.open().catch(error => api.showToast?.(error.message, 'error')));
           section.append(editOcclusion);
         }
+        const damagedSection = renderDamagedObjects(prepared);
         if (!selectedFeatureId) {
           section.append(createElement(documentNode, 'p', '', '启用检查工具后，点击任何声明 inspect Capability 的地图 Feature。'));
           const enable = createElement(documentNode, 'button', 'small-button primary', '启用检查工具');
@@ -275,12 +309,14 @@ export function createFeatureInteractionSystem() {
           enable.addEventListener('click', () => api.setTool?.('inspect'));
           section.append(enable);
           panel.append(section);
+          if (damagedSection) panel.append(damagedSection);
+          inspectionContext = renderedContext;
           return;
         }
 
         const feature = featureById(api.mapPackage, selectedFeatureId);
-        if (!feature) return;
-        const featureState = operations.stateForFeature(feature.id);
+        if (!feature) { inspectionContext = renderedContext; return; }
+        const featureState = operations.stateForFeature(feature.id, prepared);
         const heading = createElement(documentNode, 'div', 'feature-heading');
         heading.append(
           createElement(documentNode, 'div', 'feature-name', feature.name || feature.id),
@@ -342,11 +378,41 @@ export function createFeatureInteractionSystem() {
         focus.type = 'button';
         focus.addEventListener('click', () => api.focusFeature?.(feature.id));
         actions.append(focus);
-        for (const descriptor of actionsForFeature(feature.id).filter(entry => entry.id !== 'inspect')) {
+        for (const descriptor of actionsForFeature(feature.id, { readContext: prepared }).filter(entry => entry.id !== 'inspect')) {
           actions.append(createActionButton(descriptor, feature.id));
         }
         section.append(actions);
         panel.append(section);
+        if (damagedSection) panel.append(damagedSection);
+        inspectionContext = renderedContext;
+      }
+
+      function renderDamagedObjects(prepared) {
+        if (!actionPermission('restore').ok) return null;
+        const damaged = prepared.derivedScene;
+        if (!damaged.damagedFeatureIds.length) return null;
+        const ids = new Set(damaged.damagedFeatureIds.map(String));
+        const features = (api.mapPackage.features || []).filter(feature => ids.has(String(feature.id))
+          && declaredFeatureAction(feature, 'restore'));
+        if (!features.length) return null;
+        const section = createElement(documentNode, 'div', 'section');
+        section.dataset.damagedObjects = '';
+        section.append(createElement(documentNode, 'h3', '', `受损对象 · ${features.length}`));
+        const select = createElement(documentNode, 'select');
+        select.dataset.damagedFeatureSelect = '';
+        select.setAttribute('aria-label', '选择需要恢复的受损对象');
+        for (const feature of features) {
+          const option = createElement(documentNode, 'option', '', `${feature.name || feature.id} · ${damaged.destroyedObjectIds.includes(feature.id) ? '已摧毁' : '局部破坏'}`);
+          option.value = String(feature.id);
+          option.selected = String(feature.id) === String(selectedFeatureId);
+          select.append(option);
+        }
+        const inspect = createElement(documentNode, 'button', 'small-button', '检查／恢复此对象');
+        inspect.type = 'button';
+        inspect.dataset.damagedFeatureInspect = '';
+        inspect.addEventListener('click', () => api.selectFeature?.(select.value, { switchTab: true }));
+        section.append(select, inspect);
+        return section;
       }
 
       async function ejectDestroyedFeatureOccupants() {
@@ -404,18 +470,29 @@ export function createFeatureInteractionSystem() {
       }));
       off.push(api.selection?.subscribe?.(() => renderInspection()));
       for (const eventName of [
-        'state:import', 'state:commit', 'scene:restore', 'feature:state-change',
+        'state:import', 'state:commit', 'feature:state-change', 'scene:activate',
       ]) off.push(api.on?.(eventName, () => { syncFeatureVisualState(); renderInspection(); }));
+      off.push(api.on?.('scene:restore', refreshCommitted));
+      off.push(api.on?.('scene:content-change', event => {
+        if (!event.detail?.types?.includes('SceneEvent')) return;
+        const activeSceneId = readRuntimeState(api)?.preferences?.worldV2?.activeSceneId;
+        if (event.detail.sceneId != null && activeSceneId != null
+          && String(event.detail.sceneId) !== String(activeSceneId)) return;
+        syncFeatureVisualState();
+        renderInspection();
+      }));
       const renderInspectionIfSelected = () => { if (selectedFeatureId) renderInspection(); };
       for (const eventName of [
         'token:create', 'token:delete', 'token:move', 'token:property-change',
-        'status:change', 'multiplayer:capabilities',
+        'status:change',
       ]) off.push(api.on?.(eventName, renderInspectionIfSelected));
+      off.push(api.on?.('multiplayer:capabilities', renderInspection));
       off.push(api.on?.('scene:damage', () => {
-        void ejectDestroyedFeatureOccupants().finally(() => { syncFeatureVisualState(); renderInspection(); });
+        void ejectDestroyedFeatureOccupants().finally(refreshCommitted);
       }));
       off.push(api.on?.('app:destroy', () => {
         destroyed = true;
+        operations.dispose();
         api.map?.off?.('click', genericPanInspect);
         off.splice(0).forEach(dispose => dispose?.());
       }));

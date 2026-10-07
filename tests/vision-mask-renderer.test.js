@@ -22,9 +22,14 @@ function fakeDocument() {
   return { canvases, createElement() {
     const context = { calls: [] };
     for (const name of ['setTransform', 'clearRect', 'beginPath', 'rect', 'arc', 'save', 'restore', 'clip',
-      'fill', 'moveTo', 'lineTo', 'closePath', 'fillRect', 'drawImage']) {
-      context[name] = (...args) => context.calls.push({ name, args });
+      'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'fillRect', 'drawImage', 'putImageData']) {
+      context[name] = (...args) => context.calls.push({ name, args, composite:context.globalCompositeOperation,
+        lineWidth:context.lineWidth, lineJoin:context.lineJoin });
     }
+    context.getImageData = (x,y,width,height) => {
+      context.calls.push({name:'getImageData',args:[x,y,width,height]});
+      return {width,height,data:new Uint8ClampedArray(width*height*4)};
+    };
     const canvas = { width: 300, height: 150, getContext: () => context };
     canvases.push(canvas); return canvas;
   } };
@@ -43,6 +48,7 @@ test('precise and vague masks retain two bounded frames and release their surfac
   const copies = target.calls.filter(call => call.name === 'drawImage');
   assert.equal(copies.length, 3);
   assert.ok(copies.every(call => call.args.length === 9 && call.args[7] < 50 && call.args[8] < 50));
+  assert.ok(copies.every(call=>call.args.slice(1).every(Number.isInteger)), 'aligned copies only use integer backing-pixel coordinates');
   const allocated = document.canvases.length;
   for (let index = 0; index < 20; index++) renderer.draw(target, { ...input, key: `precise-${index}`, kind: 'precise' });
   assert.equal(document.canvases.length, allocated);
@@ -81,4 +87,87 @@ test('fixed lighting union survives observer movement but refreshes for scene or
   renderer.draw(target, { ...input, key: 'reset', lightingKey: 'geometry-1:lights-2:viewport-2', source: { x: 3, y: 0 } });
   assert.equal(lightContext.calls.filter(call => call.name === 'arc').length, 4);
   renderer.dispose();
+});
+
+test('overlapping ordinary shadows retain the full-viewport reference clipping and draw order', () => {
+  const document=fakeDocument(),renderer=createContinuousMaskRenderer(document);
+  const target=document.createElement('canvas').getContext('2d');target.globalCompositeOperation='destination-out';
+  const shadows=[[[[0,0],[8,0],[8,8],[0,8]]],[[[6,0],[10,0],[10,8],[6,8]]]];
+  renderer.draw(target,{key:'overlap-clip',kind:'precise',dpr:1.25,width:400,height:300,radiusUnits:30,source:{x:.2,y:.3},viewport,
+    geometry:{blocked:false,shadows,facades:[],illumination:{mode:'all',regions:[]}}});
+  const mask=document.canvases.at(-1).getContext('2d');
+  assert.deepEqual(mask.calls.find(call=>call.name==='clearRect').args,[0,0,400,300]);
+  assert.equal(mask.calls.filter(call=>call.name==='rect').length,0,'no new clip affects ordinary shadow alpha rounding');
+  assert.deepEqual(mask.calls.filter(call=>call.name==='fill'&&call.composite==='destination-out').map(call=>call.args),
+    [['evenodd'],['evenodd']],'original shadow order and independent rasterization are preserved');
+  renderer.dispose();
+});
+
+test('facade holes share foreign-shadow boundaries and never require a pixel readback or extra surface',()=>{
+  const document=fakeDocument(),renderer=createContinuousMaskRenderer(document);
+  const target=document.createElement('canvas').getContext('2d');target.globalCompositeOperation='destination-out';
+  const rect=(x,y,w,h)=>[[x,y],[x+w,y],[x+w,y+h],[x,y+h]];
+  const geometry={blocked:false,shadows:[[rect(6,-10,4,20)]],
+    facades:[{id:'building',polygons:[[rect(-10,-10,20,20),rect(-3,-3,6,6)]],otherShadowIndices:[0]}],
+    illumination:{mode:'all',regions:[]}};
+  const snapshot=structuredClone(geometry);
+  const input={geometry,source:{x:0,y:0},radiusUnits:20,viewport,width:400,height:300,dpr:1.25,kind:'precise'};
+  renderer.draw(target,{...input,key:'facade'});
+  assert.equal(document.canvases.length,5,'only the existing three light/tint surfaces, target and sight mask are allocated');
+  const mask=document.canvases.at(-1).getContext('2d');
+  assert.deepEqual(mask.calls.filter(call=>call.name==='fill').map(call=>[call.composite,call.args]),
+    [['source-over',[]],['destination-out',['evenodd']],['source-over',['evenodd']]]);
+  assert.deepEqual(renderer.cacheStats(),{objects:1,versions:1,vertices:8},'outer boundary and original hole share one cached component');
+  const readbacks=()=>document.canvases.flatMap(canvas=>canvas.getContext('2d').calls).filter(call=>call.name==='getImageData');
+  assert.equal(readbacks().length,0);
+  const allocated=document.canvases.length;
+  renderer.draw(target,{...input,key:'zoomed',viewport:{scaleX:2,project:(x,y)=>({x:150.37+x*2,y:100.21+y*2})}});
+  assert.equal(document.canvases.length,allocated);assert.deepEqual(renderer.cacheStats(),{objects:1,versions:1,vertices:8});
+  assert.equal(readbacks().length,0);assert.deepEqual(geometry,snapshot);
+  renderer.reset();assert.deepEqual(renderer.cacheStats(),{objects:0,versions:0,vertices:0});
+  renderer.dispose();
+});
+
+test('darkvision and normal-light passes reuse one prepared exterior mask',()=>{
+  const document=fakeDocument(),renderer=createContinuousMaskRenderer(document);
+  const target=document.createElement('canvas').getContext('2d');target.globalCompositeOperation='destination-out';
+  const wall=[[[4,-1],[6,-1],[6,1],[4,1]]];
+  const geometry={blocked:false,shadows:[wall],facades:[{id:'building',polygons:[[[[0,-10],[10,-10],[10,10],[0,10]]]],otherShadowIndices:[0]}],
+    illumination:{mode:'dark-and-normal',regions:[{x:0,y:0,radiusUnits:30,normalRadiusUnits:15,shadows:[wall]}]}};
+  renderer.draw(target,{key:'dark-facade',kind:'precise',geometry,viewport,source:{x:0,y:0},radiusUnits:20,width:400,height:300,dpr:1});
+  assert.deepEqual(renderer.cacheStats(),{objects:1,versions:1,vertices:8});
+  assert.equal(document.canvases.flatMap(canvas=>canvas.getContext('2d').calls).filter(call=>call.name==='getImageData').length,0);
+  assert.ok(document.canvases.flatMap(canvas=>canvas.getContext('2d').calls).some(call=>call.name==='drawImage'&&call.composite==='destination-in'));
+  renderer.dispose();
+});
+
+test('facade cache remains local to each viewer and retains only two geometry versions per object',()=>{
+  const make=()=>{const document=fakeDocument(),renderer=createContinuousMaskRenderer(document);
+    const target=document.createElement('canvas').getContext('2d');target.globalCompositeOperation='destination-out';return{document,renderer,target};};
+  const a=make(),b=make();
+  const geometry=shift=>({blocked:false,shadows:[[[[4+shift,-10],[6+shift,-10],[6+shift,10],[4+shift,10]]]],
+    facades:[{id:'same-object',polygons:[[[[0,-10],[10,-10],[10,10],[0,10]]]],otherShadowIndices:[0]}],illumination:{mode:'all',regions:[]}});
+  const input={viewport,source:{x:0,y:0},radiusUnits:20,width:400,height:300,dpr:1,kind:'precise'};
+  for(let frame=0;frame<5;frame++)a.renderer.draw(a.target,{...input,key:`a-${frame}`,geometry:geometry(frame*.1)});
+  b.renderer.draw(b.target,{...input,key:'b',geometry:geometry(-2)});
+  assert.deepEqual(a.renderer.cacheStats(),{objects:1,versions:2,vertices:16});
+  assert.deepEqual(b.renderer.cacheStats(),{objects:1,versions:1,vertices:8});
+  const exterior=context=>context.calls.filter(call=>call.composite==='source-over'&&call.name==='lineTo').map(call=>call.args);
+  assert.notDeepEqual(exterior(a.document.canvases.at(-1).getContext('2d')),exterior(b.document.canvases.at(-1).getContext('2d')));
+  a.renderer.reset();assert.deepEqual(a.renderer.cacheStats(),{objects:0,versions:0,vertices:0});
+  assert.deepEqual(b.renderer.cacheStats(),{objects:1,versions:1,vertices:8});
+  a.renderer.dispose();b.renderer.dispose();assert.deepEqual(b.renderer.cacheStats(),{objects:0,versions:0,vertices:0});
+});
+
+test('facade cache evicts beyond 512 objects and releases all derived data on dispose',()=>{
+  const document=fakeDocument(),renderer=createContinuousMaskRenderer(document);
+  const target=document.createElement('canvas').getContext('2d');target.globalCompositeOperation='destination-out';
+  const polygon=[[[0,-10],[10,-10],[10,10],[0,10]]];
+  const geometry={blocked:false,shadows:[[[[4,-10],[6,-10],[6,10],[4,10]]]],
+    facades:Array.from({length:513},(_,index)=>({id:`building-${index}`,polygons:[polygon],otherShadowIndices:[0]})),
+    illumination:{mode:'all',regions:[]}};
+  renderer.draw(target,{key:'many-facades',kind:'precise',geometry,viewport,source:{x:0,y:0},radiusUnits:20,width:400,height:300,dpr:1});
+  assert.deepEqual(renderer.cacheStats(),{objects:512,versions:512,vertices:4096});
+  renderer.dispose();assert.deepEqual(renderer.cacheStats(),{objects:0,versions:0,vertices:0});
+  assert.ok(document.canvases.filter(canvas=>canvas.getContext('2d')!==target).every(canvas=>canvas.width===0&&canvas.height===0));
 });

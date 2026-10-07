@@ -54,7 +54,7 @@ test('Token movement does not rescan all Feature visual state', () => {
 
 test('scene area rendering uses an event-refreshed attack area cache', () => {
   assert.match(sceneAreas, /const initialState = api\.getState\(\)/);
-  assert.match(sceneAreas, /let cachedAreas = clone\(initialState\?\.attackAreas \|\| \[\]\)/);
+  assert.match(sceneAreas, /let cachedAreas = clone\(activeScene\(initialState\)\?\.attackAreas \|\| initialState\?\.attackAreas \|\| \[\]\)/);
   assert.match(sceneAreas, /const areas = \(\) => cachedAreas/);
   assert.match(sceneAreas, /const state = event\?\.detail\?\.state \|\| api\.getState\(\)/);
   assert.match(sceneAreas, /areas\(\)\.some\(area => area\.anchor\?\.type === kind/);

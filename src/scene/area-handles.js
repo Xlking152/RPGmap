@@ -1,5 +1,6 @@
 import L from 'leaflet';
 import { attackAreaToPolygon, latLngToWorld, worldToLatLng } from '../engine/geometry.js';
+import { readRuntimeState } from '../engine/state-access.js';
 import { applyAreaHandleDrag, areaHandlePoints } from './area-handle-geometry.js';
 import { stateWithAreaDraft } from './area-state.js';
 
@@ -64,7 +65,7 @@ function resolvedArea(api, area) {
 export function createSceneAreaHandleSystem() {
   return Object.freeze({
     register(api) {
-      if (!api.sceneAreas?.getSelected || !api.commitState) {
+      if (!api.sceneAreas?.getSelected || (!api.sceneAreas.update && !api.world?.performOperations && !api.commitState)) {
         throw new Error('Scene area handles require SceneAreaSystem');
       }
       const mapElement = api.map.getContainer();
@@ -78,8 +79,10 @@ export function createSceneAreaHandleSystem() {
       const handles = new Map();
       const off = [];
       let draft = null;
+      let dragBase = null;
       let selectedAreaId = null;
       let dragging = false;
+      let saving = false;
       let destroyed = false;
       let renderTimer = null;
 
@@ -120,19 +123,45 @@ export function createSceneAreaHandleSystem() {
 
       async function commitDraft() {
         if (!draft || !selectedAreaId) return false;
-        const next = stateWithAreaDraft(api.getState(), selectedAreaId, draft);
+        if (typeof api.sceneAreas.update === 'function') {
+          return api.sceneAreas.update(selectedAreaId, draft, {
+            ...dragBase?.guards, source: 'scene-area:drag', reportError: false,
+          });
+        }
+        const next = stateWithAreaDraft(dragBase?.state || api.getState(), selectedAreaId, draft);
         if (!next) return false;
-        await Promise.resolve(api.commitState(next, { source: 'scene-area:drag', render: true }));
+        if (typeof api.world?.performOperations === 'function') {
+          if (!dragBase?.guards?.sceneId) throw Object.assign(new Error('当前场景已切换，请重新操作'), { code: 'scene_content_conflict' });
+          await api.world.performOperations([{ type: 'scene.content.replace', payload: {
+            ...dragBase.guards, attackAreas: next.attackAreas,
+          } }], { source: 'scene-area:drag', render: true });
+        } else {
+          // Legacy runtimes have no canonical Scene transaction port.
+          const current = stateWithAreaDraft(api.getState(), selectedAreaId, draft);
+          if (!current) return false;
+          await Promise.resolve(api.commitState(current, { source: 'scene-area:drag', render: true }));
+        }
         api.sceneAreas.select?.(selectedAreaId);
         return true;
       }
 
       function beginDrag(kind) {
+        if (saving || destroyed) return false;
         const selected = api.sceneAreas.getSelected();
         if (!selected) return false;
+        const state = api.getState();
+        const world = state.preferences?.worldV2;
+        const scene = world?.scenes?.find(item => String(item.id) === String(world.activeSceneId));
+        const attackAreas = clone(scene?.attackAreas || state.attackAreas || []);
+        const canonical = attackAreas.find(item => String(item.id) === String(selected.id));
+        if (!canonical) return false;
+        dragBase = { state: { ...state, attackAreas }, guards: {
+          ...(scene ? { sceneId: scene.id, expectedActiveSceneId: scene.id } : {}),
+          expectedAttackAreas: attackAreas,
+        } };
         selectedAreaId = String(selected.id);
-        draft = resolvedArea(api, selected);
-        if (kind === 'origin') draft.anchor = clone(selected.anchor || { type: 'free', markerId: null });
+        draft = resolvedArea(api, canonical);
+        if (kind === 'origin') draft.anchor = clone(canonical.anchor || { type: 'free', markerId: null });
         dragging = true;
         drawPreview(draft);
         api.setStatus?.('拖动范围控制点 · 松开后保存');
@@ -151,14 +180,22 @@ export function createSceneAreaHandleSystem() {
         if (!dragging || !draft) return;
         dragHandle(kind, marker);
         dragging = false;
+        saving = true;
+        api.setStatus?.('正在保存范围…');
         try {
-          await commitDraft();
-          api.setStatus?.('范围已更新');
+          const committed = await commitDraft();
+          if (committed) api.setStatus?.('范围已更新');
+          else throw new Error('范围已不存在，请重新选择');
         } catch (error) {
-          api.showToast?.(`范围保存失败：${error.message || error}`, 'error');
+          const message = `范围保存失败：${error.message || error}`;
+          api.setStatus?.(message);
+          api.showToast?.(message, 'error');
         } finally {
+          saving = false;
           previewLayer.clearLayers();
           draft = null;
+          dragBase = null;
+          api.sceneAreas.render?.();
           render();
         }
       }
@@ -179,7 +216,7 @@ export function createSceneAreaHandleSystem() {
       }
 
       function render() {
-        if (destroyed || dragging) return;
+        if (destroyed || dragging || saving) return;
         handleLayer.clearLayers();
         handles.clear();
         previewLayer.clearLayers();
@@ -204,9 +241,16 @@ export function createSceneAreaHandleSystem() {
       mapElement.addEventListener('click', renderSoon, true);
       const panel = api.uiPanels?.get?.('areas');
       panel?.addEventListener('click', renderSoon, true);
-      for (const name of ['state:commit', 'state:import', 'area:create']) {
+      for (const name of ['state:commit', 'state:import', 'scene:activate', 'area:create']) {
         off.push(api.on?.(name, renderSoon));
       }
+      off.push(api.on?.('scene:content-change', event => {
+        if (!event.detail?.types?.some(type => type === 'AttackArea' || type === 'Marker')) return;
+        const activeSceneId = readRuntimeState(api)?.preferences?.worldV2?.activeSceneId;
+        if (event.detail.sceneId != null && activeSceneId != null
+          && String(event.detail.sceneId) !== String(activeSceneId)) return;
+        renderSoon();
+      }));
       for (const name of ['token:move', 'token:delete', 'marker:move', 'marker:delete']) {
         const kind = name.startsWith('token') ? 'token' : 'marker';
         off.push(api.on?.(name, event => {

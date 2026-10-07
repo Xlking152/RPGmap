@@ -4,17 +4,17 @@ import { canonicalAttackAreas } from '../world/attack-anchors.js';
 import {
   WORLD_STATE_KEY,
   WORLD_SCHEMA_VERSION,
-  normalizeWorldV2,
   projectWorldV2ToRuntimeState,
 } from '../world/model.js';
 import { isLegacySaveV2Payload, migrateLegacySaveV2 } from '../legacy/save-v2.js';
 import { assertPersistedWorldV2, assertWorldRuleset } from '../world/validation.js';
-import { migrateWorldSchema3State } from '../world/migration.js';
+import { migrateDetachedWorldSchema4State } from '../world/migration.js';
+import { finishWorkSync, finishWorkAsync } from '../vision/work.js';
 import {
   FEATURE_STATE_KEY,
   LEGACY_FEATURE_INTERACTION_STATE_KEY,
-  migrateLegacySceneFeatureStates,
-  stripLegacyFeatureStateProjection,
+  isPlainObject,
+  migrateDetachedLegacySceneFeatureStates,
 } from '../world/feature-states.js';
 
 export const RUNTIME_SAVE_VERSION = 2;
@@ -88,9 +88,16 @@ function cleanSceneEvents(events) {
   return next;
 }
 
-function cleanPreferences(raw, ruleset) {
-  const preferences = raw && typeof raw === 'object' && !Array.isArray(raw) ? clone(raw) : {};
-  preferences.entitySystem = normalizeEntityState(preferences.entitySystem, ruleset ? { ruleset } : {});
+function cleanPreferences(raw, ruleset, { normalizeCanonicalWorld = false } = {}) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const { entitySystem, [WORLD_STATE_KEY]: world, ...metadata } = source;
+  if (typeof entitySystem === 'function' || typeof entitySystem === 'symbol') clone(entitySystem);
+  const copied = clone(metadata);
+  const preferences = Object.fromEntries(Object.keys(source).map(key => [key, copied[key]]));
+  // The canonical World is normalized below before it can leave the validator.
+  // Avoid copying its Actors, Scenes and Fog immediately before that work.
+  if (Object.hasOwn(source, WORLD_STATE_KEY)) preferences[WORLD_STATE_KEY] = normalizeCanonicalWorld ? world : clone(world);
+  preferences.entitySystem = normalizeEntityState(entitySystem, ruleset ? { ruleset } : {});
   for (const token of preferences.entitySystem.tokens) {
     if ('characterId' in token) delete token.characterId;
   }
@@ -112,7 +119,7 @@ export function createInitialRuntimeState(mapPackage, { ruleset } = {}) {
   };
 }
 
-export function validateRuntimeState(raw, { mapPackage, ruleset } = {}) {
+function* validateRuntimeStateSteps(raw, { mapPackage, ruleset } = {}) {
   let source = object(raw, 'state');
   const metadata = mapMetadata(mapPackage);
   const hasCanonicalWorld = Boolean(source.preferences?.[WORLD_STATE_KEY]);
@@ -120,40 +127,94 @@ export function validateRuntimeState(raw, { mapPackage, ruleset } = {}) {
     assertPersistedWorldV2(source.preferences[WORLD_STATE_KEY], {
       acceptedSchemaVersions: [2, 3, WORLD_SCHEMA_VERSION],
     });
-    source = migrateWorldSchema3State(migrateLegacySceneFeatureStates(source).state, {
+    if (!isPlainObject(source)) throw new TypeError('Feature State migration requires a state object');
+    const hasLegacy = isPlainObject(source.preferences)
+      && (Object.hasOwn(source.preferences, FEATURE_STATE_KEY)
+        || Object.hasOwn(source.preferences, LEGACY_FEATURE_INTERACTION_STATE_KEY));
+    // Each migration still validates and applies its complete compatibility
+    // rules. They can share this one exclusively owned snapshot.
+    source = migrateDetachedWorldSchema4State(migrateDetachedLegacySceneFeatureStates(clone(source), { hasLegacy }).state, {
       statusDefinitions: ruleset?.statuses?.definitions,
     }).state;
+    // The complete authority input is detached before asynchronous execution
+    // can yield. Compatibility migration still runs for schema 4 as well.
+    yield 'migration';
   }
   const mapId = hasCanonicalWorld ? metadata.id : String(source.mapId ?? metadata.id).trim();
   const mapVersion = hasCanonicalWorld ? metadata.version : String(source.mapVersion ?? metadata.version).trim();
   if (mapId !== metadata.id) throw new TypeError('state.mapId does not match MapPackage');
   if (mapVersion !== metadata.version) throw new TypeError('state.mapVersion does not match MapPackage');
 
+  const { markers: _markers, attackAreas: _areas, sceneEvents: _events, preferences: _preferences,
+    ...metadataFields } = source;
+  // The original full-state copy rejected unsupported values even when an
+  // invalid preference container would subsequently be replaced by defaults.
+  if (_preferences && (typeof _preferences !== 'object' || Array.isArray(_preferences))) clone(_preferences);
+  const copiedMetadata = clone(metadataFields);
   let next = {
-    ...clone(source),
+    ...Object.fromEntries(Object.keys(source).map(key => [key, copiedMetadata[key]])),
     saveVersion: RUNTIME_SAVE_VERSION,
     mapId,
     mapVersion,
     markers: cleanMarkers(source.markers ?? []),
     attackAreas: cleanAttackAreas(source.attackAreas ?? []),
     sceneEvents: cleanSceneEvents(source.sceneEvents ?? []),
-    preferences: cleanPreferences(source.preferences, ruleset),
+    preferences: cleanPreferences(source.preferences, ruleset, { normalizeCanonicalWorld: hasCanonicalWorld }),
   };
   delete next.characters;
   // This belongs to the local persistence envelope, never runtime/public state.
   delete next._localExploration;
+  // Without a canonical World this is the first yield: all caller-owned input
+  // has already been read and copied into the complete runtime snapshot.
+  yield 'runtime-content';
 
   const rawWorld = next.preferences?.[WORLD_STATE_KEY];
   if (rawWorld) {
     assertWorldRuleset(rawWorld, ruleset);
-    const world = normalizeWorldV2(rawWorld, { mapPackage, ruleset });
-    next = projectWorldV2ToRuntimeState(next, world, { mapPackage, ruleset });
+    // Projection already performs the complete canonical World normalization.
+    next = projectWorldV2ToRuntimeState(next, rawWorld, { mapPackage, ruleset });
+    yield 'canonical-projection';
     next.markers = cleanMarkers(next.markers ?? []);
     next.attackAreas = cleanAttackAreas(next.attackAreas ?? []);
     next.sceneEvents = cleanSceneEvents(next.sceneEvents ?? []);
     delete next.characters;
   }
   return next;
+}
+
+export function validateRuntimeState(raw, options = {}) {
+  return finishWorkSync(validateRuntimeStateSteps(raw, options));
+}
+
+/** Yield after a paint opportunity; hidden pages also make timely progress. */
+export function yieldRuntimeValidationFrame({ signal, view = globalThis } = {}) {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    let frame = null, fallback = null, afterFrame = null, settled = false;
+    const clear = () => {
+      if (frame !== null) view.cancelAnimationFrame?.(frame);
+      if (fallback !== null) clearTimeout(fallback);
+      if (afterFrame !== null) clearTimeout(afterFrame);
+      signal?.removeEventListener('abort', aborted);
+    };
+    const finish = () => {
+      if (settled) return;
+      settled = true; clear(); resolve();
+    };
+    const aborted = () => {
+      if (settled) return;
+      settled = true; clear();
+      reject(signal.reason ?? new DOMException('Runtime validation cancelled', 'AbortError'));
+    };
+    signal?.addEventListener('abort', aborted, { once: true });
+    // Resolve in a task following RAF, so the next validation phase does not
+    // execute as a microtask before the same frame is painted.
+    if (typeof view.requestAnimationFrame === 'function') {
+      try { frame = view.requestAnimationFrame(() => { afterFrame = setTimeout(finish, 0); }); }
+      catch { frame = null; }
+    }
+    fallback = setTimeout(finish, frame === null ? 0 : 32);
+  });
 }
 
 export function prepareRuntimeState(raw, { mapPackage, ruleset } = {}) {
@@ -185,11 +246,29 @@ export function prepareRuntimeState(raw, { mapPackage, ruleset } = {}) {
   });
 }
 
-export function exportRuntimeState(state, { mapPackage, ruleset } = {}) {
-  const next = stripLegacyFeatureStateProjection(validateRuntimeState(state, { mapPackage, ruleset }));
+function stripExportedRuntimeState(next) {
+  // Validation owns this fully detached result; stripping presentation fields
+  // need not copy its Actors, Scenes, Fog and history a second time.
+  delete next.preferences[FEATURE_STATE_KEY];
+  delete next.preferences[LEGACY_FEATURE_INTERACTION_STATE_KEY];
   delete next.characters;
   for (const token of next.preferences?.entitySystem?.tokens || []) delete token.characterId;
   return next;
+}
+
+export function exportRuntimeState(state, options = {}) {
+  return stripExportedRuntimeState(validateRuntimeState(state, options));
+}
+
+/** Internal full-validation save path; synchronous public exports stay intact. */
+export async function exportRuntimeStateAsync(state, options = {}, {
+  signal,
+  budgetMs = 8,
+  yieldTask = () => yieldRuntimeValidationFrame({ signal }),
+} = {}) {
+  return stripExportedRuntimeState(await finishWorkAsync(validateRuntimeStateSteps(state, options), {
+    signal, budgetMs, yieldTask,
+  }));
 }
 
 // Only for a state just committed from validated canonical Document changes.

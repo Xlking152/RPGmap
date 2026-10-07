@@ -5,11 +5,15 @@ function entityState(state) {
 
 function tokenContext(state, tokenId) {
   const id = String(tokenId ?? '');
-  if (!id) return { actorId: null, tokenId: null };
-  const token = (entityState(state).tokens || []).find(item => String(item?.id ?? '') === id);
+  if (!id) return { actorId: null, tokenId: null, actorLink: true };
+  const world = state?.preferences?.worldV2;
+  const scene = world?.scenes?.find(item => String(item?.id ?? '') === String(world.activeSceneId ?? ''));
+  const tokens = scene ? scene.tokens || [] : entityState(state).tokens || [];
+  const token = tokens.find(item => String(item?.id ?? '') === id);
   return {
     actorId: token?.actorId == null ? null : String(token.actorId),
     tokenId: token?.id == null ? null : String(token.id),
+    actorLink: token?.actorLink !== false,
   };
 }
 
@@ -80,8 +84,8 @@ export function featureStatusMutations({ feature, action, state, tokenId, defini
     if (!definition || definition.derived === true || definition.persisted === false) {
       throw new Error(`Feature 引用了不可持久化或不存在的状态：${statusId}`);
     }
-    const scope = change.scope === 'token' ? 'token' : 'actor';
-    const targetId = scope === 'token' ? context.tokenId : context.actorId;
+    const scope = change.scope === 'token' ? 'token' : context.actorLink ? 'actor' : 'syntheticActor';
+    const targetId = scope === 'actor' ? context.actorId : context.tokenId;
     if (!targetId) throw new Error(`所选 Token 没有可用于 ${scope} 状态的目标`);
     return Object.freeze({
       type: change.type,

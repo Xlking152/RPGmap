@@ -14,6 +14,10 @@ import { applyExplorationDelta } from '../deployment/local-server/exploration-qu
 import { worldWalChecksum } from '../deployment/local-server/world-wal.mjs';
 import { STATUS_SCHEMA_VERSION } from '../src/status/model.js';
 import { ACCESS_SCHEMA_VERSION } from '../deployment/local-server/access-control.mjs';
+import { isDeepStrictEqual } from 'node:util';
+import { deriveSceneState } from '../src/engine/state.js';
+import { runPackagedRuinsLanSmoke, sceneEventsHash } from './ruins-lan-smoke.mjs';
+import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
 
 const httpUrl = String(process.argv[2] || '').replace(/\/$/, '');
 const gmSecret = String(process.argv[3] || '');
@@ -23,6 +27,12 @@ if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(httpUrl) || !gmSecret || !/^\d{6}$/.test
   throw new Error('Usage: node scripts/lan-vision-smoke.mjs http://127.0.0.1:PORT GM_SECRET JOIN_CODE [PACKAGED_MAP_DIR]');
 }
 const WAIT_MS = 12_000;
+const build = mapDir ? await benchmarkBuildInfo(process.cwd(), path.dirname(mapDir)) : null;
+if (build) {
+  const response = await fetch(`${httpUrl}/api/version`);
+  assert(response.ok && isDeepStrictEqual(await response.json(), build.metadata),
+    'LAN vision server version differs from its actual package');
+}
 
 class OriginWebSocket {
   constructor(url, origin) {
@@ -282,7 +292,7 @@ async function waitForFog(socket, directory, sceneId, partyId, point) {
   throw new Error('Confirmed path did not finish its ordered background Fog exploration');
 }
 
-async function verifyPackagedRestart(prefix, sceneId, partyId, point) {
+async function verifyPackagedRestart(prefix, sceneId, partyId, point, destruction = null) {
   const directory = await mkdtemp(path.join(tmpdir(), 'rpgmap-package-fog-recovery-'));
   let child, gm;
   try {
@@ -319,6 +329,19 @@ async function verifyPackagedRestart(prefix, sceneId, partyId, point) {
       ?.tokens.find(item => item.id === 'smoke-pc-token')?.x === point.x, 'Restart lost its confirmed movement');
     assert(!Object.keys((await durablePrefix(restoredMap)).world.exploration.contexts).length,
       'Packaged recovery kept unused exploration contexts after draining');
+    if (destruction) {
+      const scene = recovered.state.preferences.worldV2.scenes.find(item => item.id === sceneId);
+      assert(isDeepStrictEqual(scene?.sceneEvents, destruction.sceneEvents), 'Packaged restart lost confirmed destruction/restore history');
+      const expected = deriveSceneState(destruction.sceneEvents), actual = deriveSceneState(scene.sceneEvents);
+      assert(isDeepStrictEqual(actual, expected), 'Packaged restart changed effective destruction');
+      const destroyed = actual.destroyedObjectIds.includes(destruction.featureId);
+      return { featureId: destruction.featureId, revision: recovered.revision,
+        sceneEvents: structuredClone(scene.sceneEvents), effectiveDamage: actual,
+        sceneEventsHash: sceneEventsHash(scene.sceneEvents), expectedSceneEventsHash: sceneEventsHash(destruction.sceneEvents),
+        sceneEventsRetained: true, wholeDestructionRetained: destroyed,
+        restorationRetained: !actual.damagedFeatureIds.includes(destruction.featureId),
+        privateQueueAbsent: !Object.hasOwn(gm.welcome.world, 'exploration'), queueDrained: true };
+    }
     return true;
   } finally {
     gm?.socket.close();
@@ -414,7 +437,7 @@ try {
     accessSchema: ACCESS_SCHEMA_VERSION,
     claimCode: claim.claimCode, joinCode,
   }));
-  await boundPromise;
+  const playerIdentity = await boundPromise;
   const playerWelcome = await playerWelcomePromise;
   const beforeVision = JSON.stringify(playerWelcome.world.state);
   assert(!beforeVision.includes('smoke-npc-token'), 'Hostile Token leaked without realtime vision');
@@ -502,10 +525,17 @@ try {
     'Private exploration queue leaked into a network snapshot');
   const restartRecovery = confirmedPrefix ? await verifyPackagedRestart(confirmedPrefix,
     scene.id, 'smoke-party', { x: 2940, y: 2500 }) : null;
+  const ruinsLan = mapDir ? await runPackagedRuinsLanSmoke({ gm, playerSocket, playerIdentity,
+    mapDir, sceneId: scene.id, sourcePoint: { x: 2940, y: 2500 }, joinCode, hello, waitForMessage,
+    waitForFog, canonicalSnapshot, durablePrefix, verifyPackagedRestart }) : null;
+  if (build) assert(isDeepStrictEqual(await benchmarkBuildInfo(process.cwd(), path.dirname(mapDir)), build),
+    'LAN vision package changed during verification');
 
   console.log(JSON.stringify({
     identity: true, audienceProjection: true, visionSource: true, documentMovePath: true,
-    durableMovementAndPath: Boolean(confirmedPrefix), backgroundFogDrained: true, restartRecovery,
+    version: build?.metadata.version, build,
+    diagnosticProfiling: /--(?:cpu-prof|prof)\b/.test([...process.execArgv, process.env.NODE_OPTIONS || ''].join(' ')),
+    durableMovementAndPath: Boolean(confirmedPrefix), backgroundFogDrained: true, restartRecovery, ruinsLan,
     fogRevision: canonical.revision, worldSchema: world.schemaVersion,
     importedRevision: importedSnapshot.revision,
   }));

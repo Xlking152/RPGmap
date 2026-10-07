@@ -1,6 +1,5 @@
 import { normalizeVisionOccluder, inspectLineOfSight, visionOccludersForSource, resolveSourceHostOccluderId } from '../spatial/kernel.js';
 import { queryOccluders, boundsOf } from '../spatial/index.js';
-import { polygonDifference } from '../engine/geometry.js';
 import { finishWorkSync } from './work.js';
 
 const ascendingNumber = (a, b) => a - b;
@@ -81,13 +80,18 @@ export function projectVisionOcclusion({ source, radiusUnits, occluders = [], me
     }));
     if (!visibleFront) continue;
     const box = boundsOf(obstacle.polygons.flat(2));
-    const otherShadows = shadows.filter((_, index) => {
+    const otherShadowIndices = [];
+    for (let index = 0; index < shadows.length; index++) {
       const bounds = shadowBounds[index];
-      return owners[index] !== obstacle.id && bounds[0] <= box[2] && bounds[2] >= box[0]
-        && bounds[1] <= box[3] && bounds[3] >= box[1];
-    });
-    const polygons = otherShadows.length ? polygonDifference(obstacle.polygons, otherShadows) : obstacle.polygons;
-    if (polygons.length) facades.push({ id: obstacle.id, featureId: obstacle.featureId, polygons });
+      if (owners[index] !== obstacle.id && bounds[0] <= box[2] && bounds[2] >= box[0]
+        && bounds[1] <= box[3] && bounds[3] >= box[1]) otherShadowIndices.push(index);
+    }
+    // Presentation uses an alpha mask instead of floating-point polygon
+    // difference. Destruction edges can coincide with several projected edges
+    // and make the clipping library's sweep queue fail. Index the shared shadow
+    // array so Worker results do not copy the same projected polygons per facade.
+    facades.push({ id: obstacle.id, featureId: obstacle.featureId,
+      polygons: obstacle.polygons, otherShadowIndices });
   }
   return result;
 }

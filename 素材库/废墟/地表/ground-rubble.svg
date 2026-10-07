@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs><pattern id="earth" width="64" height="64" patternUnits="userSpaceOnUse"><rect width="64" height="64" fill="#8c7759"/><path d="M0 18 21 14 40 29 64 25M3 54 23 46 42 58 64 51" fill="none" stroke="#6f5c43" stroke-width="4"/><path d="M8 31 19 27 26 36 12 40ZM41 4 57 8 53 17 40 15Z" fill="#a08a69"/></pattern></defs>
+  <rect width="256" height="256" fill="url(#earth)"/>
+</svg>

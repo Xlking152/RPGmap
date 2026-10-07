@@ -1,3 +1,5 @@
+import { facadeMaskPolygons } from './facade-mask.js';
+
 function canvasSurface(documentNode) {
   const canvas = documentNode.createElement('canvas');
   return { canvas, context: canvas.getContext('2d') };
@@ -21,6 +23,8 @@ export function createContinuousMaskRenderer(documentNode) {
   const masks = {};
   const illumination = canvasSurface(documentNode);
   const light = canvasSurface(documentNode), tint = canvasSurface(documentNode);
+  const facadeMasks = new Map();
+  let geometryIds = new WeakMap(), nextGeometryId = 0, cachedVertices = 0, cachedVersions = 0;
   const preparedKeys = {};
   let alignedViewport = null;
   let currentLightingKey = null, preparedLightingKey = null;
@@ -28,6 +32,7 @@ export function createContinuousMaskRenderer(documentNode) {
     for (const key of Object.keys(masks)) { masks[key].canvas.width = masks[key].canvas.height = 0; delete masks[key]; }
     for (const key of Object.keys(preparedKeys)) delete preparedKeys[key];
     preparedLightingKey = null;
+    facadeMasks.clear(); geometryIds = new WeakMap(); nextGeometryId = cachedVertices = cachedVersions = 0;
   }
   function drawPrepared(target, canvas, bounds, width, height, dpr) {
     // Canvas rounds its backing dimensions up. Preserve the legacy edge
@@ -35,9 +40,14 @@ export function createContinuousMaskRenderer(documentNode) {
     if (!Number.isInteger(width * dpr) || !Number.isInteger(height * dpr)) {
       target.drawImage(canvas, 0, 0, width, height); return;
     }
-    target.drawImage(canvas, Math.round(bounds.x * dpr), Math.round(bounds.y * dpr),
-      Math.round(bounds.width * dpr), Math.round(bounds.height * dpr),
-      bounds.x, bounds.y, bounds.width, bounds.height);
+    const left = Math.round(bounds.x * dpr), top = Math.round(bounds.y * dpr);
+    const pixelsX = Math.round(bounds.width * dpr), pixelsY = Math.round(bounds.height * dpr);
+    // Round-tripping an integer pixel through x / fractional-DPR and the
+    // canvas transform can introduce a subpixel sample (including alpha 1 on
+    // a black pixel). Copy aligned frames on the actual backing pixel grid.
+    target.save(); target.setTransform(1, 0, 0, 1, 0, 0);
+    target.drawImage(canvas, left, top, pixelsX, pixelsY, left, top, pixelsX, pixelsY);
+    target.restore();
   }
   function size(surface, width, height, dpr, bounds = null) {
     const pixelsX = Math.ceil(width * dpr), pixelsY = Math.ceil(height * dpr);
@@ -73,6 +83,51 @@ export function createContinuousMaskRenderer(documentNode) {
     }
     context.fill('evenodd');
   }
+  function identity(value) {
+    if (!value || typeof value !== 'object') return 0;
+    let id = geometryIds.get(value);
+    if (id === undefined) { id = ++nextGeometryId; geometryIds.set(value, id); }
+    return id;
+  }
+  function forgetFacade(id) {
+    const entry = facadeMasks.get(id);
+    for (const version of entry.versions) { cachedVertices -= version.vertices; cachedVersions--; }
+    facadeMasks.delete(id);
+  }
+  function facadePolygons(geometry, facade) {
+    const id = facade.id ?? facade.featureId ?? '@' + identity(facade);
+    // All keys and derived contours belong to this renderer. Weak identities
+    // distinguish new Worker results without retaining their private geometry.
+    const version = [geometry, geometry.shadows, facade, facade.polygons, facade.otherShadowIndices].map(identity).join(':');
+    let entry = facadeMasks.get(id);
+    const hit = entry?.versions.find(value => value.version === version);
+    if (hit) {
+      entry.versions = [...entry.versions.filter(value => value !== hit), hit];
+      facadeMasks.delete(id); facadeMasks.set(id, entry); return hit.polygons;
+    }
+    const polygons = facadeMaskPolygons(facade.polygons || [], geometry.shadows || [], facade.otherShadowIndices || []);
+    const vertices = polygons.reduce((sum, rings) => sum + rings.reduce((size, ring) => size + ring.length, 0), 0);
+    // Complex masks remain exact when they exceed the cache budget; only their
+    // reconstructible contours are left uncached, never their visibility.
+    if (vertices > 65_536) return polygons;
+    if (!entry) entry = { versions: [] };
+    entry.versions.push({ version, polygons, vertices }); cachedVertices += vertices; cachedVersions++;
+    if (entry.versions.length > 2) {
+      const oldest = entry.versions.shift(); cachedVertices -= oldest.vertices; cachedVersions--;
+    }
+    facadeMasks.delete(id); facadeMasks.set(id, entry);
+    while (facadeMasks.size > 512 || cachedVertices > 65_536) forgetFacade(facadeMasks.keys().next().value);
+    return polygons;
+  }
+  function paintFacades(context, geometry, viewport) {
+    for (const facade of geometry.facades || []) {
+      const polygons = facade.otherShadowIndices?.length ? facadePolygons(geometry, facade) : facade.polygons || [];
+      // Each connected component shares all facade/shadow intersections. Keep
+      // its holes in the original evenodd fill and independent components in
+      // separate fills, preserving the reference antialias composition.
+      for (const rings of polygons) polygon(context, viewport, rings);
+    }
+  }
   function lightUnion(regions, normal, viewport, width, height, dpr) {
     const key = currentLightingKey == null ? null : `${currentLightingKey}:${normal}`;
     if (key !== null && key === preparedLightingKey) return illumination.canvas;
@@ -90,12 +145,15 @@ export function createContinuousMaskRenderer(documentNode) {
     return illumination.canvas;
   }
   return {
-    reset() { for (const key of Object.keys(preparedKeys)) delete preparedKeys[key]; preparedLightingKey = null; },
+    reset() { resetMasks(); },
     draw(target, { key, lightingKey = null, geometry, source, radiusUnits, kind, viewport, width, height, dpr }) {
       const bounds = continuousMaskBounds(viewport, source, radiusUnits, width, height, dpr);
       if (!bounds.width || !bounds.height) return;
       const aligned = Number.isInteger(width * dpr) && Number.isInteger(height * dpr);
-      const paintBounds = aligned ? bounds : null;
+      // Multiple overlapping antialiased shadows must retain the reference
+      // clip stack: an extra rectangle can change their coverage rounding by
+      // one alpha unit at a buried edge. Facade boundaries are cached separately.
+      const paintBounds = aligned && (geometry.shadows || []).length <= 1 ? bounds : null;
       if (alignedViewport !== aligned) { resetMasks(); alignedViewport = aligned; }
       currentLightingKey = aligned ? lightingKey : null;
       // Keep the legacy single-surface lifecycle when fractional backing
@@ -112,7 +170,7 @@ export function createContinuousMaskRenderer(documentNode) {
           context.globalCompositeOperation = 'destination-out';
           for (const rings of geometry.shadows || []) polygon(context, viewport, rings);
           context.globalCompositeOperation = 'source-over';
-          for (const facade of geometry.facades || []) for (const rings of facade.polygons || []) polygon(context, viewport, rings);
+          paintFacades(context, geometry, viewport);
           context.restore();
           if (kind === 'precise' && geometry.illumination.mode !== 'all') {
             const { mode, regions } = geometry.illumination;
@@ -128,7 +186,7 @@ export function createContinuousMaskRenderer(documentNode) {
               for (const rings of geometry.shadows || []) polygon(tint.context, viewport, rings);
               tint.context.globalCompositeOperation = 'source-over';
               tint.context.save(); circle(tint.context, viewport, source.x, source.y, radiusUnits); tint.context.clip();
-              for (const facade of geometry.facades || []) for (const rings of facade.polygons || []) polygon(tint.context, viewport, rings);
+              paintFacades(tint.context, geometry, viewport);
               tint.context.restore();
               tint.context.globalCompositeOperation = 'destination-in';
               tint.context.drawImage(lightUnion(regions, true, viewport, width, height, dpr), 0, 0, width, height);
@@ -156,6 +214,11 @@ export function createContinuousMaskRenderer(documentNode) {
         drawPrepared(target, tint.canvas, bounds, width, height, dpr);
       }
     },
-    dispose() { for (const surface of [...Object.values(masks), illumination, light, tint]) surface.canvas.width = surface.canvas.height = 0; },
+    cacheStats() { return { objects: facadeMasks.size, versions: cachedVersions, vertices: cachedVertices }; },
+    dispose() {
+      resetMasks();
+      for (const surface of [illumination, light, tint]) surface.canvas.width = surface.canvas.height = 0;
+      currentLightingKey = null; alignedViewport = null;
+    },
   };
 }

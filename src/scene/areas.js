@@ -62,8 +62,10 @@ export function createSceneAreaSystem() {
       let destroyed = false;
       const off = [];
       const initialState = api.getState();
-      let cachedAreas = clone(initialState?.attackAreas || []);
-      let cachedMarkers = clone(initialState?.markers || []);
+      const activeScene = state => state?.preferences?.worldV2?.scenes?.find(scene =>
+        String(scene.id) === String(state.preferences.worldV2.activeSceneId));
+      let cachedAreas = clone(activeScene(initialState)?.attackAreas || initialState?.attackAreas || []);
+      let cachedMarkers = clone(activeScene(initialState)?.markers || initialState?.markers || []);
 
       const status = message => {
         const node = shell.querySelector?.('[data-role="map-status"]');
@@ -72,10 +74,18 @@ export function createSceneAreaSystem() {
       const areas = () => cachedAreas;
       const refreshAreas = event => {
         const state = event?.detail?.state || api.getState();
-        cachedAreas = clone(state?.attackAreas || []);
-        cachedMarkers = clone(state?.markers || []);
+        const scene = activeScene(state);
+        cachedAreas = clone(scene?.attackAreas || state?.attackAreas || []);
+        cachedMarkers = clone(scene?.markers || state?.markers || []);
       };
       const selected = () => areas().find(area => String(area.id) === String(selectedAreaId)) || null;
+      const showOperationError = (error, prefix = '场景操作未完成') => {
+        const message = `${prefix}：${error?.message || String(error)}`;
+        refreshAreas();
+        render();
+        status(message);
+        api.showToast?.(message, 'error');
+      };
 
       function tokenOrigin(tokenId) {
         const token = api.tokens?.get?.(tokenId);
@@ -112,16 +122,32 @@ export function createSceneAreaSystem() {
         };
       }
 
-      async function commitAreas(nextAreas, source = 'scene-area') {
-        const next = api.getState();
-        next.attackAreas = clone(nextAreas);
-        await Promise.resolve(api.commitState(next, { source, render: true }));
-        cachedAreas = clone(nextAreas);
-        return true;
+      async function commitAreas(nextAreas, source = 'scene-area', options = {}) {
+        try {
+          const next = api.getState();
+          const scene = activeScene(next);
+          if (typeof api.world?.performOperations === 'function') {
+            const sceneId = options.sceneId ?? scene?.id;
+            if (!sceneId) throw Object.assign(new Error('当前场景已切换，请重新操作'), { code: 'scene_content_conflict' });
+            await api.world.performOperations([{ type: 'scene.content.replace', payload: {
+              sceneId, expectedActiveSceneId: options.expectedActiveSceneId ?? sceneId,
+              expectedAttackAreas: clone(options.expectedAttackAreas ?? cachedAreas), attackAreas: clone(nextAreas),
+            } }], { source, render: true });
+          } else {
+            next.attackAreas = clone(nextAreas);
+            await Promise.resolve(api.commitState(next, { source, render: true }));
+          }
+          refreshAreas();
+          return true;
+        } catch (error) {
+          if (options.reportError !== false) showOperationError(error, '范围未保存');
+          else { refreshAreas(); render(); }
+          throw error;
+        }
       }
 
-      async function patchArea(areaId, patch) {
-        const next = clone(areas());
+      async function patchArea(areaId, patch, options = {}) {
+        const next = clone(options.expectedAttackAreas ?? areas());
         const area = next.find(item => String(item.id) === String(areaId));
         if (!area) return false;
         Object.assign(area, patch);
@@ -130,7 +156,7 @@ export function createSceneAreaSystem() {
         area.opacity = clamp(Number(area.opacity ?? 0.18), 0.05, 0.55);
         area.headingDeg = ((Number(area.headingDeg || 0) % 360) + 360) % 360;
         preview = null;
-        await commitAreas(next, 'scene-area:update');
+        await commitAreas(next, options.source || 'scene-area:update', options);
         render();
         return true;
       }
@@ -288,11 +314,12 @@ export function createSceneAreaSystem() {
       }
 
       async function previewArea(areaId = selectedAreaId) {
+        refreshAreas();
         const area = areas().find(item => String(item.id) === String(areaId));
         if (!area) return null;
         const categories = area.destructionEnabled ? (area.destructionTargets || []) : [];
         const resolved = { ...resolvedArea(area), destructionTargets: categories, severeDamage: area.destructionEnabled && area.severeDamage };
-        preview = createDamagePreview(resolved, api.mapPackage.features || [], categories);
+        preview = createDamagePreview(resolved, api.mapPackage.features || [], categories, api.mapPackage);
         preview.areaId = area.id;
         renderPanel();
         api.emit?.('scene:preview', clone(preview));
@@ -300,25 +327,43 @@ export function createSceneAreaSystem() {
       }
 
       async function applyArea(areaId = selectedAreaId) {
-        const area = areas().find(item => String(item.id) === String(areaId));
-        if (!area || !preview || String(preview.areaId) !== String(area.id)) return false;
-        const categories = area.destructionEnabled ? (area.destructionTargets || []) : [];
-        const resolved = { ...resolvedArea(area), destructionTargets: categories, severeDamage: area.destructionEnabled && area.severeDamage };
-        const current = createDamagePreview(resolved, api.mapPackage.features || [], categories);
-        if (current.signature !== preview.signature) {
+        try {
+          refreshAreas();
+          const area = areas().find(item => String(item.id) === String(areaId));
+          if (!area || !preview || String(preview.areaId) !== String(area.id)) return false;
+          const categories = area.destructionEnabled ? (area.destructionTargets || []) : [];
+          const resolved = { ...resolvedArea(area), destructionTargets: categories, severeDamage: area.destructionEnabled && area.severeDamage };
+          const current = createDamagePreview(resolved, api.mapPackage.features || [], categories, api.mapPackage);
+          if (current.signature !== preview.signature) {
+            preview = null;
+            renderPanel();
+            status('范围参数已变化，请重新预览');
+            return false;
+          }
+          const state = api.getState();
+          const scene = activeScene(state);
+          const before = scene ? { ...state, sceneEvents: scene.sceneEvents || [] } : state;
+          const next = commitDamageEvent(before, resolved, current);
+          if (next === before) return false;
+          const event = next.sceneEvents.at(-1);
+          if (scene && typeof api.world?.performOperations === 'function') {
+            await api.world.performOperations([{ type: 'scene.content.replace', payload: {
+              sceneId: scene.id, expectedActiveSceneId: scene.id, expectedSceneEvents: before.sceneEvents,
+              expectedAttackAreas: scene.attackAreas || [], sceneEvents: next.sceneEvents,
+            } }], { source: 'scene-area:damage', render: true });
+          } else {
+            await Promise.resolve(api.commitState(next, { source: 'scene-area:damage', render: true }));
+          }
           preview = null;
-          renderPanel();
-          status('范围参数已变化，请重新预览');
-          return false;
+          refreshAreas();
+          render();
+          api.emit?.('scene:damage', clone(event));
+          status('场景破坏已应用');
+          return true;
+        } catch (error) {
+          showOperationError(error, '场景破坏未应用');
+          throw error;
         }
-        const next = commitDamageEvent(api.getState(), resolved, current);
-        if (next === api.getState()) return false;
-        await Promise.resolve(api.commitState(next, { source: 'scene-area:damage', render: true }));
-        preview = null;
-        render();
-        api.emit?.('scene:damage', clone(api.getState().sceneEvents?.at?.(-1) || null));
-        status('场景破坏已应用');
-        return true;
       }
 
       async function removeArea(areaId) {
@@ -339,16 +384,16 @@ export function createSceneAreaSystem() {
         const action = event.target.closest?.('[data-area-action]');
         if (!action) return;
         const areaId = action.dataset.areaId;
-        if (action.dataset.areaAction === 'preview') void previewArea(areaId);
-        else if (action.dataset.areaAction === 'apply') void applyArea(areaId);
-        else if (action.dataset.areaAction === 'delete') void removeArea(areaId);
+        if (action.dataset.areaAction === 'preview') void previewArea(areaId).catch(error => showOperationError(error, '破坏预览失败'));
+        else if (action.dataset.areaAction === 'apply') void applyArea(areaId).catch(() => {});
+        else if (action.dataset.areaAction === 'delete') void removeArea(areaId).catch(() => {});
         else if (action.dataset.areaAction === 'duplicate') {
           const source = areas().find(area => String(area.id) === String(areaId));
           if (!source) return;
           const copy = clone(source); copy.id = uid('area'); copy.name = `${source.name || '范围'} 副本`.slice(0, 80); copy.anchor = { type: 'free', markerId: null };
           const origin = resolvedOrigin(source); copy.origin = { x: origin.x + 20, y: origin.y + 20 };
           const next = [...clone(areas()), copy]; selectedAreaId = copy.id; preview = null;
-          void commitAreas(next, 'scene-area:duplicate').then(render);
+          void commitAreas(next, 'scene-area:duplicate').then(render).catch(() => {});
         }
       });
 
@@ -364,20 +409,20 @@ export function createSceneAreaSystem() {
               : { type: 'free', markerId: null };
           // Resolve the new binding rather than the previous one so the stored
           // fallback origin immediately matches the selected Token/Marker.
-          void patchArea(area.id, { anchor, origin: resolvedOrigin({ ...area, anchor }) });
+          void patchArea(area.id, { anchor, origin: resolvedOrigin({ ...area, anchor }) }).catch(() => {});
           return;
         }
         if (['visible', 'destructionEnabled', 'severeDamage', 'craterEnabled'].includes(target.name)) {
-          void patchArea(area.id, { [target.name]: target.checked });
+          void patchArea(area.id, { [target.name]: target.checked }).catch(() => {});
           return;
         }
         const numeric = ['radius', 'range', 'angleDeg', 'length', 'width', 'headingDeg', 'opacity'];
         if (numeric.includes(target.name)) {
           const value = Number(target.value);
-          if (Number.isFinite(value)) void patchArea(area.id, { [target.name]: value });
+          if (Number.isFinite(value)) void patchArea(area.id, { [target.name]: value }).catch(() => {});
           return;
         }
-        if (target.name === 'name') void patchArea(area.id, { name: String(target.value || '').trim().slice(0, 80) || area.name });
+        if (target.name === 'name') void patchArea(area.id, { name: String(target.value || '').trim().slice(0, 80) || area.name }).catch(() => {});
       });
 
       const mapClick = event => {
@@ -394,7 +439,7 @@ export function createSceneAreaSystem() {
           render();
           status('范围已放置');
           api.emit?.('area:create', clone(area));
-        });
+        }).catch(() => {});
       };
       api.map.on('click', mapClick);
 
@@ -406,7 +451,7 @@ export function createSceneAreaSystem() {
       };
       documentNode.addEventListener('keydown', keydown);
 
-      for (const name of ['state:commit', 'state:import']) {
+      for (const name of ['state:commit', 'state:import', 'scene:activate']) {
         off.push(api.on?.(name, event => { refreshAreas(event); render(); }));
       }
       for (const name of ['token:move', 'token:delete', 'marker:move', 'marker:delete']) {
@@ -434,6 +479,7 @@ export function createSceneAreaSystem() {
         beginPlacement,
         preview: previewArea,
         apply: applyArea,
+        update: patchArea,
         select(areaId) { selectedAreaId = areaId; preview = null; render(); return selected(); },
         list() { return clone(areas()); },
         getSelected() { return clone(selected()); },

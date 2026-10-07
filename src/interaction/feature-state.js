@@ -38,10 +38,13 @@ function persistedState(state, featureId) {
   return isPlainObject(legacy) ? legacy : {};
 }
 
-export function getFeatureState(state, feature) {
+export function getFeatureState(state, feature, derivedScene = null) {
   if (!feature?.id) throw new TypeError('Feature State requires a Feature with an id');
   const saved = persistedState(state, String(feature.id));
-  const status = featureSceneStatus(feature.id, state?.sceneEvents || []);
+  const status = derivedScene
+    ? derivedScene.destroyedObjectIds.includes(String(feature.id)) ? 'destroyed'
+      : derivedScene.clipHits.some(hit => String(hit.featureId) === String(feature.id)) ? 'partial' : 'intact'
+    : featureSceneStatus(feature.id, state?.sceneEvents || []);
   const open = effectiveFeatureOpen(saved, feature);
   const custom = Object.freeze({
     ...initialCustom(feature),

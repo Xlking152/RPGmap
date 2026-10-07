@@ -241,8 +241,10 @@ test('continuous shadows preserve exact finite heights, boundary fallback and on
   assert.equal(projection.shadows.some(rings=>pointInPolygon([12,0],rings)),true);
   const facade=projection.facades.find(value=>value.id==='far');
   assert.ok(facade);
-  assert.equal(pointInPolygon([9,0],facade.polygons),false);
-  assert.equal(pointInPolygon([9,4],facade.polygons),true);
+  const exteriorVisible = point => pointInPolygon(point,facade.polygons)
+    && !facade.otherShadowIndices.some(index=>pointInPolygon(point,projection.shadows[index]));
+  assert.equal(exteriorVisible([9,0]),false);
+  assert.equal(exteriorVisible([9,4]),true);
   const hidden=normalizeVisionOccluder({id:'hidden',kind:'building',polygon:rect(8,-0.5,2,1),blockingHeightMeters:6});
   assert.equal(projectVisionOcclusion({source:source(0,0),radiusUnits:30,occluders:[near,hidden]}).facades.some(value=>value.id==='hidden'),false);
   assert.equal(projectVisionOcclusion({source:source(4,0),radiusUnits:30,occluders:[near]}).fallback,true);

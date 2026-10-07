@@ -308,8 +308,8 @@ test('source changes coalesce Canvas rendering and cancel source/scene Worker re
   const previousWorker = globalThis.Worker;
   const workers = [];
   globalThis.Worker = class {
-    constructor() { this.terminated = false; workers.push(this); }
-    postMessage(message) { this.message = message; }
+    constructor() { this.terminated = false; this.cancellations = []; workers.push(this); }
+    postMessage(message) { if (message.cancelIds) this.cancellations.push(message.cancelIds); else this.message = message; }
     terminate() { this.terminated = true; }
   };
   try {
@@ -326,21 +326,28 @@ test('source changes coalesce Canvas rendering and cancel source/scene Worker re
     fixture.flushFrame();
     assert.equal(workers.length, 1);
     assert.equal(fixture.sizeReads, 1);
+    const firstId = workers[0].message.id;
     await api.vision.setSource(null);
-    assert.equal(workers[0].terminated, true);
+    assert.equal(workers[0].terminated, false);
+    assert.deepEqual(workers[0].cancellations.at(-1), [firstId]);
     const scheduledAfterSource = frames.length;
-    workers[0].onmessage({ data: { id: workers[0].message.id, result: { precise: [['0', [[0, 20]]]], vague: [] } } });
+    workers[0].onmessage({ data: { id: firstId, result: { precise: [['0', [[0, 20]]]], vague: [] } } });
     assert.equal(frames.length, scheduledAfterSource);
     await api.vision.setSource('scout');
     fixture.flushFrame();
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(workers.length, 2);
+    assert.equal(workers.length, 1);
+    const secondId = workers[0].message.id;
+    assert.notEqual(secondId, firstId);
+    assert.ok(workers[0].message.input.map, 'scene/source invalidation resends complete geometry');
     api.emit('scene:activate');
-    assert.equal(workers[1].terminated, true);
+    assert.equal(workers[0].terminated, false);
+    assert.deepEqual(workers[0].cancellations.at(-1), [secondId]);
     const scheduledAfterScene = frames.length;
-    workers[1].onmessage({ data: { id: workers[1].message.id, result: { precise: [['0', [[0, 20]]]], vague: [] } } });
+    workers[0].onmessage({ data: { id: secondId, result: { precise: [['0', [[0, 20]]]], vague: [] } } });
     assert.equal(frames.length, scheduledAfterScene);
     fixture.dispose();
+    assert.equal(workers[0].terminated, true);
   } finally { globalThis.Worker = previousWorker; }
 });
 

@@ -39,9 +39,8 @@ test('application chrome keeps the restrained neutral, river and brick palette',
   assert.match(styles, /\.section \{[\s\S]*?border-bottom: 1px solid var\(--line\);/);
   assert.doesNotMatch(styles, /linear-gradient/i);
   assert.equal(packageJson.dependencies.lucide, '1.30.0');
-  assert.equal(packageJson.version, '2.5.4');
-  assert.match(indexSource, /application-version" content="2\.5\.4"/);
-  assert.match(indexSource, /RPGmap 2\.5\.4/);
+  assert.match(indexSource, new RegExp(`application-version" content="${packageJson.version.replaceAll('.', '\\.')}"`));
+  assert.match(indexSource, new RegExp(`RPGmap ${packageJson.version.replaceAll('.', '\\.')}<`));
 });
 
 test('production registry splits the built-in map and large vendors without suppressing chunk warnings', () => {
@@ -97,14 +96,7 @@ test('restricted audience records open a dedicated LIMITED summary instead of th
   assert.match(appShellSource, /view\.actor\.audienceRestricted \? '公开摘要' : '角色卡'/);
 });
 
-test('destruction rendering separates buildings, pontoon bridges and wall breaches', () => {
-  assert.match(sceneRenderer, /function appendBuildingDebris\(/);
-  assert.match(sceneRenderer, /function appendBridgeRuin\(/);
-  assert.match(sceneRenderer, /function appendWallBreach\(/);
-  assert.match(sceneRenderer, /irregularDamagePolygon\(/);
-  assert.match(sceneRenderer, /data-irregular-damage/);
-  assert.match(styles, /\.scene-fallen-timber/);
-  assert.match(styles, /\.scene-bridge-stub/);
-  assert.match(styles, /\.scene-wall-breach/);
-  assert.match(styles, /\.scene-local-timber/);
+test('destruction presentation uses an independent ruins layer without random geometry', () => {
+  assert.match(sceneRenderer, /data-layer': 'scene-ruins'/);
+  assert.doesNotMatch(sceneRenderer, /appendBuildingDebris|appendBridgeRuin|appendWallBreach|irregularDamagePolygon|polygonDifference|feGaussianBlur/);
 });

@@ -69,9 +69,10 @@ test('Packaged browser smoke requires a rendered ready Lanzhou map', () => {
   assert.match(browserSmokeSource, /mapImages > 0/);
 });
 
-test('Windows smoke retries an isolated Edge crash once and still fails after the second attempt', () => {
-  assert.match(windowsSmokeSource, /for \(\$attempt = 1; \$attempt -le 2; \$attempt\+\+\)/);
+test('Windows smoke defaults to at most two attempts and formal validation can require one', () => {
+  assert.match(windowsSmokeSource, /\$maximumAttempts = if \(\$SingleAttempt\) \{ 1 \} else \{ 2 \}/);
+  assert.match(windowsSmokeSource, /for \(\$attempt = 1; \$attempt -le \$maximumAttempts; \$attempt\+\+\)/);
   assert.match(windowsSmokeSource, /retrying once with a fresh profile/);
-  assert.match(windowsSmokeSource, /failed after 2 attempts/);
+  assert.match(windowsSmokeSource, /failed after \$maximumAttempts attempts/);
   assert.doesNotMatch(windowsSmokeSource, /-le 3|while \(\$true\)/);
 });

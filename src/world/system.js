@@ -282,8 +282,15 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         // heavier full validation can still yield before its synchronous write.
         const trustedWorldRevision = authorityDocuments && applied.operations.length === 1
           && TRUSTED_SAVE_TYPES.has(applied.operations[0].type) ? api.getStateRevision?.() : null;
-        if (trustedWorldRevision === null) await new Promise(resolve => setTimeout(resolve, 0));
-        const persisted = measure('world.persist', () => api.persistNow?.({ trustedWorldRevision }));
+        let persisted;
+        if (trustedWorldRevision === null && typeof api.persistValidatedAsync === 'function') {
+          const saveStarted = performance.now();
+          try { persisted = await api.persistValidatedAsync(); }
+          finally { api.diagnostics?.record('world.persist', performance.now() - saveStarted); }
+        } else {
+          if (trustedWorldRevision === null) await new Promise(resolve => setTimeout(resolve, 0));
+          persisted = measure('world.persist', () => api.persistNow?.({ trustedWorldRevision }));
+        }
         if (persisted === false) throw new Error('World 操作未能可靠保存，写入已暂停');
         localExploration.start();
         return { offline: true, operations: clone(applied.operations), results: clone(applied.results), changes };

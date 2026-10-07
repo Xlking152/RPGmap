@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="128" viewBox="0 0 256 128">
+  <defs><pattern id="stone" width="64" height="64" patternUnits="userSpaceOnUse"><rect width="64" height="64" fill="#88765b"/><path d="M3 6 27 3 35 21 26 37 5 29ZM38 32 59 27 63 49 48 61 34 53Z" fill="#b8a389"/><path d="M5 44 25 39 30 58 8 63ZM39 4 61 7 55 23 43 23Z" fill="#605548"/></pattern></defs>
+  <rect width="256" height="128" fill="url(#stone)"/>
+</svg>

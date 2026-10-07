@@ -134,14 +134,16 @@ function legacyRecords(preferences) {
   return records;
 }
 
-export function migrateLegacySceneFeatureStates(rawState) {
-  if (!isPlainObject(rawState)) throw new TypeError('Feature State migration requires a state object');
-  const preferences = isPlainObject(rawState.preferences) ? rawState.preferences : {};
+function legacyMigrationInput(state) {
+  if (!isPlainObject(state)) throw new TypeError('Feature State migration requires a state object');
+  const preferences = isPlainObject(state.preferences) ? state.preferences : {};
   const hasLegacy = Object.prototype.hasOwnProperty.call(preferences, FEATURE_STATE_KEY)
     || Object.prototype.hasOwnProperty.call(preferences, LEGACY_FEATURE_INTERACTION_STATE_KEY);
-  if (!hasLegacy) return Object.freeze({ state: clone(rawState), migrated: false });
+  return { preferences, hasLegacy };
+}
 
-  const next = clone(rawState);
+function migrateLegacyFeatureStateSnapshot(next, { preferences, hasLegacy }) {
+  if (!hasLegacy) return Object.freeze({ state: next, migrated: false });
   next.preferences = isPlainObject(next.preferences) ? next.preferences : {};
   const world = next.preferences.worldV2;
   if (!isPlainObject(world) || !Array.isArray(world.scenes)) {
@@ -158,6 +160,22 @@ export function migrateLegacySceneFeatureStates(rawState) {
   delete next.preferences[FEATURE_STATE_KEY];
   delete next.preferences[LEGACY_FEATURE_INTERACTION_STATE_KEY];
   return Object.freeze({ state: next, migrated: true });
+}
+
+export function migrateLegacySceneFeatureStates(rawState) {
+  // Keep the public plain-object check and legacy preference inspection before
+  // its complete clone, including the original compatibility/error ordering.
+  const input = legacyMigrationInput(rawState);
+  return migrateLegacyFeatureStateSnapshot(clone(rawState), input);
+}
+
+/** Internal: state is an exclusively owned snapshot and may be mutated. */
+export function migrateDetachedLegacySceneFeatureStates(state, { hasLegacy = undefined } = {}) {
+  const input = legacyMigrationInput(state);
+  // A caller that cloned the entire source first can preserve its original
+  // preference-container classification before structuredClone strips it.
+  if (typeof hasLegacy === 'boolean') input.hasLegacy = hasLegacy;
+  return migrateLegacyFeatureStateSnapshot(state, input);
 }
 
 export function stripLegacyFeatureStateProjection(rawState) {

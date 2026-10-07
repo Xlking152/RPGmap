@@ -50,7 +50,7 @@ function cleanZero(value) {
 }
 
 function sameTuple(a, b) {
-  return Math.abs(a[0] - b[0]) <= EPSILON && Math.abs(a[1] - b[1]) <= EPSILON;
+  return a[0] === b[0] && a[1] === b[1];
 }
 
 function isPointLike(value) {
@@ -74,6 +74,23 @@ function closeRing(points) {
 
   if (ring.length > 1 && sameTuple(ring[0], ring.at(-1))) ring.pop();
   if (ring.length < 3) return [];
+  // Remove only exactly collinear points between their neighbours. Using an
+  // area tolerance here would erase narrow walls or change a real doorway.
+  let changed = true;
+  while (changed && ring.length >= 3) {
+    changed = false;
+    for (let index = 0; index < ring.length; index += 1) {
+      const before = ring[(index + ring.length - 1) % ring.length];
+      const point = ring[index];
+      const after = ring[(index + 1) % ring.length];
+      const cross = (point[0] - before[0]) * (after[1] - before[1])
+        - (point[1] - before[1]) * (after[0] - before[0]);
+      const between = (point[0] - before[0]) * (point[0] - after[0])
+        + (point[1] - before[1]) * (point[1] - after[1]) <= 0;
+      if (cross === 0 && between) { ring.splice(index, 1); changed = true; break; }
+    }
+  }
+  if (ring.length < 3) return [];
   ring.push([...ring[0]]);
   return ring;
 }
@@ -82,7 +99,8 @@ function closePolygonShape(shape) {
   if (!Array.isArray(shape) || shape.length === 0) return [];
   if (isPointLike(shape[0])) return closeRing(shape);
   if (Array.isArray(shape[0]) && shape[0].length && isPointLike(shape[0][0])) {
-    return shape.map(closeRing).filter((ring) => ring.length >= 4);
+    const rings = shape.map(closeRing);
+    return rings[0]?.length >= 4 ? rings.filter((ring) => ring.length >= 4) : [];
   }
   if (
     Array.isArray(shape[0]) &&
@@ -91,7 +109,10 @@ function closePolygonShape(shape) {
     isPointLike(shape[0][0][0])
   ) {
     return shape
-      .map((polygon) => polygon.map(closeRing).filter((ring) => ring.length >= 4))
+      .map((polygon) => {
+        const rings = polygon.map(closeRing);
+        return rings[0]?.length >= 4 ? rings.filter((ring) => ring.length >= 4) : [];
+      })
       .filter((polygon) => polygon.length);
   }
   throw new TypeError('unsupported polygon nesting');
@@ -118,10 +139,75 @@ function toMultiPolygon(value) {
 
 function signedRingArea(ring) {
   let doubleArea = 0;
+  const [originX, originY] = ring[0] || [0, 0];
   for (let index = 0; index < ring.length - 1; index += 1) {
-    doubleArea += ring[index][0] * ring[index + 1][1] - ring[index + 1][0] * ring[index][1];
+    doubleArea += (ring[index][0] - originX) * (ring[index + 1][1] - originY)
+      - (ring[index + 1][0] - originX) * (ring[index][1] - originY);
   }
   return doubleArea / 2;
+}
+
+/** Clean finite, duplicate and harmless collinear vertices, preserving holes. */
+export function normalizePolygonGeometry(value) { return toMultiPolygon(value); }
+
+export class GeometryClipError extends Error {
+  constructor(operation, cause) {
+    super(`Geometry ${operation} failed: ${cause?.message || 'invalid polygon'}`, { cause });
+    this.name = 'GeometryClipError';
+    this.code = 'geometry_clip_failed';
+    this.operation = operation;
+  }
+}
+
+function isSweepFailure(error) {
+  return /SweepEvent|Unable to pop\(|Unable to find segment|sweep line|sweep event/i.test(String(error?.message || ''));
+}
+
+function validClipResult(result) {
+  if (!Array.isArray(result) || result.some(rings => !Array.isArray(rings) || !rings.length
+    || rings.some(ring => !Array.isArray(ring) || ring.length < 4
+      || ring.some(point => !Array.isArray(point) || point.length !== 2
+        || point.some(value => typeof value !== 'number' || !Number.isFinite(value))))))
+    throw new Error('Clipping produced invalid polygon coordinates');
+  return result;
+}
+
+function clipGeometry(operation, left, right, options = {}) {
+  let first, second;
+  try { first = toMultiPolygon(left); second = toMultiPolygon(right); }
+  catch (error) { throw new GeometryClipError(operation, error); }
+  if (!first.length || !second.length) return operation === 'difference' ? first : [];
+  try { return validClipResult(polygonClipping[operation](first, second)); }
+  catch (error) {
+    // Healthy geometry always keeps its original precision. Retry only the
+    // clipping library's known floating-point sweep failures, in local metres.
+    if (!isSweepFailure(error)) throw new GeometryClipError(operation, error);
+    const requestedScale = Number(options.metersPerUnit ?? 1);
+    const scale = Number.isFinite(requestedScale) && requestedScale > 0 ? requestedScale : 1;
+    let originX = Infinity, originY = Infinity;
+    for (const polygons of [first, second]) for (const rings of polygons) for (const ring of rings) for (const [x, y] of ring) {
+      originX = Math.min(originX, x); originY = Math.min(originY, y);
+    }
+    let lastError = error;
+    for (const precisionMeters of [1e-8, 1e-6]) {
+      try {
+        const local = polygons => toMultiPolygon(polygons.map(rings => rings.map(ring => ring.map(([x, y]) => [
+          Math.round((x - originX) * scale / precisionMeters) * precisionMeters,
+          Math.round((y - originY) * scale / precisionMeters) * precisionMeters,
+        ]))));
+        const localFirst = local(first), localSecond = local(second);
+        // A retry cannot erase a real thin region and silently open a blocker.
+        if (!localFirst.length || !localSecond.length
+          || localFirst.length !== first.length || localSecond.length !== second.length
+          || localFirst.some((rings, index) => rings.length !== first[index].length)
+          || localSecond.some((rings, index) => rings.length !== second[index].length))
+          throw new Error('Precision retry would remove a polygon or hole');
+        const result = validClipResult(polygonClipping[operation](localFirst, localSecond));
+        return validClipResult(result.map(rings => rings.map(ring => ring.map(([x, y]) => [x / scale + originX, y / scale + originY]))));
+      } catch (retryError) { lastError = retryError; }
+    }
+    throw new GeometryClipError(operation, lastError);
+  }
 }
 
 function bearingVector(degrees) {
@@ -370,11 +456,8 @@ export function featureToPolygon(feature) {
   throw new RangeError(`unsupported feature geometry type: ${geometry.type ?? '(empty)'}`);
 }
 
-export function intersectionArea(left, right) {
-  const leftMulti = toMultiPolygon(left);
-  const rightMulti = toMultiPolygon(right);
-  if (!leftMulti.length || !rightMulti.length) return 0;
-  const intersection = polygonClipping.intersection(leftMulti, rightMulti);
+export function intersectionArea(left, right, options = {}) {
+  const intersection = clipGeometry('intersection', left, right, options);
   return polygonArea(intersection);
 }
 
@@ -383,12 +466,8 @@ export function intersectionArea(left, right) {
  * (an array of polygons, each an array of rings). Returns an empty array when
  * nothing remains.
  */
-export function polygonDifference(subject, clipping) {
-  const subjectMulti = toMultiPolygon(subject);
-  const clipMulti = toMultiPolygon(clipping);
-  if (!subjectMulti.length) return [];
-  if (!clipMulti.length) return subjectMulti;
-  return polygonClipping.difference(subjectMulti, clipMulti);
+export function polygonDifference(subject, clipping, options = {}) {
+  return clipGeometry('difference', subject, clipping, options);
 }
 
 export function coverageRatio(target, coveringPolygon) {
@@ -435,7 +514,7 @@ export function pointInPolygon(point, polygon, includeBoundary = true) {
  * - center mode hits when the feature center lies in the attack polygon.
  * - object mode hits at minCoverage (25% by default), inclusively, or on center hit.
  */
-export function hitTestFeatures(areaOrPolygon, features, categories = null) {
+export function hitTestFeatures(areaOrPolygon, features, categories = null, options = {}) {
   if (!Array.isArray(features)) throw new TypeError('features must be an array');
   const attackPolygon = isAttackArea(areaOrPolygon)
     ? attackAreaToPolygon(areaOrPolygon)
@@ -455,7 +534,13 @@ export function hitTestFeatures(areaOrPolygon, features, categories = null) {
       continue;
     }
 
-    const overlapArea = intersectionArea(polygon, attackPolygon);
+    let overlapArea;
+    try { overlapArea = intersectionArea(polygon, attackPolygon, options); }
+    catch (error) {
+      error.featureId = String(feature.id ?? feature.featureId ?? 'unknown');
+      error.message = `破坏范围计算失败：对象 ${error.featureId}，${error.message}`;
+      throw error;
+    }
     const targetArea = polygonArea(polygon);
     const coverage = targetArea <= EPSILON ? 0 : Math.min(1, Math.max(0, overlapArea / targetArea));
     const centerHit = feature.center ? pointInPolygon(feature.center, attackPolygon) : false;

@@ -1,4 +1,5 @@
 import { normalizeOcclusionShapes, resolveEffectiveOcclusionShapes } from '../vision/occlusion-model.js';
+import { normalizeRuinsAssets } from './ruins-assets.js';
 
 export const MAP_PACKAGE_API_VERSION = 1;
 export const MAP_PACKAGE_FORMAT = 'rpgmap-map-package-v1';
@@ -24,6 +25,7 @@ export const FEATURE_INTERACTION_ACTIONS = Object.freeze([
 ]);
 
 const ROLE_SET = new Set(MAP_LAYER_ROLES);
+const DISCRETE_STRUCTURE_CATEGORIES = new Set(['building', 'wall', 'gate', 'pass-wall', 'pass-gate', 'door']);
 
 function asNonEmptyString(value, label) {
   const text = String(value ?? '').trim();
@@ -124,7 +126,7 @@ function normalizeNavigationPolygon(value, label) {
   return Object.freeze(points);
 }
 
-function normalizeNavigationCapability(feature, declared) {
+function normalizeNavigationCapability(feature, declared, defaultPassableWhenDestroyed = false) {
   const source = declared.navigation ?? feature.navigation;
   if (!source || typeof source !== 'object') return null;
   const passageTile = source.passageTile === 'road' || source.passageTile === 'open'
@@ -136,7 +138,8 @@ function normalizeNavigationCapability(feature, declared) {
       ? source.collisionGroup.trim().slice(0, 64) || null
       : null,
     passableWhenOpen: source.passableWhenOpen === true,
-    passableWhenDestroyed: source.passableWhenDestroyed === true,
+    passableWhenDestroyed: source.passableWhenDestroyed == null
+      ? defaultPassableWhenDestroyed : source.passableWhenDestroyed === true,
     damageCreatesPassage: source.damageCreatesPassage === true,
     blockingHeightMeters: asOptionalNonNegativeNumber(source.blockingHeightMeters, 'feature navigation blockingHeightMeters'),
     blockingPolygon: normalizeNavigationPolygon(source.blockingPolygon, 'feature navigation blockingPolygon'),
@@ -296,7 +299,9 @@ function normalizeFeature(feature, index, destructibleCategories) {
   const interactive = declared.interactive
     ?? feature.interactive
     ?? Object.values(actions).some(Boolean);
-  const navigation = normalizeNavigationCapability(feature, declared);
+  const defaultPassableWhenDestroyed = Boolean(destructible)
+    && (DISCRETE_STRUCTURE_CATEGORIES.has(category) || Boolean(openable));
+  const navigation = normalizeNavigationCapability(feature, declared, defaultPassableWhenDestroyed);
   const vision = normalizeVisionCapability(feature, declared, navigation);
   const statusRules = normalizeStatusRulesCapability(declared);
 
@@ -342,6 +347,7 @@ export function prepareMapPackage(rawPackage, { source = 'unknown' } = {}) {
   if (!String(svg).includes('<svg')) throw new TypeError('Invalid MapPackage: renderer did not return SVG markup');
   const occlusionShapes = normalizeOcclusionShapes(rawPackage.occlusionShapes);
   resolveEffectiveOcclusionShapes({ features, occlusionShapes });
+  const ruins = normalizeRuinsAssets(rawPackage.artAssets?.ruins);
 
   return Object.freeze({
     ...rawPackage,
@@ -356,6 +362,7 @@ export function prepareMapPackage(rawPackage, { source = 'unknown' } = {}) {
     logicalLayers: Object.freeze(layerPlan.map((entry) => entry.id)),
     featureTaxonomy,
     features,
+    ...(ruins === undefined ? {} : { artAssets: Object.freeze({ ...rawPackage.artAssets, ruins }) }),
     occlusionShapes,
     lights: Object.freeze((Array.isArray(rawPackage.lights) ? rawPackage.lights : []).map(normalizeLightDescriptor)),
     featureCount: features.length,

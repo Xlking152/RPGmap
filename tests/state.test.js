@@ -189,7 +189,7 @@ test('object-like targets localize below 95% coverage and collapse at 95% or mor
     assert.deepEqual(whole.clipHits, []);
 });
 
-test('wall-like and terrain categories always localize even at full coverage', () => {
+test('whole wall segments collapse while continuous terrain still localizes at full coverage', () => {
     const wall = {
         id: 'wall', category: 'wall', mode: 'object',
         geometry: square(0, 0, 100, 100), center: { x: 50, y: 50 },
@@ -203,8 +203,8 @@ test('wall-like and terrain categories always localize even at full coverage', (
         length: 500, width: 500, headingDeg: 90,
     };
     const wallPreview = createDamagePreview(area, [wall], ['wall']);
-    assert.deepEqual(wallPreview.objectIds, []);
-    assert.deepEqual(wallPreview.clipHits.map((hit) => hit.featureId), ['wall']);
+    assert.deepEqual(wallPreview.objectIds, ['wall']);
+    assert.deepEqual(wallPreview.clipHits, []);
 
     const terrainPreview = createDamagePreview(area, [terrain], ['terrain']);
     assert.deepEqual(terrainPreview.objectIds, []);
@@ -244,7 +244,7 @@ test('destruction polygons flood when they overlap a liquid body by more than 1%
     const river = { id: 'river', polygon: square(0, 0, 100, 100) };
     const wall = {
         id: 'levee', category: 'wall', mode: 'clip',
-        geometry: square(0, 95, 100, 105), center: { x: 50, y: 100 },
+        geometry: square(0, 95, 200, 105), center: { x: 100, y: 100 },
     };
     const features = [wall];
 

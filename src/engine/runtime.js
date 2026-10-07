@@ -13,12 +13,14 @@ import {
   exportRuntimeState,
   prepareRuntimeState,
   stringifyTrustedRuntimeState,
+  yieldRuntimeValidationFrame,
   validateRuntimeState,
 } from './runtime-state.js';
 import { createMapPresentation } from '../render/map-presentation.js';
 import { createSceneRenderer } from '../render/scene-renderer.js';
 import { applyDocumentChanges, documentChangeSet } from '../documents/changes.js';
 import { registerRuntimeStateReader } from './state-access.js';
+import { occlusionGeometryCacheStats } from '../spatial/kernel.js';
 
 const MAX_SAVE_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -130,7 +132,9 @@ export function createRpgMapRuntime({
     ruleset,
     storageAdapter,
     getState: () => state,
+    getStateRevision: () => stateRevision,
     stringifyTrustedState: current => stringifyTrustedRuntimeState(current, { mapPackage }),
+    validationYieldTask: ({ signal } = {}) => yieldRuntimeValidationFrame({ signal, view: documentNode.defaultView }),
     onSaved: () => bus.dispatchEvent(new CustomEvent('state:saved')),
     onError: error => showToast(`自动保存失败，已暂停后续写入：${error.message}`, 'error'),
     initialLoad,
@@ -388,6 +392,8 @@ export function createRpgMapRuntime({
     assertWritable();
     const local = options !== false && options.persist !== false && !readConnectionState(api)?.connected;
     if (local) importPending = true;
+    // Fence pending saves before content preparation or IndexedDB can yield.
+    persistence.cancel();
     try { return await importPreparedState(raw, options); }
     catch (error) {
       if (error.recoveryRequired) {
@@ -536,6 +542,12 @@ export function createRpgMapRuntime({
       : persistence.persistNow();
   }
 
+  function persistValidatedAsync() {
+    if (destroyed || importPending || recoveryBlocked) return Promise.resolve(false);
+    api.diagnostics?.record('world.persistTrusted', 0);
+    return persistence.persistValidatedAsync();
+  }
+
   const uiPanels = Object.freeze({
     canonical: true,
     actors: elements.panels.actors,
@@ -560,6 +572,7 @@ export function createRpgMapRuntime({
     applyAuthoritativeDocumentChanges,
     commitAuthoritativeState,
     persistNow,
+    persistValidatedAsync,
     getLocalExploration: () => persistence.getLocalExploration(),
     setLocalExploration: value => persistence.setLocalExploration(value),
     isLocalWorldActive: () => !remoteWorldIsolation.active,
@@ -572,6 +585,8 @@ export function createRpgMapRuntime({
     focusFeature,
     focusFeatureIds,
     restoreFeatures,
+    getSceneRenderDiagnostics: () => sceneRenderer.getDiagnostics?.() || {},
+    getOcclusionGeometryCacheDiagnostics: () => occlusionGeometryCacheStats(mapPackage),
     undoScene,
     resetScene,
     setStatus,
@@ -584,8 +599,10 @@ export function createRpgMapRuntime({
       destroyed = true;
       persistence.cancel();
       persistNow();
+      persistence.dispose();
       if (gridFrame) cancelAnimationFrame(gridFrame);
       mapPresentation.destroy();
+      sceneRenderer.dispose?.();
       map.remove();
       container.replaceChildren();
       return true;

@@ -550,26 +550,6 @@ button { color: inherit; }
   mix-blend-mode: multiply;
   filter: saturate(.52) contrast(.82) brightness(1.06) sepia(.16);
 }
-.scene-building-debris { opacity: .94; }
-.scene-fallen-timber {
-  stroke: #503722;
-  stroke-width: 7;
-  stroke-linecap: round;
-  filter: drop-shadow(2px 3px 1px rgba(37, 25, 14, .28));
-}
-.scene-broken-tile { fill: #9b5d43; stroke: #5d3e31; stroke-width: 2.2; }
-.scene-broken-tile.dark { fill: #5d5f58; stroke: #3f413d; }
-.scene-local-timber { fill: #533a27; stroke: #352519; stroke-width: 1.6; opacity: .88; }
-.scene-local-tile { fill: #8c644e; stroke: #513c30; stroke-width: 1.4; opacity: .82; }
-.scene-bridge-stub-shadow { fill: #263f46; opacity: .26; }
-.scene-bridge-stub { fill: #806242; stroke: #493624; stroke-width: 6; }
-.scene-bridge-stub-plank { stroke: #c19d6a; stroke-width: 6; stroke-linecap: round; opacity: .86; }
-.scene-bridge-splinter-edge { fill: none; stroke: #382719; stroke-width: 9; stroke-linecap: square; stroke-linejoin: bevel; }
-.scene-loose-pontoon { fill: #5c4330; stroke: #2f241c; stroke-width: 5; opacity: .92; }
-.scene-floating-timber { stroke: #6c4a2d; stroke-width: 10; stroke-linecap: round; opacity: .88; }
-.scene-wall-breach-shadow { fill: #271b12; opacity: .58; filter: url(#scene-soft); }
-.scene-wall-breach { fill: #443325; stroke: #24180f; stroke-width: 8; stroke-linejoin: bevel; }
-.scene-wall-fragment { fill: #a28b66; stroke: #5c4933; stroke-width: 3; opacity: .96; }
 
 .toast-stack {
   position: fixed;

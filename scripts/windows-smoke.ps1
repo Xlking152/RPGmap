@@ -3,10 +3,12 @@ param(
   [string]$Root,
   [ValidateSet('edge', 'chrome')]
   [string]$Browser = 'edge',
-  [int]$TimeoutSeconds = 30
+  [int]$TimeoutSeconds = 30,
+  [switch]$SingleAttempt
 )
 
 $ErrorActionPreference = 'Stop'
+$maximumAttempts = if ($SingleAttempt) { 1 } else { 2 }
 $rootPath = (Resolve-Path -LiteralPath $Root).Path
 $batch = Join-Path $rootPath 'start-rpgmap.bat'
 if (-not (Test-Path -LiteralPath $batch -PathType Leaf)) {
@@ -21,20 +23,20 @@ function Invoke-RpgMapBrowserSmoke {
     [string]$Mode = 'bootstrap'
   )
 
-  for ($attempt = 1; $attempt -le 2; $attempt++) {
+  for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++) {
     if ($Mode -eq 'fog') {
-      & node (Join-Path $PSScriptRoot 'browser-smoke.mjs') $Url ($TimeoutSeconds * 1000) fog
+      & node (Join-Path $PSScriptRoot 'browser-smoke.mjs') $Url ($TimeoutSeconds * 1000) fog $rootPath
     } else {
-      & node (Join-Path $PSScriptRoot 'browser-smoke.mjs') $Url ($TimeoutSeconds * 1000)
+      & node (Join-Path $PSScriptRoot 'browser-smoke.mjs') $Url ($TimeoutSeconds * 1000) bootstrap $rootPath
     }
     if ($LASTEXITCODE -eq 0) { return }
-    if ($attempt -lt 2) {
+    if ($attempt -lt $maximumAttempts) {
       Write-Warning "Packaged $Browser $Mode smoke failed on attempt $attempt; retrying once with a fresh profile."
       Start-Sleep -Seconds 2
     }
   }
 
-  throw "Packaged $Browser $Mode smoke failed after 2 attempts."
+  throw "Packaged $Browser $Mode smoke failed after $maximumAttempts attempts."
 }
 
 function Invoke-RpgMapSheetBrowserSmoke {
@@ -43,16 +45,16 @@ function Invoke-RpgMapSheetBrowserSmoke {
     [string]$Url
   )
 
-  for ($attempt = 1; $attempt -le 2; $attempt++) {
+  for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++) {
     & node (Join-Path $PSScriptRoot 'sheet-browser-smoke.mjs') $Url ([Math]::Max(45000, $TimeoutSeconds * 1000))
     if ($LASTEXITCODE -eq 0) { return }
-    if ($attempt -lt 2) {
+    if ($attempt -lt $maximumAttempts) {
       Write-Warning "Packaged $Browser Actor-sheet interaction smoke failed on attempt $attempt; retrying once with a fresh profile."
       Start-Sleep -Seconds 2
     }
   }
 
-  throw "Packaged $Browser Actor-sheet interaction smoke failed after 2 attempts."
+  throw "Packaged $Browser Actor-sheet interaction smoke failed after $maximumAttempts attempts."
 }
 
 function Invoke-RpgMapSheetFinalBrowserSmoke {
@@ -61,16 +63,16 @@ function Invoke-RpgMapSheetFinalBrowserSmoke {
     [string]$Url
   )
 
-  for ($attempt = 1; $attempt -le 2; $attempt++) {
+  for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++) {
     & node (Join-Path $PSScriptRoot 'sheet-browser-final-pass.mjs') $Url ([Math]::Max(45000, $TimeoutSeconds * 1000))
     if ($LASTEXITCODE -eq 0) { return }
-    if ($attempt -lt 2) {
+    if ($attempt -lt $maximumAttempts) {
       Write-Warning "Packaged $Browser Character/NPC final smoke failed on attempt $attempt; retrying once with a fresh profile."
       Start-Sleep -Seconds 2
     }
   }
 
-  throw "Packaged $Browser Character/NPC final smoke failed after 2 attempts."
+  throw "Packaged $Browser Character/NPC final smoke failed after $maximumAttempts attempts."
 }
 
 # Reserve an ephemeral loopback port instead of assuming 30000 is free on the

@@ -1,4 +1,5 @@
-import { polygonDifference, polygonArea } from '../engine/geometry.js';
+import { polygonDifference, polygonArea, normalizePolygonGeometry, GeometryClipError } from '../engine/geometry.js';
+import { deriveSceneState } from '../engine/state.js';
 import { isIndexableOccluderCollection, queryOccluders } from './index.js';
 import { resolveEffectiveOcclusionShapes } from '../vision/occlusion-model.js';
 import { effectiveFeatureOpen } from '../world/feature-states.js';
@@ -13,6 +14,82 @@ const RING_RAY_DATA = new WeakMap();
 const OCCLUDER_RAY_BOUNDS = new WeakMap();
 const CLEAR_RAY = Object.freeze({ clear: true, code: 'ok' });
 const INVALID_RAY = Object.freeze({ clear: false, code: 'spatial_point_invalid' });
+const OCCLUSION_GEOMETRY_CACHE = new WeakMap();
+const MAX_OCCLUSION_GEOMETRY_ENTRIES = 512;
+const MAX_FEATURE_GEOMETRY_VERSIONS = 2;
+
+function mapGeometryCache(map) {
+  if (!map || typeof map !== 'object') return null;
+  let cache = OCCLUSION_GEOMETRY_CACHE.get(map);
+  if (!cache) {
+    cache = { entries: new Map(), features: new Map(), hits: 0, misses: 0, evictions: 0, failures: 0 };
+    OCCLUSION_GEOMETRY_CACHE.set(map, cache);
+  }
+  return cache;
+}
+
+function removeGeometryEntry(cache, entry) {
+  cache.entries.delete(entry);
+  const versions = cache.features.get(entry.featureId);
+  versions?.delete(entry.key);
+  if (!versions?.size) cache.features.delete(entry.featureId);
+  cache.evictions += 1;
+}
+
+function featureGeometryVersion(cache, featureId, key) {
+  if (!cache) return { results: new Map() };
+  let versions = cache.features.get(featureId);
+  let entry = versions?.get(key);
+  if (entry) {
+    cache.hits += 1;
+    cache.entries.delete(entry); cache.entries.set(entry, true);
+    versions.delete(key); versions.set(key, entry);
+    return entry;
+  }
+  cache.misses += 1;
+  while (versions?.size >= MAX_FEATURE_GEOMETRY_VERSIONS) removeGeometryEntry(cache, versions.values().next().value);
+  while (cache.entries.size >= MAX_OCCLUSION_GEOMETRY_ENTRIES) removeGeometryEntry(cache, cache.entries.keys().next().value);
+  versions = cache.features.get(featureId);
+  if (!versions) { versions = new Map(); cache.features.set(featureId, versions); }
+  entry = { featureId, key, results: new Map() };
+  versions.set(key, entry); cache.entries.set(entry, true);
+  return entry;
+}
+
+/** Public geometry only: no permissions, sources, Actor data or visible targets. */
+export function occlusionGeometryCacheStats(map) {
+  const cache = map && OCCLUSION_GEOMETRY_CACHE.get(map);
+  return Object.freeze({ entries: cache?.entries.size || 0, features: cache?.features.size || 0,
+    maxEntries: MAX_OCCLUSION_GEOMETRY_ENTRIES, maxVersionsPerFeature: MAX_FEATURE_GEOMETRY_VERSIONS,
+    largestFeatureVersions: cache ? Math.max(0, ...[...cache.features.values()].map(versions => versions.size)) : 0,
+    hits: cache?.hits || 0, misses: cache?.misses || 0, evictions: cache?.evictions || 0, failures: cache?.failures || 0 });
+}
+
+export function releaseOcclusionGeometryCache(map) { if (map && typeof map === 'object') OCCLUSION_GEOMETRY_CACHE.delete(map); }
+
+function geometryFailure(error, featureId, occluderId, operation = error?.operation || 'difference') {
+  const failure = new GeometryClipError(operation, error);
+  failure.featureId = featureId;
+  failure.occluderId = occluderId;
+  failure.message = `遮挡几何计算失败：对象 ${featureId}（${occluderId}），${error.message}`;
+  return failure;
+}
+
+function cachedGeometry(entry, slot, compute, fallback, { strictGeometry, cache, featureId, occluderId }) {
+  let result = entry.results.get(slot);
+  if (!result) {
+    try { result = { value: compute(), error: null }; }
+    catch (error) {
+      result = { value: fallback, error: geometryFailure(error, featureId, occluderId) };
+      if (cache) cache.failures += 1;
+    }
+    entry.results.set(slot, result);
+  }
+  // A conservative legacy result is marked with its error. It can never become
+  // an accepted strict result merely because another caller warmed the cache.
+  if (strictGeometry && result.error) throw result.error;
+  return result.value;
+}
 
 function immutableLights(lights) {
   if (!Array.isArray(lights) || !Object.isFrozen(lights)) return false;
@@ -126,16 +203,22 @@ function occluderPolygon(value) {
 
 export function normalizeVisionOccluder(value) {
   if (NORMALIZED_VISION_OCCLUDERS.has(value)) return value;
-  const polygon = occluderPolygon(value);
+  let polygon = occluderPolygon(value);
   const rawHeight = value?.blockingHeightMeters ?? value?.heightMeters;
   const height = rawHeight == null || rawHeight === 'unbounded' ? Infinity : Number(rawHeight);
   if (!polygon || Number.isNaN(height) || height < 0) return null;
-  const polygons = value.polygons ?? [[polygon]];
-  if (!Array.isArray(polygons)) return null;
+  let polygons;
+  try {
+    const base = normalizePolygonGeometry(polygon);
+    if (!base.length) return null;
+    polygon = base[0][0].slice(0, -1);
+    polygons = normalizePolygonGeometry(value.polygons ?? [[polygon]]);
+  } catch { return null; }
+  if (!polygons.length) return null;
   const regions = [];
   for (const rings of polygons) {
     if (!Array.isArray(rings) || !rings.length) return null;
-    const region = rings.map(ring => occluderPolygon({ polygon: ring }));
+    const region = rings.map(ring => occluderPolygon({ polygon: ring.slice(0, -1) }));
     if (region.some(ring => !ring)) return null;
     regions.push(Object.freeze(region.map(ring => Object.freeze(ring.map(point => Object.freeze(point))))));
   }
@@ -154,7 +237,7 @@ export function normalizeVisionOccluder(value) {
   return normalized;
 }
 
-export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = null) {
+export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = null, options = {}) {
   const features = new Map((mapPackage?.features || []).map(feature => [String(feature.id), feature]));
   const shapes = resolveEffectiveOcclusionShapes(mapPackage, scene);
   const bindings = new Map(shapes.filter(shape => shape.enabled && shape.featureId).map(shape => [shape.featureId, shape]));
@@ -163,30 +246,6 @@ export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = n
   const entries = new Map();
   const aliases = new Map();
   const doors = [];
-  const add = raw => {
-    const featureId = String(raw.featureId || raw.id);
-    const feature = features.get(featureId);
-    const state = states[featureId] || {};
-    const vision = state.vision || {};
-    const effectiveHeight = vision.blockingHeightMeters ?? state.custom?.blockingHeightMeters ?? raw.blockingHeightMeters;
-    const occluder = normalizeVisionOccluder({ ...raw, blockingHeightMeters: effectiveHeight });
-    if (!occluder) return;
-    const open = effectiveFeatureOpen(state, feature);
-    if (raw.hostShapeId) doors.push({ ...occluder, hostShapeId: raw.hostShapeId });
-    // Turning off a door's blocker makes its existing aperture transparent;
-    // it must not fill the opening with the host's original solid wall.
-    if (vision.occluder === false) return;
-    if (occluder.passableWhenDestroyed && destroyed.has(featureId)) return;
-    let polygons = occluder.polygons;
-    if (occluder.passableWhenDestroyed) for (const hit of derivedScene?.clipHits || []) {
-      if (String(hit.featureId) === featureId) polygons = polygonDifference(polygons, hit.polygon);
-    }
-    if (!polygons.length) return;
-    const prepared = normalizeVisionOccluder({ ...occluder, polygons });
-    if (!(occluder.passableWhenOpen && open)) entries.set(occluder.id, prepared);
-    if (raw.shapeId) aliases.set(raw.shapeId, occluder.id);
-    if (raw.featureId) aliases.set(raw.featureId, occluder.id);
-  };
   const legacy = Array.isArray(mapPackage?.visionOccluders) ? mapPackage.visionOccluders : null;
   const legacyIds = legacy && new Set(legacy.flatMap(raw => [raw.id, raw.featureId]
     .filter(value => value != null).map(String)));
@@ -209,34 +268,141 @@ export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = n
   // add a previously undeclared Feature. Existing legacy IDs and bindings win;
   // their duplicate-entry behavior remains handled by the original Map below.
   const declared = legacy ? [...legacy, ...declaredFeatures] : declaredFeatures;
+  const rawEntries = [];
   for (const raw of declared) {
     const feature = features.get(String(raw.featureId || raw.id));
     const binding = bindings.get(String(raw.featureId || raw.id));
     if (binding) continue;
-    add({ ...raw, kind: raw.kind || (feature?.capabilities?.openable ? 'door' : feature?.category === 'building' ? 'building' : 'wall') });
+    rawEntries.push({ ...raw, kind: raw.kind || (feature?.capabilities?.openable ? 'door' : feature?.category === 'building' ? 'building' : 'wall') });
   }
   for (const shape of shapes) {
     if (!shape.enabled) continue;
     const feature = features.get(shape.featureId);
     const vision = feature?.capabilities?.vision;
-    add({ id: shape.featureId || shape.id, featureId: shape.featureId, shapeId: shape.id,
+    rawEntries.push({ id: shape.featureId || shape.id, featureId: shape.featureId, shapeId: shape.id,
       kind: shape.kind, polygon: shape.points, hostShapeId: shape.hostShapeId,
       blockingHeightMeters: shape.blockingHeightMeters,
       passableWhenOpen: shape.kind === 'door' || vision?.passableWhenOpen === true,
       passableWhenDestroyed: vision?.passableWhenDestroyed !== false });
   }
+  const allAliases = new Map();
+  for (const raw of rawEntries) for (const id of [raw.id, raw.featureId, raw.shapeId]) {
+    if (id != null) allAliases.set(String(id), String(raw.featureId || raw.id));
+  }
+  const selected = options.featureIds ? new Set(Array.from(options.featureIds, String)) : null;
+  if (selected) {
+    // Door apertures and their host are one geometric dependency. Keep unrelated
+    // old damage out of a new single-object preflight (especially restoration).
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const raw of rawEntries) {
+        const featureId = String(raw.featureId || raw.id);
+        const matched = [raw.id, raw.featureId, raw.shapeId].some(id => selected.has(String(id)));
+        const hostId = allAliases.get(String(raw.hostShapeId)) || String(raw.hostShapeId || '');
+        if (matched || raw.hostShapeId && (selected.has(featureId) || selected.has(hostId))) {
+          for (const id of [featureId, raw.hostShapeId ? hostId : null]) if (id && !selected.has(id)) {
+            selected.add(id); changed = true;
+          }
+        }
+      }
+    }
+  }
+  const hits = new Map();
+  for (const hit of derivedScene?.clipHits || []) {
+    const id = String(hit.featureId);
+    if (!hits.has(id)) hits.set(id, []);
+    hits.get(id).push(hit.polygon);
+  }
+  const rawByFeature = new Map();
+  const aperturesByHost = new Map();
+  for (const raw of rawEntries) {
+    const id = String(raw.featureId || raw.id);
+    if (!rawByFeature.has(id)) rawByFeature.set(id, []);
+    rawByFeature.get(id).push(raw);
+    if (raw.hostShapeId) {
+      const hostId = allAliases.get(String(raw.hostShapeId)) || String(raw.hostShapeId);
+      if (!aperturesByHost.has(hostId)) aperturesByHost.set(hostId, []);
+      aperturesByHost.get(hostId).push({ raw, state: states[id] || {}, hits: hits.get(id) || [],
+        destroyed: destroyed.has(id), feature: features.get(id)?.capabilities });
+    }
+  }
+  const scale = Number.isFinite(Number(mapPackage?.metersPerUnit)) && Number(mapPackage.metersPerUnit) > 0
+    ? Number(mapPackage.metersPerUnit) : 1;
+  const cache = mapGeometryCache(mapPackage);
+  const versions = new Map();
+  const versionFor = featureId => {
+    if (!versions.has(featureId)) {
+      const feature = features.get(featureId), state = states[featureId] || {};
+      const key = JSON.stringify([scale, rawByFeature.get(featureId), feature?.geometry, feature?.capabilities,
+        feature?.interaction?.initialState?.open, feature?.interaction?.initialOpen, feature?.initialOpen,
+        state.vision, state.custom, state.open, destroyed.has(featureId), hits.get(featureId) || [],
+        aperturesByHost.get(featureId) || []]);
+      versions.set(featureId, featureGeometryVersion(cache, featureId, key));
+    }
+    return versions.get(featureId);
+  };
+  const solidSlots = new Map();
+  for (const raw of rawEntries) {
+    const featureId = String(raw.featureId || raw.id);
+    if (selected && !selected.has(featureId)) continue;
+    const index = solidSlots.get(featureId) || 0;
+    solidSlots.set(featureId, index + 1);
+    const feature = features.get(featureId), state = states[featureId] || {}, vision = state.vision || {};
+    const effectiveHeight = vision.blockingHeightMeters ?? state.custom?.blockingHeightMeters ?? raw.blockingHeightMeters;
+    const occluder = normalizeVisionOccluder({ ...raw, blockingHeightMeters: effectiveHeight });
+    if (!occluder) {
+      if (options.strictGeometry) throw geometryFailure(new Error('Invalid blocker polygon or height'), featureId, String(raw.id));
+      continue;
+    }
+    const open = effectiveFeatureOpen(state, feature);
+    if (raw.hostShapeId) doors.push({ ...occluder, hostShapeId: raw.hostShapeId });
+    // Turning off a door leaves its aperture in the host, as before.
+    if (vision.occluder === false || occluder.passableWhenDestroyed && destroyed.has(featureId)) continue;
+    const version = versionFor(featureId);
+    const prepared = cachedGeometry(version, `solid:${index}`, () => {
+      let polygons = occluder.polygons;
+      if (occluder.passableWhenDestroyed) for (const polygon of hits.get(featureId) || []) {
+        polygons = polygonDifference(polygons, polygon, { metersPerUnit: scale });
+      }
+      if (!polygons.length) return null;
+      const value = normalizeVisionOccluder({ ...occluder, polygons });
+      if (!value) throw new Error('Clipping produced an invalid blocker polygon');
+      return value;
+    }, occluder, { ...options, cache, featureId, occluderId: occluder.id });
+    if (!prepared) continue;
+    if (!(occluder.passableWhenOpen && open)) entries.set(occluder.id, prepared);
+    if (raw.shapeId) aliases.set(raw.shapeId, occluder.id);
+    if (raw.featureId) aliases.set(raw.featureId, occluder.id);
+  }
   // A door always cuts its aperture from the host. A closed door contributes
   // its own blocker, so its height and destruction remain independent.
+  const apertureSlots = new Map();
   for (const door of doors) {
     const hostId = aliases.get(door.hostShapeId) || door.hostShapeId;
     const host = entries.get(hostId);
     if (!host || host.kind === 'door') continue;
-    let polygons = host.polygons;
-    for (const aperture of door.polygons) polygons = polygonDifference(polygons, [aperture]);
-    if (polygons.length) entries.set(hostId, normalizeVisionOccluder({ ...host, polygons }));
+    const featureId = String(host.featureId || host.id);
+    const index = apertureSlots.get(featureId) || 0;
+    apertureSlots.set(featureId, index + 1);
+    const prepared = cachedGeometry(versionFor(featureId), `aperture:${index}`, () => {
+      let polygons = host.polygons;
+      for (const aperture of door.polygons) polygons = polygonDifference(polygons, [aperture], { metersPerUnit: scale });
+      if (!polygons.length) return null;
+      const value = normalizeVisionOccluder({ ...host, polygons });
+      if (!value) throw new Error('Door clipping produced an invalid host polygon');
+      return value;
+    }, host, { ...options, cache, featureId, occluderId: host.id });
+    if (prepared) entries.set(hostId, prepared);
     else entries.delete(hostId);
   }
   return [...entries.values()];
+}
+
+/** New damage must pass this shared preflight before any authoritative commit. */
+export function validateSceneOcclusionGeometry(map, scene = {}, options = {}) {
+  deriveVisionOccluders(map, scene, deriveSceneState(scene.sceneEvents || []), { ...options, strictGeometry: true });
+  return true;
 }
 
 function distanceToEdge(point, a, b) {

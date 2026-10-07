@@ -45,3 +45,29 @@ test('trusted World document commits save the same bytes as full validation', ()
   }
   assert.throws(() => stringifyTrustedRuntimeState(state, { mapPackage: { ...mapPackage, id: 'wrong-map' } }), /MapPackage/);
 });
+
+test('full save validation detaches canonical documents and runtime extensions after omitting redundant copies', () => {
+  const state = stateWithToken();
+  state.extension = { values: [1, 2] };
+  state.preferences.extension = { values: [3, 4] };
+  state.preferences.worldV2.extension = { values: [5, 6] };
+  const before = JSON.stringify(state);
+  const exported = exportRuntimeState(state, { mapPackage, ruleset });
+  assert.equal(JSON.stringify(state), before, 'validation must not rewrite its input');
+  exported.extension.values.push(7);
+  exported.preferences.extension.values.push(8);
+  exported.preferences.worldV2.extension.values.push(9);
+  exported.preferences.worldV2.actors[0].name = 'changed';
+  exported.preferences.worldV2.scenes[0].tokens[0].x = 90;
+  assert.equal(JSON.stringify(state), before, 'public output must not alias private canonical or extension data');
+});
+
+test('full validation still rejects malformed destruction history and cannot defer it to trusted serialization', () => {
+  const state = stateWithToken();
+  const scene = state.preferences.worldV2.scenes[0];
+  scene.sceneEvents = [{ id: 'invalid-damage', type: 'damage', objectIds: [], clipHits: [],
+    craterPolygon: [[NaN, 5], [10, 5], [10, 10]], craterEnabled: true }];
+  const original = structuredClone(state);
+  assert.throws(() => exportRuntimeState(state, { mapPackage, ruleset }));
+  assert.deepEqual(state, original);
+});

@@ -1,7 +1,9 @@
 import {
   createInitialRuntimeState,
   exportRuntimeState,
+  exportRuntimeStateAsync,
   prepareRuntimeState,
+  yieldRuntimeValidationFrame,
 } from '../engine/runtime-state.js';
 import { WORLD_STATE_KEY, createWorldV2FromRuntimeState, projectWorldV2ToRuntimeState } from '../world/model.js';
 import { canonicalWorldStorageKey, legacyMapWorldStorageKey } from '../world/manager.js';
@@ -41,7 +43,10 @@ export function createWorldStatePersistence({
   ruleset,
   storageAdapter,
   getState,
+  getStateRevision = null,
   stringifyTrustedState = null,
+  validationYieldTask = yieldRuntimeValidationFrame,
+  validationBudgetMs = 8,
   saveDelayMs = 180,
   onSaved = () => {},
   onError = () => {},
@@ -58,6 +63,17 @@ export function createWorldStatePersistence({
   let blocked = initialLoad?.blocked === true;
   let pendingInitialLoad = initialLoad;
   let localExploration = null;
+  let disposed = false;
+  let validationGeneration = 0;
+  let validationTail = Promise.resolve();
+  let joinableValidation = null;
+  const validationJobs = new Set();
+
+  function invalidateValidation() {
+    validationGeneration += 1;
+    joinableValidation = null;
+    for (const job of validationJobs) job.controller.abort();
+  }
   function readLocalExploration(raw) {
     const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
     localExploration = value?._localExploration ? structuredClone(value._localExploration) : null;
@@ -130,7 +146,7 @@ export function createWorldStatePersistence({
   }
 
   function writeCurrentState(trusted = false) {
-    if (blocked || suspended) return false;
+    if (blocked || suspended || disposed) return false;
     try {
       const current = getState();
       const serialized = trusted && typeof stringifyTrustedState === 'function'
@@ -141,13 +157,14 @@ export function createWorldStatePersistence({
       return true;
     } catch (error) {
       blocked = true;
+      invalidateValidation();
       onError(error);
       return false;
     }
   }
 
   function schedule() {
-    if (blocked || suspended) return false;
+    if (blocked || suspended || disposed) return false;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = null;
@@ -172,19 +189,99 @@ export function createWorldStatePersistence({
     return writeCurrentState(true);
   }
 
+  async function writeValidatedState(job) {
+    const signal = job.controller.signal;
+    const available = () => !blocked && !suspended && !disposed
+      && job.generation === validationGeneration && !signal.aborted;
+    const currentRevision = () => typeof getStateRevision === 'function' ? getStateRevision() : null;
+    if (!available()) return false;
+    try {
+      // The operation's reduction and authoritative commit remain one turn.
+      // Begin its heavier save work after the browser can paint that commit.
+      await validationYieldTask({ signal });
+    } catch (error) {
+      if (!available()) return false;
+      blocked = true; invalidateValidation(); onError(error); return false;
+    }
+    while (available()) {
+      let captured, revision, capturedReady = false, attemptedWrite = false;
+      const stillCurrent = () => getState() === captured && currentRevision() === revision;
+      try {
+        captured = getState(); revision = currentRevision(); capturedReady = true;
+        const exported = await exportRuntimeStateAsync(captured, { mapPackage, ruleset }, {
+          signal, budgetMs: validationBudgetMs, yieldTask: () => validationYieldTask({ signal }),
+        });
+        if (!available()) return false;
+        if (!stillCurrent()) continue;
+        const serialized = JSON.stringify(exported);
+        if (!available()) return false;
+        if (!stillCurrent()) continue;
+        // Queue changes can occur during validation without changing World
+        // identity. Only the latest private envelope is attached at the write.
+        attemptedWrite = true;
+        storageAdapter.set(storageKey, withLocalExploration(serialized));
+        // onSaved is synchronous and may commit another operation. Its new
+        // save request must queue behind this job, rather than join its ACK.
+        if (joinableValidation === job) joinableValidation = null;
+        onSaved();
+        return true;
+      } catch (error) {
+        // A storage or notification failure after starting the write is not a
+        // stale validation result: its durability is uncertain and must block.
+        if (attemptedWrite) { blocked = true; invalidateValidation(); onError(error); return false; }
+        if (!available()) return false;
+        // An obsolete snapshot's failure cannot stop a newer valid World.
+        if (capturedReady) {
+          try { if (!stillCurrent()) continue; }
+          catch (readError) { error = readError; }
+        }
+        blocked = true; invalidateValidation(); onError(error); return false;
+      }
+    }
+    return false;
+  }
+
+  function persistValidatedAsync() {
+    if (blocked || suspended || disposed) return Promise.resolve(false);
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    if (joinableValidation?.generation === validationGeneration) return joinableValidation.promise;
+    const job = { generation: validationGeneration, controller: new AbortController(), promise: null };
+    validationJobs.add(job);
+    joinableValidation = job;
+    job.promise = validationTail.then(() => writeValidatedState(job));
+    // One failure never leaves the serial chain rejected; the failing caller
+    // still observes its result while a later explicit recovery can write.
+    validationTail = job.promise.catch(() => false);
+    job.promise.finally(() => {
+      validationJobs.delete(job);
+      if (joinableValidation === job) joinableValidation = null;
+    }).catch(() => {});
+    return job.promise;
+  }
+
   function replace(nextState) {
     if (suspended) throw Object.assign(new Error('联机投影不能覆盖离线 World 存档'), { code: 'world_persistence_suspended' });
+    if (disposed) return false;
+    invalidateValidation();
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;
     }
-    storageAdapter.set(storageKey, JSON.stringify(exportRuntimeState(nextState, { mapPackage, ruleset })));
+    const serialized = JSON.stringify(exportRuntimeState(nextState, { mapPackage, ruleset }));
+    try { storageAdapter.set(storageKey, serialized); }
+    catch (error) {
+      // A backend may write successfully before reporting a durability error.
+      // Keep the imported record intact until explicit recovery; an old live
+      // state must not overwrite it through a subsequent automatic save.
+      blocked = true; invalidateValidation(); onError(error); throw error;
+    }
     localExploration = null;
     blocked = false;
     return true;
   }
 
   function cancel() {
+    invalidateValidation();
     if (!saveTimer) return;
     clearTimeout(saveTimer);
     saveTimer = null;
@@ -196,8 +293,10 @@ export function createWorldStatePersistence({
     schedule,
     persistNow,
     persistTrustedNow,
+    persistValidatedAsync,
     replace,
     cancel,
+    dispose() { cancel(); disposed = true; },
     suspend() { cancel(); suspended = true; },
     resume() { suspended = false; },
     getLocalExploration() { return structuredClone(localExploration); },

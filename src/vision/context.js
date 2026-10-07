@@ -1,5 +1,5 @@
 import { deriveSceneState } from '../engine/state.js';
-import { deriveVisionOccluders, deriveSceneLightSources } from '../spatial/kernel.js';
+import { deriveVisionOccluders, deriveSceneLightSources, releaseOcclusionGeometryCache } from '../spatial/kernel.js';
 
 const contexts = new WeakMap();
 const explorationContexts = new WeakMap();
@@ -16,11 +16,15 @@ function immutable(value) {
 export function sceneVisionContext(map, scene = {}) {
   let entries = contexts.get(map);
   if (!entries) { entries = new Map(); contexts.set(map, entries); }
-  const geometryRefs = [scene.id, scene.featureStates, scene.sceneEvents, scene.occlusionShapes];
-  const immutableGeometry = geometryRefs.every(immutable);
+  const geometryRefs = [scene.id, scene.featureStates, scene.sceneEvents, scene.occlusionShapes,
+    map.features, map.visionOccluders, map.occlusionShapes, map.metersPerUnit];
+  // Loaded MapPackages are static inputs. Their field identities still qualify
+  // reuse, while only mutable Scene data requires content checks on every call.
+  const immutableGeometry = geometryRefs.slice(0, 4).every(immutable);
   let value = immutableGeometry ? [...entries.values()].find(entry => entry.geometryRefs
     && geometryRefs.every((reference, index) => reference === entry.geometryRefs[index])) : null;
-  const key = value ? null : JSON.stringify([scene.id, scene.featureStates || {}, scene.sceneEvents || [], scene.occlusionShapes || []]);
+  const key = value ? null : JSON.stringify([scene.id, scene.featureStates || {}, scene.sceneEvents || [], scene.occlusionShapes || [],
+    map.features, map.visionOccluders, map.occlusionShapes, map.metersPerUnit]);
   value ||= entries.get(key);
   const hit = Boolean(value);
   if (!value) {
@@ -66,4 +70,6 @@ export function sceneExplorationContext(map, scene = {}, spatial = sceneVisionCo
   return context;
 }
 
-export function releaseVisionContexts(map) { contexts.delete(map); explorationContexts.delete(map); }
+export function releaseVisionContexts(map) {
+  contexts.delete(map); explorationContexts.delete(map); releaseOcclusionGeometryCache(map);
+}

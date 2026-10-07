@@ -4,6 +4,7 @@ import { normalizeFogState } from '../vision/fog.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { normalizeEntityStatusState, STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { upgradeBuiltInMapReference, upgradeBuiltInRulesetReference } from './package-upgrades.js';
+import { cloneWithReplacements } from '../engine/detached-metadata.js';
 
 export { upgradeBuiltInMapReference, upgradeBuiltInRulesetReference } from './package-upgrades.js';
 
@@ -37,14 +38,24 @@ function migrateMetricActor(actor) {
   return next;
 }
 
-function migrateMetricScene(scene, schemaVersion) {
-  const next = clone(scene);
-  next.mapPackage = { ...upgradeBuiltInMapReference(next.mapPackage, schemaVersion) };
-  next.tokens = (Array.isArray(next.tokens) ? next.tokens : []).map(rawToken => {
+function migrateMetricScene(scene, schemaVersion, actors) {
+  const tokens = (Array.isArray(scene.tokens) ? scene.tokens : []).map(rawToken => {
     const token = clone(rawToken);
     migrateFeetField(token, 'elevationFt', 'elevationMeters');
+    const access = normalizeTokenAccess(token, { actor: actors.get(String(token.actorId ?? '')) || null });
+    token.controllerUserIds = access.controllerUserIds;
+    token.visibility = access.visibility;
+    token.vision = access.vision;
+    delete token.hidden;
     return token;
   });
+  const next = cloneWithReplacements(scene, {
+    mapPackage: { ...upgradeBuiltInMapReference(scene.mapPackage, schemaVersion) },
+    tokens,
+    markers: (Array.isArray(scene.markers) ? scene.markers : [])
+      .map(rawMarker => normalizeLightweightMarker(rawMarker)).filter(marker => marker.id),
+    fog: normalizeFogState(scene.fog),
+  }, { preserveContainer: true });
   for (const state of Object.values(plainObject(next.featureStates) ? next.featureStates : {})) {
     if (plainObject(state?.custom)) migrateFeetField(state.custom, 'blockingHeightFt', 'blockingHeightMeters');
   }
@@ -55,7 +66,11 @@ function migrateMetricScene(scene, schemaVersion) {
 }
 
 export function migrateWorldSchema4State(rawState, { statusDefinitions = null } = {}) {
-  const state = clone(rawState);
+  return migrateDetachedWorldSchema4State(clone(rawState), { statusDefinitions });
+}
+
+/** Internal: state is an exclusively owned snapshot and may be mutated. */
+export function migrateDetachedWorldSchema4State(state, { statusDefinitions = null } = {}) {
   const world = state?.preferences?.worldV2;
   if (!plainObject(world)) return Object.freeze({ state, migrated: false, fromSchemaVersion: null });
   const schemaVersion = Number(world.schemaVersion);
@@ -68,31 +83,17 @@ export function migrateWorldSchema4State(rawState, { statusDefinitions = null } 
   const before = JSON.stringify(state);
   world.ruleset = { ...upgradeBuiltInRulesetReference(world.ruleset, schemaVersion) };
   world.actors = (Array.isArray(world.actors) ? world.actors : []).map(rawActor => {
-    const actor = clone(rawActor);
+    const actor = migrateMetricActor(rawActor);
     if (schemaVersion === 2) {
       const classification = normalizeActorClassification(actor, { legacy: true });
       actor.type = classification.type;
       actor.partyId = classification.partyId;
     }
-    return migrateMetricActor(actor);
+    return actor;
   });
   const actors = new Map(world.actors.map(actor => [String(actor?.id ?? ''), actor]));
-  world.scenes = (Array.isArray(world.scenes) ? world.scenes : []).map(rawScene => {
-    const scene = migrateMetricScene(rawScene, schemaVersion);
-    scene.tokens = (Array.isArray(scene.tokens) ? scene.tokens : []).map(rawToken => {
-      const token = clone(rawToken);
-      const access = normalizeTokenAccess(token, { actor: actors.get(String(token.actorId ?? '')) || null });
-      token.controllerUserIds = access.controllerUserIds;
-      token.visibility = access.visibility;
-      token.vision = access.vision;
-      delete token.hidden;
-      return token;
-    });
-    scene.markers = (Array.isArray(scene.markers) ? scene.markers : [])
-      .map(rawMarker => normalizeLightweightMarker(rawMarker)).filter(marker => marker.id);
-    scene.fog = normalizeFogState(scene.fog);
-    return scene;
-  });
+  world.scenes = (Array.isArray(world.scenes) ? world.scenes : [])
+    .map(rawScene => migrateMetricScene(rawScene, schemaVersion, actors));
   const configuredDefinitions = Array.isArray(statusDefinitions) ? statusDefinitions : [];
   const configuredIds = new Set(configuredDefinitions.map(definition => String(definition?.id || '')));
   const persistedDefinitions = Array.isArray(world.statusDefinitions) ? world.statusDefinitions : [];

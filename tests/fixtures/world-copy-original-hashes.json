@@ -1,0 +1,18 @@
+{
+  "description": "Exact original full-copy normalized/projected/exported JSON bytes from v2.5.4 Git source.",
+  "sourceCommit": "ed7e13baab0f116222333c20431e19ab63b60e37",
+  "records": [
+    {
+      "activeSceneId": "scene-a",
+      "normalized": "ef2a8310f75baf8f5215954d652e874a6d5dddcc74229a6f24af60e842b5a693",
+      "projected": "05086f00798d546ce65d070a0074c0e8bec095f88c73a7c63c842eb4fb2fd51d",
+      "exported": "987b84fae8e01f425ac10b5bbc41eeaa18e8845e29e275d2e5ea9a8d5fb1812f"
+    },
+    {
+      "activeSceneId": "scene-b",
+      "normalized": "5d01a02c2d053ac7bbe5a67e0e29737267c6ad32c0cbc6a231cb21dce3f4ef6b",
+      "projected": "71560a045b2c29fb66bcd8a879c4b291424d100b98780f53f090303ff9d5b119",
+      "exported": "288d1c728bf0dd053d42721858192f22edbcdcec6dac7bea7df5a901217101c0"
+    }
+  ]
+}

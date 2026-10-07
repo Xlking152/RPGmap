@@ -473,12 +473,14 @@ function categorySet(categories) {
     return new Set(list.map((entry, index) => asId(entry, `categories[${index}]`)));
 }
 
-export function createDamagePreview(area, features, categories) {
+export function createDamagePreview(area, features, categories, options = {}) {
     const areaSnapshot = normalizeAttackArea(area);
     if (!Array.isArray(features)) throw validationError('features must be an array');
     const allowedCategories = categorySet(categories);
     const eligibleFeatures = features.filter((feature) =>
-        feature?.destructible !== false
+        (typeof feature?.capabilities?.destructible === 'boolean'
+            ? feature.capabilities.destructible
+            : (feature?.destructible?.enabled ?? feature?.destructible)) !== false
         && feature?.hitTest !== false,
     );
     // Severe-only ground features are always eligible when severe damage is
@@ -489,8 +491,8 @@ export function createDamagePreview(area, features, categories) {
     const normalFeatures = eligibleFeatures.filter((feature) => feature.severeOnly !== true);
     const polygon = attackAreaToPolygon(areaSnapshot);
     const geometryHits = [
-        ...hitTestFeatures(areaSnapshot, normalFeatures, allowedCategories),
-        ...hitTestFeatures(areaSnapshot, severeOnlyFeatures),
+        ...hitTestFeatures(areaSnapshot, normalFeatures, allowedCategories, options),
+        ...hitTestFeatures(areaSnapshot, severeOnlyFeatures, null, options),
     ];
     const objectIds = [];
     const clipHits = [];
@@ -509,9 +511,9 @@ export function createDamagePreview(area, features, categories) {
             'object',
         ).toLowerCase();
         if (policy === 'none' || policy === 'indestructible') continue;
-        const localized = policy === 'clip' || policy === 'precise' || policy === 'exact'
-            || category === 'terrain'
-            || WALL_LIKE_CATEGORIES.has(category);
+        const discreteStructure = category === 'building' || WALL_LIKE_CATEGORIES.has(category);
+        const localized = !discreteStructure && (policy === 'clip' || policy === 'precise' || policy === 'exact'
+            || category === 'terrain' || feature.severeOnly === true);
         const coverage = asFiniteNumber(hit.coverage ?? 0, `hit ${featureId} coverage`);
         if (localized || coverage + 1e-9 < WHOLE_OBJECT_COVERAGE) {
             clipHits.push({

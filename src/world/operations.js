@@ -28,7 +28,7 @@ import {
 import { sceneVisionContext } from '../vision/context.js';
 import { normalizeOcclusionShape, normalizeOcclusionShapes } from '../vision/occlusion-model.js';
 import { assertOcclusionReferences, normalizeOcclusionConfiguration, exportOcclusionConfiguration, featureForOcclusionDoor } from './occlusion-config.js';
-import { visionIgnoresOcclusion } from '../spatial/kernel.js';
+import { visionIgnoresOcclusion, validateSceneOcclusionGeometry } from '../spatial/kernel.js';
 import { migrateWorldSchema3State } from './migration.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { advanceStatusDurations, STATUS_SCHEMA_VERSION } from '../status/model.js';
@@ -182,6 +182,15 @@ function finite(value, label) {
 function same(left, right) {
   if (left === right) return true;
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function sameSceneContent(left, right) {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object'
+    || Array.isArray(left) !== Array.isArray(right)) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length
+    && keys.every(key => Object.hasOwn(right, key) && sameSceneContent(left[key], right[key]));
 }
 
 function mapById(items = []) {
@@ -1009,10 +1018,35 @@ function applyCanonicalOperation(state, operation, context = {}) {
 
   if (type === 'scene.content.replace') {
     const scene = sceneById(world, payload.sceneId);
+    if (payload.expectedActiveSceneId !== undefined
+      && String(world.activeSceneId) !== identifier(payload.expectedActiveSceneId, 'expectedActiveSceneId')) {
+      fail('当前场景已切换，请重新操作', 'scene_content_conflict');
+    }
+    // A queued absolute replacement may be sent at a newer network revision
+    // than the snapshot it was built from. Reject it before changing any field
+    // or applying later status effects in this transaction.
+    for (const [field, expected] of [['sceneEvents', 'expectedSceneEvents'], ['attackAreas', 'expectedAttackAreas']]) {
+      if (payload[expected] === undefined) continue;
+      const previous = array(payload[expected], expected);
+      if (!sameSceneContent(scene[field] || [], previous)) {
+        fail(field === 'sceneEvents' ? '场景破坏历史已更新，请重新操作' : '场景范围已更新，请重新编辑', 'scene_content_conflict');
+      }
+    }
+    const priorEvents = new Map((scene.sceneEvents || []).map(event => [String(event.id), event]));
     for (const key of ['markers', 'attackAreas', 'sceneEvents']) {
       if (payload[key] !== undefined) scene[key] = clone(array(payload[key], key));
     }
     if (payload.settings !== undefined) scene.settings = clone(object(payload.settings, 'settings'));
+    if (payload.sceneEvents !== undefined) {
+      const changedDamage = (scene.sceneEvents || []).filter(event => String(event.type ?? '').toLowerCase() === 'damage'
+        && !same(event, priorEvents.get(String(event.id))));
+      const featureIds = [...new Set(changedDamage.flatMap(event => [
+        ...(event.objectIds || []), ...(event.clipHits || []).map(hit => hit.featureId),
+      ]).map(String))];
+      if (featureIds.length) {
+        validateSceneOcclusionGeometry(operationMapForScene(context, scene), scene, { featureIds });
+      }
+    }
     return { action: type, sceneId: String(scene.id) };
   }
 

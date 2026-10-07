@@ -133,7 +133,9 @@ export function createVisionFogSystem() {
         visibilitySignature = '';
         visibilityAbort?.abort();
         visibilityAbort = null;
-        visibilityBackground?.cancel();
+        // Reject the old task and cancel its work, retaining the initialized
+        // Worker for the next scene geometry rather than paying startup again.
+        visibilityBackground?.cancel({ terminate: false });
       }
 
       function requestVisibility(request) {
