@@ -65,6 +65,46 @@ test('serial full saves coalesce and retry newer Fog/movement without overwritin
   assert.equal(f.turns.pending, 0);
 });
 
+test('a newer Fog revision abandons the old snapshot at its next phase boundary', async () => {
+  const f = fixture();
+  const saving = f.persistence.persistValidatedAsync();
+  await f.turns.release(); // The old owned migration snapshot is awaiting paint.
+  f.change('new Fog revision');
+  let latestSnapshotCopies = 0;
+  Object.defineProperty(f.state.extension, 'captureProof', { enumerable: true,
+    get() { latestSnapshotCopies += 1; return { value: 'latest only' }; } });
+  await f.turns.release();
+  assert.equal(latestSnapshotCopies, 1, 'resume must recapture the latest snapshot before computing the next old phase');
+  assert.equal(f.turns.calls, 3, 'only one obsolete phase wait precedes the latest migration wait');
+  assert.equal(f.writes.length, 0);
+  assert.equal(await f.turns.finish(saving), true);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0].extension.nested.value, 'new Fog revision');
+  assert.deepEqual(f.writes[0].extension.captureProof, { value: 'latest only' });
+  assert.equal(f.errors.length, 0);
+  assert.equal(f.turns.calls, 4, 'one initial paint, one obsolete phase and both latest phase waits before complete final validation');
+});
+
+test('a snapshot superseded during input capture does not schedule an obsolete phase wait', async () => {
+  const f = fixture();
+  let changed = false;
+  Object.defineProperty(f.state.extension, 'captureHook', { enumerable: true,
+    get() {
+      if (!changed) { changed = true; f.change('changed during capture'); }
+      return 'detached extension';
+    } });
+  const saving = f.persistence.persistValidatedAsync();
+  await f.turns.release();
+  assert.equal(changed, true);
+  assert.equal(f.turns.calls, 2, 'the obsolete migration yields no paint wait before recapturing latest');
+  assert.equal(await f.turns.finish(saving), true);
+  assert.equal(f.turns.calls, 3, 'only initial paint and both latest phase waits precede complete final validation');
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0].extension.nested.value, 'changed during capture');
+  assert.equal(f.writes[0].extension.captureHook, 'detached extension');
+  assert.equal(f.errors.length, 0);
+});
+
 test('revision guards detect an in-place update and final writes use the latest private queue', async () => {
   const f = fixture();
   f.persistence.setLocalExploration({ schemaVersion: 1, jobs: [{ id: 'old' }], generations: {} });

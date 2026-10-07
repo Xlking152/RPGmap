@@ -99,6 +99,30 @@ function harness(previous = false, overrides = {}) {
 const move = ids => [{ type: 'token.movePath', payload: { tokenIds: ids } }];
 const session = { id: 'player', role: 'player', visionSourceTokenId: 'source' };
 
+test('Fog reset and hide use a full fresh per-recipient projection with predecessor hints only', () => {
+  for (const types of [['scene.fog.reset'], ['scene.fog.hide'], ['scene.fog.reset', 'scene.fog.hide'],
+    ['scene.fog.reset', 'scene.settings.patch'], ['scene.settings.patch']]) {
+    const values = fixture(), runner = harness();
+    const viewer = { ...session, identityStatus: 'active', audienceRevision: 1,
+      audienceProjection: values.projection };
+    runner.dependencies.sessions.set('player-socket', viewer);
+    runner.broadcastOperationCommit({ beforeState: values.before, afterState: values.after,
+      operationId: 'refresh', baseRevision: 1, revision: 2, updatedAt: 'after', results: [],
+      originSessionId: viewer.id, operations: types.map(type => ({ type, payload: {} })) });
+    assert.ok(runner.metrics.calls.includes('full:player'));
+    const knownFogOnly = types.every(type => ['scene.fog.reset', 'scene.fog.hide'].includes(type));
+    const cache = runner.metrics.caches[0];
+    if (knownFogOnly) {
+      assert.equal(cache.beforeState, values.before);
+      assert.equal(cache.previousProjection, values.projection);
+      assert.equal(cache.tokenIds.size, 0);
+      assert.equal(runner.metrics.freshDetection[0], true, 'no historic perception result may skip target detection');
+    } else assert.equal(cache, undefined, 'mixed and unknown changes retain complete cache invalidation');
+    assert.equal(runner.metrics.responses.length, 1);
+    assert.equal(viewer.audienceProjection.preferences.worldV2.actors[0].name, 'player');
+  }
+});
+
 function compareIncremental({ before, projection, after }, operations, results = [], viewer = session) {
   const input = structuredClone({ before, projection, after, operations, results, viewer });
   const current = harness(), previous = harness(true);

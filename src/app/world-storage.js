@@ -46,7 +46,7 @@ export function createWorldStatePersistence({
   getStateRevision = null,
   stringifyTrustedState = null,
   validationYieldTask = yieldRuntimeValidationFrame,
-  validationBudgetMs = 8,
+  validationBudgetMs = 0,
   saveDelayMs = 180,
   onSaved = () => {},
   onError = () => {},
@@ -209,7 +209,16 @@ export function createWorldStatePersistence({
       try {
         captured = getState(); revision = currentRevision(); capturedReady = true;
         const exported = await exportRuntimeStateAsync(captured, { mapPackage, ruleset }, {
-          signal, budgetMs: validationBudgetMs, yieldTask: () => validationYieldTask({ signal }),
+          signal, budgetMs: validationBudgetMs, yieldTask: async () => {
+            signal.throwIfAborted();
+            if (!stillCurrent()) throw new Error('Runtime validation snapshot superseded');
+            await validationYieldTask({ signal });
+            signal.throwIfAborted();
+            // Fog may commit while this owned snapshot waits for paint. Stop
+            // its remaining phases now; only a completely validated current
+            // snapshot can reach the guarded write below.
+            if (!stillCurrent()) throw new Error('Runtime validation snapshot superseded');
+          },
         });
         if (!available()) return false;
         if (!stillCurrent()) continue;

@@ -1,41 +1,45 @@
 import { deriveSceneState } from '../engine/state.js';
 import { deriveVisionOccluders, deriveSceneLightSources, releaseOcclusionGeometryCache } from '../spatial/kernel.js';
+import { isImmutableVisionData as immutable } from './immutable-data.js';
 
 const contexts = new WeakMap();
+const mapGeometrySignatures = new WeakMap();
 const explorationContexts = new WeakMap();
-const immutableValues = new WeakSet();
 let version = 0;
-function immutable(value) {
-  if (!value || typeof value !== 'object') return true;
-  if (immutableValues.has(value)) return true;
-  if (!Object.isFrozen(value) || !Object.values(value).every(immutable)) return false;
-  immutableValues.add(value);
-  return true;
+function mapGeometrySignature(map, refs) {
+  const reusable = refs.every(reference => immutable(reference));
+  const previous = reusable && mapGeometrySignatures.get(map);
+  if (previous && refs.every((reference, index) => reference === previous.refs[index])) return previous.key;
+  const key = JSON.stringify(refs);
+  if (reusable) mapGeometrySignatures.set(map, { refs, key });
+  else mapGeometrySignatures.delete(map);
+  return key;
 }
 // Two scene geometries per map; no Actor permissions or audience results live here.
 export function sceneVisionContext(map, scene = {}) {
   let entries = contexts.get(map);
   if (!entries) { entries = new Map(); contexts.set(map, entries); }
-  const geometryRefs = [scene.id, scene.featureStates, scene.sceneEvents, scene.occlusionShapes,
-    map.features, map.visionOccluders, map.occlusionShapes, map.metersPerUnit];
-  // Loaded MapPackages are static inputs. Their field identities still qualify
-  // reuse, while only mutable Scene data requires content checks on every call.
-  const immutableGeometry = geometryRefs.slice(0, 4).every(immutable);
+  const mapRefs = [map.features, map.visionOccluders, map.occlusionShapes, map.metersPerUnit];
+  const mapKey = mapGeometrySignature(map, mapRefs);
+  const geometryRefs = [scene.id, scene.featureStates, scene.sceneEvents, scene.occlusionShapes];
+  const immutableGeometry = geometryRefs.every(reference => immutable(reference));
   let value = immutableGeometry ? [...entries.values()].find(entry => entry.geometryRefs
-    && geometryRefs.every((reference, index) => reference === entry.geometryRefs[index])) : null;
-  const key = value ? null : JSON.stringify([scene.id, scene.featureStates || {}, scene.sceneEvents || [], scene.occlusionShapes || [],
-    map.features, map.visionOccluders, map.occlusionShapes, map.metersPerUnit]);
+    && entry.mapKey === mapKey && geometryRefs.every((reference, index) => reference === entry.geometryRefs[index])) : null;
+  // Keep the large static signature out of the Scene serialization. Mutable
+  // public inputs still get content checks, including deeply mutable map data.
+  const key = value ? null : JSON.stringify([scene.id, scene.featureStates || {}, scene.sceneEvents || [], scene.occlusionShapes || []]);
   value ||= entries.get(key);
+  if (value?.mapKey !== mapKey) value = null;
   const hit = Boolean(value);
   if (!value) {
-    value = { geometryVersion: ++version,
+    value = { mapKey, geometryVersion: ++version,
       occluders: Object.freeze(deriveVisionOccluders(map, scene, deriveSceneState(scene.sceneEvents || []))) };
     entries.set(key, value);
     if (entries.size > 2) entries.delete(entries.keys().next().value);
   }
   value.geometryRefs = immutableGeometry ? geometryRefs : null;
   const lightRefs = [scene.tokens, map.lights];
-  const immutableLighting = lightRefs.every(immutable);
+  const immutableLighting = lightRefs.every(reference => immutable(reference));
   if (!immutableLighting || !value.lightRefs || !lightRefs.every((reference, index) => reference === value.lightRefs[index])) {
     const lights = deriveSceneLightSources(map, scene);
     const lightKey = JSON.stringify(lights);
@@ -71,5 +75,5 @@ export function sceneExplorationContext(map, scene = {}, spatial = sceneVisionCo
 }
 
 export function releaseVisionContexts(map) {
-  contexts.delete(map); explorationContexts.delete(map); releaseOcclusionGeometryCache(map);
+  contexts.delete(map); mapGeometrySignatures.delete(map); explorationContexts.delete(map); releaseOcclusionGeometryCache(map);
 }

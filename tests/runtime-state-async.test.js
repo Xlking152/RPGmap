@@ -6,27 +6,39 @@ import { validationTurns, withValidationClock } from './fixtures/validation-turn
 
 const options = { mapPackage: copyMap, ruleset: copyRuleset };
 
-test('the default budget batches short complete validation phases without fixed frame waits', async () => {
+test('an internal 4 ms budget yields at phase boundaries while retaining complete validation', async () => {
+  const { state } = worldCopyInput();
+  const expected = JSON.stringify(exportRuntimeState(state, options));
+  await withValidationClock([0, 1, 4, 100], async reads => {
+    let yields = 0;
+    const exported = await exportRuntimeStateAsync(state, options, { budgetMs: 4, yieldTask: async () => { yields += 1; } });
+    assert.equal(yields, 1);
+    assert.equal(reads(), 4);
+    assert.equal(JSON.stringify(exported), expected);
+  });
+});
+
+test('an internal 8 ms budget batches short complete validation phases without fixed frame waits', async () => {
   const { state } = worldCopyInput(), before = structuredClone(state);
   const expected = JSON.stringify(exportRuntimeState(state, options));
-  await withValidationClock([0, 1, 2, 3], async reads => {
+  await withValidationClock([0, 1, 2], async reads => {
     let yields = 0;
-    const exported = await exportRuntimeStateAsync(state, options, { yieldTask: async () => { yields += 1; } });
-    assert.equal(yields, 0, 'three semantic phases under 8 ms remain in one task');
-    assert.equal(reads(), 4);
+    const exported = await exportRuntimeStateAsync(state, options, { budgetMs: 8, yieldTask: async () => { yields += 1; } });
+    assert.equal(yields, 0, 'short preceding phases remain in one task before the complete final projection');
+    assert.equal(reads(), 3);
     assert.equal(JSON.stringify(exported), expected);
   });
   assert.deepEqual(state, before);
 });
 
-test('the default budget accumulates short phase time and yields at 8 ms', async () => {
+test('an internal 8 ms budget accumulates short phase time and yields at 8 ms', async () => {
   const { state } = worldCopyInput();
   const expected = JSON.stringify(exportRuntimeState(state, options));
-  await withValidationClock([0, 3, 7, 8, 100], async reads => {
+  await withValidationClock([0, 3, 8, 100], async reads => {
     let yields = 0;
-    const exported = await exportRuntimeStateAsync(state, options, { yieldTask: async () => { yields += 1; } });
+    const exported = await exportRuntimeStateAsync(state, options, { budgetMs: 8, yieldTask: async () => { yields += 1; } });
     assert.equal(yields, 1, 'individual phases below 8 ms still accumulate to the deadline');
-    assert.equal(reads(), 5);
+    assert.equal(reads(), 4);
     assert.equal(JSON.stringify(exported), expected);
   });
 });
@@ -34,11 +46,11 @@ test('the default budget accumulates short phase time and yields at 8 ms', async
 test('paint waiting time resets the budget and does not force another short-phase frame wait', async () => {
   const { state } = worldCopyInput();
   const expected = JSON.stringify(exportRuntimeState(state, options));
-  await withValidationClock([0, 4, 9, 100, 103], async reads => {
+  await withValidationClock([0, 4, 9, 100], async reads => {
     let yields = 0;
-    const exported = await exportRuntimeStateAsync(state, options, { yieldTask: async () => { yields += 1; } });
-    assert.equal(yields, 1, 'the final 3 ms phase does not include the previous paint wait');
-    assert.equal(reads(), 5);
+    const exported = await exportRuntimeStateAsync(state, options, { budgetMs: 8, yieldTask: async () => { yields += 1; } });
+    assert.equal(yields, 1, 'the complete final projection does not wait for a frame after its work is finished');
+    assert.equal(reads(), 4);
     assert.equal(JSON.stringify(exported), expected);
   });
 });
@@ -52,7 +64,7 @@ test('async full validation preserves synchronous exports, ordering and input is
     const turns = validationTurns();
     const exported = await turns.finish(exportRuntimeStateAsync(state, options, { budgetMs: 0, yieldTask: turns.yieldTask }));
     assert.equal(JSON.stringify(exported), expected);
-    assert.equal(turns.calls, 3);
+    assert.equal(turns.calls, 2);
     exported.extension.nested.value = 'changed';
     exported.preferences.worldV2.scenes[0].fog.exploredByParty.party.rows[2][0][0] = 19;
     assert.deepEqual(state, input);

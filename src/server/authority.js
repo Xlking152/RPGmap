@@ -18,6 +18,7 @@ export { sceneVisionContext, sceneExplorationContext };
 export { mergeExploration } from '../vision/fog.js';
 export { computeExplorationChunk, mergeExplorationChunkFog } from './exploration-compute.js';
 export { createExplorationOperationCapture } from '../vision/exploration-operations.js';
+export { createServerMovementAdjudicationActorResolver } from './movement-adjudication.js';
 
 export const serverRuleset = infiniteHorrorRuleset;
 const canonicalVisionDescriptions = new WeakMap();

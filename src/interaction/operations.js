@@ -61,16 +61,55 @@ export function createFeatureOperations({
   const send = (name, detail) => emit?.(name, detail);
 
   let cachedRead = null;
-  const readContext = () => {
-    const state = typeof readState === 'function' ? readState() : getState();
-    const revision = typeof getStateRevision === 'function' ? getStateRevision() : null;
+  const prepareReadContext = (state, revision, qualified) => {
     // Only the private runtime reader with a committed revision qualifies for
     // reuse. Legacy/public ports may return mutable objects and are rederived.
-    const qualified = typeof readState === 'function' && Number.isSafeInteger(revision);
     if (qualified && cachedRead?.state === state && cachedRead.revision === revision) return cachedRead.context;
     const context = createFeatureReadContext(state);
     cachedRead = qualified ? { state, revision, context } : null;
     return context;
+  };
+  const readContext = () => {
+    const state = typeof readState === 'function' ? readState() : getState();
+    const revision = typeof getStateRevision === 'function' ? getStateRevision() : null;
+    return prepareReadContext(state, revision,
+      typeof readState === 'function' && Number.isSafeInteger(revision));
+  };
+
+  const modernReadContext = () => {
+    if (typeof performOperations === 'function' && typeof readState === 'function'
+      && typeof getStateRevision === 'function') {
+      const state = readState(), revision = getStateRevision();
+      if (state?.preferences?.worldV2?.schemaVersion === 4 && Number.isSafeInteger(revision)) {
+        return { ...prepareReadContext(state, revision, true), privateInput: true };
+      }
+    }
+    return null;
+  };
+
+  const executionContext = () => {
+    const prepared = modernReadContext();
+    if (prepared) return prepared;
+    // Legacy drafts and standalone operation ports still receive the original
+    // detached public snapshot, including mutable status-effect input.
+    const rawState = getState();
+    const world = rawState.preferences?.worldV2;
+    const scene = world?.scenes?.find(item => String(item.id) === String(world.activeSceneId));
+    return { state: scene ? { ...rawState, sceneEvents: scene.sceneEvents || [] } : rawState,
+      derivedScene: null, privateInput: false };
+  };
+
+  const contentHistory = (prepared, sceneEvents) => {
+    const history = { expectedSceneEvents: prepared.state.sceneEvents || [], sceneEvents };
+    // Copy both histories together: shared prior event leaves retain the same
+    // command aliasing while the authority's private history stays isolated.
+    return prepared.privateInput ? structuredClone(history) : history;
+  };
+
+  const committedFeatureState = feature => {
+    const prepared = modernReadContext();
+    return prepared ? getFeatureRuntimeState(prepared.state, feature, prepared.derivedScene)
+      : getFeatureRuntimeState(getState(), feature);
   };
 
   const statusWorldOperations = mutations => mutations.map(({ type, ...payload }) => ({ type, payload }));
@@ -125,7 +164,7 @@ export function createFeatureOperations({
         source: 'feature:patch', featureId: feature.id,
       });
     return Promise.resolve(commit).then(() => {
-      const featureState = getFeatureRuntimeState(getState(), feature);
+      const featureState = committedFeatureState(feature);
       send('interaction:state-change', { featureId: feature.id, state: featureState });
       return featureState;
     });
@@ -133,10 +172,8 @@ export function createFeatureOperations({
 
   const execute = async (action, options = {}) => {
     const featureId = options.featureId;
-    const rawState = getState();
-    const world = rawState.preferences?.worldV2;
-    const scene = world?.scenes?.find(item => String(item.id) === String(world.activeSceneId));
-    const state = scene ? { ...rawState, sceneEvents: scene.sceneEvents || [] } : rawState;
+    const prepared = executionContext();
+    const state = prepared.state;
     const feature = featureById(mapPackage, featureId);
     if (!feature) return result(action, featureId, false, 'Feature 不存在');
 
@@ -144,6 +181,7 @@ export function createFeatureOperations({
     const descriptor = listFeatureInteractions({
       mapPackage,
       state,
+      derivedScene: prepared.derivedScene,
       featureId: feature.id,
       tokenId,
       resolveStatus,
@@ -189,7 +227,7 @@ export function createFeatureOperations({
           await performOperations([
             { type: 'scene.content.replace', payload: { ...(sceneId ? { sceneId } : {}),
               ...(sceneId ? { expectedActiveSceneId: sceneId } : {}),
-              expectedSceneEvents: state.sceneEvents || [], sceneEvents: damaged.sceneEvents } },
+              ...contentHistory(prepared, damaged.sceneEvents) } },
             ...statusWorldOperations(mutations),
           ], { source: 'feature:damage' });
         } else {
@@ -210,7 +248,7 @@ export function createFeatureOperations({
           await performOperations([
             { type: 'scene.content.replace', payload: { ...(sceneId ? { sceneId } : {}),
               ...(sceneId ? { expectedActiveSceneId: sceneId } : {}),
-              expectedSceneEvents: state.sceneEvents || [], sceneEvents: restored.sceneEvents } },
+              ...contentHistory(prepared, restored.sceneEvents) } },
             ...statusWorldOperations(mutations),
           ], { source: 'feature:restore' });
         } else {
@@ -241,7 +279,7 @@ export function createFeatureOperations({
           const draft = applyStatusEffects(changed, feature, action, tokenId);
           await Promise.resolve(replaceState(draft.state, { source: `feature:${action}`, featureId: feature.id }));
         }
-        const featureState = getFeatureRuntimeState(getState(), feature);
+        const featureState = committedFeatureState(feature);
         send('interaction:state-change', { featureId: feature.id, open, state: featureState, tokenId });
         return result(action, feature.id, true, '', { tokenId, open, state: featureState, statusMutations: mutations, message: actionMessage(action, feature) });
       }

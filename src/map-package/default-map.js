@@ -15,6 +15,14 @@ function applyArtAssetUrls(svg, artAssets) {
   });
 }
 
+// The fetch result belongs to this loader. Freezing it once lets consumers
+// reuse static geometry safely without changing the public MapPackage adapter.
+function freezeLoadedData(value) {
+  if (!value || typeof value !== 'object') return value;
+  Object.values(value).forEach(freezeLoadedData);
+  return Object.freeze(value);
+}
+
 export async function createDefaultMapPackage() {
   const artAssets = createLanzhouGeneratedArtAssets();
   const [svgResponse, dataResponse] = await Promise.all([
@@ -27,7 +35,7 @@ export async function createDefaultMapPackage() {
     throw error;
   }
   const svg = applyArtAssetUrls(await svgResponse.text(), artAssets);
-  const source = await dataResponse.json();
+  const source = freezeLoadedData(await dataResponse.json());
   const mapPackage = {
     ...source,
     artAssets,

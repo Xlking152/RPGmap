@@ -28,7 +28,7 @@ function fixture(t, { legacy = false, damageB = false } = {}) {
   let state = projectWorldOperationState({ preferences: { worldV2: { schemaVersion: 4, id: 'world', name: 'World',
     ruleset: { id: 'test', version: '1' }, activeSceneId: 'scene', actors: [], statusDefinitions: [], scenes: [scene] } } });
   let revision = 1, renders = 0, visuals = 0, canInteract = true, role = 'gm', selectedToken = 'token';
-  let failAuthority = false, failPublicRead = false, canonical = true, ackHook = null;
+  let failAuthority = false, failPublicRead = false, failPrivateRead = false, canonical = true, ackHook = null;
   const listeners = new Map(), panel = node('panel'), replaceChildren = panel.replaceChildren;
   panel.replaceChildren = function (...children) { renders++; replaceChildren.call(this, ...children); };
   const document = { getElementById: () => ({}), createElement: tag => node(tag) };
@@ -55,7 +55,13 @@ function fixture(t, { legacy = false, damageB = false } = {}) {
       return applied;
     } },
   };
-  const unregister = registerRuntimeStateReader(api, () => state);
+  const unregister = registerRuntimeStateReader(api, () => {
+    if (failPrivateRead) {
+      failPrivateRead = false;
+      throw new Error('Injected read exception');
+    }
+    return state;
+  });
   t.after(() => { api.emit('app:destroy'); unregister(); globalThis.document = previousDocument; });
   createFeatureInteractionSystem().register(api);
   const counts = () => ({ renders, visuals });
@@ -69,7 +75,9 @@ function fixture(t, { legacy = false, damageB = false } = {}) {
   };
   return { api, panel, features, state: () => state, counts, button, click, nextEvent, revision: () => revision,
     setStatus(value) { canInteract = value; }, setRole(value) { role = value; }, setToken(value) { selectedToken = value; },
-    rejectAuthority(value) { failAuthority = value; }, rejectRead(value) { failPublicRead = value; },
+    rejectAuthority(value) { failAuthority = value; },
+    rejectRead(value) { if (legacy) failPublicRead = value; else failPrivateRead = value; },
+    rejectPublicRead(value) { failPublicRead = value; },
     emitCanonical(value) { canonical = value; }, onAck(callback) { ackHook = callback; },
   };
 }
@@ -92,6 +100,13 @@ test('canonical commits cover local damage/restore notifications, execute and th
   value.api.emit('scene:content-change', { sceneId: 'scene', types: ['SceneEvent'] });
   assert.deepEqual(value.counts(), { renders: before.renders + 1, visuals: before.visuals + 1 },
     'canonical notifications still force rendering even at the same revision');
+});
+
+test('modern damage and restore buttons do not request unrelated public World snapshots', async t => {
+  const value = fixture(t); value.api.selectFeature('a'); value.rejectPublicRead(true);
+  assert.equal((await value.click('damage')).ok, true);
+  assert.equal((await value.click('restore')).ok, true);
+  assert.equal(value.state().preferences.worldV2.scenes[0].sceneEvents.length, 2);
 });
 
 test('local commits without canonical notification still refresh new state and changed selected Token', async t => {

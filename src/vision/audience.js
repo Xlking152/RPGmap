@@ -3,6 +3,7 @@ import { normalizeFogState } from './fog.js';
 import { normalizeActorPublicProfile } from '../actor/public-profile.js';
 import { canPlaceActorTemplate } from '../permissions/model.js';
 import { sceneVisionContext } from './context.js';
+import { isImmutableVisionData as immutablePolicyDocument, hasImmutableVisionData, recordImmutableVisionData } from './immutable-data.js';
 import {
   deriveSceneLightSources,
   perceptionLevelAtPoint,
@@ -15,7 +16,6 @@ import { journalVisibleToAudience } from '../journal/model.js';
 const clone = structuredClone;
 const projectionAudiences = new WeakMap();
 const projectionPolicies = new WeakMap();
-const immutablePolicyDocuments = new WeakSet();
 const vagueActorDocuments = new WeakSet();
 const canonicalActorMaps = new WeakMap();
 const canonicalTokenMaps = new WeakMap();
@@ -118,22 +118,6 @@ function plainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function immutablePolicyDocument(value) {
-  if (value === null || !['object', 'function'].includes(typeof value)) return !['function', 'symbol', 'bigint'].includes(typeof value);
-  if (immutablePolicyDocuments.has(value)) return true;
-  if (typeof value !== 'object' || !Object.isFrozen(value)
-    || (Array.isArray(value) ? Object.getPrototypeOf(value) !== Array.prototype
-      : ![Object.prototype, null].includes(Object.getPrototypeOf(value)))) return false;
-  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
-    if (!Object.hasOwn(descriptor, 'value') || !immutablePolicyDocument(descriptor.value)) return false;
-  }
-  for (let prototype = Object.getPrototypeOf(value); prototype; prototype = Object.getPrototypeOf(prototype)) {
-    const toJSON = Object.getOwnPropertyDescriptor(prototype, 'toJSON');
-    if (toJSON && (!Object.hasOwn(toJSON, 'value') || typeof toJSON.value === 'function')) return false;
-  }
-  immutablePolicyDocuments.add(value);
-  return true;
-}
 
 function hasId(value, target) {
   return Array.isArray(value) && Boolean(target) && value.some(item => String(item ?? '') === target);
@@ -172,7 +156,7 @@ function canonicalTokenMap(tokens) {
   // The previous canonical array was qualified as a whole when its audience
   // was projected. Reuse that immutable proof without scanning every document
   // again. Unqualified and duplicate-ID arrays keep the legacy fresh map.
-  if (immutablePolicyDocuments.has(tokens) && result.size === tokens.length
+  if (hasImmutableVisionData(tokens) && result.size === tokens.length
     && tokens.every(token => typeof token?.id === 'string' && token.id.length > 0)) {
     canonicalTokenMaps.set(tokens, result);
   }
@@ -410,7 +394,7 @@ function movementPartyInputs(world, previous) {
   if (movementPartyRelations.get(world.scenes)?.has(previous.scenes)) {
     return { actors: world.actors, scenes: world.scenes };
   }
-  const knownScenes = immutablePolicyDocuments.has(world.scenes);
+  const knownScenes = hasImmutableVisionData(world.scenes);
   if (!knownScenes && (Object.getPrototypeOf(world.scenes) !== Array.prototype
     || Object.getOwnPropertyNames(world.scenes).length !== world.scenes.length + 1
     || Object.getOwnPropertySymbols(world.scenes).length)) return null;
@@ -430,7 +414,7 @@ function movementPartyInputs(world, previous) {
     }
     const tokens = fields.tokens?.value;
     if (!Array.isArray(tokens) || !Object.isFrozen(tokens) || tokens.length !== before.tokens.length) return null;
-    const knownTokens = immutablePolicyDocuments.has(tokens);
+    const knownTokens = hasImmutableVisionData(tokens);
     if (!knownTokens && (Object.getPrototypeOf(tokens) !== Array.prototype
       || Object.getOwnPropertyNames(tokens).length !== tokens.length + 1 || Object.getOwnPropertySymbols(tokens).length)) return null;
     for (let index = 0; index < tokens.length; index += 1) {
@@ -443,10 +427,9 @@ function movementPartyInputs(world, previous) {
     }
     // All other fields are the same previously verified immutable documents;
     // every new Token has also been checked, proving the replacement is immutable.
-    immutablePolicyDocuments.add(tokens);
-    immutablePolicyDocuments.add(scene);
+    if (!immutablePolicyDocument(tokens) || !recordImmutableVisionData(scene, fields)) return null;
   }
-  immutablePolicyDocuments.add(world.scenes);
+  if (!immutablePolicyDocument(world.scenes)) return null;
   // This proof concerns only immutable collection structure, never a user's
   // party membership or projection. Keep one predecessor per live result,
   // with both arrays weakly keyed, so old Worlds cannot form a retained chain.
@@ -787,7 +770,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const definitionsUnchanged = movementCache && previousWorld?.statusDefinitions === rawState.preferences.worldV2.statusDefinitions;
   const reusePolicies = Boolean(sourceIdentityUnchanged && partiesUnchanged && definitionsUnchanged);
   const policies = new WeakMap();
-  const immutableActors = immutablePolicyDocuments.has(rawWorld.actors);
+  const immutableActors = hasImmutableVisionData(rawWorld.actors);
   const oldActive = previousScenes.get(String(world.activeSceneId));
   const rawActive = activeScene(rawState.preferences.worldV2);
   const geometryUnchanged = oldActive && oldActive.featureStates === rawActive?.featureStates
@@ -838,7 +821,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
         id: token ? String(token.id) : null, actorId: token ? String(token.actorId) : null,
       });
     };
-    const immutableScenePolicies = immutableActors && immutablePolicyDocuments.has(scene.tokens);
+    const immutableScenePolicies = immutableActors && hasImmutableVisionData(scene.tokens);
     for (const rawToken of scene.tokens || []) {
       const actor = actors.get(String(rawToken.actorId));
       const unchanged = movementCache && actor && previousTokens.get(String(rawToken.id)) === rawToken

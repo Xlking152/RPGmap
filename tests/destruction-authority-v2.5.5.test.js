@@ -88,8 +88,9 @@ function authorityFixture({ synthetic = false, statuses = false, door = false, e
       tokens: [token, otherToken], markers: [], attackAreas: [], sceneEvents: structuredClone(history),
       featureStates: structuredClone(featureStates), occlusionShapes: [], settings: { lineOfSightEnabled: true } }] } } });
   const commits = [], emitted = [];
-  let statusCalls = 0, legacyWrites = 0;
+  let statusCalls = 0, legacyWrites = 0, revision = 1;
   const operations = createFeatureOperations({ mapPackage, getState: () => state,
+    readState: () => state, getStateRevision: () => revision,
     replaceState() { legacyWrites++; throw new Error('Legacy replaceState must never commit World-backed damage or restoration'); },
     performOperations(batch, metadata) {
       const applied = applyWorldOperations(state, batch, { mapPackage, source: { role: 'gm' },
@@ -99,7 +100,7 @@ function authorityFixture({ synthetic = false, statuses = false, door = false, e
           const reduced = reduceStatusOperation(value.preferences.entitySystem, message);
           return { state: { ...value, preferences: { ...value.preferences, entitySystem: reduced.state } }, results: reduced.results };
         } });
-      state = applied.state;
+      state = applied.state; revision++;
       commits.push({ batch: structuredClone(batch), metadata, results: applied.results });
       return applied;
     },
@@ -286,8 +287,9 @@ function queuedButtons({ staleProjection = false } = {}) {
   let state = structuredClone(base.getState());
   if (staleProjection) state.sceneEvents = [];
   const pending = [], emitted = [], committed = [];
-  let statusCalls = 0;
+  let statusCalls = 0, revision = 1;
   const operations = createFeatureOperations({ mapPackage: base.mapPackage, getState: () => state,
+    readState: () => state, getStateRevision: () => revision,
     replaceState() { throw new Error('No optimistic projection commits'); },
     performOperations(batch) {
       const world = state.preferences.worldV2;
@@ -306,7 +308,7 @@ function queuedButtons({ staleProjection = false } = {}) {
       const next = structuredClone(state), world = next.preferences.worldV2;
       const other = { ...structuredClone(world.scenes[0]), id: 'other-scene' };
       world.scenes.push(other); world.activeSceneId = other.id;
-      state = projectWorldOperationState(next);
+      state = projectWorldOperationState(next); revision++;
     },
     flush() {
       const item = pending.shift();
@@ -317,7 +319,7 @@ function queuedButtons({ staleProjection = false } = {}) {
             const reduced = reduceStatusOperation(value.preferences.entitySystem, message);
             return { state: { ...value, preferences: { ...value.preferences, entitySystem: reduced.state } }, results: reduced.results };
           } });
-        state = applied.state; committed.push(item.values); item.resolve(applied);
+        state = applied.state; revision++; committed.push(item.values); item.resolve(applied);
       } catch (error) { item.reject(error); }
     },
   };

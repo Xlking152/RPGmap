@@ -103,7 +103,7 @@ export function documentEntries(state) {
   return entries;
 }
 
-function diffFields(before, after, path = [], removed = []) {
+function diffFields(before, after, path = [], removed = [], isCanonicalData = null) {
   const changed = {};
   for (const key of Object.keys(before)) {
     if (!Object.hasOwn(after, key)) removed.push([...path, key]);
@@ -111,10 +111,11 @@ function diffFields(before, after, path = [], removed = []) {
   for (const [key, value] of Object.entries(after)) {
     if (equal(before[key], value) && Object.hasOwn(before, key)) continue;
     if (plain(before[key]) && plain(value)) {
-      const nested = diffFields(before[key], value, [...path, key], removed);
+      const nested = diffFields(before[key], value, [...path, key], removed, isCanonicalData);
       if (Object.keys(nested).length) changed[key] = nested;
     } else changed[key] = value === null || typeof value === 'string' || typeof value === 'boolean'
-      || (typeof value === 'number' && Number.isFinite(value)) ? value : clone(value);
+      || (typeof value === 'number' && Number.isFinite(value)) ? value
+        : typeof isCanonicalData === 'function' && isCanonicalData(value) === true ? value : clone(value);
   }
   return changed;
 }
@@ -148,7 +149,7 @@ function fogBoundsByScene(fog) {
 // Internal additive Fog commits cannot alter other documents or collection
 // order. Diff only the recipient's addressed Fog, keeping the public delta
 // format and deletion semantics identical to the full projection diff.
-export function createFogDocumentChanges(beforeState, afterState, { fog = [] } = {}) {
+export function createFogDocumentChanges(beforeState, afterState, { fog = [], isCanonicalData = null } = {}) {
   const bounds = fogBoundsByScene(fog), changes = [];
   const beforeScenes = new Map((beforeState?.preferences?.worldV2?.scenes || []).map(scene => [String(scene.id), scene]));
   const afterScenes = new Map((afterState?.preferences?.worldV2?.scenes || []).map(scene => [String(scene.id), scene]));
@@ -159,7 +160,12 @@ export function createFogDocumentChanges(beforeState, afterState, { fog = [] } =
     if (after === undefined) { changes.push({ action: 'delete', document, changed: null }); continue; }
     if (before === undefined) { changes.push({ action: 'create', document, changed: clone(after), dirtyBounds: dirtyBounds ?? null }); continue; }
     const removed = [];
-    const changed = plain(before) && plain(after) ? diffFields(before, after, [], removed) : clone(after);
+    // Only the server's accepted, deeply immutable JSON proof may share an
+    // addressed replacement leaf. Each recipient still derives its own keys
+    // from its filtered Fog; default callers retain detached mutable output.
+    // Sharing canonical row arrays avoids cloning the same large numeric rows
+    // once for every session while synchronous socket serialization reads them.
+    const changed = plain(before) && plain(after) ? diffFields(before, after, [], removed, isCanonicalData) : clone(after);
     changes.push({ action: 'update', document, changed, ...(removed.length ? { removed } : {}), dirtyBounds: dirtyBounds ?? null });
   }
   return changes;

@@ -6,12 +6,13 @@ import { applyDocumentChanges } from '../src/documents/changes.js';
 import { registerRuntimeStateReader } from '../src/engine/state-access.js';
 import { copyMap, copyRuleset, worldCopyInput } from './fixtures/world-copy-inputs.js';
 import { flushValidationTurn } from './fixtures/validation-turns.js';
+import { loadBuiltInRulesetReference } from '../src/ruleset/builtins.js';
 
-function fixture() {
-  let current = exportRuntimeState(worldCopyInput().state, { mapPackage: copyMap, ruleset: copyRuleset }), revision = 1;
-  const calls = [], pending = [], durations = [];
+function fixture({ ruleset = copyRuleset } = {}) {
+  let current = exportRuntimeState(worldCopyInput().state, { mapPackage: copyMap, ruleset }), revision = 1;
+  const calls = [], pending = [], durations = [], reductions = [];
   const api = {
-    mapPackage: copyMap, ruleset: copyRuleset,
+    mapPackage: copyMap, ruleset,
     getState: () => structuredClone(current), getStateRevision: () => revision,
     commitState(next) { current = next; revision += 1; },
     applyAuthoritativeDocumentChanges(changes, options) {
@@ -20,13 +21,39 @@ function fixture() {
     },
     persistNow(options) { calls.push(['sync', options]); return true; },
     persistValidatedAsync() { calls.push(['async']); return new Promise(resolve => pending.push(resolve)); },
-    diagnostics: { measure(_name, fn) { return fn(); }, record(name, elapsed) { durations.push([name, elapsed]); } },
+    diagnostics: { measure(name, fn) {
+      const result = fn(); if (name === 'world.reduce') reductions.push(result); return result;
+    }, record(name, elapsed) { durations.push([name, elapsed]); } },
     emit() {},
   };
   registerRuntimeStateReader(api, () => current);
   createWorldSystem().register(api);
-  return { api, calls, pending, durations, current: () => current };
+  return { api, calls, pending, durations, reductions, current: () => current };
 }
+
+test('real registered built-in history operations use private COW but still wait for complete async durability', async () => {
+  const ruleset = await loadBuiltInRulesetReference(copyRuleset), f = fixture({ ruleset });
+  f.api.applyAuthoritativeDocumentChanges([], { updatedAt: '2026-10-07T00:00:00.000Z' });
+  f.calls.length = 0;
+  const before = f.current(), snapshot = structuredClone(before), scene = before.preferences.worldV2.scenes[0];
+  const operation = f.api.world.performOperations([{ type: 'scene.content.replace', payload: {
+    sceneId: scene.id, expectedActiveSceneId: scene.id, expectedSceneEvents: structuredClone(scene.sceneEvents),
+    sceneEvents: [...structuredClone(scene.sceneEvents), { id: 'confirmed-restore', type: 'restore', featureIds: ['wall'] }],
+  } }]);
+  assert.equal(f.reductions.at(-1).state.preferences.worldV2.scenes[0].fog, scene.fog, 'WorldSystem issues the exact private snapshot capability');
+  assert.equal(f.current().preferences.worldV2.scenes[0].fog, scene.fog);
+  assert.deepEqual(before, snapshot);
+  assert.deepEqual(f.calls.map(item => item[0]), ['commit', 'async'], 'history is never added to trusted synchronous saves');
+  let acknowledged = false;
+  operation.then(() => { acknowledged = true; });
+  await flushValidationTurn(); assert.equal(acknowledged, false);
+  f.pending.shift()(true);
+  const result = await operation;
+  const committed = f.current().preferences.worldV2.scenes[0].sceneEvents.at(-1);
+  result.operations[0].payload.sceneEvents.at(-1).featureIds.push('outside result');
+  assert.deepEqual(committed.featureIds, ['wall']);
+  assert.equal(Object.hasOwn(result, 'state'), false, 'private applied.state cannot escape the operation API');
+});
 
 test('untrusted operations commit in one turn and wait for the full async save acknowledgement', async () => {
   const f = fixture(), actor = f.api.world.listActors()[0];

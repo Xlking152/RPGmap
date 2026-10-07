@@ -5,6 +5,9 @@ export { RULESET_API_VERSION, prepareRuleset } from './contract.js';
 export { RulesetRegistry } from './registry.js';
 
 export const rulesetRegistry = new RulesetRegistry([infiniteHorrorRuleset]);
+// Internal read-only implementation identity, captured before any extension
+// can replace a registry entry with another Ruleset using the same ID.
+export const registeredInfiniteHorrorRuleset = rulesetRegistry.require(infiniteHorrorRuleset.id);
 
 let activeRulesetId = infiniteHorrorRuleset.id;
 

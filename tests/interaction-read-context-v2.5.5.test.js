@@ -78,7 +78,7 @@ test('mutable legacy ports never reuse stale destruction results without a commi
   assert.notEqual(operations.readContext(), first);
 });
 
-test('status and permission decisions remain fresh when the shared geometric read context is reused', () => {
+test('status and permission decisions remain fresh when the shared geometric read context is reused', async () => {
   const value = fixture();
   let allowed = true;
   const operations = createFeatureOperations({ ...value.ports,
@@ -88,22 +88,136 @@ test('status and permission decisions remain fresh when the shared geometric rea
   allowed = false;
   assert.equal(operations.readContext(), prepared);
   assert.equal(operations.actionsForFeature('feature-1', { tokenId: 'token' }).find(action => action.id === 'damage').enabled, false);
+  const before = structuredClone(value.state());
+  assert.equal((await operations.damage('feature-1', { tokenId: 'token' })).ok, false);
+  assert.deepEqual(value.state(), before, 'execution resolves current permissions even with a cached geometric context');
+  assert.equal(value.clones(), 0);
 });
 
-test('damage, restoration and patches keep immutable inputs while using one detached command snapshot', async () => {
+test('modern damage, restoration and patches keep immutable inputs without full World snapshots', async () => {
   const value = fixture(), operations = createFeatureOperations(value.ports);
   const original = value.state(), before = structuredClone(original);
-  assert.equal((await operations.damage('feature-1')).ok, true);
+  const damage = await operations.damage('feature-1');
+  assert.equal(damage.ok, true);
+  const committedDamage = value.state().preferences.worldV2.scenes[0].sceneEvents.at(-1);
+  assert.deepEqual(damage.event, committedDamage);
+  assert.notEqual(damage.event, committedDamage);
+  assert.notEqual(damage.event.objectIds, committedDamage.objectIds, 'returned damage cannot expose private committed event leaves');
+  assert.throws(() => damage.event.objectIds.push('outside'), TypeError);
   assert.deepEqual(original, before);
-  assert.equal(value.clones(), 1, 'one detached command input replaces per-Feature copies');
+  assert.equal(value.clones(), 0, 'modern planning must not copy unrelated World or Fog history');
   const damaged = value.state(), damagedBefore = structuredClone(damaged);
-  assert.equal((await operations.restore('feature-1')).ok, true);
+  const restore = await operations.restore('feature-1');
+  assert.equal(restore.ok, true);
+  const committedRestore = value.state().preferences.worldV2.scenes[0].sceneEvents.at(-1);
+  assert.deepEqual(restore.event, committedRestore);
+  assert.notEqual(restore.event, committedRestore);
+  assert.notEqual(restore.event.featureIds, committedRestore.featureIds, 'returned restoration cannot expose private committed event leaves');
+  assert.throws(() => restore.event.featureIds.push('outside'), TypeError);
   assert.deepEqual(damaged, damagedBefore);
-  assert.equal(value.clones(), 2);
+  assert.equal(value.clones(), 0);
   const restored = value.state(), restoredBefore = structuredClone(restored);
-  await operations.patchState('feature-0', { custom: { nested: { value: 'changed' } } });
+  const patched = await operations.patchState('feature-0', { custom: { nested: { value: 'changed' } } });
   assert.deepEqual(restored, restoredBefore);
+  patched.custom.nested.value = 'outside mutation';
   assert.equal(operations.stateForFeature('feature-0').custom.nested.value, 'changed');
+  assert.equal(value.clones(), 0, 'post-commit Feature output is detached without a full public snapshot');
+});
+
+test('modern command history is detached together before an asynchronous authority port observes it', async () => {
+  for (const action of ['damage', 'restore']) {
+    const value = fixture(), before = structuredClone(value.state());
+    let batch, rejectCommit;
+    const operations = createFeatureOperations({ ...value.ports,
+      performOperations(operations) {
+        batch = operations;
+        return new Promise((resolve, reject) => { rejectCommit = reject; });
+      } });
+    const pending = operations[action](action === 'damage' ? 'feature-1' : 'feature-0');
+    const history = batch[0].payload;
+    const authoritative = value.state().preferences.worldV2.scenes[0].sceneEvents;
+    assert.notEqual(history.expectedSceneEvents, authoritative);
+    assert.notEqual(history.expectedSceneEvents[0], authoritative[0]);
+    assert.equal(history.expectedSceneEvents[0], history.sceneEvents[0], 'one copy retains prior-event aliasing within the command');
+    history.expectedSceneEvents[0].objectIds.push('outside-command');
+    history.sceneEvents.at(-1).id = 'outside-new-event';
+    assert.deepEqual(value.state(), before, 'neither history supplied to an external port aliases authority data');
+    rejectCommit(new Error('Injected authority rejection'));
+    assert.equal((await pending).ok, false);
+    assert.deepEqual(value.state(), before);
+    assert.equal(value.clones(), 0);
+  }
+});
+
+test('a queued modern command still rejects changed canonical history before committing', async () => {
+  const value = fixture();
+  let batch, resolveCommit, rejectCommit;
+  const operations = createFeatureOperations({ ...value.ports,
+    performOperations(operations) {
+      batch = operations;
+      return new Promise((resolve, reject) => { resolveCommit = resolve; rejectCommit = reject; });
+    } });
+  const pending = operations.damage('feature-1');
+  const concurrent = structuredClone(value.state().preferences.worldV2.scenes[0].sceneEvents);
+  concurrent.push({ id: 'concurrent', type: 'damage', objectIds: ['feature-2'], clipHits: [] });
+  value.ports.performOperations([{ type: 'scene.content.replace', payload: { sceneId: 'scene', sceneEvents: concurrent } }]);
+  const committed = value.state(), before = structuredClone(committed);
+  try { resolveCommit(value.ports.performOperations(batch)); } catch (error) { rejectCommit(error); }
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /历史已更新/);
+  assert.equal(value.state(), committed);
+  assert.deepEqual(value.state(), before);
+  assert.equal(operations.stateForFeature('feature-1').destroyed, false);
+  assert.equal(operations.stateForFeature('feature-2').destroyed, true);
+  assert.equal(value.clones(), 0);
+});
+
+test('modern door output reads the newly committed revision and keeps custom data detached', async () => {
+  const value = fixture();
+  value.ports.mapPackage.features[1].capabilities.openable = true;
+  value.state().preferences.worldV2.scenes[0].featureStates['feature-1'] = { custom: { nested: { value: 'door' } } };
+  const operations = createFeatureOperations(value.ports), original = value.state(), before = structuredClone(original);
+  operations.readContext();
+  const opened = await operations.open('feature-1');
+  assert.equal(opened.ok, true);
+  assert.equal(opened.state.open, true);
+  opened.state.custom.nested.value = 'outside';
+  assert.equal(operations.stateForFeature('feature-1').custom.nested.value, 'door');
+  assert.deepEqual(original, before);
+  assert.equal(value.clones(), 0);
+});
+
+test('standalone and legacy mutation ports retain detached public command inputs', async () => {
+  const standalone = fixture();
+  const operations = createFeatureOperations({ ...standalone.ports, readState: null, getStateRevision: null });
+  assert.equal((await operations.damage('feature-1')).ok, true);
+  assert.equal((await operations.restore('feature-1')).ok, true);
+  assert.equal(standalone.clones(), 2, 'a standalone authority port has no qualified private input');
+
+  const legacy = fixture(), original = legacy.state(), before = structuredClone(original);
+  let replaced;
+  const legacyOperations = createFeatureOperations({ ...legacy.ports, performOperations: null,
+    readState() { throw new Error('A mutable legacy draft must use the public port'); },
+    replaceState(next) { replaced = next; return next; } });
+  assert.equal((await legacyOperations.damage('feature-1')).ok, true);
+  assert.notEqual(replaced, original);
+  replaced.preferences.worldV2.scenes[0].featureStates['feature-0'].custom.nested.value = 'legacy mutable draft';
+  assert.deepEqual(original, before);
+  assert.equal(legacy.clones(), 1);
+});
+
+test('noncanonical schema and missing committed revision cannot qualify private planning', async () => {
+  for (const override of [{ schemaVersion: 3 }, { revision: null }]) {
+    const value = fixture();
+    const ports = { ...value.ports,
+      readState: () => override.schemaVersion ? { ...value.state(), preferences: { ...value.state().preferences,
+        worldV2: { ...value.state().preferences.worldV2, schemaVersion: override.schemaVersion } } } : value.state(),
+      getStateRevision: () => 'revision' in override ? override.revision : value.revision(),
+    };
+    assert.equal((await createFeatureOperations(ports).damage('feature-1')).ok, true);
+    assert.equal(value.clones(), 1, 'unqualified readers cannot replace the detached public command input');
+  }
 });
 
 test('real Feature visual synchronization replays once and refreshes authoritative Scene history and activation', async () => {

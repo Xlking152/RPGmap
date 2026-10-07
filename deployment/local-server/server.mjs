@@ -60,6 +60,7 @@ import {
   mergeExplorationChunkFog,
   validateSceneOcclusion,
   createExplorationOperationCapture,
+  createServerMovementAdjudicationActorResolver,
 } from './ruleset-authority.mjs';
 import {
   networkUrls as listNetworkUrls,
@@ -436,6 +437,9 @@ if (upgradeRequired) {
 world = await worldWal.replay(world);
 if (world.state?.preferences?.worldV2) world.state = projectWorldOperationState(world.state);
 const assertCanonicalWorldState = createCanonicalWorldValidator();
+const prepareMovementAdjudicationActor = createServerMovementAdjudicationActorResolver({
+  isCanonicalData: assertCanonicalWorldState.isImmutableData,
+});
 if (world.state) assertCanonicalWorldState(world.state);
 const assertWorldSnapshotSize = createWorldSnapshotSizeValidator(assertCanonicalWorldState, { maxStateBytes: MAX_WS_PAYLOAD });
 
@@ -1111,6 +1115,7 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
     && results.every(result => ['token.move', 'token.movePath', 'token.reposition'].includes(result.action));
   const tokenIds = pureMovement ? new Set(results.flatMap(result => result.tokenIds || [result.tokenId]).map(String)) : null;
   const ordinaryStatus = operations.length && operations.every(operation => ['status.apply', 'status.remove'].includes(operation.type));
+  const fogRefresh = operations.length && operations.every(operation => ['scene.fog.reset', 'scene.fog.hide'].includes(operation.type));
   const recipients = [...sessions];
   const originIndex = recipients.findIndex(([, session]) => session.id === originSessionId);
   if (originIndex > 0) recipients.unshift(...recipients.splice(originIndex, 1));
@@ -1120,12 +1125,15 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
     const incrementalProjection = tryIncrementalAudienceProjection(
       session, beforeProjection, afterState, operations, results, beforeState, movementTargets,
     );
-    const afterProjection = incrementalProjection || audienceStateFor(session, afterState, pureMovement || ordinaryStatus ? {
+    const afterProjection = incrementalProjection || audienceStateFor(session, afterState, pureMovement || ordinaryStatus || fogRefresh ? {
       movementCache: { beforeState, previousProjection: beforeProjection,
         tokenIds: tokenIds || new Set() },
       // Status hooks can affect other Tokens or lights. Recheck every target's
       // perception; only private geometry rays and immutable policy inputs
       // with their exact canonical predecessor may be reused.
+      // Reset/hide changes historical memory, so it also needs full fresh
+      // target detection. Stable geometry rays and detached unchanged leaves
+      // can retain their bounded per-recipient cache through that full pass.
       forceFreshDetection: !pureMovement,
     } : {});
     session.audienceProjection = afterProjection;
@@ -1134,7 +1142,8 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
       : [];
     const response = {
       type: documentBatch ? 'document.batch.committed' : 'world.operation.committed', operationId, baseRevision, revision, updatedAt,
-      changes: fogOnly ? createFogDocumentChanges(beforeProjection, afterProjection, { fog })
+      changes: fogOnly ? createFogDocumentChanges(beforeProjection, afterProjection, { fog,
+        isCanonicalData: assertCanonicalWorldState.isImmutableData })
         : createDocumentChanges(beforeProjection, afterProjection, null, { motion, fog,
           collectionChanges: projectionCollectionChanges(beforeProjection, afterProjection) }),
       ...(motion.length ? { motion } : {}),
@@ -2222,6 +2231,7 @@ server.on('upgrade', (req, socket) => {
           now,
           isCanonicalData: assertCanonicalWorldState.isImmutableData,
           trustedOperationHooks: true,
+          prepareMovementAdjudicationActor,
           ruleset: serverRuleset,
           mapMetrics: visionMapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)) || { metersPerUnit: 1 },
           mapPackage: visionMapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)),

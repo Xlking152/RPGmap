@@ -173,7 +173,8 @@ function* validateRuntimeStateSteps(raw, { mapPackage, ruleset } = {}) {
     assertWorldRuleset(rawWorld, ruleset);
     // Projection already performs the complete canonical World normalization.
     next = projectWorldV2ToRuntimeState(next, rawWorld, { mapPackage, ruleset });
-    yield 'canonical-projection';
+    // Finish all projected content checks in this owned phase. There is no
+    // later validation work that needs an additional paint opportunity.
     next.markers = cleanMarkers(next.markers ?? []);
     next.attackAreas = cleanAttackAreas(next.attackAreas ?? []);
     next.sceneEvents = cleanSceneEvents(next.sceneEvents ?? []);
@@ -263,7 +264,7 @@ export function exportRuntimeState(state, options = {}) {
 /** Internal full-validation save path; synchronous public exports stay intact. */
 export async function exportRuntimeStateAsync(state, options = {}, {
   signal,
-  budgetMs = 8,
+  budgetMs = 0,
   yieldTask = () => yieldRuntimeValidationFrame({ signal }),
 } = {}) {
   return stripExportedRuntimeState(await finishWorkAsync(validateRuntimeStateSteps(state, options), {

@@ -17,7 +17,7 @@ import { createVisionBackground } from '../vision/background.js';
 import { mergeExploration, computeFogExplorationAsync } from '../vision/fog.js';
 import { createLocalExplorationQueue } from '../vision/local-exploration.js';
 import { createExplorationOperationCapture } from '../vision/exploration-operations.js';
-import { readRuntimeState } from '../engine/state-access.js';
+import { createRuntimeOperationInputProof, readRuntimeState } from '../engine/state-access.js';
 
 const clone = structuredClone;
 const TRUSTED_SAVE_TYPES = new Set(['token.create', 'token.move', 'token.reposition', 'token.movePath', 'scene.fog.explore']);
@@ -168,8 +168,8 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       api.on?.('app:destroy', () => { invalidateExploration(); background?.dispose(); localExploration.dispose(); });
 
       function reduceOperations(state, operations, { source = 'world.operation', now = new Date().toISOString(), computeFogExploration,
-        prepareOperation, onOperationApplied } = {}) {
-        return applyWorldOperations(state, operations, {
+        prepareOperation, onOperationApplied, privateSceneEvents = false } = {}) {
+        const context = {
           now,
           ruleset: runtimeRuleset,
           source: { role: 'offline', source },
@@ -190,7 +190,9 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
             next.preferences.entitySystem = reduced.state;
             return { state: next, results: reduced.results };
           },
-        });
+        };
+        if (privateSceneEvents) context.runtimeOperationInputProof = createRuntimeOperationInputProof(api, state, context);
+        return applyWorldOperations(state, operations, context);
       }
 
       async function performOperations(operations, {
@@ -248,7 +250,8 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         const explorationCapture = createExplorationOperationCapture({ sourceIds: selectedSource ? [selectedSource] : [],
           ruleset: runtimeRuleset, mapForScene: scene => sameMap(scene, mapPackage) ? mapPackage : null });
         const applied = measure('world.reduce', () => reduceOperations(before, operations, { source, computeFogExploration,
-          prepareOperation: explorationCapture.prepareOperation, onOperationApplied: explorationCapture.onOperationApplied }));
+          prepareOperation: explorationCapture.prepareOperation, onOperationApplied: explorationCapture.onOperationApplied,
+          privateSceneEvents: operations.length === 1 && operations[0].type === 'scene.content.replace' }));
         // Validation must succeed before destructive operations invalidate any
         // previously confirmed paths. Save the cancellation with the new World.
         const invalidating = applied.results.filter(result => ['scene.fog.hide', 'scene.fog.reset',
