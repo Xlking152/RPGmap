@@ -4,7 +4,7 @@ import { computeVisibilityRowsAsync } from './visibility.js';
 import { sceneVisionContext, releaseVisionContexts } from './context.js';
 import { createVisionBackground } from './background.js';
 import { createVisionViewport, visionZoomTransform } from './viewport.js';
-import { createContinuousMaskRenderer } from './mask-renderer.js';
+import { createContinuousMaskRenderer, copyViewportCanvas } from './mask-renderer.js';
 import { readRuntimeState } from '../engine/state-access.js';
 import { classifyVisionChange, tokenVisionLight, visionStatusTargets, visionScene as runtimeScene } from './invalidation.js';
 import {
@@ -474,7 +474,7 @@ export function createVisionFogSystem() {
         }
 
         perception.globalCompositeOperation = 'source-over';
-        perception.drawImage(explorationCanvas, 0, 0, size.x, size.y);
+        copyViewportCanvas(perception, explorationCanvas, size.x, size.y, dpr);
         const preciseRange = Number(source?.preciseGroundRangeMeters ?? source?.preciseRangeMeters ?? source?.rangeMeters) || 0;
         const vagueRange = Number(source?.vagueGroundRangeMeters ?? source?.vagueRangeMeters ?? source?.rangeMeters) || 0;
         // With full ambient precision, the precise pass clears every vague

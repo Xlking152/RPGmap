@@ -7,9 +7,35 @@ import { sceneVisionContext, releaseVisionContexts } from '../src/vision/context
 import { applyWorldOperations, applyWorldOperationsAsync } from '../src/world/operations.js';
 import { createVisionBackground } from '../src/vision/background.js';
 import { createVisionFogSystem } from '../src/vision/system.js';
+import { groundShadowRows } from '../src/vision/ground-shadow.js';
 
 const map = { width: 120, height: 120, metersPerUnit: 1 };
 const wall = { id: 'wall', featureId: 'wall', polygon: [[40, 10], [60, 10], [60, 90], [40, 90]], blockingHeightMeters: 8, passableWhenOpen: true };
+
+test('sparse unexplored rows retain exact rays at shadow tangencies and large coordinates', () => {
+  for (const offset of [0, 1e8]) for (const height of [0, 12]) {
+    const source = { x: offset + 12.5, y: offset + 52.5, elevationMeters: height };
+    const occluders = Object.freeze([
+      normalizeVisionOccluder({ polygon: [[42.5, 12.5], [62.5, 12.5], [62.5, 82.5], [42.5, 82.5]]
+        .map(([x, y]) => [x + offset, y + offset]), blockingHeightMeters: 8 }),
+      normalizeVisionOccluder({ polygon: [[130, 60], [145, 60], [145, 90], [130, 90]]
+        .map(([x, y]) => [x + offset, y + offset]), blockingHeightMeters: 10 }),
+    ]);
+    const base = offset / 5;
+    const candidates = Object.fromEntries(Array.from({ length: 24 }, (_, row) =>
+      [String(base + row), [[base + 1, base + 3], [base + 20, base + 22], [base + 30, base + 34]]]));
+    const result = groundShadowRows(source, 250, occluders, 5, candidates);
+    assert.notEqual(result, null);
+    for (const [row, spans] of Object.entries(candidates)) for (const [start, end] of spans) {
+      for (let column = start; column <= end; column++) {
+        const clear = inspectLineOfSight({ from: source,
+          to: { x: (column + .5) * 5, y: (Number(row) + .5) * 5, elevationMeters: 0 }, occluders }).clear;
+        assert.equal((result[row] || []).some(([a, b]) => column >= a && column <= b), clear,
+          JSON.stringify({ offset, height, row, column }));
+      }
+    }
+  }
+});
 function reference(input) {
   const { source, map, occluders, lights, ignoresOcclusion } = input;
   const rows = (range, precise) => Object.entries(visibleFogRowsForCircle({ x: source.x, y: source.y, radiusMeters: range }, map, {

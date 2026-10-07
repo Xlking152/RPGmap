@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { continuousMaskBounds, createContinuousMaskRenderer } from '../src/vision/mask-renderer.js';
+import { continuousMaskBounds, createContinuousMaskRenderer, copyViewportCanvas } from '../src/vision/mask-renderer.js';
 
 const viewport = { scaleX: 1, project: (x, y) => ({ x: 150.37 + x, y: 100.21 + y }) };
 
@@ -34,6 +34,27 @@ function fakeDocument() {
     canvases.push(canvas); return canvas;
   } };
 }
+
+test('viewport copies retain fractional resampling and preserve the caller path and blend', () => {
+  const document = fakeDocument(), target = document.createElement('canvas').getContext('2d');
+  target.globalCompositeOperation = 'destination-in';
+  for (const [width, height, dpr] of [[400, 300, 1], [400, 300, 1.25], [400, 300, 2], [401, 301, 1.25]]) {
+    target.calls.length = 0;
+    const canvas = { width: Math.ceil(width * dpr), height: Math.ceil(height * dpr) };
+    copyViewportCanvas(target, canvas, width, height, dpr);
+    const copy = target.calls.find(call => call.name === 'drawImage');
+    assert.equal(copy.composite, 'destination-in');
+    if (Number.isInteger(width * dpr) && Number.isInteger(height * dpr)) {
+      assert.deepEqual(target.calls.map(call => call.name), ['save', 'setTransform', 'drawImage', 'restore']);
+      assert.deepEqual(copy.args, [canvas, 0, 0]);
+    } else assert.deepEqual(copy.args, [canvas, 0, 0, width, height]);
+    assert.equal(target.calls.some(call => ['beginPath', 'clip', 'clearRect'].includes(call.name)), false);
+  }
+  target.calls.length = 0;
+  const differentlySized = { width: 401, height: 300 };
+  copyViewportCanvas(target, differentlySized, 400, 300, 1);
+  assert.deepEqual(target.calls[0].args, [differentlySized, 0, 0, 400, 300]);
+});
 
 test('precise and vague masks retain two bounded frames and release their surfaces', () => {
   const document = fakeDocument(), renderer = createContinuousMaskRenderer(document);

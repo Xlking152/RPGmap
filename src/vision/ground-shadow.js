@@ -137,6 +137,10 @@ export function* groundShadowRowsSteps(source, radiusUnits, occluders, cellUnits
     const y = (Number(rowKey) + 0.5) * cellUnits;
     const firstCenter = ranges.length ? (ranges[0][0] + 0.5) * cellUnits : undefined;
     const lastCenter = ranges.length ? (ranges.at(-1)[1] + 0.5) * cellUnits : undefined;
+    // At very large coordinates a single ULP can exceed the tangent tolerance.
+    // Such rows keep the original interval path, including its rounding.
+    const canCull = Number.isFinite(firstCenter) && Number.isFinite(lastCenter)
+      && Math.abs(firstCenter) <= 1e7 && Math.abs(lastCenter) <= 1e7;
     const intervals = [];
     let fullyBlocked = false;
     while (nextShape < shapes.length && shapes[nextShape].minY <= y) active.push(shapes[nextShape++]);
@@ -156,6 +160,10 @@ export function* groundShadowRowsSteps(source, radiusUnits, occluders, cellUnits
       xs.sort(ascendingNumber);
       for (let i = 0; i + 1 < xs.length; i += 2) {
         const left = xs[i], right = xs[i + 1];
+        // Along a sweep only the newly explored columns remain in ranges.
+        // Disjoint shadows cannot remove a cell or contribute a tangent ray;
+        // retain the full tolerance band used by the exact boundary check.
+        if (canCull && (right < firstCenter - 1e-7 || left > lastCenter + 1e-7)) continue;
         intervals.push([left, right]);
         if ((firstCenter ?? (ranges[0][0] + 0.5) * cellUnits) > left + 1e-7
           && (lastCenter ?? (ranges.at(-1)[1] + 0.5) * cellUnits) < right - 1e-7) fullyBlocked = true;

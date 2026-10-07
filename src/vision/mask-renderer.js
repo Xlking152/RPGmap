@@ -1,5 +1,17 @@
 import { facadeMaskPolygons } from './facade-mask.js';
 
+// Full viewport surfaces already have this device-pixel transform. Avoid a
+// scaled image transfer when the backing dimensions are exact; keep the old
+// resampling for fractional backing sizes. save/restore preserves the current
+// clip, blend mode, and caller path.
+export function copyViewportCanvas(context, canvas, width, height, dpr) {
+  if (Number.isInteger(width * dpr) && Number.isInteger(height * dpr)
+    && canvas.width === width * dpr && canvas.height === height * dpr) {
+    context.save(); context.setTransform(1, 0, 0, 1, 0, 0);
+    context.drawImage(canvas, 0, 0); context.restore();
+  } else context.drawImage(canvas, 0, 0, width, height);
+}
+
 function canvasSurface(documentNode) {
   const canvas = documentNode.createElement('canvas');
   return { canvas, context: canvas.getContext('2d') };
@@ -153,7 +165,7 @@ export function createContinuousMaskRenderer(documentNode) {
       circle(light.context, viewport, region.x, region.y, radius); light.context.fill();
       light.context.globalCompositeOperation = 'destination-out';
       for (const rings of region.shadows || []) polygon(light.context, viewport, rings);
-      illumination.context.drawImage(light.canvas, 0, 0, width, height);
+      copyViewportCanvas(illumination.context, light.canvas, width, height, dpr);
     }
     preparedLightingKey = key;
     return illumination.canvas;
@@ -190,7 +202,7 @@ export function createContinuousMaskRenderer(documentNode) {
             const { mode, regions } = geometry.illumination;
             if (mode === 'dark-and-normal') {
               context.globalCompositeOperation = 'destination-out';
-              context.drawImage(lightUnion(regions, false, viewport, width, height, dpr), 0, 0, width, height);
+              copyViewportCanvas(context, lightUnion(regions, false, viewport, width, height, dpr), width, height, dpr);
               // Build the normal-light union separately, then intersect it with
               // the same circle/shadow mask so light cannot reveal behind walls.
               coloredKey = coloredStyle = coloredKind = null;
@@ -204,12 +216,12 @@ export function createContinuousMaskRenderer(documentNode) {
               paintFacades(tint.context, geometry, viewport);
               tint.context.restore();
               tint.context.globalCompositeOperation = 'destination-in';
-              tint.context.drawImage(lightUnion(regions, true, viewport, width, height, dpr), 0, 0, width, height);
+              copyViewportCanvas(tint.context, lightUnion(regions, true, viewport, width, height, dpr), width, height, dpr);
               tint.context.restore();
-              context.globalCompositeOperation = 'source-over'; context.drawImage(tint.canvas, 0, 0, width, height);
+              context.globalCompositeOperation = 'source-over'; copyViewportCanvas(context, tint.canvas, width, height, dpr);
             } else {
               context.globalCompositeOperation = 'destination-in';
-              context.drawImage(lightUnion(regions, mode === 'normal', viewport, width, height, dpr), 0, 0, width, height);
+              copyViewportCanvas(context, lightUnion(regions, mode === 'normal', viewport, width, height, dpr), width, height, dpr);
             }
           }
         }
@@ -222,7 +234,7 @@ export function createContinuousMaskRenderer(documentNode) {
         if (!cacheable || coloredKind !== cacheKind || coloredKey !== key || coloredStyle !== target.fillStyle) {
           size(tint, width, height, dpr, paintBounds);
           clipSurface(tint.context, paintBounds);
-          tint.context.drawImage(mask.canvas, 0, 0, width, height);
+          copyViewportCanvas(tint.context, mask.canvas, width, height, dpr);
           tint.context.globalCompositeOperation = 'source-in';
           tint.context.fillStyle = target.fillStyle;
           if (paintBounds) tint.context.fillRect(paintBounds.x, paintBounds.y, paintBounds.width, paintBounds.height);

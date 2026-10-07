@@ -174,7 +174,13 @@ function partyRows(fog, partyId) {
 }
 
 function addSpan(rows, row, start, end) {
-  rows[String(row)] = mergeSpans([...(rows[String(row)] || []), [start, end]]);
+  const key = String(row), previous = rows[key];
+  // Raster rows are owned by this calculation. A first, already canonical
+  // interval needs neither normalization nor sorting; legacy values keep the
+  // same merge boundary below.
+  if (!previous && Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end >= start) {
+    rows[key] = [[start, end]];
+  } else rows[key] = mergeSpans([...(previous || []), [start, end]]);
 }
 
 function removeSpan(rows, row, start, end) {

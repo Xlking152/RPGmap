@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { normalizeFogState } from '../src/vision/fog.js';
+import { readFile } from 'node:fs/promises';
+import { normalizeFogState, exploreFogVisibleSweep } from '../src/vision/fog.js';
+import { deriveVisionOccluders } from '../src/spatial/kernel.js';
+import { deriveSceneState } from '../src/engine/state.js';
 
 function history() {
   const rows = Object.fromEntries(Array.from({ length: 320 }, (_, row) =>
@@ -97,4 +100,14 @@ test('numeric-row copy optimization preserves the span limit and atomic failure'
   const before = structuredClone(input);
   assert.throws(() => normalizeFogState(input), { code: 'fog_limit' });
   assert.deepEqual(input, before);
+});
+
+test('425 metre Lanzhou sweep retains every v2.5.4 visible cell and JSON order', async () => {
+  const map = JSON.parse(await readFile(new URL('../reference/maps/lanzhou/runtime.json', import.meta.url), 'utf8'));
+  const occluders = deriveVisionOccluders(map, { featureStates: {}, sceneEvents: [], tokens: [] }, deriveSceneState([]));
+  const fog = exploreFogVisibleSweep({}, 'party', { x: 2940, y: 2500, elevationMeters: 0 },
+    { x: 3365, y: 2500, elevationMeters: 0 }, 1000, map, { occluders });
+  // Frozen five-round baseline at released ed7e13b; all 171 path samples.
+  assert.equal(createHash('sha256').update(JSON.stringify(fog)).digest('hex'),
+    '1a149fc9d5199006112531db83cab17e4e65ed4468f7b7ab86449c4ee8430618');
 });
