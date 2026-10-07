@@ -28,7 +28,7 @@ export async function runRuinsBrowserSmoke(evaluate, { beforeRecovery, afterReco
     status:document.querySelector('[data-rpgmap-boot-status]')?.textContent,api:!!document.querySelector('#app')?.rpgMapApp})`)));
   await beforeRecovery?.();
   let recovered;
-  try { recovered = await evaluate(`(${verifyRecoveryAndRestore.toString()})(${JSON.stringify(STORAGE_KEY)},(${captureCommittedVisionRevision.toString()}))`, 60_000); }
+  try { recovered = await evaluate(`(${verifyRecoveryAndRestore.toString()})(${JSON.stringify(STORAGE_KEY)},(${captureCommittedVisionRevision.toString()}),(${matchesCommittedRuinsFeedback.toString()}))`, 60_000); }
   finally { await afterRecovery?.(); }
   return { ...initial, ...recovered, passed: true };
 }
@@ -47,6 +47,11 @@ export async function captureCommittedVisionRevision(api, source, operation) {
     if (!Number.isSafeInteger(revision)) throw new Error(`No authoritative commit observed for ${source}`);
     return { value, revision };
   } finally { off(); }
+}
+
+export function matchesCommittedRuinsFeedback(feedback, revision, started, point = null) {
+  return Boolean(feedback?.rendered && feedback.stateRevision >= revision && feedback.requestedAt >= started
+    && (!point || (Math.abs(feedback.source?.x - point.x) <= .001 && Math.abs(feedback.source?.y - point.y) <= .001)));
 }
 
 async function prepareAndDamage(storageKey, captureRevision) {
@@ -206,7 +211,7 @@ async function prepareAndDamage(storageKey, captureRevision) {
     beforeReload:{diagnostics:api.getSceneRenderDiagnostics(),queue:api.world.getExplorationStatus()}};
 }
 
-async function verifyRecoveryAndRestore(storageKey,captureRevision) {
+async function verifyRecoveryAndRestore(storageKey,captureRevision,matchesFeedback) {
   const api=document.querySelector('#app').rpgMapApp,{original,expected}=JSON.parse(sessionStorage.getItem(storageKey));
   const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const check=(condition,message)=>{if(!condition)throw new Error(message);};
@@ -221,10 +226,10 @@ async function verifyRecoveryAndRestore(storageKey,captureRevision) {
   await api.vision.setSource(original.sourceId);api.selection.replace([original.sourceId],original.sourceId);
   const recoveredToken=api.tokens.get(original.sourceId);
   api.map.setView([api.mapPackage.height-recoveredToken.y,recoveredToken.x],0,{animate:false});
-  const rendered=async(revision=api.getStateRevision(),started=0)=>{
+  const rendered=async(revision=api.getStateRevision(),started=0,point=null)=>{
     const deadline=performance.now()+5000;
     while(performance.now()<deadline){const feedback=api.vision.getFeedbackState();
-      if(feedback?.rendered&&feedback.stateRevision>=revision&&feedback.requestedAt>=started)return feedback;
+      if(matchesFeedback(feedback,revision,started,point))return feedback;
       await wait(8);
     }throw new Error('Restored-scene vision feedback did not finish');
   };
@@ -265,9 +270,18 @@ async function verifyRecoveryAndRestore(storageKey,captureRevision) {
   // measurements return to the fixed SweepEvent observation point so their
   // recorded source and the independent release verifier use the same input.
   const stressSetup=performance.now();
+  const stressPoint={x:3628.528142813593,y:1242.984768981114};
   const sourceCommit=await captureRevision(api,'ruins-smoke:stress-source',()=>api.world.performOperations([{type:'token.upsert',payload:{sceneId,token:{...api.tokens.get(original.sourceId),
-    x:3628.528142813593,y:1242.984768981114}}}],{source:'ruins-smoke:stress-source'}));
-  await rendered(sourceCommit.revision,stressSetup);
+    ...stressPoint}}}],{source:'ruins-smoke:stress-source'}));
+  await rendered(sourceCommit.revision,stressSetup,stressPoint);
+  // The prior movement scenario is complete before fixed-source pressure
+  // begins. Its animation and durable historical path must both finish;
+  // destruction still queues and measures its own exploration normally.
+  const setupDeadline=performance.now()+45000;
+  while(api.world.getExplorationStatus().queued||api.world.getExplorationStatus().running){
+    check(performance.now()<setupDeadline,'Stress source setup exploration did not drain');await wait(20);
+  }
+  await rendered(sourceCommit.revision,stressSetup,stressPoint);
   const stress=[],frameSamples=[],longTasks=[],heapBytesBefore=performance.memory?.usedJSHeapSize??null,stressStartedAt=performance.now();
   const observer=new PerformanceObserver(list=>longTasks.push(...list.getEntries().map(entry=>({startTime:entry.startTime,duration:entry.duration}))));
   observer.observe({type:'longtask',buffered:false});
