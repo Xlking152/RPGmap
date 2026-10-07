@@ -1,6 +1,6 @@
 import { readConnectionState } from "../multiplayer/connection-state.js";
 import L from 'leaflet';
-import { worldToLatLng, latLngToWorld } from './geometry.js';
+import { worldToLatLng } from './geometry.js';
 import { featureBounds } from './feature-selection.js';
 import {
   commitResetSceneEvent,
@@ -17,6 +17,7 @@ import {
   validateRuntimeState,
 } from './runtime-state.js';
 import { createMapPresentation } from '../render/map-presentation.js';
+import { createMapGridRenderer } from '../render/map-grid.js';
 import { createSceneRenderer } from '../render/scene-renderer.js';
 import { applyDocumentChanges, documentChangeSet } from '../documents/changes.js';
 import { registerRuntimeStateReader } from './state-access.js';
@@ -25,10 +26,6 @@ import { occlusionGeometryCacheStats } from '../spatial/kernel.js';
 const MAX_SAVE_FILE_BYTES = 5 * 1024 * 1024;
 
 const clone = structuredClone;
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
 
 function parseSvg(markup) {
   const parser = new DOMParser();
@@ -225,31 +222,7 @@ export function createRpgMapRuntime({
     return 500;
   }
 
-  function renderGrid() {
-    gridLayer.clearLayers();
-    const spacing = gridSpacing();
-    const bounds = map.getBounds();
-    const northWest = latLngToWorld({ lat: bounds.getNorth(), lng: bounds.getWest() }, mapPackage.height);
-    const southEast = latLngToWorld({ lat: bounds.getSouth(), lng: bounds.getEast() }, mapPackage.height);
-    const minX = clamp(Math.min(northWest.x, southEast.x), 0, mapPackage.width);
-    const maxX = clamp(Math.max(northWest.x, southEast.x), 0, mapPackage.width);
-    const minY = clamp(Math.min(northWest.y, southEast.y), 0, mapPackage.height);
-    const maxY = clamp(Math.max(northWest.y, southEast.y), 0, mapPackage.height);
-    const firstX = Math.floor(minX / spacing) * spacing;
-    const firstY = Math.floor(minY / spacing) * spacing;
-    for (let x = firstX; x <= maxX + spacing; x += spacing) {
-      L.polyline([
-        worldToLatLng({ x, y: minY }, mapPackage.height),
-        worldToLatLng({ x, y: maxY }, mapPackage.height),
-      ], { pane: 'gridPane', interactive: false, weight: 0.7, className: 'grid-minor' }).addTo(gridLayer);
-    }
-    for (let y = firstY; y <= maxY + spacing; y += spacing) {
-      L.polyline([
-        worldToLatLng({ x: minX, y }, mapPackage.height),
-        worldToLatLng({ x: maxX, y }, mapPackage.height),
-      ], { pane: 'gridPane', interactive: false, weight: 0.7, className: 'grid-minor' }).addTo(gridLayer);
-    }
-  }
+  const renderGrid = createMapGridRenderer({ map, mapPackage, layer: gridLayer, leaflet: L, getSpacing: gridSpacing });
 
   function renderScene() {
     if (destroyed) return;

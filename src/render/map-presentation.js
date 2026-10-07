@@ -132,13 +132,22 @@ export function createMapPresentation({ map, baseSvg, mapPackage }) {
       .filter(node => !node.classList.contains('scene-destroyed'));
     const occupied = [];
 
+    // Independent labels can be measured before any placement writes. Custom
+    // SVGs with nested labels/obstacles retain the original sequential reads.
+    const canBatch = !visibleLabels.some(label => obstacleNodes.some(obstacle =>
+      obstacle === label || obstacle.contains(label) || label.contains(obstacle))
+      || visibleLabels.some(other => other !== label && (other.contains(label) || label.contains(other))));
+    const obstacleBoxes = canBatch ? obstacleNodes.map(node => ({ node, box: rectBox(node.getBoundingClientRect()) })) : null;
+    const labelBoxes = canBatch ? new Map(visibleLabels.map(node => [node, rectBox(node.getBoundingClientRect())])) : null;
+
     visibleLabels.forEach(node => {
       const ownFeatureId = node.dataset.labelAnchor || node.dataset.labelFor;
-      const obstacles = obstacleNodes
-        .filter(obstacle => obstacle.dataset.featureId !== ownFeatureId)
-        .map(obstacle => rectBox(obstacle.getBoundingClientRect()));
+      const obstacles = obstacleBoxes
+        ? obstacleBoxes.filter(({ node }) => node.dataset.featureId !== ownFeatureId).map(({ box }) => box)
+        : obstacleNodes.filter(obstacle => obstacle.dataset.featureId !== ownFeatureId)
+          .map(obstacle => rectBox(obstacle.getBoundingClientRect()));
       const placement = chooseLabelPlacement({
-        box: rectBox(node.getBoundingClientRect()),
+        box: labelBoxes ? labelBoxes.get(node) : rectBox(node.getBoundingClientRect()),
         candidates: parseCandidates(node.dataset.labelCandidates),
         occupied,
         obstacles,
