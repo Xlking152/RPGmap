@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { prepareMapPackage } from '../src/map-package/contract.js';
 import { sceneVisionContext, releaseVisionContexts } from '../src/vision/context.js';
+import { deriveSceneLightSources } from '../src/spatial/kernel.js';
 
 function frozen(value) {
   if (value && typeof value === 'object') { Object.values(value).forEach(frozen); Object.freeze(value); }
@@ -13,6 +14,60 @@ const wall = () => ({ id: 'wall', polygon: [[10, 0], [20, 0], [20, 100], [10, 10
 const scene = () => ({ id: 'scene', featureStates: {}, sceneEvents: [], occlusionShapes: [], tokens: [] });
 const map = () => ({ id: 'map', version: '1', width: 200, height: 200, metersPerUnit: 1,
   features: [], visionOccluders: [wall()], lights: [] });
+
+test('500 immutable non-light Token moves reuse light preparation and all real light changes match the full kernel', () => {
+  const packageMap = frozen(map());
+  const lamp = frozen({ id: 'lamp', placement: 'map', x: 40, y: 20, elevationMeters: 2,
+    light: { enabled: true, rangeMeters: 100, intensity: 1.5, elevationOffsetMeters: 3 } });
+  let current = frozen({ ...scene(), tokens: [...Array.from({ length: 499 }, (_, index) => ({
+    id: `token-${index}`, placement: 'map', x: index, y: 0, light: { enabled: false },
+  })), lamp] });
+  const stringify = JSON.stringify;
+  let lightPreparations = 0;
+  JSON.stringify = function (value, ...options) {
+    if (Array.isArray(value) && value.some(item => item?.id === 'token-light:lamp')) lightPreparations++;
+    return stringify.call(this, value, ...options);
+  };
+  try {
+    const first = sceneVisionContext(packageMap, current);
+    for (let i = 0; i < 30; i++) {
+      current = frozen({ ...current, tokens: current.tokens.map((token, index) => index === i ? { ...token, x: token.x + 1 } : token) });
+      const value = sceneVisionContext(packageMap, current);
+      assert.equal(value.lights, first.lights); assert.equal(value.lightVersion, first.lightVersion);
+      assert.deepEqual(value.lights, deriveSceneLightSources(packageMap, current));
+    }
+    assert.equal(lightPreparations, 1);
+    for (const patch of [
+      { x: 45 }, { elevationMeters: 7 }, { light: { ...lamp.light, intensity: 2, elevationOffsetMeters: 1 } },
+      { placement: 'feature' }, { light: { ...lamp.light, enabled: false } },
+    ]) {
+      const changed = frozen({ ...current, tokens: current.tokens.map(token => token.id === 'lamp' ? { ...lamp, ...patch } : token) });
+      const value = sceneVisionContext(packageMap, changed);
+      assert.deepEqual(value.lights, deriveSceneLightSources(packageMap, changed));
+      assert.notEqual(value.lightVersion, first.lightVersion);
+    }
+    const restored = sceneVisionContext(packageMap, current);
+    assert.deepEqual(restored.lights, first.lights);
+    releaseVisionContexts(packageMap);
+    assert.equal(sceneVisionContext(packageMap, current).cacheHit, false);
+  } finally { JSON.stringify = stringify; releaseVisionContexts(packageMap); }
+});
+
+test('mutable and accessor light inputs cannot retain an immutable light preparation', () => {
+  const packageMap = map(), current = scene();
+  let range = 20;
+  const light = Object.freeze({ enabled: true, get rangeMeters() { return range; } });
+  current.tokens = Object.freeze([Object.freeze({ id: 'lamp', placement: 'map', x: 10, y: 10, light })]);
+  const first = sceneVisionContext(packageMap, current);
+  range = 40;
+  const changed = sceneVisionContext(packageMap, current);
+  assert.equal(changed.lights[0].rangeMeters, 40); assert.notEqual(changed.lightVersion, first.lightVersion);
+  packageMap.lights.push({ id: 'map-lamp', x: 30, y: 30, rangeMeters: 60 });
+  assert.deepEqual(sceneVisionContext(packageMap, current).lights, deriveSceneLightSources(packageMap, current));
+  packageMap.lights[0].x = 50;
+  assert.deepEqual(sceneVisionContext(packageMap, current).lights, deriveSceneLightSources(packageMap, current));
+  releaseVisionContexts(packageMap);
+});
 
 test('deeply frozen map geometry is serialized once across mutable Scene and token changes', () => {
   const packageMap = frozen(map()), mutable = scene();

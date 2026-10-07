@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata } from '../src/vision/audience.js';
+import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope } from '../src/vision/audience.js';
 import { projectStateForAudience as oldFullProjection } from './fixtures/audience-before-targeted-movement.mjs';
 import { createPreviousProjectionFunctions } from './fixtures/server-incremental-before-preparation.js';
 import { createCanonicalWorldValidator } from '../deployment/local-server/world-schema.mjs';
@@ -16,7 +16,7 @@ const serverFunctions = server.slice(server.indexOf('function lightweightProject
 const currentFactory = new Function('dependencies', `
   const { sessions, committedPatches, audienceStateFor, projectMotionForSession,
     createFogDocumentChanges, createDocumentChanges, sendSocket, rememberResumeCommit,
-    describeVisionForToken, describeServerVision, structuredClone, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata,
+    describeVisionForToken, describeServerVision, structuredClone, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope,
     visionMapForScene, findUser, assertCanonicalWorldState } = dependencies;
   ${serverFunctions}
   return { tryIncrementalAudienceProjection, broadcastOperationCommit };
@@ -122,7 +122,7 @@ function harness(state, contexts = [state.context], previous = false) {
   const calls = [], responses = [], sessions = new Map();
   const users = new Map(contexts.map(context => [context.userId, context.user]));
   const dependencies = { sessions, committedPatches: new WeakMap(), structuredClone,
-    createDocumentChanges, createFogDocumentChanges, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata,
+    createDocumentChanges, createFogDocumentChanges, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope,
     describeServerVision: ruleset.vision.describe,
     assertCanonicalWorldState: state.validate, visionMapForScene: () => map, findUser: id => users.get(id),
     describeVisionForToken: () => { throw new Error('Fog cannot request movement vision'); },

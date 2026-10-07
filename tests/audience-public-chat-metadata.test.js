@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { projectStateForAudience, advancePublicChatProjectionMetadata, advanceFogProjectionMetadata,
+import { projectStateForAudience, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, advanceFogProjectionMetadata,
   projectionCollectionChanges } from '../src/vision/audience.js';
 import { projectStateForAudience as oldFullProjection } from './fixtures/audience-before-targeted-movement.mjs';
 import { createCanonicalWorldValidator } from '../deployment/local-server/world-schema.mjs';
@@ -18,7 +18,7 @@ const sceneOf = state => worldOf(state).scenes[0];
 const server = readFileSync(new URL('../deployment/local-server/server.mjs', import.meta.url), 'utf8');
 const serverFunctions = server.slice(server.indexOf('function lightweightProjectionShell('), server.indexOf('function sendAudienceSnapshot('));
 const factory = new Function('dependencies', `
-  const { advancePublicChatProjectionMetadata, advanceFogProjectionMetadata, describeServerVision,
+  const { advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, advanceFogProjectionMetadata, describeServerVision,
     visionMapForScene, findUser, assertCanonicalWorldState } = dependencies;
   ${serverFunctions}
   return tryIncrementalAudienceProjection;
@@ -61,7 +61,7 @@ function append(state, text = 'Public chat') {
 }
 
 function candidate(state, after, context = state.context, results = [{ chatId: 'public-chat' }]) {
-  return factory({ advancePublicChatProjectionMetadata, advanceFogProjectionMetadata,
+  return factory({ advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, advanceFogProjectionMetadata,
     describeServerVision: context.describeVision, visionMapForScene: () => context.mapPackage,
     findUser: () => context.user, assertCanonicalWorldState: state.validate })(context, state.projected, after,
     [{ type: 'chat.append', payload: {} }], results, state.before);
@@ -79,6 +79,86 @@ function metadataDuring(callback) {
   } finally { WeakMap.prototype.set = originalSet; }
   return { value, metadata: entries.find(entry => entry.key === value?.preferences?.audienceVision)?.entry };
 }
+
+function sourceFreeStatusPredecessor(messages = []) {
+  const state = setup({ visionSourceTokenId: null }, messages);
+  const operations = [{ type: 'status.apply', payload: {
+    scope: 'actor', targetId: 'scout', definitionId: 'status-strengthened',
+  } }];
+  const applied = applyWorldOperations(state.before, operations, {
+    now: '2026-10-08T00:00:00.000Z',
+    applyStatus: (value, message) => applyStatusMessage(value, message, { mutate: true, assumeNormalized: true }),
+  });
+  state.validate(applied.state);
+  const projected = factory({ advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, advanceFogProjectionMetadata,
+    describeServerVision: state.context.describeVision, visionMapForScene: () => map,
+    findUser: () => state.context.user, assertCanonicalWorldState: state.validate })(
+    state.context, state.projected, applied.state, operations, applied.results, state.before);
+  assert.ok(projected);
+  assert.deepEqual(projected, oldFullProjection(applied.state, state.context));
+  assert.equal(projected.preferences.audienceVision, state.projected.preferences.audienceVision);
+  return { ...state, before: applied.state, projected };
+}
+
+test('public chat after a real source-free status keeps the owned increment without advancing stale metadata', () => {
+  const state = sourceFreeStatusPredecessor(), applied = append(state);
+  const { value: result, metadata } = metadataDuring(() => candidate(state, applied.state, state.context, applied.results));
+  assert.ok(result); assert.equal(metadata, undefined);
+  assert.equal(result.preferences.audienceVision, state.projected.preferences.audienceVision);
+  const oracle = oldFullProjection(applied.state, state.context);
+  assert.deepEqual(result, oracle);
+  assert.deepEqual(createDocumentChanges(state.projected, result), createDocumentChangesFull(state.projected, oracle));
+  assert.notEqual(worldOf(result).actors[0], worldOf(applied.state).actors[0]);
+  assert.equal(JSON.stringify(result).includes('secret'), false);
+  assert.deepEqual(Object.keys(sceneOf(result).fog.exploredByParty), ['party']);
+
+  const moved = applyWorldOperations(applied.state, [{ type: 'token.move', payload: {
+    sceneId: 'scene', tokenId: 'source', x: 51, y: 50,
+  } }], { now: '2026-10-08T00:00:02.000Z' }).state;
+  state.validate(moved);
+  const { value: fresh, metadata: freshMetadata } = metadataDuring(() => projectStateForAudience(moved, {
+    ...state.context, movementCache: { beforeState: applied.state, previousProjection: result, tokenIds: new Set(['source']) },
+  }));
+  assert.deepEqual(fresh, oldFullProjection(moved, state.context));
+  assert.equal(freshMetadata.canonicalState, moved);
+  assert.notEqual(worldOf(fresh).actors, worldOf(result).actors, 'stale metadata cannot qualify a later movement');
+});
+
+test('source-free stale metadata retains audience, map and ownership guards', () => {
+  const state = sourceFreeStatusPredecessor(), applied = append(state);
+  assert.equal(matchesSourceFreeProjectionScope(state.projected, state.context), true);
+  for (const patch of [
+    { role: 'gm' }, { userId: 'other' }, { user: { ownership: {}, placementGrants: {} } },
+    { user: { ownership: { scout: 'owner' }, disabled: true } }, { visionSourceTokenId: 'source' },
+    { mapPackage: { ...map } }, { mapMetrics: { metersPerUnit: 2 } }, { trustedProjection: false },
+  ]) {
+    const context = { ...state.context, ...patch };
+    assert.equal(matchesSourceFreeProjectionScope(state.projected, context), false);
+    if (!Object.hasOwn(patch, 'mapMetrics') && !Object.hasOwn(patch, 'trustedProjection')) {
+      assert.equal(candidate(state, applied.state, context, applied.results) === null, true, JSON.stringify(patch));
+    }
+  }
+  assert.equal(matchesSourceFreeProjectionScope(structuredClone(state.projected), state.context), false);
+  assert.equal(candidate({ ...state, before: structuredClone(state.before) }, applied.state), null);
+  const changed = { ...applied.state, preferences: { ...applied.state.preferences, worldV2: {
+    ...worldOf(applied.state), scenes: [{ ...sceneOf(applied.state), featureStates: { wall: { vision: { occluder: false } } } }],
+  } } }; state.validate(changed);
+  assert.equal(candidate(state, changed), null);
+});
+
+test('source-free stale metadata cannot bypass trimming or protected chat', () => {
+  const trimmed = sourceFreeStatusPredecessor(Array.from({ length: 500 }, (_, index) => ({
+    id: `old-${index}`, type: 'chat', createdAt: '2026-10-08T00:00:00.000Z', text: 'old', data: null,
+  })));
+  assert.equal(candidate(trimmed, append(trimmed).state), null);
+  const state = sourceFreeStatusPredecessor(), after = append(state).state;
+  const protectedAfter = { ...after, preferences: { ...after.preferences, chatSystem: {
+    ...after.preferences.chatSystem, messages: after.preferences.chatSystem.messages.map(message => ({
+      ...message, data: { actorId: 'hostile' },
+    })),
+  } } }; state.validate(protectedAfter);
+  assert.equal(candidate(state, protectedAfter), null);
+});
 
 for (const source of ['source', null]) test(`real canonical public chat advances private metadata and Doc proofs (${source || 'no source'})`, () => {
   const state = setup({ visionSourceTokenId: source }), applied = append(state), after = applied.state;

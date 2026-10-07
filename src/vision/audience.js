@@ -1009,6 +1009,24 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   return state;
 }
 
+// This proves only the private audience scope, never a canonical predecessor.
+// A source-free public append may retain older optimization metadata, but the
+// server must still prove that every non-chat canonical field is unchanged.
+export function matchesSourceFreeProjectionScope(previousProjection, rawContext = {}) {
+  const audience = previousProjection?.preferences?.audienceVision;
+  const metadata = projectionPolicies.get(audience);
+  const context = { ...rawContext, userId: rawContext.userId == null ? '' : String(rawContext.userId) };
+  return context.trustedProjection === true && audience?.source === null
+    && !context.visionSourceTokenId && Boolean(metadata?.canonicalState)
+    && metadata.sourceTokenId === '' && metadata.targetedIndex === null
+    && permissionsCacheable(context.user)
+    && projectionAudiences.get(audience) === audienceKey(context)
+    && metadata.mapPackage === context.mapPackage
+    && metadata.metersPerUnit === Math.max(0.000001, Number(context.mapMetrics?.metersPerUnit) || 1)
+    && Array.isArray(audience.partyIds) && audience.partyIds.length === metadata.partyIds.length
+    && audience.partyIds.every((id, index) => id === metadata.partyIds[index]);
+}
+
 // Only a proved public append can carry private perception metadata forward.
 // Chat trimming, protected entity data and any non-chat mutation retain full
 // projection. The new audience key never changes the predecessor's metadata.

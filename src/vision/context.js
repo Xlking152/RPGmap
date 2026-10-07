@@ -41,9 +41,20 @@ export function sceneVisionContext(map, scene = {}) {
   const lightRefs = [scene.tokens, map.lights];
   const immutableLighting = lightRefs.every(reference => immutable(reference));
   if (!immutableLighting || !value.lightRefs || !lightRefs.every((reference, index) => reference === value.lightRefs[index])) {
-    const lights = deriveSceneLightSources(map, scene);
-    const lightKey = JSON.stringify(lights);
-    if (lightKey !== value.lightKey) Object.assign(value, { lightKey, lights: Object.freeze(lights), lightVersion: ++version });
+    // Most moves replace a non-luminous Token. Keep only the exact immutable
+    // light-bearing documents, in their original order; no per-Token temporary
+    // arrays or light normalization are needed when those inputs are unchanged.
+    const lightTokens = immutableLighting ? (Array.isArray(scene.tokens) ? scene.tokens : [])
+      .filter(token => token?.placement === 'map' && token?.light?.enabled === true) : null;
+    const sameLightInputs = lightTokens && value.lightRefs && value.lightRefs[1] === map.lights
+      && value.lightTokens?.length === lightTokens.length
+      && lightTokens.every((token, index) => token === value.lightTokens[index]);
+    if (!sameLightInputs) {
+      const lights = deriveSceneLightSources(map, scene);
+      const lightKey = JSON.stringify(lights);
+      if (lightKey !== value.lightKey) Object.assign(value, { lightKey, lights: Object.freeze(lights), lightVersion: ++version });
+    }
+    value.lightTokens = lightTokens;
     value.lightRefs = immutableLighting ? lightRefs : null;
   }
   return { geometryVersion: value.geometryVersion, occluders: value.occluders,

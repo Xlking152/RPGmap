@@ -53,6 +53,7 @@ import {
   projectStateForAudience,
   advanceFogProjectionMetadata,
   advancePublicChatProjectionMetadata,
+  matchesSourceFreeProjectionScope,
   projectionCollectionChanges,
   serverRuleset,
   sphereGroundRadiusMeters,
@@ -936,13 +937,39 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
     };
     const canonicalScene = canonicalWorldScene(afterState, next.preferences.worldV2.activeSceneId);
     const mapPackage = visionMapForScene(canonicalScene);
-    return advancePublicChatProjectionMetadata(beforeProjection, next, beforeState, afterState, {
+    const projectionContext = {
       role: session.role, userId: session.userId,
       user: session.userId ? findUser(session.userId) : null,
       visionSourceTokenId: session.visionSourceTokenId, describeVision: describeServerVision,
       mapPackage, mapMetrics: { metersPerUnit: mapPackage?.metersPerUnit || 1 },
       trustedProjection: true, isCanonicalData: assertCanonicalWorldState.isImmutableData,
-    });
+    };
+    const advanced = advancePublicChatProjectionMetadata(beforeProjection, next, beforeState, afterState, projectionContext);
+    if (advanced) return advanced;
+    // A prior eligible status/move may leave optimization metadata behind its
+    // correctly masked projection. With no vision source, a pure public append
+    // does not change detection. Keep this already prepared increment only if
+    // every other canonical field is identical; retain the stale metadata so
+    // future movement cannot claim an unproved predecessor relationship.
+    if (!matchesSourceFreeProjectionScope(beforeProjection, projectionContext)
+      || !assertCanonicalWorldState.isImmutableData(beforeState)
+      || !assertCanonicalWorldState.isImmutableData(afterState)) return null;
+    const unchanged = (before, after, omitted = []) => before && after
+      && Object.keys(before).length === Object.keys(after).length
+      && Object.keys(before).every(key => Object.hasOwn(after, key)
+        && (omitted.includes(key) || Object.is(before[key], after[key])));
+    const beforePreferences = beforeState.preferences, afterPreferences = afterState.preferences;
+    const beforeChat = beforePreferences?.chatSystem, afterChat = afterPreferences?.chatSystem;
+    const oldMessages = beforeChat?.messages, messages = afterChat?.messages;
+    if (!unchanged(beforeState, afterState, ['preferences'])
+      || !unchanged(beforePreferences, afterPreferences, ['worldV2', 'entitySystem', 'chatSystem'])
+      || !unchanged(beforePreferences.worldV2, afterPreferences.worldV2, ['updatedAt'])
+      || !unchanged(beforePreferences.entitySystem, afterPreferences.entitySystem)
+      || !unchanged(beforeChat, afterChat, ['messages'])
+      || !Array.isArray(oldMessages) || !Array.isArray(messages)
+      || messages.length !== oldMessages.length + appended.length || messages.length > 500
+      || oldMessages.some((message, index) => message !== messages[index])) return null;
+    return next;
   }
 
   const movementTargets = preparedMovementTargets === undefined
