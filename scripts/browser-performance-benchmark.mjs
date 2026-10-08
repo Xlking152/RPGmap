@@ -9,6 +9,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
 import { browserBenchmarkMovementTarget, browserBenchmarkPhaseOperations } from './browser-benchmark-movement.mjs';
 import { withinMillisecondsBudget } from './performance-budget.mjs';
+import { closeOwnedBrowser, rejectPendingCdp } from './owned-browser-close.mjs';
 
 if (process.platform !== 'win32') throw new Error('Browser performance benchmark requires Windows');
 
@@ -214,6 +215,8 @@ class BrowserSession {
       this.socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error(`${this.name} CDP open failed`)); }, { once: true });
     });
     this.pending = new Map(); this.nextId = 1;
+    this.socket.addEventListener('close', () => rejectPendingCdp(this.pending, `${this.name} CDP WebSocket closed`));
+    this.socket.addEventListener('error', () => rejectPendingCdp(this.pending, `${this.name} CDP WebSocket failed`));
     this.socket.addEventListener('message', event => {
       const message = JSON.parse(String(event.data));
       if (message.id && this.pending.has(message.id)) {
@@ -232,11 +235,13 @@ class BrowserSession {
     await Promise.all([this.send('Runtime.enable'), this.send('Network.enable'), this.send('Log.enable')]);
   }
   send(method, params = {}) {
+    if (!this.socket || !this.pending) return Promise.reject(new Error(`${this.name} CDP transport is unavailable`));
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`${this.name} ${method} timed out`)); }, CDP_WAIT_MS);
       this.pending.set(id, { resolve, reject, timer });
-      this.socket.send(JSON.stringify({ id, method, params }));
+      try { this.socket.send(JSON.stringify({ id, method, params })); }
+      catch (error) { this.pending.delete(id); clearTimeout(timer); reject(error); }
     });
   }
   async evaluate(expression) {
@@ -322,13 +327,14 @@ class BrowserSession {
     await writeFile(path.join(this.outputRoot, `${label}-${this.name.replaceAll(' ', '-').toLowerCase()}.png`), Buffer.from(capture.data, 'base64'));
   }
   async close() {
-    if (this.socket && this.pending) {
-      try { await this.send('Browser.close'); } catch {}
-      for (const pending of this.pending.values()) clearTimeout(pending.timer);
-      this.pending.clear();
+    try {
+      if (this.process) await closeOwnedBrowser({ process: this.process, send: method => this.send(method),
+        pending: this.pending, label: this.name });
+    } finally {
+      this.socket?.close();
+      if (this.process?.exitCode === null && this.process.signalCode === null) this.process.kill('SIGKILL');
+      if (this.profile) await rm(this.profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => {});
     }
-    if (this.process?.exitCode === null) this.process.kill('SIGKILL');
-    await rm(this.profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => {});
   }
 }
 
@@ -388,6 +394,7 @@ await mkdir(outputRoot, { recursive: true });
 let server = null;
 let setupSocket = null;
 const sessions = [];
+let benchmarkFailure = null;
 const buildInfo = await benchmarkBuildInfo(root, packageRoot);
 
 try {
@@ -577,9 +584,15 @@ try {
       throw new Error(`${session.name} browser errors: ${JSON.stringify({ failures: session.failures, exceptions: session.exceptions })}`);
     }
   }
+} catch (error) {
+  benchmarkFailure = error;
+  throw error;
 } finally {
   setupSocket?.close();
-  await Promise.allSettled(sessions.map(session => session.close()));
+  const shutdown = await Promise.allSettled(sessions.map(session => session.close()));
   await stopServer(server);
   await rm(mapDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => {});
+  const failures = shutdown.filter(result => result.status === 'rejected').map(result => result.reason);
+  if (failures.length) throw new AggregateError(benchmarkFailure ? [benchmarkFailure, ...failures] : failures,
+    'Browser benchmark shutdown failed');
 }

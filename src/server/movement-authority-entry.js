@@ -1,7 +1,7 @@
 import { createMovementAuthority } from '../movement/authority.js';
 import { createMinimalReferencePackage } from '../../reference/maps/minimal/package.js';
 import lanzhouMapPackage from '../../reference/maps/lanzhou/runtime.json' with { type: 'json' };
-import { resolveTokenActor } from '../token/actor.js';
+import { normalizeActorDocument } from '../actor/model.js';
 import { resolveStatuses } from '../status/model.js';
 import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
 
@@ -71,7 +71,10 @@ export function prepareCanonicalMovementInputs({ world, scene, token, ruleset, i
   // invalidate replacement, reordering of duplicate IDs and same-ID imports.
   if (!entry || entry.ruleset !== ruleset || entry.actor !== actor || entry.definitions !== definitions
     || entry.actorLink !== token.actorLink || entry.actorDelta !== token.actorDelta || entry.effects !== token.effects) {
-    const resolvedActor = resolveTokenActor({ ...world, activeSceneId: scene.id, scenes: [scene] }, token.id, { ruleset }).actor;
+    // The guarded linked Token already selected this exact first-match Actor.
+    // Run the same complete normalization without building the resolver's
+    // discarded Token/baseActor copies. Status and returned copies stay fresh.
+    const resolvedActor = normalizeActorDocument(actor, { ruleset });
     const status = resolveStatuses({ schemaVersion: 4, actors: [resolvedActor], tokens: [token], statusDefinitions: definitions },
       { actorId: token.actorId, tokenId: token.id, ruleset });
     entry = { ruleset, actor, definitions, actorLink: token.actorLink, actorDelta: token.actorDelta, effects: token.effects,

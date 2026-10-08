@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureVisionSourceProof, assertVisionSourceProofUnchanged } from './vision-source-proof.mjs';
+import { closeOwnedBrowser, rejectPendingCdp } from './owned-browser-close.mjs';
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sourceProof = await captureVisionSourceProof(sourceRoot);
@@ -40,6 +41,8 @@ try {
   await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
   let nextId = 0;
   const pending = new Map();
+  socket.addEventListener('close', () => rejectPendingCdp(pending, 'Chrome CDP WebSocket closed'));
+  socket.addEventListener('error', () => rejectPendingCdp(pending, 'Chrome CDP WebSocket failed'));
   socket.addEventListener('message', event => {
     const message = JSON.parse(String(event.data)), task = pending.get(message.id);
     if (!task) return;
@@ -48,7 +51,9 @@ try {
   });
   function send(method, params = {}) { return new Promise((resolve, reject) => {
     const id = ++nextId, timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)); }, 60_000);
-    pending.set(id, { resolve, reject, timer }); socket.send(JSON.stringify({ id, method, params }));
+    pending.set(id, { resolve, reject, timer });
+    try { socket.send(JSON.stringify({ id, method, params })); }
+    catch (error) { pending.delete(id); clearTimeout(timer); reject(error); }
   }); }
   // Keep each CDP command bounded without placing all software-rendered cases
   // in one long command. Every case still draws both frames and checks every
@@ -122,7 +127,7 @@ try {
   assert.equal(progress.value.cases, 2304, 'Raster oracle must complete all cases');
   assert.equal(progress.value.framesPerCase, 2, 'Raster oracle must draw both consecutive frames');
   assert.equal(progress.value.differingPixels, 0, 'Cropped mask must match full-viewport software raster pixels');
-  await send('Browser.close');
+  await closeOwnedBrowser({ process: browser, send, pending, label: 'Chrome raster oracle' });
 } finally {
   socket?.close();
   if (browser.exitCode === null) browser.kill('SIGKILL');

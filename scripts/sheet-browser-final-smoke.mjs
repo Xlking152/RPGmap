@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { closeOwnedBrowser } from './owned-browser-close.mjs';
 
 if (process.platform !== 'win32') throw new Error('Final sheet browser smoke requires Windows Edge');
 const targetUrl = String(process.argv[2] || '').trim();
@@ -53,6 +54,7 @@ const edge = spawn(edgePath(), [
 ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
 let edgeError = '';
 let browserClosed = false;
+let socket;
 edge.stderr.setEncoding('utf8');
 edge.stderr.on('data', chunk => { edgeError += chunk; });
 
@@ -64,7 +66,7 @@ try {
     return pages.find(item => item.type === 'page' && item.webSocketDebuggerUrl);
   }, 'Edge CDP endpoint', deadline);
 
-  const socket = new WebSocket(page.webSocketDebuggerUrl);
+  socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Edge CDP WebSocket open timed out')), 5_000);
     socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
@@ -106,7 +108,8 @@ try {
     const id = nextId++;
     const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Edge CDP command timed out: ${method}`)); }, 7_500);
     pending.set(id, { resolve, reject, timer });
-    socket.send(JSON.stringify({ id, method, params }));
+    try { socket.send(JSON.stringify({ id, method, params })); }
+    catch (error) { pending.delete(id); clearTimeout(timer); reject(error); }
   });
   const evaluate = async expression => {
     const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
@@ -314,11 +317,12 @@ try {
     resize: { before: resizeBefore, requested: requestedSize, captured: resizeCaptured, rerender: resizeAfterRender, reopened: resizeReopened },
     playEdit,
   }));
-  await send('Browser.close');
+  await closeOwnedBrowser({ process: edge, send, pending, label: 'Final sheet browser smoke' });
   browserClosed = true;
 } catch (error) {
   throw new Error(`${error.message}${edgeError ? `\nEdge stderr:\n${edgeError.slice(-4000)}` : ''}`);
 } finally {
+  socket?.close();
   if (!browserClosed && edge.exitCode === null) edge.kill('SIGKILL');
   if (edge.exitCode === null) {
     await new Promise(resolve => {

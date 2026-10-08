@@ -11,6 +11,7 @@ import { captureVisionSourceProof, assertVisionSourceProofUnchanged } from './vi
 import { normalizeVisionOccluder } from '../src/spatial/kernel.js';
 import { projectVisionOcclusion } from '../src/vision/ground-shadow.js';
 import { projectVisionOcclusion as legacyProjection } from '../tests/fixtures/ground-shadow-before-row-optimization.js';
+import { closeOwnedBrowser, rejectPendingCdp } from './owned-browser-close.mjs';
 
 const sourceRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const sourceProof=await captureVisionSourceProof(sourceRoot);
@@ -66,10 +67,13 @@ try {
   assert(page,'Chrome CDP did not start');socket=new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve,reject)=>{socket.addEventListener('open',resolve,{once:true});socket.addEventListener('error',reject,{once:true});});
   let nextId=0;const pending=new Map();
+  socket.addEventListener('close',()=>rejectPendingCdp(pending,'Chrome CDP WebSocket closed'));
+  socket.addEventListener('error',()=>rejectPendingCdp(pending,'Chrome CDP WebSocket failed'));
   socket.addEventListener('message',event=>{const message=JSON.parse(String(event.data)),task=pending.get(message.id);if(!task)return;
     pending.delete(message.id);clearTimeout(task.timer);if(message.error)task.reject(new Error(message.error.message));else task.resolve(message.result);});
   const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++nextId,timer=setTimeout(()=>{pending.delete(id);reject(new Error(method+' timed out'));},60_000);
-    pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));});
+    pending.set(id,{resolve,reject,timer});try{socket.send(JSON.stringify({id,method,params}));}
+    catch(error){pending.delete(id);clearTimeout(timer);reject(error);}});
   const initial=await send('Runtime.evaluate',{returnByValue:true,expression:`
     globalThis.rpgmapFacadeRaster=(function*(){
       const oldFactory=(()=>{${referenceSource.replaceAll('export ','')};return createContinuousMaskRenderer;})();
@@ -201,7 +205,7 @@ try {
     assert(frame.visibleInteriorPixels>1000&&frame.hiddenInteriorPixels>1000,'Sweep failure regression must inspect both exposed and hidden pixels');
     assert.equal(frame.interiorLeakedPixels,0);assert.equal(frame.missingVisibleInteriorPixels,0);
   }
-  await send('Browser.close');
+  await closeOwnedBrowser({process:browser,send,pending,label:'Chrome facade raster oracle'});
 }finally{
   socket?.close();if(browser.exitCode===null)browser.kill('SIGKILL');
   const absoluteProfile=path.resolve(profile);

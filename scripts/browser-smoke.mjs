@@ -8,6 +8,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { runRuinsBrowserSmoke } from './ruins-browser-smoke.mjs';
 import { createPackagedOfflineServer, openPersistentOfflineRuntime } from './ruins-offline-browser-support.mjs';
 import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
+import { closeOwnedBrowser } from './owned-browser-close.mjs';
+import { cdpCommandEnvelope, proveLiveValidationWorker } from './live-validation-worker-proof.mjs';
 
 if (process.platform !== 'win32') throw new Error('Packaged browser smoke requires Windows');
 const browserName = String(process.env.RPGMAP_SMOKE_BROWSER || 'edge').toLowerCase();
@@ -84,6 +86,7 @@ let edgeError = '';
 edge.stderr.setEncoding('utf8');
 edge.stderr.on('data', chunk => { edgeError += chunk; });
 let browserClosed = false;
+let socket;
 let offlineServer = null;
 
 try {
@@ -94,7 +97,7 @@ try {
     return pages.find(item => item.type === 'page' && item.webSocketDebuggerUrl);
   }, 'Edge CDP endpoint', deadline);
 
-  const socket = new WebSocket(page.webSocketDebuggerUrl);
+  socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Edge CDP WebSocket open timed out')), 5_000);
     socket.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
@@ -149,14 +152,15 @@ try {
       resolveTraceCompletion = null;
     }
   });
-  const send = (method, params = {}, commandTimeoutMs = 5000) => new Promise((resolve, reject) => {
+  const send = (method, params = {}, commandTimeoutMs = 5000, sessionId) => new Promise((resolve, reject) => {
     const id = nextId++;
     const timeout = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`Edge CDP command timed out: ${method}`));
     }, commandTimeoutMs);
     pending.set(id, { resolve, reject, timeout });
-    socket.send(JSON.stringify({ id, method, params }));
+    try { socket.send(JSON.stringify(cdpCommandEnvelope(id, method, params, sessionId))); }
+    catch (error) { pending.delete(id); clearTimeout(timeout); reject(error); }
   });
   const evaluate = async (expression, commandTimeoutMs) => {
     const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, commandTimeoutMs);
@@ -703,15 +707,15 @@ try {
       },
     } : {});
     ruinsAudit.storageMode = 'persistent-offline';
-    const { targetInfos } = await send('Target.getTargets');
-    const validationWorkers = targetInfos.filter(target => target.type === 'worker'
-      && /\/assets\/world-validation-worker-[^/]+\.js$/.test(target.url));
-    if (validationWorkers.length !== 1) {
-      throw new Error('Packaged full-save validation must retain one live Module Worker: ' + JSON.stringify(
-        targetInfos.filter(target => target.type === 'worker').map(target => target.url)));
+    try {
+      ruinsAudit.validationWorker = await proveLiveValidationWorker(send);
+    } catch (error) {
+      const stress = ruinsAudit.stress;
+      const completedRuinsStress = { rounds: stress.rounds,
+        frames: { count: stress.frames.count, averageFPS: stress.frames.averageFPS, p95Ms: stress.frames.p95Ms },
+        maxLongTaskMs: stress.maxLongTaskMs, damageP95Ms: stress.damageP95Ms, restoreP95Ms: stress.restoreP95Ms };
+      throw new Error(`${error.message}; completedRuinsStress=${JSON.stringify(completedRuinsStress)}`, { cause: error });
     }
-    ruinsAudit.validationWorker = { started: true, liveCount: validationWorkers.length,
-      asset: new URL(validationWorkers[0].url).pathname };
   }
   const assetAudit = await evaluate(`(async () => {
     const response = await fetch('./.vite/manifest.json', { cache: 'no-store' });
@@ -810,11 +814,12 @@ try {
     diagnosticProfiling:Boolean(process.env.RPGMAP_SMOKE_CPU_PROFILE||process.env.RPGMAP_SMOKE_FEEDBACK_CPU_PROFILE||process.env.RPGMAP_SMOKE_RUINS_CPU_PROFILE),
     worldManager: mode === 'bootstrap', map: 'northern-song-lanzhou-1104', assets: assetAudit, fog: fogAudit,
     movement: movementAudit, occlusion: occlusionAudit, ruins: ruinsAudit, layout: layoutAudit, ...runtime }));
-  await send('Browser.close');
+  await closeOwnedBrowser({ process: edge, send, pending, label: `${browserName} browser smoke` });
   browserClosed = true;
 } catch (error) {
   throw new Error(`${error.message}${edgeError ? `\nEdge stderr:\n${edgeError.slice(-4000)}` : ''}`);
 } finally {
+  socket?.close();
   await offlineServer?.close();
   if (!browserClosed && edge.exitCode === null) edge.kill('SIGKILL');
   if (edge.exitCode === null) {
