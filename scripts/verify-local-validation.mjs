@@ -363,6 +363,9 @@ function ruinsSmoke(value) {
     && ['worldIdRetained', 'sceneEventsRetained', 'attackAreasRetained', 'anchorRetained'].every(key => value.reload?.[key] === true)
     && value.restore?.singleObjectOnly === true && value.restore.independentCraterRetained === true
     && value.restore.actions?.length === 2, 'Ruins persistence/single-object restoration proof missing');
+  requireCondition(value.validationWorker?.started === true && value.validationWorker.liveCount === 1
+    && /^\/assets\/world-validation-worker-[A-Za-z0-9_-]+\.js$/.test(value.validationWorker.asset || ''),
+  'Ruins full-save Module Worker startup/reuse proof missing');
   equal(value.restore.actions.map(action => action.featureId), [value.whole.featureId, value.partial.featureId],
     'Ruins restoration targets differ');
   for (const operation of value.restore.actions) requireCondition(finite(operation.commitMs) && operation.commitMs >= 0

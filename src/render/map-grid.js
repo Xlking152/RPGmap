@@ -1,5 +1,26 @@
 import { worldToLatLng, latLngToWorld } from '../engine/geometry.js';
 
+export function createMapViewportScheduler({ map, presentation, renderGrid, view = globalThis }) {
+  let frame = null, closed = false;
+  function schedule() {
+    if (closed || frame !== null) return;
+    frame = view.requestAnimationFrame(() => {
+      frame = null;
+      if (closed) return;
+      presentation.refresh();
+      renderGrid();
+    });
+  }
+  map.on('moveend zoomend resize', schedule);
+  return { schedule, dispose() {
+    if (closed) return;
+    closed = true;
+    map.off('moveend zoomend resize', schedule);
+    if (frame !== null) view.cancelAnimationFrame(frame);
+    frame = null;
+  } };
+}
+
 // Grid lines depend on the viewport and spacing, not World/Fog revisions.
 export function createMapGridRenderer({ map, mapPackage, layer, leaflet, getSpacing }) {
   let lastViewport = null;

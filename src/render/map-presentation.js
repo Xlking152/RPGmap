@@ -1,4 +1,6 @@
 const TIER_ORDER = Object.freeze({ overview: 0, mid: 1, detail: 2 });
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const TEXT_FLOW_NAMES = new Set(['text', 'tspan', 'textPath']);
 
 export function zoomTierForScale(pixelsPerWorldUnit) {
   if (!Number.isFinite(pixelsPerWorldUnit) || pixelsPerWorldUnit <= 0.24) return 'overview';
@@ -95,6 +97,14 @@ function rectBox(rect) {
   };
 }
 
+function independentSvgLabel(node, baseSvg) {
+  if (node.namespaceURI !== SVG_NAMESPACE || (node.localName !== 'text' && node.localName !== 'g')) return false;
+  for (let ancestor = node.parentElement; ancestor && ancestor !== baseSvg; ancestor = ancestor.parentElement) {
+    if (ancestor.namespaceURI !== SVG_NAMESPACE || TEXT_FLOW_NAMES.has(ancestor.localName)) return false;
+  }
+  return true;
+}
+
 export function createMapPresentation({ map, baseSvg, mapPackage }) {
   if (!map || !baseSvg || !mapPackage) throw new Error('地图呈现控制器缺少必要参数');
   let frame = null;
@@ -127,14 +137,17 @@ export function createMapPresentation({ map, baseSvg, mapPackage }) {
       })
       .sort((left, right) => Number(right.dataset.labelPriority || 0) - Number(left.dataset.labelPriority || 0));
 
+    if (!visibleLabels.length) return;
+
     const viewport = rectBox(map.getContainer().getBoundingClientRect());
     const obstacleNodes = [...baseSvg.querySelectorAll('[data-label-obstacle="true"]')]
       .filter(node => !node.classList.contains('scene-destroyed'));
     const occupied = [];
 
     // Independent labels can be measured before any placement writes. Custom
-    // SVGs with nested labels/obstacles retain the original sequential reads.
-    const canBatch = !visibleLabels.some(label => obstacleNodes.some(obstacle =>
+    // Text/HTML flow and nested labels/obstacles need sequential reads because
+    // hiding an earlier label can move later labels without DOM containment.
+    const canBatch = !visibleLabels.some(label => !independentSvgLabel(label, baseSvg) || obstacleNodes.some(obstacle =>
       obstacle === label || obstacle.contains(label) || label.contains(obstacle))
       || visibleLabels.some(other => other !== label && (other.contains(label) || label.contains(other))));
     const obstacleBoxes = canBatch ? obstacleNodes.map(node => ({ node, box: rectBox(node.getBoundingClientRect()) })) : null;

@@ -441,9 +441,18 @@ try {
         api.map.invalidateSize({ animate: false });
         const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
         let maxProjectionError = 0, maxCenterAlpha = 0;
+        const verifyViewportLabels = () => {
+          const svg = document.querySelector('.leaflet-base-pane svg.leaflet-image-layer');
+          const scale = svg.getBoundingClientRect().width / api.mapPackage.width;
+          const expectedTier = scale <= 0.24 ? 'overview' : scale <= 0.52 ? 'mid' : 'detail';
+          if (svg.dataset.zoomTier !== expectedTier) throw new Error('Viewport label tier did not follow zoom/resize: ' + JSON.stringify({
+            zoom: api.map.getZoom(), actual: svg.dataset.zoomTier, expected: expectedTier }));
+          if (!document.querySelector('.leaflet-grid-pane path.grid-minor')) throw new Error('Viewport grid is missing');
+        };
         for (let zoom = -4; zoom <= 5; zoom += 0.25) {
           api.map.setView([api.mapPackage.height - source.y, source.x], zoom, { animate: false });
           await frame(); await frame(); api.vision.render(); await frame();
+          verifyViewportLabels();
           const canvas = document.querySelector('.rpgmap-vision-fog-perception');
           const point = api.map.latLngToContainerPoint([api.mapPackage.height - source.y, source.x]);
           const ratio = canvas.width / api.map.getSize().x;
@@ -456,6 +465,7 @@ try {
           maxProjectionError = Math.max(maxProjectionError, Math.abs(exact.x - point.x), Math.abs(exact.y - point.y));
         }
         api.map.panBy([47, -31], { animate: false }); await frame(); api.vision.render(); await frame();
+        verifyViewportLabels();
         api.map.fitBounds([[api.mapPackage.height - source.y - 200, source.x - 200],
           [api.mapPackage.height - source.y + 200, source.x + 200]], { animate: false });
         await frame(); api.vision.render(); await frame();
@@ -693,6 +703,15 @@ try {
       },
     } : {});
     ruinsAudit.storageMode = 'persistent-offline';
+    const { targetInfos } = await send('Target.getTargets');
+    const validationWorkers = targetInfos.filter(target => target.type === 'worker'
+      && /\/assets\/world-validation-worker-[^/]+\.js$/.test(target.url));
+    if (validationWorkers.length !== 1) {
+      throw new Error('Packaged full-save validation must retain one live Module Worker: ' + JSON.stringify(
+        targetInfos.filter(target => target.type === 'worker').map(target => target.url)));
+    }
+    ruinsAudit.validationWorker = { started: true, liveCount: validationWorkers.length,
+      asset: new URL(validationWorkers[0].url).pathname };
   }
   const assetAudit = await evaluate(`(async () => {
     const response = await fetch('./.vite/manifest.json', { cache: 'no-store' });

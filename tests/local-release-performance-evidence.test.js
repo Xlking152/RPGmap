@@ -139,6 +139,7 @@ function ruinsFixture() {
     zoom: [-2, 0.25, 2, 0].map(zoom => ({ zoom, centerAlpha: 0 })),
     beforeReload: { diagnostics: ruinsRenderer(), queue: { queued: 0, running: false } },
     storageMode: 'persistent-offline',
+    validationWorker: { started: true, liveCount: 1, asset: '/assets/world-validation-worker-fixture.js' },
     reload: { worldIdRetained: true, sceneEventsRetained: true, attackAreasRetained: true, anchorRetained: true },
     restore: { singleObjectOnly: true, independentCraterRetained: true,
       actions: ['whole', 'partial'].map((featureId, index) => ({ featureId, commitMs: 10, feedbackMs: 30, stateRevision: index + 8 })) },
@@ -633,6 +634,10 @@ test('v2.5.5 ruins gate requires saved damage, isolated restoration and drained 
   const candidate = await fixture(t, false, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json'].ruins);
   for (const [change, message] of [
     [report => { report.storageMode = 'memory-overlay'; }, /persistence/],
+    [report => { delete report.validationWorker; }, /Module Worker/],
+    [report => { report.validationWorker.started = false; }, /Module Worker/],
+    [report => { report.validationWorker.liveCount = 2; }, /Module Worker/],
+    [report => { report.validationWorker.asset = '/assets/visibility-worker-fixture.js'; }, /Module Worker/],
     [report => { report.reload.worldIdRetained = false; }, /persistence/],
     [report => { report.reload.sceneEventsRetained = false; }, /persistence/],
     [report => { report.restore.singleObjectOnly = false; }, /persistence/],

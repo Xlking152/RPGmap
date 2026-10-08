@@ -119,21 +119,33 @@ export function createInitialRuntimeState(mapPackage, { ruleset } = {}) {
   };
 }
 
-function* validateRuntimeStateSteps(raw, { mapPackage, ruleset } = {}) {
+// Internal save preparation preserves every raw-input read and rejection before
+// transferring an already owned canonical snapshot to another execution realm.
+export function prepareRuntimeStateValidationInput(raw, { mapPackage } = {}) {
   let source = object(raw, 'state');
   const metadata = mapMetadata(mapPackage);
   const hasCanonicalWorld = Boolean(source.preferences?.[WORLD_STATE_KEY]);
+  let hasLegacy = false;
   if (hasCanonicalWorld) {
     assertPersistedWorldV2(source.preferences[WORLD_STATE_KEY], {
       acceptedSchemaVersions: [2, 3, WORLD_SCHEMA_VERSION],
     });
     if (!isPlainObject(source)) throw new TypeError('Feature State migration requires a state object');
-    const hasLegacy = isPlainObject(source.preferences)
+    hasLegacy = isPlainObject(source.preferences)
       && (Object.hasOwn(source.preferences, FEATURE_STATE_KEY)
         || Object.hasOwn(source.preferences, LEGACY_FEATURE_INTERACTION_STATE_KEY));
+    source = clone(source);
+  }
+  return { source, metadata, hasCanonicalWorld, hasLegacy };
+}
+
+function* validatePreparedRuntimeStateSteps(prepared, { mapPackage, ruleset } = {}) {
+  let { source } = prepared;
+  const { metadata, hasCanonicalWorld, hasLegacy } = prepared;
+  if (hasCanonicalWorld) {
     // Each migration still validates and applies its complete compatibility
     // rules. They can share this one exclusively owned snapshot.
-    source = migrateDetachedWorldSchema4State(migrateDetachedLegacySceneFeatureStates(clone(source), { hasLegacy }).state, {
+    source = migrateDetachedWorldSchema4State(migrateDetachedLegacySceneFeatureStates(source, { hasLegacy }).state, {
       statusDefinitions: ruleset?.statuses?.definitions,
     }).state;
     // The complete authority input is detached before asynchronous execution
@@ -181,6 +193,11 @@ function* validateRuntimeStateSteps(raw, { mapPackage, ruleset } = {}) {
     delete next.characters;
   }
   return next;
+}
+
+function* validateRuntimeStateSteps(raw, { mapPackage, ruleset } = {}) {
+  const options = { mapPackage, ruleset };
+  return yield* validatePreparedRuntimeStateSteps(prepareRuntimeStateValidationInput(raw, options), options);
 }
 
 export function validateRuntimeState(raw, options = {}) {
@@ -269,6 +286,18 @@ export async function exportRuntimeStateAsync(state, options = {}, {
 } = {}) {
   return stripExportedRuntimeState(await finishWorkAsync(validateRuntimeStateSteps(state, options), {
     signal, budgetMs, yieldTask,
+  }));
+}
+
+// Internal continuations consume the prefix's owned snapshot. They perform all
+// remaining validation; public callers keep the original raw-input boundary.
+export function exportPreparedRuntimeState(prepared, options = {}) {
+  return stripExportedRuntimeState(finishWorkSync(validatePreparedRuntimeStateSteps(prepared, options)));
+}
+
+export async function exportPreparedRuntimeStateAsync(prepared, options = {}, scheduler = {}) {
+  return stripExportedRuntimeState(await finishWorkAsync(validatePreparedRuntimeStateSteps(prepared, options), {
+    budgetMs: 0, ...scheduler,
   }));
 }
 

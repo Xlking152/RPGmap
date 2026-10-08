@@ -42,14 +42,29 @@ export function createContinuousMaskRenderer(documentNode) {
   let currentLightingKey = null, preparedLightingKey = null;
   let coloredKey = null, coloredStyle = null, coloredKind = null;
   const copyClips = new Map();
+  const whiteCopies = { precise: null, vague: null };
+  let coloredCopy = null, coloredRevision = 0;
+  function copyRecord() {
+    return { ...canvasSurface(documentNode), source: null, revision: null, bounds: null };
+  }
+  function releaseCopies() {
+    for (const key of Object.keys(whiteCopies)) {
+      const entry = whiteCopies[key];
+      if (entry) entry.canvas.width = entry.canvas.height = 0;
+      whiteCopies[key] = null;
+    }
+    if (coloredCopy) coloredCopy.canvas.width = coloredCopy.canvas.height = 0;
+    coloredCopy = null;
+  }
   function resetMasks() {
     for (const key of Object.keys(masks)) { masks[key].canvas.width = masks[key].canvas.height = 0; delete masks[key]; }
     for (const key of Object.keys(preparedKeys)) delete preparedKeys[key];
     preparedLightingKey = null;
     coloredKey = coloredStyle = coloredKind = null; copyClips.clear();
+    releaseCopies();
     facadeMasks.clear(); geometryIds = new WeakMap(); nextGeometryId = cachedVertices = cachedVersions = 0;
   }
-  function drawPrepared(target, canvas, bounds, width, height, dpr) {
+  function drawPrepared(target, canvas, bounds, width, height, dpr, copy = null, revision = null) {
     // Canvas rounds its backing dimensions up. Preserve the legacy edge
     // resampling when either logical dimension spans fractional device pixels.
     if (!Number.isInteger(width * dpr) || !Number.isInteger(height * dpr)) {
@@ -57,6 +72,23 @@ export function createContinuousMaskRenderer(documentNode) {
     }
     const left = Math.round(bounds.x * dpr), top = Math.round(bounds.y * dpr);
     const pixelsX = Math.round(bounds.width * dpr), pixelsY = Math.round(bounds.height * dpr);
+    if (copy) {
+      const previous = copy.bounds;
+      if (copy.source !== canvas || copy.revision !== revision || !previous
+        || previous[0] !== left || previous[1] !== top || previous[2] !== pixelsX || previous[3] !== pixelsY) {
+        if (copy.canvas.width !== pixelsX || copy.canvas.height !== pixelsY) {
+          copy.canvas.width = pixelsX; copy.canvas.height = pixelsY;
+        }
+        // Rasterize geometry on the unchanged full viewport. Copy only its
+        // finished integer pixels into this owned surface, without resampling
+        // or blending the source alpha a second time.
+        copy.context.setTransform(1, 0, 0, 1, 0, 0);
+        copy.context.globalCompositeOperation = 'copy';
+        copy.context.drawImage(canvas, -left, -top);
+        copy.source = canvas; copy.revision = revision;
+        copy.bounds = [left, top, pixelsX, pixelsY];
+      }
+    }
     // Round-tripping an integer pixel through x / fractional-DPR and the
     // canvas transform can introduce a subpixel sample (including alpha 1 on
     // a black pixel). Copy aligned frames on the actual backing pixel grid.
@@ -71,8 +103,11 @@ export function createContinuousMaskRenderer(documentNode) {
       }
       // An integer-pixel destination clip permits an unscaled image copy.
       // The retained full surface preserves Canvas's exact path rasterization.
-      target.clip(clip); target.drawImage(canvas, 0, 0);
-    } else target.drawImage(canvas, left, top, pixelsX, pixelsY, left, top, pixelsX, pixelsY);
+      target.clip(clip);
+      if (copy) target.drawImage(copy.canvas, left, top);
+      else target.drawImage(canvas, 0, 0);
+    } else if (copy) target.drawImage(copy.canvas, left, top);
+    else target.drawImage(canvas, left, top, pixelsX, pixelsY, left, top, pixelsX, pixelsY);
     target.restore();
   }
   function size(surface, width, height, dpr, bounds = null) {
@@ -227,8 +262,16 @@ export function createContinuousMaskRenderer(documentNode) {
         }
         mask.context.restore();
         preparedKeys[cacheKind] = key;
+        mask.copyRevision = (mask.copyRevision || 0) + 1;
       }
-      if (target.globalCompositeOperation === 'destination-out') drawPrepared(target, mask.canvas, bounds, width, height, dpr);
+      // A full-viewport region gains nothing from an extra complete copy.
+      const copyEligible = aligned && (kind === 'precise' || kind === 'vague')
+        && (Math.round(bounds.width * dpr) < Math.ceil(width * dpr)
+          || Math.round(bounds.height * dpr) < Math.ceil(height * dpr));
+      if (target.globalCompositeOperation === 'destination-out') {
+        const copy = copyEligible ? (whiteCopies[kind] ||= copyRecord()) : null;
+        drawPrepared(target, mask.canvas, bounds, width, height, dpr, copy, mask.copyRevision);
+      }
       else {
         const cacheable = aligned && typeof target.fillStyle === 'string';
         if (!cacheable || coloredKind !== cacheKind || coloredKey !== key || coloredStyle !== target.fillStyle) {
@@ -242,8 +285,10 @@ export function createContinuousMaskRenderer(documentNode) {
           tint.context.restore();
           coloredKey = cacheable ? key : null; coloredStyle = cacheable ? target.fillStyle : null;
           coloredKind = cacheable ? cacheKind : null;
+          coloredRevision++;
         }
-        drawPrepared(target, tint.canvas, bounds, width, height, dpr);
+        const copy = copyEligible && cacheable ? (coloredCopy ||= copyRecord()) : null;
+        drawPrepared(target, tint.canvas, bounds, width, height, dpr, copy, coloredRevision);
       }
     },
     cacheStats() { return { objects: facadeMasks.size, versions: cachedVersions, vertices: cachedVertices }; },

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createMapGridRenderer } from '../src/render/map-grid.js';
+import { createMapGridRenderer, createMapViewportScheduler } from '../src/render/map-grid.js';
 
 function fixture() {
   const state = { west: 10, east: 40, north: 20, south: 5, spacing: 10, clears: 0, fail: false, lines: [] };
@@ -36,4 +36,24 @@ test('failed grid replacement cannot leave an earlier viewport falsely cached', 
   state.west = 15; state.fail = true; assert.throws(render, /drawing failed/);
   state.west = 10; state.fail = false;
   assert.equal(render(), true); assert.equal(state.lines.length, 8); assert.equal(state.clears, 3);
+});
+
+test('viewport changes update labels and grid once per frame without scene replay; disposal drops pending work', () => {
+  const listeners = new Map(), frames = new Map(), calls = [];
+  let nextId = 0;
+  const map = {
+    on(types, callback) { for (const name of types.split(' ')) listeners.set(name, callback); },
+    off(types, callback) { for (const name of types.split(' ')) { assert.equal(listeners.get(name), callback); listeners.delete(name); } },
+  };
+  const view = { requestAnimationFrame(callback) { const id = ++nextId; frames.set(id, callback); return id; },
+    cancelAnimationFrame(id) { frames.delete(id); } };
+  const scheduler = createMapViewportScheduler({ map, view, presentation: { refresh: () => calls.push('labels') },
+    renderGrid: () => calls.push('grid') });
+  for (const event of ['zoomend', 'moveend', 'resize']) listeners.get(event)();
+  scheduler.schedule(); assert.equal(frames.size, 1); assert.deepEqual(calls, []);
+  const callback = frames.values().next().value; frames.clear(); callback();
+  assert.deepEqual(calls, ['labels', 'grid']);
+  listeners.get('resize')(); assert.equal(frames.size, 1);
+  scheduler.dispose(); assert.equal(frames.size, 0); assert.equal(listeners.size, 0);
+  scheduler.schedule(); scheduler.dispose(); assert.deepEqual(calls, ['labels', 'grid']);
 });

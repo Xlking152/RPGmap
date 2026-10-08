@@ -1,12 +1,12 @@
 import {
   createInitialRuntimeState,
   exportRuntimeState,
-  exportRuntimeStateAsync,
   prepareRuntimeState,
   yieldRuntimeValidationFrame,
 } from '../engine/runtime-state.js';
 import { WORLD_STATE_KEY, createWorldV2FromRuntimeState, projectWorldV2ToRuntimeState } from '../world/model.js';
 import { canonicalWorldStorageKey, legacyMapWorldStorageKey } from '../world/manager.js';
+import { createWorldValidationWork } from './world-validation-work.js';
 
 export function worldStateStorageKey(target) {
   if (typeof target === 'string') return canonicalWorldStorageKey(target);
@@ -47,6 +47,7 @@ export function createWorldStatePersistence({
   stringifyTrustedState = null,
   validationYieldTask = yieldRuntimeValidationFrame,
   validationBudgetMs = 0,
+  validationWorkerFactory = null,
   saveDelayMs = 180,
   onSaved = () => {},
   onError = () => {},
@@ -68,11 +69,13 @@ export function createWorldStatePersistence({
   let validationTail = Promise.resolve();
   let joinableValidation = null;
   const validationJobs = new Set();
+  const validationWork = createWorldValidationWork({ mapPackage, ruleset, workerFactory: validationWorkerFactory });
 
   function invalidateValidation() {
     validationGeneration += 1;
     joinableValidation = null;
     for (const job of validationJobs) job.controller.abort();
+    validationWork.cancel();
   }
   function readLocalExploration(raw) {
     const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -208,7 +211,7 @@ export function createWorldStatePersistence({
       const stillCurrent = () => getState() === captured && currentRevision() === revision;
       try {
         captured = getState(); revision = currentRevision(); capturedReady = true;
-        const exported = await exportRuntimeStateAsync(captured, { mapPackage, ruleset }, {
+        const serialized = await validationWork.serialize(captured, {
           signal, budgetMs: validationBudgetMs, yieldTask: async () => {
             signal.throwIfAborted();
             if (!stillCurrent()) throw new Error('Runtime validation snapshot superseded');
@@ -220,9 +223,6 @@ export function createWorldStatePersistence({
             if (!stillCurrent()) throw new Error('Runtime validation snapshot superseded');
           },
         });
-        if (!available()) return false;
-        if (!stillCurrent()) continue;
-        const serialized = JSON.stringify(exported);
         if (!available()) return false;
         if (!stillCurrent()) continue;
         // Queue changes can occur during validation without changing World
@@ -305,7 +305,7 @@ export function createWorldStatePersistence({
     persistValidatedAsync,
     replace,
     cancel,
-    dispose() { cancel(); disposed = true; },
+    dispose() { cancel(); disposed = true; validationWork.dispose(); },
     suspend() { cancel(); suspended = true; },
     resume() { suspended = false; },
     getLocalExploration() { return structuredClone(localExploration); },

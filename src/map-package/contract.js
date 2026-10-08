@@ -320,6 +320,13 @@ function normalizeFeature(feature, index, destructibleCategories) {
   return Object.freeze({ ...feature, id, category, capabilities });
 }
 
+const preparedMapPackages = new WeakSet();
+
+// Receipt for the plain, frozen object produced here, never a caller's Proxy.
+export function isPreparedMapPackage(value) {
+  return Boolean(value && typeof value === 'object' && preparedMapPackages.has(value));
+}
+
 export function prepareMapPackage(rawPackage, { source = 'unknown' } = {}) {
   if (!rawPackage || typeof rawPackage !== 'object') throw new TypeError('Invalid MapPackage: object expected');
   const id = asNonEmptyString(rawPackage.id ?? rawPackage.mapId, 'id');
@@ -349,7 +356,7 @@ export function prepareMapPackage(rawPackage, { source = 'unknown' } = {}) {
   resolveEffectiveOcclusionShapes({ features, occlusionShapes });
   const ruins = normalizeRuinsAssets(rawPackage.artAssets?.ruins);
 
-  return Object.freeze({
+  const prepared = Object.freeze({
     ...rawPackage,
     id,
     version,
@@ -369,6 +376,8 @@ export function prepareMapPackage(rawPackage, { source = 'unknown' } = {}) {
     svg,
     createSvg: render,
   });
+  preparedMapPackages.add(prepared);
+  return prepared;
 }
 
 export function mapPackageCapabilities(mapPackage) {

@@ -17,7 +17,7 @@ import {
   validateRuntimeState,
 } from './runtime-state.js';
 import { createMapPresentation } from '../render/map-presentation.js';
-import { createMapGridRenderer } from '../render/map-grid.js';
+import { createMapGridRenderer, createMapViewportScheduler } from '../render/map-grid.js';
 import { createSceneRenderer } from '../render/scene-renderer.js';
 import { applyDocumentChanges, documentChangeSet } from '../documents/changes.js';
 import { registerRuntimeStateReader } from './state-access.js';
@@ -109,7 +109,6 @@ export function createRpgMapRuntime({
   let activePanel = 'actors';
   let selectedFeatureId = null;
   let destroyed = false;
-  let gridFrame = null;
   let importPending = false;
   let recoveryBlocked = false;
   let remoteWorldIsolation = null;
@@ -223,16 +222,12 @@ export function createRpgMapRuntime({
   }
 
   const renderGrid = createMapGridRenderer({ map, mapPackage, layer: gridLayer, leaflet: L, getSpacing: gridSpacing });
+  const viewportScheduler = createMapViewportScheduler({ map, presentation: mapPresentation, renderGrid });
 
   function renderScene() {
     if (destroyed) return;
     sceneRenderer.render();
-    mapPresentation.schedule();
-    if (gridFrame) cancelAnimationFrame(gridFrame);
-    gridFrame = requestAnimationFrame(() => {
-      gridFrame = null;
-      renderGrid();
-    });
+    viewportScheduler.schedule();
   }
 
   function setActivePanel(name) {
@@ -573,7 +568,7 @@ export function createRpgMapRuntime({
       persistence.cancel();
       persistNow();
       persistence.dispose();
-      if (gridFrame) cancelAnimationFrame(gridFrame);
+      viewportScheduler.dispose();
       mapPresentation.destroy();
       sceneRenderer.dispose?.();
       map.remove();
