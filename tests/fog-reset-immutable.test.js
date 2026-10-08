@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resetFogParty, resetImmutableFogParty, normalizeFogState } from '../src/vision/fog.js';
+import { resetFogParty, resetImmutableFogParty, createImmutableFogResetScope, normalizeFogState } from '../src/vision/fog.js';
 import { applyWorldOperations, applyWorldOperationsAsync } from '../src/world/operations.js';
 import { createCanonicalWorldValidator } from '../deployment/local-server/world-schema.mjs';
 import { migrateTestStateToWorldV3 } from './helpers/world-v3.js';
+import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
+import { registeredInfiniteHorrorRuleset } from '../src/ruleset/index.js';
 
 const now = '2026-10-08T09:00:00.000Z';
 const fogOf = state => state.preferences.worldV2.scenes[0].fog;
@@ -47,7 +49,7 @@ test('six sequential authority resets do not rebuild any surviving party grid', 
     const operation = { type: 'scene.fog.reset', payload: { sceneId: 'scene-a', partyId: `party-${party}` } };
     const expected = applyWorldOperations(state, [operation], { now });
     const actual = await applyWorldOperationsAsync(state, [operation], {
-      now, trustedOperationHooks: true, isCanonicalData: validate.isImmutableData,
+      now, ruleset: infiniteHorrorRuleset, trustedOperationHooks: true, isCanonicalData: validate.isImmutableData,
     });
     assert.deepEqual(actual, expected);
     for (let remaining = party + 1; remaining < 6; remaining++) {
@@ -58,6 +60,166 @@ test('six sequential authority resets do not rebuild any surviving party grid', 
   }
   assert.deepEqual(fogOf(state).exploredByParty, {});
   assert.equal(Object.keys(fogOf(original).exploredByParty).length, 6);
+});
+
+test('one real six-reset batch shares surviving grids in every intermediate state', async () => {
+  const { state, validate } = fixture(fog()), before = JSON.stringify(state);
+  const original = fogOf(state);
+  const operations = Array.from({ length: 6 }, (_, party) => ({ type: 'scene.fog.reset',
+    payload: { sceneId: 'scene-a', partyId: `party-${party}` } }));
+  const expected = applyWorldOperations(state, operations, { now, ruleset: registeredInfiniteHorrorRuleset });
+  const observations = [];
+  let avoidedPartyRebuilds = 0;
+  const actual = await applyWorldOperationsAsync(state, operations, { now,
+    ruleset: registeredInfiniteHorrorRuleset, trustedOperationHooks: true, isCanonicalData: validate.isImmutableData,
+    prepareOperation({ state }) { avoidedPartyRebuilds += Object.keys(fogOf(state).exploredByParty).length; },
+    onOperationApplied({ state, index }) {
+      const current = fogOf(state);
+      assert.equal(validate.isImmutableData(current), false, 'intermediate Fog has not been authority-validated');
+      assert.equal(Object.isFrozen(current), true);
+      assert.equal(Object.isFrozen(current.exploredByParty), true);
+      for (let party = index + 1; party < 6; party++) {
+        assert.equal(current.exploredByParty[`party-${party}`], original.exploredByParty[`party-${party}`]);
+      }
+      observations.push(index);
+    },
+  });
+  assert.deepEqual(actual, expected);
+  assert.equal(JSON.stringify(actual), JSON.stringify(expected));
+  assert.deepEqual(observations, [0, 1, 2, 3, 4, 5]);
+  validate(actual.state);
+  assert.equal(JSON.stringify(state), before);
+  // All 6+5+4+3+2+1 records that the original normalizer rebuilt are avoided.
+  // This fixture has 24 rows and three spans per row: 2,016 final row/span
+  // Arrays, besides merge/sort temporary Arrays, no longer need rebuilding.
+  const arraysPerRecord = Object.values(original.exploredByParty['party-0'].rows)
+    .reduce((count, spans) => count + 1 + spans.length, 0);
+  assert.equal(avoidedPartyRebuilds, 21);
+  assert.equal(avoidedPartyRebuilds * arraysPerRecord, 2016);
+});
+
+test('derived Fog brands are restricted to their batch and authority receipt', () => {
+  const { state, validate } = fixture(fog()), original = fogOf(state);
+  const scope = createImmutableFogResetScope(validate.isImmutableData);
+  const first = resetImmutableFogParty(original, 'party-0', validate.isImmutableData, scope);
+  assert.equal(Object.isFrozen(first), true);
+  assert.equal(Object.isFrozen(first.exploredByParty), true);
+  const same = resetImmutableFogParty(first, 'party-1', validate.isImmutableData, scope);
+  assert.equal(same.exploredByParty['party-2'], original.exploredByParty['party-2']);
+  for (const [receipt, otherScope] of [
+    [validate.isImmutableData, createImmutableFogResetScope(validate.isImmutableData)],
+    [() => false, scope],
+    [validate.isImmutableData, null],
+  ]) {
+    const result = resetImmutableFogParty(first, 'party-1', receipt, otherScope);
+    assert.deepEqual(result, resetFogParty(first, 'party-1'));
+    assert.notEqual(result.exploredByParty['party-2'], original.exploredByParty['party-2']);
+    assert.equal(Object.isFrozen(result), false);
+  }
+});
+
+test('duplicate records and nested grid aliases keep the old detached alias boundaries', () => {
+  for (const alias of [
+    raw => { raw.exploredByParty['party-1'] = raw.exploredByParty['party-0']; },
+    raw => { raw.exploredByParty['party-1'].rows = raw.exploredByParty['party-0'].rows; },
+    raw => { raw.exploredByParty['party-0'].rows[1] = raw.exploredByParty['party-0'].rows[0]; },
+    raw => { raw.exploredByParty['party-0'].rows[1][0] = raw.exploredByParty['party-0'].rows[0][0]; },
+  ]) {
+    const raw = fog(); alias(raw);
+    const { state, validate } = fixture(raw), input = fogOf(state);
+    const actual = resetImmutableFogParty(input, 'party-5', validate.isImmutableData,
+      createImmutableFogResetScope(validate.isImmutableData));
+    const expected = resetFogParty(input, 'party-5');
+    assert.deepEqual(actual, expected);
+    assert.equal(JSON.stringify(actual), JSON.stringify(expected));
+    assert.notEqual(actual.exploredByParty['party-0'], input.exploredByParty['party-0']);
+    assert.notEqual(actual.exploredByParty['party-0'], actual.exploredByParty['party-1']);
+    assert.notEqual(actual.exploredByParty['party-0'].rows[0], actual.exploredByParty['party-0'].rows[1]);
+  }
+});
+
+test('custom and replaced built-in Rulesets preserve mutable custom hooks', () => {
+  const { state, validate } = fixture(fog()), before = JSON.stringify(state);
+  const operation = { type: 'scene.fog.reset', payload: { sceneId: 'scene-a', partyId: 'party-5' } };
+  for (const ruleset of [null, { id: 'custom', version: '1' },
+    { ...infiniteHorrorRuleset },
+    { ...registeredInfiniteHorrorRuleset, vision: { describe() { return {}; } } },
+  ]) {
+    const context = { now, ruleset, isCanonicalData: validate.isImmutableData,
+      onOperationApplied({ state }) { fogOf(state).exploredByParty['party-0'].rows[0][0][0] = 2; } };
+    const expected = applyWorldOperations(state, [operation], context);
+    const actual = applyWorldOperations(state, [operation], { ...context, trustedOperationHooks: true });
+    assert.deepEqual(actual, expected);
+    assert.equal(fogOf(actual.state).exploredByParty['party-0'].rows[0][0][0], 2);
+  }
+  assert.equal(JSON.stringify(state), before);
+});
+
+test('receipt and Ruleset changes inside a batch invalidate a derived brand', () => {
+  for (const change of [context => { context.isCanonicalData = () => false; },
+    context => { context.ruleset = { ...infiniteHorrorRuleset }; }]) {
+    const { state, validate } = fixture(fog());
+    const context = { now, ruleset: infiniteHorrorRuleset, trustedOperationHooks: true,
+      isCanonicalData: validate.isImmutableData,
+      onOperationApplied({ state, index }) {
+        if (!index) change(context);
+        else fogOf(state).exploredByParty['party-2'].rows[0][0][0] = 2;
+      },
+    };
+    const operations = [0, 1].map(party => ({ type: 'scene.fog.reset', payload: { sceneId: 'scene-a', partyId: `party-${party}` } }));
+    const actual = applyWorldOperations(state, operations, context);
+    assert.equal(fogOf(actual.state).exploredByParty['party-2'].rows[0][0][0], 2);
+    assert.equal(fogOf(state).exploredByParty['party-2'].rows[0][0][0], 1);
+  }
+});
+
+test('reset then hide or explore keeps the complete normalizer and publishes the same Fog', async () => {
+  const { state, validate } = fixture(fog()), before = JSON.stringify(state), original = fogOf(state);
+  const operations = [
+    { type: 'scene.fog.reset', payload: { sceneId: 'scene-a', partyId: 'party-0' } },
+    { type: 'scene.fog.hide', payload: { sceneId: 'scene-a', partyId: 'party-1', x: 12.5, y: 7.5, radiusMeters: 5 } },
+    { type: 'scene.fog.explore', payload: { sceneId: 'scene-a', partyId: 'party-2', x: 22.5, y: 7.5, radiusMeters: 5 } },
+    { type: 'scene.fog.reset', payload: { sceneId: 'scene-a', partyId: 'party-3' } },
+  ];
+  const expected = applyWorldOperations(state, operations, { now, ruleset: infiniteHorrorRuleset });
+  const actual = await applyWorldOperationsAsync(state, operations, { now,
+    ruleset: infiniteHorrorRuleset, trustedOperationHooks: true, isCanonicalData: validate.isImmutableData,
+    onOperationApplied({ state, index }) {
+      const record = fogOf(state).exploredByParty['party-4'];
+      if (!index) assert.equal(record, original.exploredByParty['party-4']);
+      else assert.notEqual(record, original.exploredByParty['party-4']);
+    },
+  });
+  assert.deepEqual(actual, expected);
+  assert.equal(JSON.stringify(actual), JSON.stringify(expected));
+  validate(actual.state);
+  assert.equal(JSON.stringify(state), before);
+});
+
+test('a later failed operation leaves authority unchanged after a shared reset', () => {
+  const { state, validate } = fixture(fog()), before = JSON.stringify(state), original = fogOf(state);
+  let observed = false;
+  assert.throws(() => applyWorldOperations(state, [
+    { type: 'scene.fog.reset', payload: { sceneId: 'scene-a', partyId: 'party-0' } },
+    { type: 'token.move', payload: { sceneId: 'scene-a', tokenId: 'missing', x: 1, y: 1 } },
+  ], { now, ruleset: infiniteHorrorRuleset, trustedOperationHooks: true, isCanonicalData: validate.isImmutableData,
+    onOperationApplied({ state, index }) {
+      if (!index) { observed = true; assert.equal(fogOf(state).exploredByParty['party-1'], original.exploredByParty['party-1']); }
+    },
+  }));
+  assert.equal(observed, true);
+  assert.equal(JSON.stringify(state), before);
+});
+
+test('null or primitive records cannot acquire a normalization brand', () => {
+  for (const record of [null, 1, 'record']) {
+    const input = Object.freeze({ schemaVersion: 1, cellSizeMeters: 5,
+      exploredByParty: Object.freeze({ party: record }) });
+    const receipt = () => true;
+    const actual = resetImmutableFogParty(input, 'other', receipt, createImmutableFogResetScope(receipt));
+    assert.deepEqual(actual, resetFogParty(input, 'other'));
+    assert.equal(Object.isFrozen(actual), false);
+  }
 });
 
 test('accepted Fog does not imply normalized keys or numeric values', () => {

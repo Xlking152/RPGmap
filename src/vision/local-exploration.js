@@ -1,13 +1,14 @@
 import { readConnectionState } from "../multiplayer/connection-state.js";
 import { createVisionBackground } from './background.js';
 import { computeFogExplorationAsync } from './fog.js';
-import { ownedExplorationSnapshot, prepareOwnedExplorationJob } from './owned-exploration-snapshot.js';
+import { computeFogExplorationDeltaAsync } from './exploration-delta.js';
+import { ownedExplorationSnapshot, prepareOwnedExplorationJob, isOrdinaryExplorationJobs } from './owned-exploration-snapshot.js';
 
-export function createLocalExplorationQueue(api, commit) {
+export function createLocalExplorationQueue(api, commit, { getExploredRows } = {}) {
   let state = api.getLocalExploration?.();
   if (!state || state.schemaVersion !== 1 || !Array.isArray(state.jobs)) state = { schemaVersion: 1, jobs: [] };
   const snapshotsEnabled = typeof api.setLocalExplorationSnapshot === 'function';
-  if (snapshotsEnabled) state.jobs = state.jobs.map(prepareOwnedExplorationJob);
+  if (snapshotsEnabled && isOrdinaryExplorationJobs(state.jobs)) state.jobs = state.jobs.map(prepareOwnedExplorationJob);
   let running = false, disposed = false, sequence = 0;
   let controller = null;
   let inFlightJob = null;
@@ -33,19 +34,31 @@ export function createLocalExplorationQueue(api, commit) {
         controller = new AbortController();
         let added;
         try {
-          try { added = background ? await background.run(job.input)
-            : await computeFogExplorationAsync(job.input, {}, { signal: controller.signal }); }
+          // Capture only confirmed rows at work start. This borrowed private
+          // history never becomes part of the durable job or its shared input.
+          const workInput = typeof getExploredRows === 'function'
+            ? { ...job.input, explorationDelta: true,
+              exploredRows: structuredClone(getExploredRows(job.sceneId, job.input.partyId) ?? {}) }
+            : job.input;
+          const compute = () => typeof getExploredRows === 'function'
+            ? computeFogExplorationDeltaAsync(workInput, { signal: controller.signal })
+            : computeFogExplorationAsync(workInput, {}, { signal: controller.signal });
+          try { added = background ? await background.run(workInput)
+            : await compute(); }
           catch (error) {
             if (controller.signal.aborted || disposed || !state.jobs.some(item => item.id === job.id)) continue;
             background?.dispose(); background = null;
-            added = await computeFogExplorationAsync(job.input, {}, { signal: controller.signal });
+            added = await compute();
           }
           if (disposed || controller.signal.aborted || !state.jobs.some(item => item.id === job.id)) continue;
           if (readConnectionState(api)?.connected) break;
           const before = state.jobs;
           state.jobs = before.filter(item => item.id !== job.id);
           saveMetadata();
-          try { await commit(job, added); }
+          try {
+            if (typeof getExploredRows === 'function') await commit(job, added, { explorationDelta: true });
+            else await commit(job, added);
+          }
           catch (error) {
             if (!cancelled.has(job.id) && !state.jobs.some(item => item.id === job.id)) state.jobs.unshift(job);
             saveMetadata();

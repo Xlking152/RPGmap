@@ -273,7 +273,7 @@ export function exploreFogVisibleCircle(rawFog, partyId, circle, map = {}, {
 } = {}) {
   const fog = normalizeFogState(rawFog, map);
   const rows = partyRows(fog, partyId);
-  const visible = visibleFogRowsForCircle(circle, map, { sourceElevationMeters, occluders, allowHostExemption });
+  const visible = visibleFogRowsForCircle(circle, map, { sourceElevationMeters, occluders, allowHostExemption, exploredRows: rows });
   for (const [row, spans] of Object.entries(visible)) rows[row] = mergeSpans([...(rows[row] || []), ...spans]);
   return fog;
 }
@@ -485,29 +485,49 @@ export function resetFogParty(rawFog, partyId) {
 }
 
 const normalizedImmutablePartyRecords = new WeakSet();
+const immutableFogResetScopes = new WeakMap();
+const derivedImmutableResetFogs = new WeakMap();
 
-function normalizedImmutablePartyRecord(record) {
+// A batch owns only this nonce and its authority receipt, never a World or an
+// earlier Fog. Derived middle states may use it only in that same batch.
+export function createImmutableFogResetScope(isCanonicalData) {
+  if (typeof isCanonicalData !== 'function') return null;
+  const scope = Object.freeze({});
+  immutableFogResetScopes.set(scope, isCanonicalData);
+  return scope;
+}
+
+function normalizedImmutablePartyRecord(record, references) {
   if (!record || typeof record !== 'object') return false;
-  if (normalizedImmutablePartyRecords.has(record)) return true;
   // Canonical JSON acceptance proves immutable own data, but does not prove
   // that a Fog grid is normalized. Restrict sharing to the exact ordinary
   // representation; extensions and legacy/coercible grids retain the complete
   // normalizer, including its clone and alias behavior.
   if (Object.getPrototypeOf(record) !== Object.prototype
+    || !Object.isFrozen(record)
     || Object.keys(record).length !== 1 || !Object.hasOwn(record, 'rows')
-    || !record.rows || Object.getPrototypeOf(record.rows) !== Object.prototype) return false;
+    || !record.rows || Object.getPrototypeOf(record.rows) !== Object.prototype
+    || !Object.isFrozen(record.rows)
+    || references.has(record) || references.has(record.rows)) return false;
+  references.add(record); references.add(record.rows);
+  const normalized = normalizedImmutablePartyRecords.has(record);
   for (const rowKey of Object.keys(record.rows)) {
     const row = Number(rowKey), spans = record.rows[rowKey];
     if (!Number.isSafeInteger(row) || row < 0 || String(row) !== rowKey
       || !Array.isArray(spans) || !spans.length || spans.length > MAX_ROW_SPANS
-      || Object.keys(spans).length !== spans.length) return false;
+      || Object.getPrototypeOf(spans) !== Array.prototype || !Object.isFrozen(spans)
+      || Object.keys(spans).length !== spans.length || references.has(spans)) return false;
+    references.add(spans);
     let previousEnd = -2;
     for (let index = 0; index < spans.length; index++) {
       const span = spans[index];
       if (!Array.isArray(span) || span.length !== 2 || Object.keys(span).length !== 2
-        || !Number.isSafeInteger(span[0]) || !Number.isSafeInteger(span[1])
+        || Object.getPrototypeOf(span) !== Array.prototype || !Object.isFrozen(span)
+        || references.has(span)) return false;
+      references.add(span);
+      if (!normalized && (!Number.isSafeInteger(span[0]) || !Number.isSafeInteger(span[1])
         || Object.is(span[0], -0) || Object.is(span[1], -0)
-        || span[0] < 0 || span[1] < span[0] || span[0] <= previousEnd + 1) return false;
+        || span[0] < 0 || span[1] < span[0] || span[0] <= previousEnd + 1)) return false;
       previousEnd = span[1];
     }
   }
@@ -518,21 +538,28 @@ function normalizedImmutablePartyRecord(record) {
 // Internal authority entry: unchanged records may be shared only after the
 // server's accepted immutable-data receipt AND normalization-equivalence proof.
 // The public reset above always returns completely detached mutable data.
-export function resetImmutableFogParty(rawFog, partyId, isCanonicalData) {
-  if (typeof isCanonicalData !== 'function' || isCanonicalData(rawFog) !== true
+export function resetImmutableFogParty(rawFog, partyId, isCanonicalData, scope = null) {
+  const scoped = scope !== null && immutableFogResetScopes.get(scope) === isCanonicalData;
+  const derived = scoped && derivedImmutableResetFogs.get(rawFog) === scope;
+  if (typeof isCanonicalData !== 'function' || !derived && isCanonicalData(rawFog) !== true
     || !rawFog || Object.getPrototypeOf(rawFog) !== Object.prototype
     || !Object.isFrozen(rawFog) || Object.keys(rawFog).length !== 3
     || !Object.hasOwn(rawFog, 'schemaVersion') || !Object.hasOwn(rawFog, 'cellSizeMeters')
     || rawFog.schemaVersion !== FOG_SCHEMA_VERSION || rawFog.cellSizeMeters !== FOG_CELL_SIZE_METERS
     || !Object.hasOwn(rawFog, 'exploredByParty') || !rawFog.exploredByParty
-    || Object.getPrototypeOf(rawFog.exploredByParty) !== Object.prototype) return resetFogParty(rawFog, partyId);
-  for (const id of Object.keys(rawFog.exploredByParty)) {
+    || Object.getPrototypeOf(rawFog.exploredByParty) !== Object.prototype
+    || !Object.isFrozen(rawFog.exploredByParty)) return resetFogParty(rawFog, partyId);
+  const references = derived ? null : new WeakSet();
+  if (!derived) for (const id of Object.keys(rawFog.exploredByParty)) {
     if (!id || id !== id.trim().slice(0, 80) || id === '__proto__'
-      || !normalizedImmutablePartyRecord(rawFog.exploredByParty[id])) return resetFogParty(rawFog, partyId);
+      || !normalizedImmutablePartyRecord(rawFog.exploredByParty[id], references)) return resetFogParty(rawFog, partyId);
   }
   const exploredByParty = { ...rawFog.exploredByParty };
   delete exploredByParty[String(partyId ?? '').trim()];
-  return { ...rawFog, exploredByParty };
+  if (!scoped) return { ...rawFog, exploredByParty };
+  const next = Object.freeze({ ...rawFog, exploredByParty: Object.freeze(exploredByParty) });
+  derivedImmutableResetFogs.set(next, scope);
+  return next;
 }
 
 export function isFogCellExplored(rawFog, partyId, point, { metersPerUnit = 1 } = {}) {

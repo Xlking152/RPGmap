@@ -2,6 +2,16 @@ import { isImmutableVisionData } from './immutable-data.js';
 
 const ownedJobs = new WeakSet(), snapshots = new WeakSet();
 
+export function isOrdinaryExplorationJobs(value) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype
+    || Object.keys(value).length !== value.length || Reflect.ownKeys(value).length !== value.length + 1) return false;
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !Object.hasOwn(descriptor, 'value')) return false;
+  }
+  return true;
+}
+
 // Only the local queue's already detached data reaches this helper. Collect
 // first so unusual containers retain their complete existing clone path.
 function freezeOwnedExplorationData(value) {
@@ -30,8 +40,18 @@ export function ownedExplorationSnapshot(state) {
   // The mutable queue containers never escape to the persistence controller.
   if (state.schemaVersion !== 1 || Object.keys(state).length !== 2
     || !Object.hasOwn(state, 'schemaVersion') || !Object.hasOwn(state, 'jobs')
-    || !Array.isArray(state.jobs) || state.jobs.some(job => !ownedJobs.has(job))) return null;
-  const snapshot = Object.freeze({ ...state, jobs: Object.freeze([...state.jobs]) });
+    || !isOrdinaryExplorationJobs(state.jobs)) return null;
+  const jobs = [];
+  for (let index = 0; index < state.jobs.length; index++) {
+    const job = Object.getOwnPropertyDescriptor(state.jobs, String(index)).value;
+    if (!ownedJobs.has(job)) return null;
+    jobs[index] = job;
+  }
+  Object.freeze(jobs);
+  // Build from the proven values, without running a customizable array
+  // iterator or copying an unproven metadata value. Preserve JSON key order.
+  const snapshot = Object.freeze(Object.keys(state)[0] === 'jobs'
+    ? { jobs, schemaVersion: 1 } : { schemaVersion: 1, jobs });
   if (!isImmutableVisionData(snapshot)) return null;
   snapshots.add(snapshot);
   return snapshot;
@@ -42,7 +62,7 @@ export function prepareOwnedExplorationJob(job) {
   // non-Proxy clone can acquire a sharing receipt; mutable classes and cycles
   // continue through the old setter on every metadata save.
   const owned = structuredClone(job);
-  if (freezeOwnedExplorationData(owned)) ownedJobs.add(owned);
+  if (owned && typeof owned === 'object' && freezeOwnedExplorationData(owned)) ownedJobs.add(owned);
   return owned;
 }
 

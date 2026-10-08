@@ -18,9 +18,41 @@ import { mergeExploration, computeFogExplorationAsync } from '../vision/fog.js';
 import { createLocalExplorationQueue } from '../vision/local-exploration.js';
 import { createExplorationOperationCapture } from '../vision/exploration-operations.js';
 import { createRuntimeOperationInputProof, readRuntimeState } from '../engine/state-access.js';
+import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
+import { registeredInfiniteHorrorRuleset } from '../ruleset/index.js';
 
 const clone = structuredClone;
 const TRUSTED_SAVE_TYPES = new Set(['token.create', 'token.move', 'token.reposition', 'token.movePath', 'scene.fog.explore']);
+const localVisionDescribe = infiniteHorrorRuleset.vision.describe;
+const localActorDerive = infiniteHorrorRuleset.actor.derive;
+
+function reusableLocalVisionDescribe(ruleset) {
+  return (ruleset === infiniteHorrorRuleset || ruleset === registeredInfiniteHorrorRuleset)
+    && ruleset.vision.describe === localVisionDescribe && ruleset.actor.derive === localActorDerive;
+}
+
+function exactDataFields(value, fields) {
+  if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) return null;
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== fields.length || keys.some(key => !fields.includes(key))) return null;
+  const data = Object.create(null);
+  for (const field of fields) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, field);
+    if (!descriptor || !Object.hasOwn(descriptor, 'value')) return null;
+    data[field] = descriptor.value;
+  }
+  return data;
+}
+
+function isEmptyExplorationDelta(added, partyId) {
+  const fog = exactDataFields(added, ['schemaVersion', 'cellSizeMeters', 'exploredByParty']);
+  if (!fog || fog.schemaVersion !== 1 || fog.cellSizeMeters !== 5) return false;
+  const id = String(partyId ?? '').trim().slice(0, 80);
+  if (!id) return false;
+  const parties = exactDataFields(fog.exploredByParty, [id]);
+  const party = parties && exactDataFields(parties[id], ['rows']);
+  return Boolean(party && exactDataFields(party.rows, []));
+}
 
 function currentWorldFromState(state) {
   return state?.preferences?.[WORLD_STATE_KEY] || null;
@@ -142,12 +174,39 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       }
 
       const background = createVisionBackground({ diagnostics: api.diagnostics });
-      const localExploration = createLocalExplorationQueue(api, (job, added) => {
+      const localExploration = createLocalExplorationQueue(api, async (job, added, { explorationDelta = false } = {}) => {
         if (api.isLocalWorldActive?.() === false) throw new Error('联机续传期间保留离线探索任务');
-        return performOperations([
-          { type: 'scene.fog.explore', payload: { ...job.input.payload, sceneId: job.sceneId, partyId: job.input.partyId } },
-        ], { source: 'vision:exploration-commit', addedExploration: added });
-      });
+        const operation = { type: 'scene.fog.explore',
+          payload: { ...job.input.payload, sceneId: job.sceneId, partyId: job.input.partyId } };
+        if (explorationDelta === true && isEmptyExplorationDelta(added, job.input.partyId)) {
+          const current = readRuntimeState(api);
+          // Empty derived rows still require the original Fog input checks.
+          // Custom describers receive a detached snapshot, just as they do in
+          // the reducer, so this read-only preparation cannot mutate authority.
+          prepareFogOperation(reusableLocalVisionDescribe(runtimeRuleset) ? current : clone(current), operation, {
+            ruleset: runtimeRuleset, mapMetrics: mapPackage,
+            mapForScene: scene => sameMap(scene, mapPackage)
+              && String(scene.mapPackage?.version || '') === String(mapPackage.version || mapPackage.mapVersion || '') ? mapPackage : null,
+          });
+          // The queue already removed this job from its private metadata. Save
+          // that progress with full validation even though World is unchanged.
+          let persisted;
+          if (typeof api.persistValidatedAsync === 'function') persisted = await api.persistValidatedAsync();
+          else {
+            if (typeof api.persistNow !== 'function') throw new Error('探索进度无法可靠保存');
+            persisted = api.persistNow();
+          }
+          if (persisted === false) throw new Error('探索进度未能可靠保存，写入已暂停');
+          return { offline: true, unchanged: true };
+        }
+        return performOperations([operation], { source: 'vision:exploration-commit', addedExploration: added });
+      }, { getExploredRows(sceneId, partyId) {
+        const world = currentWorldFromState(readRuntimeState(api));
+        const scene = world?.scenes?.find(item => String(item.id) === String(sceneId));
+        const parties = scene?.fog?.exploredByParty;
+        const id = String(partyId ?? '').trim().slice(0, 80);
+        return parties && Object.hasOwn(parties, id) ? parties[id]?.rows ?? null : null;
+      } });
       const measure = api.diagnostics?.measure
         ? (name, callback) => api.diagnostics.measure(name, callback)
         : (_name, callback) => callback();
@@ -248,7 +307,11 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         const before = readRuntimeState(api);
         const selectedSource = api.vision?.getSource?.();
         const explorationCapture = createExplorationOperationCapture({ sourceIds: selectedSource ? [selectedSource] : [],
-          ruleset: runtimeRuleset, mapForScene: scene => sameMap(scene, mapPackage) ? mapPackage : null });
+          ruleset: runtimeRuleset, mapForScene: scene => sameMap(scene, mapPackage) ? mapPackage : null,
+          // IH's senses do not depend on the lighting/world context. The
+          // prepared source already supplies the accepted normal-light radii;
+          // Fog preparation only needs its x-ray sense, not another full derive.
+          ...(reusableLocalVisionDescribe(runtimeRuleset) ? { describeVision: localVisionDescribe } : {}) });
         const applied = measure('world.reduce', () => reduceOperations(before, operations, { source, computeFogExploration,
           prepareOperation: explorationCapture.prepareOperation, onOperationApplied: explorationCapture.onOperationApplied,
           privateSceneEvents: operations.length === 1 && operations[0].type === 'scene.content.replace' }));

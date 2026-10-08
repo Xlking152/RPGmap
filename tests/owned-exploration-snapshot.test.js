@@ -89,3 +89,55 @@ test('frozen impostors, mutable data, class values, cycles, and Proxy input neve
   assert.throws(() => prepareOwnedExplorationJob({ input: { discarded: () => 1 } }), { name: 'DataCloneError' });
   f.controller.dispose();
 });
+
+test('legacy null and primitive jobs retain queue startup and complete metadata-clone behavior', () => {
+  const originalWorker = globalThis.Worker; globalThis.Worker = undefined;
+  for (const primitive of [null, 3, 'legacy', false]) {
+    assert.equal(prepareOwnedExplorationJob(primitive), primitive);
+    assert.equal(ownedExplorationSnapshot({ schemaVersion: 1, jobs: [primitive] }), null);
+    let saved;
+    const queue = createLocalExplorationQueue({ getLocalExploration: () => ({ schemaVersion: 1, jobs: [primitive] }),
+      setLocalExplorationSnapshot() { assert.fail('invalid old job must not acquire a sharing receipt'); },
+      setLocalExploration(value) { saved = structuredClone(value); }, persistNow: () => true }, async () => {});
+    try {
+      assert.deepEqual(queue.stats(), { queued: 1, running: false });
+      queue.persist();
+      assert.deepEqual(saved, { schemaVersion: 1, jobs: [primitive] });
+    } finally { queue.dispose(); }
+  }
+  globalThis.Worker = originalWorker;
+});
+
+test('legacy sparse jobs and array extensions retain their native clone boundaries', () => {
+  const originalWorker = globalThis.Worker; globalThis.Worker = undefined;
+  const cases = [new Array(1), Object.assign([prepareOwnedExplorationJob({ id: 'old', input: input() })], { extension: { keep: true } })];
+  for (const jobs of cases) {
+    assert.equal(ownedExplorationSnapshot({ schemaVersion: 1, jobs }), null);
+    let saved;
+    const queue = createLocalExplorationQueue({ getLocalExploration: () => ({ schemaVersion: 1, jobs: structuredClone(jobs) }),
+      setLocalExplorationSnapshot() { assert.fail('unusual array must not acquire a sharing receipt'); },
+      setLocalExploration(value) { saved = structuredClone(value); }, persistNow: () => true }, async () => {});
+    try {
+      queue.persist();
+      assert.deepEqual(saved.jobs, jobs);
+      assert.equal(Object.hasOwn(saved.jobs, 0), Object.hasOwn(jobs, 0));
+      assert.deepEqual(saved.jobs.extension, jobs.extension);
+    } finally { queue.dispose(); }
+  }
+  globalThis.Worker = originalWorker;
+});
+
+test('custom iterators and accessor jobs cannot substitute an unowned Proxy into a sharing receipt', () => {
+  const job = prepareOwnedExplorationJob({ id: 'owned', input: input() });
+  const jobs = [job], impostor = Object.freeze(new Proxy({ id: 'impostor' }, {}));
+  jobs[Symbol.iterator] = function* () { yield impostor; };
+  assert.equal(ownedExplorationSnapshot({ schemaVersion: 1, jobs }), null);
+  assert.throws(() => structuredClone({ jobs: [...jobs] }), { name: 'DataCloneError' });
+  const accessor = [job];
+  Object.defineProperty(accessor, 0, { enumerable: true, configurable: true, get: () => impostor });
+  assert.equal(ownedExplorationSnapshot({ schemaVersion: 1, jobs: accessor }), null);
+  const snapshot = ownedExplorationSnapshot({ jobs: [job], schemaVersion: 1 });
+  assert.equal(isOwnedExplorationSnapshot(snapshot), true);
+  assert.deepEqual(Object.keys(snapshot), ['jobs', 'schemaVersion']);
+  assert.deepEqual(structuredClone(snapshot), snapshot);
+});

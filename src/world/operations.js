@@ -25,6 +25,7 @@ import {
   normalizeFogState,
   resetFogParty,
   resetImmutableFogParty,
+  createImmutableFogResetScope,
 } from '../vision/fog.js';
 import { sceneVisionContext } from '../vision/context.js';
 import { normalizeOcclusionShape, normalizeOcclusionShapes } from '../vision/occlusion-model.js';
@@ -142,6 +143,14 @@ const GRANULAR_OPERATION_TYPES = new Set([
 
 const clone = structuredClone;
 const privateSceneVisionDescribe = infiniteHorrorRuleset.vision.describe;
+const immutableFogResetScopeKey = Symbol('immutable Fog reset scope');
+
+function immutableFogResetContext(context) {
+  return context.trustedOperationHooks === true
+    && typeof context.isCanonicalData === 'function'
+    && (context.ruleset === infiniteHorrorRuleset || context.ruleset === registeredInfiniteHorrorRuleset)
+    && context.ruleset.vision?.describe === privateSceneVisionDescribe;
+}
 
 function cloneProjection(value) {
   if (Array.isArray(value)) return value.map(cloneProjection);
@@ -1208,8 +1217,8 @@ function applyCanonicalOperation(state, operation, context = {}) {
 
   if (type.startsWith('scene.fog.')) {
     const { scene, partyId, dirtyBounds, input } = context.preparedFog || prepareFogOperation(state, operation, context);
-    if (type === 'scene.fog.reset') scene.fog = context.trustedOperationHooks === true
-      ? resetImmutableFogParty(scene.fog, partyId, context.isCanonicalData)
+    if (type === 'scene.fog.reset') scene.fog = immutableFogResetContext(context)
+      ? resetImmutableFogParty(scene.fog, partyId, context.isCanonicalData, context[immutableFogResetScopeKey] || null)
       : resetFogParty(scene.fog, partyId);
     else if (type === 'scene.fog.hide') scene.fog = hideFogCircle(scene.fog, partyId, input.payload, input.map);
     else scene.fog = (context.computeFogExploration || computeFogExploration)(input, scene.fog);
@@ -1343,6 +1352,7 @@ function* worldOperationSteps(rawState, rawOperations, context = {}) {
   const state = cloneOperationInput(rawState, operations, context, privateEvents);
   worldFromState(state);
   const results = [];
+  let immutableFogResetScope = null, immutableFogResetReceipt = null, immutableFogResetRuleset = null;
   for (let index = 0; index < operations.length; index += 1) {
     const operation = operations[index];
     const prepared = context.prepareOperation?.({ state, operation, index });
@@ -1365,11 +1375,21 @@ function* worldOperationSteps(rawState, rawOperations, context = {}) {
         const computed = yield { input: preparedFog.input, fog: preparedFog.scene.fog };
         fogContext = { preparedFog, computeFogExploration: () => computed };
       }
-      results.push(applyCanonicalOperation(state, operation, { ...context, ...fogContext, enqueueStatusOperation(value) {
+      const operationContext = { ...context, ...fogContext, enqueueStatusOperation(value) {
         const status = normalizeWorldOperation(value);
         if (!STATUS_TYPES.has(status.type)) fail('Movement may only generate status operations', 'invalid_world_operation');
         generated.push(status);
-      } }));
+      } };
+      if (operation.type === 'scene.fog.reset' && immutableFogResetContext(operationContext)) {
+        if (!immutableFogResetScope || immutableFogResetReceipt !== operationContext.isCanonicalData
+          || immutableFogResetRuleset !== operationContext.ruleset) {
+          immutableFogResetReceipt = operationContext.isCanonicalData;
+          immutableFogResetRuleset = operationContext.ruleset;
+          immutableFogResetScope = createImmutableFogResetScope(immutableFogResetReceipt);
+        }
+        operationContext[immutableFogResetScopeKey] = immutableFogResetScope;
+      }
+      results.push(applyCanonicalOperation(state, operation, operationContext));
       if (generated.length) {
         if (operations.length + generated.length > WORLD_OPERATION_BATCH_LIMIT) fail('Generated operations exceed batch limit', 'world_operation_limit');
         // Feature effects use the just-committed canonical placement, not an old Entity projection.

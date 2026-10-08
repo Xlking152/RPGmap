@@ -1,4 +1,5 @@
 import { computeFogExplorationAsync } from './fog.js';
+import { computeFogExplorationDeltaAsync } from './exploration-delta.js';
 import { computeVisibilityRows } from './visibility.js';
 import { normalizeVisionOccluder } from '../spatial/kernel.js';
 
@@ -20,7 +21,9 @@ self.onmessage = async ({ data: { id, input, cancelIds } }) => {
       self.postMessage({ id, result: computeVisibilityRows(input) });
       return;
     }
-    const result = await computeFogExplorationAsync(input, {}, { signal: controller.signal });
+    const result = await (input.explorationDelta === true
+      ? computeFogExplorationDeltaAsync(input, { signal: controller.signal })
+      : computeFogExplorationAsync(input, {}, { signal: controller.signal }));
     if (!controller.signal.aborted) self.postMessage({ id, result });
   } catch (error) { if (!controller.signal.aborted) self.postMessage({ id, error: error.message }); }
   finally { active.delete(id); }
