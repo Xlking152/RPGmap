@@ -543,6 +543,7 @@ export function createRpgMapRuntime({
     persistValidatedAsync,
     getLocalExploration: () => persistence.getLocalExploration(),
     setLocalExploration: value => persistence.setLocalExploration(value),
+    setLocalExplorationSnapshot: value => persistence.setLocalExplorationSnapshot(value),
     isLocalWorldActive: () => !remoteWorldIsolation.active,
     exportState,
     importState,

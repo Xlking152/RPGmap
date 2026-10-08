@@ -24,6 +24,7 @@ import {
   hideFogCircle,
   normalizeFogState,
   resetFogParty,
+  resetImmutableFogParty,
 } from '../vision/fog.js';
 import { sceneVisionContext } from '../vision/context.js';
 import { normalizeOcclusionShape, normalizeOcclusionShapes } from '../vision/occlusion-model.js';
@@ -1207,7 +1208,9 @@ function applyCanonicalOperation(state, operation, context = {}) {
 
   if (type.startsWith('scene.fog.')) {
     const { scene, partyId, dirtyBounds, input } = context.preparedFog || prepareFogOperation(state, operation, context);
-    if (type === 'scene.fog.reset') scene.fog = resetFogParty(scene.fog, partyId);
+    if (type === 'scene.fog.reset') scene.fog = context.trustedOperationHooks === true
+      ? resetImmutableFogParty(scene.fog, partyId, context.isCanonicalData)
+      : resetFogParty(scene.fog, partyId);
     else if (type === 'scene.fog.hide') scene.fog = hideFogCircle(scene.fog, partyId, input.payload, input.map);
     else scene.fog = (context.computeFogExploration || computeFogExploration)(input, scene.fog);
     return { action: type, sceneId: String(scene.id), partyId, dirtyBounds };

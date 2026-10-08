@@ -1,17 +1,24 @@
 import { readConnectionState } from "../multiplayer/connection-state.js";
 import { createVisionBackground } from './background.js';
 import { computeFogExplorationAsync } from './fog.js';
+import { ownedExplorationSnapshot, prepareOwnedExplorationJob } from './owned-exploration-snapshot.js';
 
 export function createLocalExplorationQueue(api, commit) {
   let state = api.getLocalExploration?.();
   if (!state || state.schemaVersion !== 1 || !Array.isArray(state.jobs)) state = { schemaVersion: 1, jobs: [] };
+  const snapshotsEnabled = typeof api.setLocalExplorationSnapshot === 'function';
+  if (snapshotsEnabled) state.jobs = state.jobs.map(prepareOwnedExplorationJob);
   let running = false, disposed = false, sequence = 0;
   let controller = null;
   let inFlightJob = null;
   const cancelled = new Set();
   let background = createVisionBackground({ diagnostics: api.diagnostics });
   const session = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
-  const saveMetadata = () => api.setLocalExploration?.(state);
+  const saveMetadata = () => {
+    const snapshot = snapshotsEnabled ? ownedExplorationSnapshot(state) : null;
+    if (snapshot) api.setLocalExplorationSnapshot(snapshot);
+    else api.setLocalExploration?.(state);
+  };
   function persist() {
     saveMetadata();
     if (api.persistNow?.() === false) throw new Error('探索路径未能可靠保存');
@@ -52,8 +59,10 @@ export function createLocalExplorationQueue(api, commit) {
   return {
     enqueue(input, sceneId) {
       const id = `${session}:${++sequence}`;
-      state.jobs.push({ id, sceneId: String(sceneId), input: structuredClone({ ...input,
-        contextVersion: `local:${session}:${input.contextVersion ?? id}` }) });
+      const job = { id, sceneId: String(sceneId), input: { ...input,
+        contextVersion: `local:${session}:${input.contextVersion ?? id}` } };
+      state.jobs.push(snapshotsEnabled ? prepareOwnedExplorationJob(job)
+        : { ...job, input: structuredClone(job.input) });
       saveMetadata();
       return id;
     },

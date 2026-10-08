@@ -7,6 +7,7 @@ import {
 import { WORLD_STATE_KEY, createWorldV2FromRuntimeState, projectWorldV2ToRuntimeState } from '../world/model.js';
 import { canonicalWorldStorageKey, legacyMapWorldStorageKey } from '../world/manager.js';
 import { createWorldValidationWork } from './world-validation-work.js';
+import { isOwnedExplorationSnapshot } from '../vision/owned-exploration-snapshot.js';
 
 export function worldStateStorageKey(target) {
   if (typeof target === 'string') return canonicalWorldStorageKey(target);
@@ -310,6 +311,11 @@ export function createWorldStatePersistence({
     resume() { suspended = false; },
     getLocalExploration() { return structuredClone(localExploration); },
     setLocalExploration(value) { localExploration = structuredClone(value); },
+    // Internal queue snapshots own frozen JSON data. Public setters and
+    // unqualified input keep their original detached-copy boundary.
+    setLocalExplorationSnapshot(value) {
+      localExploration = isOwnedExplorationSnapshot(value) ? value : structuredClone(value);
+    },
     get blocked() { return blocked; },
     get suspended() { return suspended; },
   };

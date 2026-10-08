@@ -484,6 +484,57 @@ export function resetFogParty(rawFog, partyId) {
   return fog;
 }
 
+const normalizedImmutablePartyRecords = new WeakSet();
+
+function normalizedImmutablePartyRecord(record) {
+  if (!record || typeof record !== 'object') return false;
+  if (normalizedImmutablePartyRecords.has(record)) return true;
+  // Canonical JSON acceptance proves immutable own data, but does not prove
+  // that a Fog grid is normalized. Restrict sharing to the exact ordinary
+  // representation; extensions and legacy/coercible grids retain the complete
+  // normalizer, including its clone and alias behavior.
+  if (Object.getPrototypeOf(record) !== Object.prototype
+    || Object.keys(record).length !== 1 || !Object.hasOwn(record, 'rows')
+    || !record.rows || Object.getPrototypeOf(record.rows) !== Object.prototype) return false;
+  for (const rowKey of Object.keys(record.rows)) {
+    const row = Number(rowKey), spans = record.rows[rowKey];
+    if (!Number.isSafeInteger(row) || row < 0 || String(row) !== rowKey
+      || !Array.isArray(spans) || !spans.length || spans.length > MAX_ROW_SPANS
+      || Object.keys(spans).length !== spans.length) return false;
+    let previousEnd = -2;
+    for (let index = 0; index < spans.length; index++) {
+      const span = spans[index];
+      if (!Array.isArray(span) || span.length !== 2 || Object.keys(span).length !== 2
+        || !Number.isSafeInteger(span[0]) || !Number.isSafeInteger(span[1])
+        || Object.is(span[0], -0) || Object.is(span[1], -0)
+        || span[0] < 0 || span[1] < span[0] || span[0] <= previousEnd + 1) return false;
+      previousEnd = span[1];
+    }
+  }
+  normalizedImmutablePartyRecords.add(record);
+  return true;
+}
+
+// Internal authority entry: unchanged records may be shared only after the
+// server's accepted immutable-data receipt AND normalization-equivalence proof.
+// The public reset above always returns completely detached mutable data.
+export function resetImmutableFogParty(rawFog, partyId, isCanonicalData) {
+  if (typeof isCanonicalData !== 'function' || isCanonicalData(rawFog) !== true
+    || !rawFog || Object.getPrototypeOf(rawFog) !== Object.prototype
+    || !Object.isFrozen(rawFog) || Object.keys(rawFog).length !== 3
+    || !Object.hasOwn(rawFog, 'schemaVersion') || !Object.hasOwn(rawFog, 'cellSizeMeters')
+    || rawFog.schemaVersion !== FOG_SCHEMA_VERSION || rawFog.cellSizeMeters !== FOG_CELL_SIZE_METERS
+    || !Object.hasOwn(rawFog, 'exploredByParty') || !rawFog.exploredByParty
+    || Object.getPrototypeOf(rawFog.exploredByParty) !== Object.prototype) return resetFogParty(rawFog, partyId);
+  for (const id of Object.keys(rawFog.exploredByParty)) {
+    if (!id || id !== id.trim().slice(0, 80) || id === '__proto__'
+      || !normalizedImmutablePartyRecord(rawFog.exploredByParty[id])) return resetFogParty(rawFog, partyId);
+  }
+  const exploredByParty = { ...rawFog.exploredByParty };
+  delete exploredByParty[String(partyId ?? '').trim()];
+  return { ...rawFog, exploredByParty };
+}
+
 export function isFogCellExplored(rawFog, partyId, point, { metersPerUnit = 1 } = {}) {
   const fog = normalizeFogState(rawFog);
   const rows = fog.exploredByParty[String(partyId ?? '')]?.rows || {};
