@@ -348,6 +348,10 @@ export function assertWorldState(value) {
 // still use the current candidate. Getter/Proxy branches never seed a cache.
 export function createCanonicalWorldValidator() {
   const summaries = new WeakMap();
+  // Most frozen JSON branches recur at one canonical path. Avoid allocating
+  // a Map for every Token/Fog row; aliases still promote to the original
+  // bounded path map, so global occurrence/depth/key accounting is unchanged.
+  const singleSummaries = new WeakMap();
   const byteSizes = new WeakMap();
   const immutableData = new WeakSet();
   const acceptedData = new WeakSet();
@@ -375,12 +379,13 @@ export function createCanonicalWorldValidator() {
     // root is ordinary data and traversal intrinsics remain standard. Share
     // that one proof only within this call; a partial or failed proof seeds
     // neither this memo nor the accepted/frozen graph caches.
-    let snapshotData = acceptedDataProof;
+    let snapshotData = acceptedDataProof, singleSummaryAllowed = false;
     if (wholeSnapshotProofAllowed()) {
       const proven = [];
       if (readOnlyJsonGraph(value, acceptedDataProof, null, proven, true)) {
         const localProof = new WeakSet(proven);
         snapshotData = { has: current => localProof.has(current) || acceptedDataProof.has(current) };
+        singleSummaryAllowed = true;
       }
     }
     const documentCache = {
@@ -411,7 +416,8 @@ export function createCanonicalWorldValidator() {
     };
     const visit = (current, path, depth) => {
       if (current && typeof current === 'object') {
-        const cached = summaries.get(current)?.get(path);
+        const single = singleSummaries.get(current);
+        const cached = single?.path === path ? single.summary : summaries.get(current)?.get(path);
         if (cached) { consume(cached, path, depth); return cached; }
       }
       consume(ONE_JSON_NODE, path, depth);
@@ -479,9 +485,18 @@ export function createCanonicalWorldValidator() {
       if (entry.summary.cacheable) {
         immutableData.add(entry.value);
         let byPath = summaries.get(entry.value);
-        if (!byPath) { byPath = new Map(); summaries.set(entry.value, byPath); }
-        if (byPath.size >= 8 && !byPath.has(entry.path)) byPath.delete(byPath.keys().next().value);
-        byPath.set(entry.path, entry.summary);
+        const single = singleSummaries.get(entry.value);
+        if (!byPath && (single?.path === entry.path || !single && singleSummaryAllowed)) {
+          if (single) single.summary = entry.summary;
+          else singleSummaries.set(entry.value, { path: entry.path, summary: entry.summary });
+        } else {
+          if (!byPath) {
+            byPath = new Map(); summaries.set(entry.value, byPath);
+            if (single) { byPath.set(single.path, single.summary); singleSummaries.delete(entry.value); }
+          }
+          if (byPath.size >= 8 && !byPath.has(entry.path)) byPath.delete(byPath.keys().next().value);
+          byPath.set(entry.path, entry.summary);
+        }
       }
       // A null entry proves whole-candidate acceptance without trusting an
       // accessor/Proxy branch's earlier observed serialized size.

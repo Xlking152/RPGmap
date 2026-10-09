@@ -18,6 +18,7 @@ import { mergeExploration, computeFogExplorationAsync } from '../vision/fog.js';
 import { createLocalExplorationQueue } from '../vision/local-exploration.js';
 import { createExplorationOperationCapture } from '../vision/exploration-operations.js';
 import { createRuntimeOperationInputProof, readRuntimeState } from '../engine/state-access.js';
+import { yieldRuntimeValidationFrame } from '../engine/runtime-state.js';
 import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
 import { registeredInfiniteHorrorRuleset } from '../ruleset/index.js';
 
@@ -304,17 +305,45 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           if (currentRequest.contextVersion !== request.contextVersion || currentRequest.lineOfSightEnabled !== request.lineOfSightEnabled) return { unchanged: true };
           computeFogExploration = (_input, fog) => mergeExploration(fog, added, mapPackage);
         }
-        const before = readRuntimeState(api);
-        const selectedSource = api.vision?.getSource?.();
-        const explorationCapture = createExplorationOperationCapture({ sourceIds: selectedSource ? [selectedSource] : [],
-          ruleset: runtimeRuleset, mapForScene: scene => sameMap(scene, mapPackage) ? mapPackage : null,
-          // IH's senses do not depend on the lighting/world context. The
-          // prepared source already supplies the accepted normal-light radii;
-          // Fog preparation only needs its x-ray sense, not another full derive.
-          ...(reusableLocalVisionDescribe(runtimeRuleset) ? { describeVision: localVisionDescribe } : {}) });
-        const applied = measure('world.reduce', () => reduceOperations(before, operations, { source, computeFogExploration,
-          prepareOperation: explorationCapture.prepareOperation, onOperationApplied: explorationCapture.onOperationApplied,
-          privateSceneEvents: operations.length === 1 && operations[0].type === 'scene.content.replace' }));
+        const prepare = (state, input) => {
+          const selectedSource = api.vision?.getSource?.();
+          const capture = createExplorationOperationCapture({ sourceIds: selectedSource ? [selectedSource] : [],
+            ruleset: runtimeRuleset, mapForScene: scene => sameMap(scene, mapPackage) ? mapPackage : null,
+            // IH's senses do not depend on the lighting/world context. The
+            // prepared source already supplies the accepted normal-light radii;
+            // Fog preparation only needs its x-ray sense, not another full derive.
+            ...(reusableLocalVisionDescribe(runtimeRuleset) ? { describeVision: localVisionDescribe } : {}) });
+          const result = measure('world.reduce', () => reduceOperations(state, input, { source, computeFogExploration,
+            prepareOperation: capture.prepareOperation, onOperationApplied: capture.onOperationApplied,
+            privateSceneEvents: input.length === 1 && input[0].type === 'scene.content.replace' }));
+          return { capture, result };
+        };
+        let before = readRuntimeState(api);
+        const revision = api.getStateRevision?.(), epoch = explorationEpoch;
+        let { capture: explorationCapture, result: applied } = prepare(before, operations);
+        if (!addedExploration && applied.operations.length === 1
+          && applied.operations[0].type === 'scene.content.replace'
+          && reusableLocalVisionDescribe(runtimeRuleset)
+          && typeof api.applyAuthoritativeDocumentChanges === 'function'
+          && typeof globalThis.requestAnimationFrame === 'function') {
+          // Reduction and the renderer's authoritative commit can each fit a
+          // frame while their combined work cannot. Yield before ANY authority
+          // or queue mutation; this is scheduling, not an early acknowledgement.
+          await yieldRuntimeValidationFrame();
+          if (epoch !== explorationEpoch || readConnectionState(api)?.connected
+            || api.isLocalWorldActive?.() === false) {
+            throw Object.assign(new Error('当前 World 已切换，请重新执行场景编辑'), { code: 'world_operation_context_changed' });
+          }
+          const current = readRuntimeState(api);
+          if (current !== before || api.getStateRevision?.() !== revision) {
+            // Re-run the complete reducer against current authority. In
+            // particular, an absolute history replacement must still pass its
+            // original expected-scene/history guards. Use its detached normalized
+            // input, never a caller's payload that could change during the wait.
+            before = current;
+            ({ capture: explorationCapture, result: applied } = prepare(before, applied.operations));
+          }
+        }
         // Validation must succeed before destructive operations invalidate any
         // previously confirmed paths. Save the cancellation with the new World.
         const invalidating = applied.results.filter(result => ['scene.fog.hide', 'scene.fog.reset',
