@@ -52,6 +52,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Vision candidate failed' }
 Write-Output '[final-main] vision measurements saved'
 $env:RPGMAP_SMOKE_LOCAL_PERFORMANCE = '1'
 Remove-Item Env:RPGMAP_SMOKE_HOSTED_FRAME_OBSERVATION -ErrorAction SilentlyContinue
+Remove-Item Env:RPGMAP_SMOKE_HOSTED_PERFORMANCE_OBSERVATION -ErrorAction SilentlyContinue
 Remove-Item Env:RPGMAP_SMOKE_CPU_PROFILE -ErrorAction SilentlyContinue
 Remove-Item Env:RPGMAP_SMOKE_FEEDBACK_CPU_PROFILE -ErrorAction SilentlyContinue
 Remove-Item Env:RPGMAP_SMOKE_RUINS_CPU_PROFILE -ErrorAction SilentlyContinue

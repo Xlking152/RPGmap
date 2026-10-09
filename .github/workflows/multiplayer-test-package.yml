@@ -68,9 +68,9 @@ jobs:
         shell: pwsh
         env:
           # v2.5.5 release performance is verified on the user's machine and
-          # exact final ZIP. This different hosted machine records frame data;
-          # functionality, feedback, long tasks and recovery remain asserted.
-          RPGMAP_SMOKE_HOSTED_FRAME_OBSERVATION: '1'
+          # exact final ZIP. This different hosted machine records performance;
+          # functionality, visibility, persistence and recovery remain asserted.
+          RPGMAP_SMOKE_HOSTED_PERFORMANCE_OBSERVATION: '1'
         run: |
           node scripts/vision-mask-raster-check.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Continuous mask raster equivalence failed.' }

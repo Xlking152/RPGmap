@@ -815,6 +815,9 @@ export async function verifyLocalValidation({ directory, version, commit, source
     if (localOnly) {
       requireCondition(smoke.ruins.stress.framesGateEnforced === true,
         'Hosted frame observations cannot be formal local performance evidence');
+      requireCondition(smoke.ruins.stress.performanceGatesEnforced === true
+        && smoke.occlusion.feedback.performanceGatesEnforced === true,
+      'Hosted performance observations cannot be formal local performance evidence');
       localPerformance(smoke.ruins.localPerformance);
     }
     const facade = await readEvidence(validation.evidence?.facadeRaster, 'facade raster');
