@@ -303,6 +303,46 @@ async function fixture(t, compressed = false, version = '2.5.4') {
   return { directory, entries, reports, validation, save, verify: () => verifyLocalValidation({ directory, version, commit }) };
 }
 
+function localPlayFixture() {
+  return { storageMode: 'persistent-offline', connected: false, secondsPerPhase: 60, tokenId: 'offline-source',
+    tokenCount: 1, featureCount: 103, finalQueue: { queued: 0, running: false },
+    phases: ['normal', 'dark'].map((name, index) => ({ name, lighting: name, rangeMeters: [120, 500][index],
+      startedAt: index * 70_000, endedAt: index * 70_000 + 60_000, durationMs: 60_000,
+      frameSamplesMs: Array(3600).fill(1000 / 60), averageFPS: 60, frameP95Ms: 1000 / 60,
+      inputSamplesMs: Array(120).fill(10), inputP95Ms: 10, longTasks: [], maxLongTaskMs: 0,
+      moves: Array.from({ length: 120 }, (_, step) => ({ from: { x: step % 2, y: 0 },
+        target: { x: 1 - step % 2, y: 0 }, revision: step + 1, commitMs: 5, feedbackMs: 20 })) })) };
+}
+
+test('v2.5.5 explicit local scope defers multiplayer performance and retains local and reliability gates', async t => {
+  const candidate = await fixture(t, false, '2.5.5');
+  candidate.validation.performanceScope = 'local-single-player';
+  candidate.validation.checks.localPerformance = 'passed';
+  for (const key of ['lanBenchmark', 'occlusionLanBenchmark', 'browserBenchmark']) {
+    candidate.validation.checks[key] = 'deferred'; delete candidate.validation.evidence[key];
+  }
+  const smoke = candidate.reports['chrome-smoke.json'];
+  smoke.ruins.localPerformance = localPlayFixture();
+  await candidate.save(); await assert.doesNotReject(candidate.verify());
+  const cases = [
+    [() => { candidate.validation.checks.occlusionLanBenchmark = 'passed'; }, /Deferred multiplayer check mislabeled/],
+    [() => { delete smoke.ruins.localPerformance; }, /Local ordinary play fixture missing/],
+    [() => { smoke.ruins.localPerformance.phases[0].inputSamplesMs.fill(17); smoke.ruins.localPerformance.phases[0].inputP95Ms = 17; }, /frame\/input summary or gate/],
+    [() => { smoke.ruins.localPerformance.phases[1].durationMs = 5000; }, /sixty-second/],
+    [() => { smoke.ruins.localPerformance.phases[0].moves[0].target.x = 0; }, /confirmed movements missing/],
+    [() => { smoke.ruins.localPerformance.finalQueue.queued = 1; }, /exploration did not drain/],
+    [() => { delete candidate.validation.evidence.ruinsLan; }, /Ruins LAN evidence/],
+    [() => { candidate.reports['audit.json'].metadata.vulnerabilities.total = 1; }, /dependency audit/],
+  ];
+  const validation = structuredClone(candidate.validation), original = structuredClone(smoke.ruins.localPerformance);
+  for (const [change, message] of cases) {
+    Object.assign(candidate.validation, structuredClone(validation));
+    smoke.ruins.localPerformance = structuredClone(original);
+    candidate.reports['audit.json'].metadata.vulnerabilities.total = 0;
+    change(); await candidate.save(); await assert.rejects(candidate.verify(), message);
+  }
+});
+
 for (const compressed of [false, true]) {
   test(`legitimate package-bound reports pass with ${compressed ? 'deflated' : 'stored'} ZIP`, async t => {
     const candidate = await fixture(t, compressed);

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { runRuinsBrowserSmoke } from './ruins-browser-smoke.mjs';
+import { runLocalBrowserPerformance } from './local-browser-performance.mjs';
 import { createPackagedOfflineServer, openPersistentOfflineRuntime } from './ruins-offline-browser-support.mjs';
 import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
 import { closeOwnedBrowser } from './owned-browser-close.mjs';
@@ -711,6 +712,9 @@ try {
       },
     } : {});
     ruinsAudit.storageMode = 'persistent-offline';
+    if (process.env.RPGMAP_SMOKE_LOCAL_PERFORMANCE === '1') {
+      ruinsAudit.localPerformance = await runLocalBrowserPerformance(evaluate);
+    }
     try {
       ruinsAudit.validationWorker = await proveLiveValidationWorker(send);
     } catch (error) {

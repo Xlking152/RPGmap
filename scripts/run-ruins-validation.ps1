@@ -27,7 +27,7 @@ function Invoke-Check {
   Write-Output "[final-main] $Name started"
   & $Action *> $checkLog
   $checkExit = $LASTEXITCODE
-  if ($checkExit -ne 0) { Get-Content -LiteralPath $checkLog -Tail 12; throw "$Name failed with exit $checkExit" }
+  if ($checkExit -ne 0) { Get-Content -LiteralPath $checkLog -Tail 12 | ForEach-Object { $_.Substring(0, [Math]::Min(400, $_.Length)) }; throw "$Name failed with exit $checkExit" }
   Write-Output "[final-main] $Name passed"
 }
 
@@ -40,9 +40,8 @@ Invoke-Check 'build' { npm run build }
 Invoke-Check 'bundle' { npm run check:bundle }
 Invoke-Check 'package' { npm run package:local-server }
 Invoke-Check 'verify-package' { node scripts/verify-package.mjs "--root=$packageRoot" "--archive=$packageRoot.zip" "--commit=$finalCommit" }
-Remove-Item Env:RPGMAP_CANONICAL_DIAGNOSTICS -ErrorAction SilentlyContinue
-Invoke-Check 'lan-ordinary' { node scripts/lan-performance-benchmark.mjs "--package=$packageRoot" "--output=artifact/qa/v2.5.5-lan-ordinary-$label.json" --assert }
-Invoke-Check 'lan-large' { node scripts/occlusion-lan-benchmark.mjs "--package=$packageRoot" --rounds=5 --warmup-rounds=1 "--output=artifact/qa/v2.5.5-lan-large-$label-five.json" --assert }
+# User scope: keep multiplayer functionality, defer its performance work.
+# Package smoke still checks permissions, durable WAL, reconnect and recovery.
 Write-Output '[final-main] vision baseline started'
 Assert-VisionBaseline
 node scripts/vision-performance-benchmark.mjs "--repo=$baselineRoot" > "artifact/qa/v2.5.4-vision-$label-load.json"
@@ -51,13 +50,7 @@ Assert-VisionBaseline
 node scripts/vision-performance-benchmark.mjs > "artifact/qa/v2.5.5-vision-$label-load.json"
 if ($LASTEXITCODE -ne 0) { throw 'Vision candidate failed' }
 Write-Output '[final-main] vision measurements saved'
-$env:RPGMAP_BENCHMARK_PACKAGE = $packageRoot
-$env:RPGMAP_BENCHMARK_BROWSER = 'chrome'
-$env:RPGMAP_BROWSER_BENCHMARK_HEADLESS = '1'
-Remove-Item Env:RPGMAP_BROWSER_BENCHMARK_SECONDS -ErrorAction SilentlyContinue
-Remove-Item Env:RPGMAP_BROWSER_BENCHMARK_PROFILE_SESSION -ErrorAction SilentlyContinue
-Invoke-Check 'chrome-seven' { node scripts/browser-performance-benchmark.mjs --assert }
-Copy-Item -LiteralPath output/playwright/v2.5.5-seven-session/report.json -Destination "artifact/qa/v2.5.5-chrome-seven-$label.json"
+$env:RPGMAP_SMOKE_LOCAL_PERFORMANCE = '1'
 Remove-Item Env:RPGMAP_SMOKE_CPU_PROFILE -ErrorAction SilentlyContinue
 Remove-Item Env:RPGMAP_SMOKE_FEEDBACK_CPU_PROFILE -ErrorAction SilentlyContinue
 Remove-Item Env:RPGMAP_SMOKE_RUINS_CPU_PROFILE -ErrorAction SilentlyContinue

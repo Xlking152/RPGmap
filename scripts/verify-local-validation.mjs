@@ -685,6 +685,41 @@ function timing(result, name) {
   const sorted = [...result.samplesMs].sort((a, b) => a - b);
   requireCondition(result.medianMs === sorted[2] && result.p95Ms === sorted[4], `${name} timing summary invalid`);
 }
+
+function localPerformance(report) {
+  requireCondition(report?.storageMode === 'persistent-offline' && report.connected === false
+    && report.secondsPerPhase === 60 && typeof report.tokenId === 'string' && report.tokenId.length > 0
+    && Number.isSafeInteger(report.tokenCount) && report.tokenCount > 0 && report.featureCount === 103
+    && report.phases?.length === 2, 'Local ordinary play fixture missing');
+  for (const [index, phase] of report.phases.entries()) {
+    requireCondition(phase.name === ['normal', 'dark'][index] && phase.lighting === phase.name
+      && phase.rangeMeters === [120, 500][index] && finite(phase.startedAt) && phase.startedAt >= 0
+      && finite(phase.endedAt) && phase.durationMs === phase.endedAt - phase.startedAt
+      && phase.durationMs >= 60_000 && phase.moves?.length >= 100,
+    'Local ordinary play requires two complete sixty-second moving phases');
+    const frames = phase.frameSamplesMs, inputs = phase.inputSamplesMs;
+    requireCondition(frames?.length >= 3000 && frames.every(value => finite(value) && value > 0)
+      && inputs?.length === phase.moves.length && inputs.every(value => finite(value) && value >= 0),
+    'Local ordinary play raw frame/input observations missing');
+    const p95 = values => [...values].sort((a, b) => a - b)[Math.ceil(values.length * .95) - 1];
+    const fps = 1000 * frames.length / frames.reduce((sum, value) => sum + value, 0);
+    requireCondition(finite(phase.averageFPS) && Math.abs(phase.averageFPS - fps) <= 1e-6 && fps >= 58
+      && phase.frameP95Ms === p95(frames) && phase.frameP95Ms <= 20
+      && phase.inputP95Ms === p95(inputs) && withinMillisecondsBudget(phase.inputP95Ms, 16.7),
+    'Local ordinary play frame/input summary or gate failed');
+    requireCondition(phase.moves.every(move => finite(move.from?.x) && finite(move.from?.y)
+      && finite(move.target?.x) && finite(move.target?.y)
+      && (move.from.x !== move.target.x || move.from.y !== move.target.y)
+      && Number.isSafeInteger(move.revision) && move.revision > 0 && finite(move.commitMs) && move.commitMs >= 0
+      && finite(move.feedbackMs) && move.feedbackMs >= move.commitMs), 'Local ordinary play confirmed movements missing');
+    requireCondition(Array.isArray(phase.longTasks) && phase.longTasks.every(task => finite(task.startTime)
+      && task.startTime >= phase.startedAt && task.startTime <= phase.endedAt && finite(task.duration) && task.duration >= 0)
+      && phase.maxLongTaskMs === Math.max(0, ...phase.longTasks.map(task => task.duration)) && phase.maxLongTaskMs <= 100,
+    'Local ordinary play long-task gate failed');
+  }
+  requireCondition(report.finalQueue?.queued === 0 && report.finalQueue.running === false,
+    'Local ordinary play exploration did not drain');
+}
 async function vision(baseline, candidate, validation, sourceRoot, needsRuinsEvidence) {
   requireCondition(/^[a-f0-9]{40}$/.test(validation.baselineCommit || '') && baseline.sourceCommit === validation.baselineCommit
     && candidate.sourceCommit === validation.commit && candidate.version === validation.version, 'Vision source commit mismatch');
@@ -735,7 +770,17 @@ export async function verifyLocalValidation({ directory, version, commit, source
   const [major, minor, patch] = version.split('.').map(Number);
   const needsEvidence = major > 2 || (major === 2 && (minor > 5 || (minor === 5 && patch >= 4)));
   const needsRuinsEvidence = major > 2 || (major === 2 && (minor > 5 || (minor === 5 && patch >= 5)));
-  const checks = needsEvidence ? [...requiredChecks, 'visionBenchmark', 'occlusionLanBenchmark', 'browserBenchmark'] : requiredChecks;
+  // The v2.5.5 scope was explicitly changed to local performance by the user.
+  // Other versions and reports without this exact scope keep all original gates.
+  const localOnly = validation.performanceScope === 'local-single-player';
+  requireCondition(validation.performanceScope === undefined || (localOnly && version === '2.5.5'),
+    'Unsupported local performance scope');
+  const checks = localOnly ? [...requiredChecks.filter(name => name !== 'lanBenchmark'), 'visionBenchmark', 'localPerformance']
+    : needsEvidence ? [...requiredChecks, 'visionBenchmark', 'occlusionLanBenchmark', 'browserBenchmark'] : requiredChecks;
+  if (localOnly) {
+    for (const check of ['lanBenchmark', 'occlusionLanBenchmark', 'browserBenchmark'])
+      requireCondition(validation.checks?.[check] === 'deferred', `Deferred multiplayer check mislabeled: ${check}`);
+  }
   for (const check of checks) {
     if (validation.checks?.[check] !== 'passed') throw new Error(`Local check missing: ${check}`);
   }
@@ -750,7 +795,7 @@ export async function verifyLocalValidation({ directory, version, commit, source
       && !file.split(/[\\/]/).includes('..'), `${name} evidence file missing or outside candidate`);
     return JSON.parse(await readFile(path.join(directory, file), 'utf8'));
   };
-  for (const [name, verify] of [['lanBenchmark', ordinaryLan], ['occlusionLanBenchmark', largeLan], ['browserBenchmark', browser]]) {
+  for (const [name, verify] of localOnly ? [] : [['lanBenchmark', ordinaryLan], ['occlusionLanBenchmark', largeLan], ['browserBenchmark', browser]]) {
     const report = await readEvidence(validation.evidence?.[name], name);
     requireBuild(report, build, version, name); verify(report, { requireFrameMean: needsRuinsEvidence });
   }
@@ -764,6 +809,7 @@ export async function verifyLocalValidation({ directory, version, commit, source
   if (needsRuinsEvidence) {
     requireCondition(smoke.diagnosticProfiling === false, 'Chrome diagnostic profiling cannot be formal performance evidence');
     ruinsSmoke(smoke.ruins);
+    if (localOnly) localPerformance(smoke.ruins.localPerformance);
     const facade = await readEvidence(validation.evidence?.facadeRaster, 'facade raster');
     requireRasterSource(facade, candidateVision, validation, 'Facade raster');
     facadeRaster(facade);
