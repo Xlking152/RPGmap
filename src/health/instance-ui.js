@@ -291,7 +291,17 @@ export function createHealthInstanceUi() {
         observers.push(observer);
       }
       if (MutationObserverCtor && mapHost) {
-        const observer = new MutationObserverCtor(scheduleDecorate);
+        const observer = new MutationObserverCtor(records => {
+          // Ruins, Fog and map layers share this host. Their DOM updates do not
+          // change health; observe only the selected Token summary and its
+          // insertion/removal. Health/selection events still refresh directly.
+          const inSummary = node => (node?.nodeType === 3 ? node.parentElement : node)
+            ?.closest?.('.selected-token-summary');
+          const containsSummary = node => node?.matches?.('.selected-token-summary')
+            || node?.querySelector?.('.selected-token-summary');
+          if (records.some(record => inSummary(record.target)
+            || [...record.addedNodes, ...record.removedNodes].some(containsSummary))) scheduleDecorate();
+        });
         observer.observe(mapHost, { childList: true, subtree: true });
         observers.push(observer);
       }

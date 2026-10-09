@@ -389,8 +389,10 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
   const acceptedData = weakSet('accepted');
   const immutableDataProofs = weakSet('pure');
   const isImmutableData = value => {
-    if (!value || typeof value !== 'object' || types.isProxy(value) || !acceptedData.has(value)) return false;
-    if (immutableDataProofs.has(value)) return true;
+    if (!value || typeof value !== 'object' || types.isProxy(value)) return false;
+    const record = metadata?.get(value);
+    if (metadata ? !record?.accepted : !acceptedData.has(value)) return false;
+    if (metadata ? record.pure : immutableDataProofs.has(value)) return true;
     const proven = [];
     if (!readOnlyJsonGraph(value, immutableDataProofs,
       current => acceptedData.has(current) && Object.isFrozen(current), proven)) return false;
@@ -509,7 +511,8 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
         summary.bytes += child.bytes + (Array.isArray(current) ? 0 : Buffer.byteLength(JSON.stringify(key)) + 1);
         if (!child.cacheable) summary.cacheable = false;
       }
-      pending.push({ value: current, path, summary });
+      pending.push(metadata ? { value: current, path, summary, metadataRecord: null }
+        : { value: current, path, summary });
       return summary;
     };
     visit(value, 'state', 0);
@@ -519,6 +522,30 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
     // Children precede parents. No rejected candidate can seed trusted entries.
     for (const entry of pending) {
       Object.freeze(entry.value);
+      if (metadata) {
+        // One lookup per newly frozen branch; retain the same bounded alias
+        // summaries and delay acceptance until every branch has frozen.
+        const record = recordFor(entry.value);
+        entry.metadataRecord = record;
+        if (entry.summary.cacheable) {
+          record.immutable = true;
+          let byPath = record.summaries === missingMetadata ? null : record.summaries;
+          const single = record.singleSummary === missingMetadata ? null : record.singleSummary;
+          if (!byPath && (single?.path === entry.path || !single && singleSummaryAllowed)) {
+            if (single) single.summary = entry.summary;
+            else record.singleSummary = { path: entry.path, summary: entry.summary };
+          } else {
+            if (!byPath) {
+              byPath = new Map(); record.summaries = byPath;
+              if (single) { byPath.set(single.path, single.summary); record.singleSummary = missingMetadata; }
+            }
+            if (byPath.size >= 8 && !byPath.has(entry.path)) byPath.delete(byPath.keys().next().value);
+            byPath.set(entry.path, entry.summary);
+          }
+        }
+        record.bytes = entry.summary.cacheable ? entry.summary.bytes : null;
+        continue;
+      }
       if (entry.summary.cacheable) {
         immutableData.add(entry.value);
         let byPath = summaries.get(entry.value);
@@ -558,7 +585,10 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
       // tuple for each fixed validator kind, never a history of old Worlds.
       records.set(entry.kind, { value: entry.value, dependencies: entry.dependencies });
     }
-    for (let index = 0; index < pending.length; index++) acceptedData.add(pending[index].value);
+    for (let index = 0; index < pending.length; index++) {
+      if (metadata) pending[index].metadataRecord.accepted = true;
+      else acceptedData.add(pending[index].value);
+    }
     if (times) {
       measurements.push({ objects: pending.length, documents: pendingDocuments.length,
         collections: pendingCollections.length, proofMs: times.proof - times.start,

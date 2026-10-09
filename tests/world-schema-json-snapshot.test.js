@@ -375,13 +375,15 @@ test('stale accepted summaries cannot skip dynamic iterator fallback after reloc
 });
 
 test('a failed freeze cannot seed the complete-acceptance proof', () => {
-  const validate = createCanonicalWorldValidator();
+  for (const compactMetadata of [false, true]) {
+  const validate = createCanonicalWorldValidator({ compactMetadata });
   const child = { value: 1 };
   const proxy = new Proxy({ value: 2 }, { preventExtensions() { throw new Error('freeze failed'); } });
   const world = { payload: [child, proxy] };
   assert.throws(() => validate(world), /freeze failed/);
   assert.equal(Object.isFrozen(child), true, 'the old visitor may already have frozen an earlier child');
   for (const value of [child, proxy, world.payload, world]) assert.equal(validate.isImmutableData(value), false);
+  }
 });
 
 test('array cache remains path-specific and rejected candidates do not freeze or seed snapshots', () => {
