@@ -42,6 +42,7 @@ const EXPECTED_ROOT_ENTRIES = [
   'exploration-fog-transfer.mjs',
   'movement-authority.mjs',
   'world-wal.mjs',
+  'resume-patch-codec.mjs',
   'world-checkpoint.mjs',
   'storage-upgrade.mjs',
   'world-schema.mjs',
