@@ -1,9 +1,8 @@
-import { polygonDifference, polygonArea, normalizePolygonGeometry, GeometryClipError } from '../engine/geometry.js';
-import { deriveSceneState } from '../engine/state.js';
-import { isIndexableOccluderCollection, queryOccluders } from './index.js';
-import { resolveEffectiveOcclusionShapes } from '../vision/occlusion-model.js';
-import { effectiveFeatureOpen } from '../world/feature-states.js';
-import { hasImmutableVisionData } from '../vision/immutable-data.js';
+import { polygonDifference, polygonArea, normalizePolygonGeometry, GeometryClipError } from '../../src/engine/geometry.js';
+import { deriveSceneState } from '../../src/engine/state.js';
+import { isIndexableOccluderCollection, queryOccluders } from '../../src/spatial/index.js';
+import { resolveEffectiveOcclusionShapes } from '../../src/vision/occlusion-model.js';
+import { effectiveFeatureOpen } from '../../src/world/feature-states.js';
 
 const EPSILON = 1e-9;
 const NORMALIZED_VISION_OCCLUDERS = new WeakSet();
@@ -20,65 +19,12 @@ const INVALID_RAY = Object.freeze({ clear: false, code: 'spatial_point_invalid' 
 const OCCLUSION_GEOMETRY_CACHE = new WeakMap();
 const MAX_OCCLUSION_GEOMETRY_ENTRIES = 512;
 const MAX_FEATURE_GEOMETRY_VERSIONS = 2;
-const PURE_COORDINATE_TREES = new WeakSet();
-const clonePristineCoordinates = structuredClone;
-const normalizationPlatform = [
-  [globalThis, 'Number'], [globalThis, 'String'], [Array, 'isArray'],
-  [Number, 'isFinite'], [Number, 'isNaN'], [Object, 'freeze'],
-  ...['map', 'every', 'some', 'slice', 'push', 'pop', 'splice', 'at', Symbol.iterator]
-    .map(key => [Array.prototype, key]),
-].map(([owner, key]) => ({ owner, key, value: owner[key] }));
-const stockNormalization = normalizationPlatform.every(({ value }) =>
-  typeof value === 'function' && Function.prototype.toString.call(value).includes('[native code]'));
-
-function normalizationPlatformUnchanged() {
-  if (!stockNormalization || structuredClone !== clonePristineCoordinates
-    || !normalizationPlatform.every(({ owner, key, value }) => {
-      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
-      return descriptor && Object.hasOwn(descriptor, 'value') && descriptor.value === value;
-    })) return false;
-  // Geometry normalization tests these inherited shape names even on arrays.
-  for (const owner of [Object.prototype, Array.prototype]) for (const key of [
-    'shape', 'attackShape', 'type', 'id', 'featureId', 'shapeId', 'kind', 'polygon', 'blockingPolygon',
-    'heightMeters', 'passableWhenOpen', 'passableWhenDestroyed', 'polygons',
-  ]) {
-    if (Object.hasOwn(owner, key)) return false;
-  }
-  return true;
-}
-
-function pureCoordinateTree(value) {
-  if (!hasImmutableVisionData(value)) return false;
-  if (PURE_COORDINATE_TREES.has(value)) return true;
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype
-    || Reflect.ownKeys(value).length !== value.length + 1) return false;
-  for (let index = 0; index < value.length; index++) {
-    if (!Object.hasOwn(value, index)) return false;
-    const item = value[index];
-    if (typeof item === 'number' ? !Number.isFinite(item) : !pureCoordinateTree(item)) return false;
-  }
-  // Frozen Proxy wrappers can still intercept .map. The platform clone proves
-  // the actual coordinate-array identity before this WeakSet can accept it.
-  try { clonePristineCoordinates(value); } catch { return false; }
-  PURE_COORDINATE_TREES.add(value);
-  return true;
-}
-
-function reusablePristineInput(raw, effectiveHeight) {
-  if (!normalizationPlatformUnchanged()) return null;
-  const polygon = raw.polygon ?? raw.blockingPolygon;
-  if (!pureCoordinateTree(polygon) || (raw.polygons != null && !pureCoordinateTree(raw.polygons))) return null;
-  const scalars = [raw.id, raw.featureId, raw.shapeId, raw.kind,
-    effectiveHeight ?? raw.heightMeters, raw.passableWhenOpen, raw.passableWhenDestroyed];
-  if (!scalars.every(value => value == null || ['string', 'number', 'boolean'].includes(typeof value))) return null;
-  return [polygon, raw.polygons, ...scalars];
-}
 
 function mapGeometryCache(map) {
   if (!map || typeof map !== 'object') return null;
   let cache = OCCLUSION_GEOMETRY_CACHE.get(map);
   if (!cache) {
-    cache = { entries: new Map(), features: new Map(), hits: 0, misses: 0, evictions: 0, failures: 0, normalizationHits: 0 };
+    cache = { entries: new Map(), features: new Map(), hits: 0, misses: 0, evictions: 0, failures: 0 };
     OCCLUSION_GEOMETRY_CACHE.set(map, cache);
   }
   return cache;
@@ -118,8 +64,7 @@ export function occlusionGeometryCacheStats(map) {
   return Object.freeze({ entries: cache?.entries.size || 0, features: cache?.features.size || 0,
     maxEntries: MAX_OCCLUSION_GEOMETRY_ENTRIES, maxVersionsPerFeature: MAX_FEATURE_GEOMETRY_VERSIONS,
     largestFeatureVersions: cache ? Math.max(0, ...[...cache.features.values()].map(versions => versions.size)) : 0,
-    hits: cache?.hits || 0, misses: cache?.misses || 0, evictions: cache?.evictions || 0, failures: cache?.failures || 0,
-    normalizationHits: cache?.normalizationHits || 0 });
+    hits: cache?.hits || 0, misses: cache?.misses || 0, evictions: cache?.evictions || 0, failures: cache?.failures || 0 });
 }
 
 export function releaseOcclusionGeometryCache(map) { if (map && typeof map === 'object') OCCLUSION_GEOMETRY_CACHE.delete(map); }
@@ -407,18 +352,7 @@ export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = n
     solidSlots.set(featureId, index + 1);
     const feature = features.get(featureId), state = states[featureId] || {}, vision = state.vision || {};
     const effectiveHeight = vision.blockingHeightMeters ?? state.custom?.blockingHeightMeters ?? raw.blockingHeightMeters;
-    // These are constructor-owned raw records. Only previously proved frozen
-    // coordinate trees and primitive parameters can reuse pristine geometry;
-    // public mutable/extended inputs retain every normalization and coercion.
-    const pristineRefs = reusablePristineInput(raw, effectiveHeight);
-    let pristine = null;
-    if (pristineRefs) for (const previous of cache?.features.get(featureId)?.values() || []) {
-      const candidate = previous.normalizations?.get(index);
-      if (candidate && pristineRefs.every((value, offset) => Object.is(value, candidate.refs[offset]))) {
-        pristine = candidate; cache.normalizationHits++; break;
-      }
-    }
-    const occluder = pristine?.value || normalizeVisionOccluder({ ...raw, blockingHeightMeters: effectiveHeight });
+    const occluder = normalizeVisionOccluder({ ...raw, blockingHeightMeters: effectiveHeight });
     if (!occluder) {
       if (options.strictGeometry) throw geometryFailure(new Error('Invalid blocker polygon or height'), featureId, String(raw.id));
       continue;
@@ -428,10 +362,6 @@ export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = n
     // Turning off a door leaves its aperture in the host, as before.
     if (vision.occluder === false || occluder.passableWhenDestroyed && destroyed.has(featureId)) continue;
     const version = versionFor(featureId);
-    if (pristineRefs) {
-      version.normalizations ||= new Map();
-      version.normalizations.set(index, pristine || { refs: pristineRefs, value: occluder });
-    }
     const prepared = cachedGeometry(version, `solid:${index}`, () => {
       let polygons = occluder.polygons;
       if (occluder.passableWhenDestroyed) for (const polygon of hits.get(featureId) || []) {

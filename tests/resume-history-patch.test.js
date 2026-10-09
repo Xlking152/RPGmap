@@ -14,7 +14,7 @@ const source = server.slice(server.indexOf('const resumeHistory = [];'), server.
 const factory = new Function('world', 'Date', 'structuredClone', 'createHash', 'access', 'findUser', 'WORLD_ID', 'GM_SECRET',
   'createWorldOperationPatch', 'applyWorldOperationPatch', 'createDocumentChanges', 'audienceStateFor',
   'projectMotionForSession', 'encodeResumePatch', 'decodeResumePatch', `${source}; return {
-    rememberResumeCommit, resumableCommits, audienceFingerprint, resetResumeHistory,
+    rememberResumeCommit, resumableCommits, audienceFingerprint, resetResumeHistory, canRebaseStatusOverBackgroundFog,
     history: () => resumeHistory, base: () => ({ revision: resumeBaseRevision, state: resumeBaseState }),
     setWorld: value => { world = value; }
   };`);
@@ -37,7 +37,7 @@ function harness({ encode = encodeResumePatch, decode = decodeResumePatch, copy 
     createWorldOperationPatch, applyWorldOperationPatch, createDocumentChanges, audience, () => [], encode, decode);
   return { ...api, user, access, session, projections, world: () => world,
     time(value) { now = value; },
-    commit(edit = state => { state.preferences.worldV2.scenes[0].tokens[0].x++; }) {
+    commit(edit = state => { state.preferences.worldV2.scenes[0].tokens[0].x++; }, backgroundFogOnly = false) {
       const before = world.state, after = clone(before); edit(after);
       const nextRevision = world.revision + 1;
       after.preferences.worldV2.updatedAt = `revision-${nextRevision}`;
@@ -45,7 +45,7 @@ function harness({ encode = encodeResumePatch, decode = decodeResumePatch, copy 
       world = { state: after, revision: nextRevision }; api.setWorld(world);
       api.rememberResumeCommit({ beforeState: before, afterState: after, operationId: `operation-${nextRevision}`,
         baseRevision: nextRevision - 1, revision: nextRevision, updatedAt: `revision-${nextRevision}`,
-        results: [], documentBatch: true, fog: [], patch });
+        results: [], documentBatch: true, fog: [], patch, backgroundFogOnly });
       return { before, after, patch };
     },
   };
@@ -68,6 +68,42 @@ test('native resume encoding preserves negative zero, shared references and comp
   decoded.world.scenes.fog[0].fog.exploredByParty.party.rows['3'][0][0] = 99;
   assert.equal(fog.exploredByParty.party.rows['3'][0][0], 1);
   assert.equal(decodeResumePatch(bytes).world.scenes.fog[0].fog.exploredByParty.party.rows['3'][0][0], 1);
+});
+
+test('Status document intents can rebase only over a complete fresh private background Fog history', () => {
+  const h = harness(), status = [{ type: 'status.apply', payload: { targetId: 'actor-a' } }];
+  const fog = state => { state.preferences.worldV2.scenes[0].fog.exploredByParty.party.rows['3'] = [[1, 9]]; };
+  h.commit(fog, true); h.commit(fog, true);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(0, status, true), true);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(1, [{ type: 'status.remove' }], true), true);
+  for (const operations of [[], [{ type: 'scene.fog.reset' }], [{ type: 'chat.append' }],
+    [{ type: 'status.setStacks' }], [...status, { type: 'actor.upsert' }]]) {
+    assert.equal(h.canRebaseStatusOverBackgroundFog(0, operations, true), false);
+  }
+  for (const base of [-1, .5, NaN, 2, 3, '0']) assert.equal(h.canRebaseStatusOverBackgroundFog(base, status, true), false);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(0, status, false), false);
+  h.time(1000 + 5 * 60_000);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(0, status, true), true);
+  h.time(1001 + 5 * 60_000);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(0, status, true), false);
+  h.time(999);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(0, status, true), false);
+});
+
+test('user commits, missing history, eviction and resets preserve optimistic Status conflicts', () => {
+  const h = harness(), status = [{ type: 'status.apply' }];
+  h.commit(undefined, true); h.commit(); h.commit(undefined, true);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(0, status, true), false);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(1, status, true), false);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(2, status, true), true);
+  h.history()[2].baseRevision = 1;
+  assert.equal(h.canRebaseStatusOverBackgroundFog(2, status, true), false);
+  h.resetResumeHistory(); h.commit(undefined, true);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(2, status, true), false);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(3, status, true), true);
+  for (let index = 0; index < 257; index++) h.commit(undefined, true);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(3, status, true), false);
+  assert.equal(h.canRebaseStatusOverBackgroundFog(h.base().revision, status, true), true);
 });
 
 test('actual retained history contains only encoded patches and emits identical permission projections to live history', () => {

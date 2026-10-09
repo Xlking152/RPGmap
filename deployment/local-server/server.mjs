@@ -590,7 +590,7 @@ function discardResumeHistory() {
 }
 function rememberResumeCommit({
   beforeState, afterState, operationId, baseRevision, revision, updatedAt,
-  results, originSessionId, documentBatch, fog, patch,
+  results, originSessionId, documentBatch, fog, patch, backgroundFogOnly = false,
 }) {
   const now = Date.now();
   let encodedPatch;
@@ -610,12 +610,34 @@ function rememberResumeCommit({
     results: structuredClone(results || []),
     originSessionId: originSessionId || null,
     documentBatch: documentBatch === true,
+    backgroundFogOnly: backgroundFogOnly === true,
     fog: structuredClone(fog || []),
   });
   while (resumeHistory.length > RESUME_HISTORY_LIMIT
     || (resumeHistory[0] && now - resumeHistory[0].at > RESUME_HISTORY_MAX_AGE_MS)) {
     advanceResumeBase(resumeHistory.shift());
   }
+}
+function canRebaseStatusOverBackgroundFog(baseRevision, operations, documentBatch) {
+  // Only the bundled Status reducer's narrow document intents commute with
+  // completed exploration. Never rebase over a reset, source change, user
+  // operation or missing history. Authorization and reduction still run
+  // against the current state, followed by the same durable WAL transaction.
+  if (documentBatch !== true || !operations.length
+    || !operations.every(operation => ['status.apply', 'status.remove'].includes(operation.type))
+    || !Number.isSafeInteger(baseRevision) || baseRevision < 0 || baseRevision >= world.revision
+    || !resumeBaseState || baseRevision < resumeBaseRevision) return false;
+  const now = Date.now();
+  let expected = world.revision;
+  for (let index = resumeHistory.length - 1; index >= 0; index--) {
+    const entry = resumeHistory[index];
+    if (entry.revision !== expected || entry.baseRevision !== expected - 1
+      || entry.backgroundFogOnly !== true || now < entry.at
+      || now - entry.at > RESUME_HISTORY_MAX_AGE_MS) return false;
+    expected = entry.baseRevision;
+    if (expected === baseRevision) return true;
+  }
+  return false;
 }
 function resumableCommits(session, revision, fingerprint) {
   const requested = Number(revision);
@@ -1151,7 +1173,7 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
 }
 
 
-function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, operations = [], documentBatch = false, onOriginProjection = null }) {
+function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, operations = [], documentBatch = false, onOriginProjection = null, backgroundFogOnly = false }) {
   const fog = results.filter(result => Object.hasOwn(result, 'dirtyBounds'));
   const fogOnly = operations.length && operations.every(operation => operation.type === 'scene.fog.explore');
   // These describe the authoritative commit, not any viewer's permissions.
@@ -1203,6 +1225,7 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
   rememberResumeCommit({
     beforeState, afterState, operationId, baseRevision, revision, updatedAt,
     results, originSessionId, documentBatch, fog, patch: committedPatches.get(afterState),
+    ...(backgroundFogOnly === true ? { backgroundFogOnly: true } : {}),
   });
 }
 function sendAudienceSnapshot(socket, session, reason = 'audience.changed') {
@@ -1828,7 +1851,8 @@ async function commitExplorationResults(results) {
   await persistWorldCommit(nextWorld, beforeState, operationId);
   world = nextWorld;
   broadcastOperationCommit({ beforeState, afterState: state, operationId, baseRevision,
-    revision: world.revision, updatedAt: now, results: fogResults, operations, originSessionId: null, documentBatch: true });
+    revision: world.revision, updatedAt: now, results: fogResults, operations, originSessionId: null,
+    documentBatch: true, backgroundFogOnly: true });
 }
 
 async function flushExploration() {
@@ -2267,7 +2291,10 @@ server.on('upgrade', (req, socket) => {
       }
       const safeMoveRebase = message._documentBatch === true
         && envelope.operations.every(operation => operation.type === 'token.movePath');
-      if (envelope.baseRevision !== world.revision && !safeMoveRebase) {
+      const safeStatusRebase = canRebaseStatusOverBackgroundFog(
+        envelope.baseRevision, envelope.operations, message._documentBatch === true,
+      );
+      if (envelope.baseRevision !== world.revision && !safeMoveRebase && !safeStatusRebase) {
         return sendWorldOperationDenied(socket, message, 'revision_conflict', 'World 已被其他操作更新，请先重新载入最新状态');
       }
 
