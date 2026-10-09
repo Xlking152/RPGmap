@@ -1,6 +1,8 @@
 import { types } from 'node:util';
+import { performance } from 'node:perf_hooks';
 import { assertCanonicalStatusState, assertStatusState } from './status-operations.mjs';
 import { assertCanonicalWorldV2, assertWorldV2 } from './world-v2.mjs';
+const diagnosticNow = performance.now.bind(performance);
 
 // The release server applies these hostile-input limits before any permission
 // projection or authoritative World mutation.
@@ -346,16 +348,35 @@ export function assertWorldState(value) {
 // a different key limit. Unchanged, immutable Actor/definition arrays reuse
 // their private structural indexes; new Token collections and all references
 // still use the current candidate. Getter/Proxy branches never seed a cache.
-export function createCanonicalWorldValidator() {
-  const summaries = new WeakMap();
+export function createCanonicalWorldValidator({ diagnostics = false, compactMetadata = false } = {}) {
+  // The fixed server reducer owns these derived facts. One weak record per
+  // accepted JSON object avoids repeatedly resizing separate weak tables during
+  // large Fog commits. Public validators keep their original intrinsic calls.
+  const metadata = compactMetadata ? new WeakMap() : null;
+  const recordFor = value => {
+    let record = metadata.get(value);
+    if (!record) { record = Object.create(null); metadata.set(value, record); }
+    return record;
+  };
+  const weakMap = field => metadata ? {
+    get: value => metadata.get(value)?.[field],
+    has: value => { const record = metadata.get(value); return Boolean(record && Object.hasOwn(record, field)); },
+    set(value, entry) { recordFor(value)[field] = entry; },
+    delete(value) { const record = metadata.get(value); return Boolean(record && Object.hasOwn(record, field) && delete record[field]); },
+  } : new WeakMap();
+  const weakSet = field => metadata ? {
+    has: value => metadata.get(value)?.[field] === true,
+    add(value) { recordFor(value)[field] = true; },
+  } : new WeakSet();
+  const summaries = weakMap('summaries');
   // Most frozen JSON branches recur at one canonical path. Avoid allocating
   // a Map for every Token/Fog row; aliases still promote to the original
   // bounded path map, so global occurrence/depth/key accounting is unchanged.
-  const singleSummaries = new WeakMap();
-  const byteSizes = new WeakMap();
-  const immutableData = new WeakSet();
-  const acceptedData = new WeakSet();
-  const immutableDataProofs = new WeakSet();
+  const singleSummaries = weakMap('singleSummary');
+  const byteSizes = weakMap('bytes');
+  const immutableData = weakSet('immutable');
+  const acceptedData = weakSet('accepted');
+  const immutableDataProofs = weakSet('pure');
   const isImmutableData = value => {
     if (!value || typeof value !== 'object' || types.isProxy(value) || !acceptedData.has(value)) return false;
     if (immutableDataProofs.has(value)) return true;
@@ -369,9 +390,11 @@ export function createCanonicalWorldValidator() {
     return true;
   };
   const acceptedDataProof = { has: isImmutableData };
-  const verifiedDocuments = new WeakMap();
-  const verifiedCollections = new WeakMap();
+  const verifiedDocuments = weakMap('documents');
+  const verifiedCollections = weakMap('collections');
+  const measurements = [];
   const validate = value => {
+    const times = diagnostics ? { start: diagnosticNow() } : null;
     const pending = [];
     const pendingDocuments = [];
     const pendingCollections = [];
@@ -388,6 +411,7 @@ export function createCanonicalWorldValidator() {
         singleSummaryAllowed = true;
       }
     }
+    if (times) times.proof = diagnosticNow();
     const documentCache = {
       verified(kind, document, ...dependencies) {
         if (!document || typeof document !== 'object' || !immutableData.has(document)) return false;
@@ -478,7 +502,9 @@ export function createCanonicalWorldValidator() {
       return summary;
     };
     visit(value, 'state', 0);
+    if (times) times.json = diagnosticNow();
     assertWorldStateStructure(value, documentCache);
+    if (times) times.structure = diagnosticNow();
     // Children precede parents. No rejected candidate can seed trusted entries.
     for (const entry of pending) {
       Object.freeze(entry.value);
@@ -502,6 +528,7 @@ export function createCanonicalWorldValidator() {
       // accessor/Proxy branch's earlier observed serialized size.
       byteSizes.set(entry.value, entry.summary.cacheable ? entry.summary.bytes : null);
     }
+    if (times) times.freeze = diagnosticNow();
     const immutableDependencies = dependencies => dependencies.every(dependency =>
       !dependency || typeof dependency !== 'object' || immutableData.has(dependency));
     for (const entry of pendingDocuments) {
@@ -521,6 +548,13 @@ export function createCanonicalWorldValidator() {
       records.set(entry.kind, { value: entry.value, dependencies: entry.dependencies });
     }
     for (let index = 0; index < pending.length; index++) acceptedData.add(pending[index].value);
+    if (times) {
+      measurements.push({ objects: pending.length, documents: pendingDocuments.length,
+        collections: pendingCollections.length, proofMs: times.proof - times.start,
+        jsonMs: times.json - times.proof, structureMs: times.structure - times.json,
+        freezeMs: times.freeze - times.structure, metadataMs: diagnosticNow() - times.freeze });
+      if (measurements.length > 256) measurements.shift();
+    }
     return value;
   };
   // Data graphs are proved lazily; repeated queries are O(1). Consumers never
@@ -528,6 +562,7 @@ export function createCanonicalWorldValidator() {
   const immutableProofDescriptor = Object.create(null);
   immutableProofDescriptor.value = isImmutableData;
   Object.defineProperty(validate, 'isImmutableData', immutableProofDescriptor);
+  if (diagnostics) validate.getDiagnostics = () => measurements.map(entry => ({ ...entry }));
   validate.serializedBytes = (value, { omitPreferencesKeys = [] } = {}) => {
     const bytesFor = current => {
       if (current === null || typeof current !== 'object') return Buffer.byteLength(JSON.stringify(current));

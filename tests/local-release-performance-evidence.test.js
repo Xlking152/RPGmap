@@ -113,8 +113,16 @@ function timing(scale = 1) {
 function ruinsRenderer() {
   return { renders: 40, maskBuilds: 10, reusedObjects: 20, ruinObjects: 2, craterObjects: 1, floodObjects: 0,
     cachedFeatureGeometry: 2, cachedNodes: 103, lastRenderMs: 2, maxRenderMs: 4,
-    ruinObjectsLimit: 103, cachedNodesLimit: 103, featureGeometryLimit: 103, craterObjectsLimit: 1 };
+    ruinObjectsLimit: 103, cachedNodesLimit: 103, featureGeometryLimit: 103, craterObjectsLimit: 1,
+    inactiveRuins: 1, inactiveRuinsLimit: 103, largestRuinVersions: 2 };
 }
+
+test('v2.5.5 formal large-range LAN evidence rejects diagnostic profiling', async t => {
+  const candidate = await fixture(t, false, '2.5.5');
+  candidate.reports['large-lan.json'].diagnosticProfiling = true;
+  await candidate.save();
+  await assert.rejects(candidate.verify(), /LAN diagnostic profiling cannot be formal/);
+});
 function geometryCache() {
   return { entries: 82, features: 81, maxEntries: 512, maxVersionsPerFeature: 2,
     largestFeatureVersions: 2, hits: 100, misses: 82, evictions: 0, failures: 0 };
@@ -240,7 +248,7 @@ async function fixture(t, compressed = false, version = '2.5.4') {
     .map(([name, count]) => [name, { count, medianMs: 20, p95Ms: 30 }]));
   const lan = { ...common, fixture: { actors: 100, tokens: 500, players: 6 }, warmup: 30,
     measurement: structuredClone(summary), ackMeasurement: structuredClone(summary), moveBytes: { requestMax: 450, responseMax: 550 } };
-  const large = { ...common, fixture: { actors: 100, tokens: 500, players: 6, occluders: 81, nearbyOccluders: 51,
+  const large = { ...common, diagnosticProfiling: false, fixture: { actors: 100, tokens: 500, players: 6, occluders: 81, nearbyOccluders: 51,
     fogCellSizeMeters: 5, pathSampleSpacingMeters: 2.5 },
   scenarios: { singleSource: largeScenario(1), sixConcurrentSources: largeScenario(6) } };
   const browser = { ...common, browser: 'chrome', headless: true,
@@ -659,6 +667,8 @@ test('v2.5.5 ruins stress gate validates twelve actual operations and bounded re
     [report => { report.stress.samples[0].restoreFeedback.revision = report.stress.samples[0].damageFeedback.revision; }, /revisions did not advance/],
     [report => { report.stress.samples[0].diagnostics.ruinObjects = 104; }, /renderer cache limit/],
     [report => { report.stress.samples[0].diagnostics.featureGeometryLimit = 1000; }, /renderer cache limit/],
+    [report => { report.stress.samples[0].diagnostics.inactiveRuins = 104; }, /renderer cache limit/],
+    [report => { report.stress.samples[0].diagnostics.largestRuinVersions = 3; }, /renderer cache limit/],
     [report => { report.stress.samples[0].geometryCache.entries = 513; }, /geometry cache bounds/],
     [report => { report.stress.samples[0].geometryCache.largestFeatureVersions = 3; }, /geometry cache bounds/],
     [report => { delete report.stress.samples[0].geometryCache; }, /geometry cache bounds/],

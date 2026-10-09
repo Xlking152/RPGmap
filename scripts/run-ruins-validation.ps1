@@ -40,6 +40,7 @@ Invoke-Check 'build' { npm run build }
 Invoke-Check 'bundle' { npm run check:bundle }
 Invoke-Check 'package' { npm run package:local-server }
 Invoke-Check 'verify-package' { node scripts/verify-package.mjs "--root=$packageRoot" "--archive=$packageRoot.zip" "--commit=$finalCommit" }
+Remove-Item Env:RPGMAP_CANONICAL_DIAGNOSTICS -ErrorAction SilentlyContinue
 Invoke-Check 'lan-ordinary' { node scripts/lan-performance-benchmark.mjs "--package=$packageRoot" "--output=artifact/qa/v2.5.5-lan-ordinary-$label.json" --assert }
 Invoke-Check 'lan-large' { node scripts/occlusion-lan-benchmark.mjs "--package=$packageRoot" --rounds=5 --warmup-rounds=1 "--output=artifact/qa/v2.5.5-lan-large-$label-five.json" --assert }
 Write-Output '[final-main] vision baseline started'

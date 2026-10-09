@@ -194,3 +194,50 @@ test('single-path JSON summaries promote through many aliases without changing b
   assert.equal(validate(rejected), rejected);
   assert.equal(validate.isImmutableData(rejected), true);
 });
+
+test('server compact metadata keeps complete validation, byte counts, purity and changing dependencies', () => {
+  for (const compactMetadata of [false, true]) {
+    const validate = createCanonicalWorldValidator({ compactMetadata });
+    let current = canonicalFixture(); validate(current);
+    for (let index = 0; index < 16; index++) {
+      const next = movedCandidate(current), world = next.preferences.worldV2;
+      world.scenes[0].fog = { schemaVersion: 1, cellSizeMeters: 5,
+        exploredByParty: { party: { rows: { [index]: [[1, index + 2]] } } } };
+      world.actors = [{ ...world.actors[0], name: `Actor ${index}` }];
+      next.preferences.entitySystem.actors = world.actors;
+      assert.equal(assertWorldState(next), next);
+      assert.equal(validate(next), next);
+      assert.equal(validate.serializedBytes(next), Buffer.byteLength(JSON.stringify(next)));
+      assert.equal(validate.isImmutableData(next), true);
+      const badReference = movedCandidate(next);
+      badReference.preferences.worldV2.scenes[0].tokens[0].actorId = 'missing-actor';
+      assertSameRejection(validate, badReference);
+      assert.equal(Object.isFrozen(badReference.preferences.worldV2.scenes[0].tokens[0]), false);
+      const badDefinitions = movedCandidate(next);
+      badDefinitions.preferences.entitySystem.statusDefinitions = [{ id: 'invalid' }];
+      assertSameRejection(validate, badDefinitions);
+      current = next;
+    }
+    let getterReads = 0;
+    const dynamic = { opaque: { get value() { getterReads++; return 1; } } };
+    validate(dynamic);
+    const reads = getterReads;
+    assert.equal(validate.isImmutableData(dynamic), false);
+    assert.equal(getterReads, reads, 'purity qualification must not invoke an accessor');
+    assert.throws(() => validate({ opaque: current, invalid: Infinity }), /finite numbers/);
+  }
+});
+
+test('optional canonical phase diagnostics are detached, bounded and absent by default', () => {
+  assert.equal(createCanonicalWorldValidator().getDiagnostics, undefined);
+  const validate = createCanonicalWorldValidator({ compactMetadata: true, diagnostics: true });
+  for (let index = 0; index < 260; index++) validate({ data: { index } });
+  const measurements = validate.getDiagnostics();
+  assert.equal(measurements.length, 256);
+  assert.ok(measurements.every(entry => ['proofMs', 'jsonMs', 'structureMs', 'freezeMs', 'metadataMs']
+    .every(key => Number.isFinite(entry[key]) && entry[key] >= 0)));
+  measurements[0].objects = -1;
+  assert.notEqual(validate.getDiagnostics()[0].objects, -1);
+  assert.throws(() => validate({ invalid: Infinity }), /finite numbers/);
+  assert.equal(validate.getDiagnostics().length, 256);
+});

@@ -333,6 +333,9 @@ async function verifyRecoveryAndRestore(storageKey,captureRevision,matchesFeedba
     check(performance.now()-queueStart<45000,'Restored fixture exploration did not drain');await wait(20);
   }
   const stressFinal={diagnostics:api.getSceneRenderDiagnostics(),geometryCache:api.getOcclusionGeometryCacheDiagnostics(),queue:api.world.getExplorationStatus()};
+  check(stressFinal.diagnostics.inactiveRuins<=stressFinal.diagnostics.inactiveRuinsLimit
+    &&stressFinal.diagnostics.inactiveRuinsLimit<=512&&stressFinal.diagnostics.largestRuinVersions<=2,
+    'Detached ruins display cache exceeded its object/version limits');
   await api.world.performOperations([
     {type:'scene.content.replace',payload:{sceneId,sceneEvents:original.scene.sceneEvents,attackAreas:original.scene.attackAreas,settings:original.scene.settings}},
     {type:'token.upsert',payload:{sceneId,token:original.token}},

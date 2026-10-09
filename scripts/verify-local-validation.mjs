@@ -149,7 +149,9 @@ function ordinaryLan(report) {
   'LAN move packet gate failed');
 }
 
-function largeLan(report) {
+function largeLan(report, { requireFrameMean = false } = {}) {
+  if (requireFrameMean) requireCondition(report.diagnosticProfiling === false,
+    'Large-range LAN diagnostic profiling cannot be formal performance evidence');
   const fixture = report.fixture;
   requireCondition(fixture?.actors === 100 && fixture.tokens === 500 && fixture.players === 6
     && fixture.fogCellSizeMeters === 5 && fixture.pathSampleSpacingMeters === 2.5
@@ -285,10 +287,13 @@ function ruinsRendererDiagnostics(value, name) {
     && Number.isSafeInteger(value.reusedObjects) && value.reusedObjects >= 0,
   `${name} renderer observations missing`);
   for (const [key, limitKey, limit] of [['ruinObjects', 'ruinObjectsLimit', 103], ['cachedNodes', 'cachedNodesLimit', 103],
-    ['cachedFeatureGeometry', 'featureGeometryLimit', 103], ['craterObjects', 'craterObjectsLimit', 1]]) {
+    ['cachedFeatureGeometry', 'featureGeometryLimit', 103], ['craterObjects', 'craterObjectsLimit', 1],
+    ['inactiveRuins', 'inactiveRuinsLimit', 103]]) {
     requireCondition(value[limitKey] === limit && Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= limit,
       `${name} renderer cache limit failed: ${key}`);
   }
+  requireCondition(Number.isSafeInteger(value.largestRuinVersions) && value.largestRuinVersions >= 0
+    && value.largestRuinVersions <= 2, `${name} renderer cache limit failed: ruin versions`);
   requireCondition(Number.isSafeInteger(value.floodObjects) && value.floodObjects >= 0
     && finite(value.lastRenderMs) && value.lastRenderMs >= 0 && finite(value.maxRenderMs)
     && value.maxRenderMs >= value.lastRenderMs, `${name} renderer timing/count invalid`);

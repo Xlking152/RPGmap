@@ -236,6 +236,71 @@ test('unchanged renders and unrelated destruction preserve existing DOM nodes an
   assert.ok(f.renderer.getDiagnostics().reusedObjects > 0);
 });
 
+test('whole destruction and restore reuse detached display nodes without retaining an active decal or tag', t => {
+  const source = feature(), f = fixture(t), history = [], original = structuredClone(source);
+  let first;
+  for (let index = 0; index < 12; index++) {
+    history.push(damage(`whole-${index}`, { objectIds: ['building'] }));
+    f.setEvents([...history]); f.renderer.render();
+    first ||= f.ruin('building');
+    assert.equal(f.ruin('building'), first);
+    assert.equal(f.original('building').classList.contains('scene-destroyed'), true);
+    history.push({ id: `restore-${index}`, type: 'restore', featureIds: ['building'] });
+    f.setEvents([...history]); f.renderer.render();
+    assert.equal(f.ruin('building'), null);
+    assert.equal(f.original('building').classList.contains('scene-destroyed'), false);
+    assert.equal(f.original('building').getAttribute('mask'), null);
+    assert.equal(f.renderer.getDiagnostics().inactiveRuins, 1);
+    assert.ok(f.renderer.getDiagnostics().largestRuinVersions <= 2);
+  }
+  assert.equal(f.renderer.getDiagnostics().maskBuilds, 1);
+  assert.deepEqual(source, original);
+  f.renderer.reset();
+  assert.equal(f.renderer.getDiagnostics().inactiveRuins, 0);
+});
+
+test('cached partial versions restore their exact mask and image while new history IDs alone do not rebuild pixels', t => {
+  const f = fixture(t);
+  const clipped = (id, x) => damage(id, { clipHits: [{ featureId: 'building', polygon: ring(x, 0, 20, 20) }] });
+  f.setEvents([clipped('a', 0)]); f.renderer.render();
+  const a = f.ruin('building'), originalMask = f.svg.querySelector('#scene-ruin-0-original');
+  f.setEvents([clipped('same-pixels-new-id', 0)]); f.renderer.render();
+  assert.equal(f.ruin('building'), a);
+  f.setEvents([clipped('b', 50)]); f.renderer.render();
+  const b = f.ruin('building'); assert.notEqual(b, a);
+  f.setEvents([clipped('a-again', 0)]); f.renderer.render();
+  assert.equal(f.ruin('building'), a);
+  assert.equal(f.svg.querySelector('#scene-ruin-0-original'), originalMask);
+  assert.equal(f.original('building').getAttribute('mask'), 'url(#scene-ruin-0-original)');
+  assert.equal(f.renderer.getDiagnostics().maskBuilds, 2);
+  assert.equal(f.renderer.getDiagnostics().largestRuinVersions, 2);
+});
+
+test('failed cached images are recreated after restore so an asset can become available', t => {
+  const f = fixture(t, [feature()], { ruins: { 'test-style': { normal: 'temporarily-missing.webp' } } });
+  f.setEvents([damage('whole', { objectIds: ['building'] })]); f.renderer.render();
+  const first = f.ruin('building'); first.querySelector('image').dispatchEvent({ type: 'error' });
+  f.setEvents([{ id: 'restored', type: 'restore', featureIds: ['building'] }]); f.renderer.render();
+  f.setEvents([damage('whole-again', { objectIds: ['building'] })]); f.renderer.render();
+  assert.notEqual(f.ruin('building'), first);
+  assert.equal(f.ruin('building').querySelector('svg').getAttribute('visibility'), null);
+});
+
+test('inactive display cache is bounded at 512 objects and reset releases every detached version', t => {
+  const features = Array.from({ length: 514 }, (_, index) => feature(`building-${index}`));
+  const f = fixture(t, features), ids = features.map(value => value.id);
+  f.setEvents([damage('all', { objectIds: ids })]); f.renderer.render();
+  f.setEvents([{ id: 'restore-all', type: 'restore', featureIds: ids }]); f.renderer.render();
+  const stats = f.renderer.getDiagnostics();
+  assert.equal(stats.inactiveRuinsLimit, 512);
+  assert.equal(stats.inactiveRuins, 512);
+  assert.equal(stats.ruinObjects, 0);
+  assert.equal(f.svg.querySelectorAll('[data-ruin-for]').length, 0);
+  f.renderer.reset();
+  assert.equal(f.renderer.getDiagnostics().inactiveRuins, 0);
+  assert.equal(f.renderer.getDiagnostics().largestRuinVersions, 0);
+});
+
 test('missing images expose a static fallback, and replacing the resource table refreshes affected decals', (t) => {
   const f = fixture(t, [feature()], { ruins: { 'test-style': { normal: 'missing.webp' } } });
   f.setEvents([damage('whole', { objectIds: ['building'] })]); f.renderer.render();

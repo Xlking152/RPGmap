@@ -439,7 +439,11 @@ if (upgradeRequired) {
 // No upgrade is needed now. Only after validation may a torn WAL tail be trimmed.
 world = await worldWal.replay(world);
 if (world.state?.preferences?.worldV2) world.state = projectWorldOperationState(world.state);
-const assertCanonicalWorldState = createCanonicalWorldValidator();
+const canonicalDiagnostics = process.env.RPGMAP_CANONICAL_DIAGNOSTICS === '1';
+const assertCanonicalWorldState = createCanonicalWorldValidator({ diagnostics: canonicalDiagnostics, compactMetadata: true });
+if (canonicalDiagnostics) process.once('exit', () => {
+  console.error(JSON.stringify({ canonicalValidationDiagnostics: assertCanonicalWorldState.getDiagnostics() }));
+});
 const prepareMovementAdjudicationActor = createServerMovementAdjudicationActorResolver({
   isCanonicalData: assertCanonicalWorldState.isImmutableData,
 });

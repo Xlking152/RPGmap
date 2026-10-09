@@ -11,6 +11,8 @@ export function createSceneRenderer({ baseSvg, mapPackage, getSceneEvents, getDa
   const featureNodes = new Map();
   let featureGeometry = new WeakMap();
   const ruinRecords = new Map();
+  const inactiveRuins = new Map();
+  const inactiveRuinsLimit = Math.min(512, featureById.size);
   const floodRecords = new Map();
   let previousEvents = null;
   let previousAssets = null;
@@ -121,14 +123,16 @@ export function createSceneRenderer({ baseSvg, mapPackage, getSceneEvents, getDa
         height: layout.sourceHeight, preserveAspectRatio: 'none', 'data-rubble-variant': layout.variant });
       // A legacy/normal asset remains usable for severe damage, with the darker static underlay showing through.
       if (severe && resource.url === resolveRuinsResource(feature, mapPackage.artAssets)?.url) image.setAttribute('opacity', '.66');
-      image.addEventListener('error', () => imageViewport.setAttribute('visibility', 'hidden'), { once: true });
+      image.addEventListener('error', () => {
+        imageViewport.setAttribute('visibility', 'hidden'); group.setAttribute('data-ruin-asset-failed', 'true');
+      }, { once: true });
       imageViewport.append(image);
       group.append(imageViewport);
     }
     return group;
   }
 
-  function removeRuin(id) {
+  function removeRuin(id, retain = true) {
     const record = ruinRecords.get(id);
     if (!record) return;
     record.group.remove();
@@ -138,14 +142,35 @@ export function createSceneRenderer({ baseSvg, mapPackage, getSceneEvents, getDa
     node?.removeAttribute('mask');
     for (const label of baseSvg.querySelectorAll('[data-label-for="' + CSS.escape(id) + '"]')) label.classList.remove('scene-label-destroyed');
     ruinRecords.delete(id);
+    if (retain && inactiveRuinsLimit) {
+      inactiveRuins.delete(id); inactiveRuins.set(id, record);
+      while (inactiveRuins.size > inactiveRuinsLimit) inactiveRuins.delete(inactiveRuins.keys().next().value);
+    }
   }
 
   function updateRuin(feature, damage, index) {
-    const signature = JSON.stringify({ damage, normal: resolveRuinsResource(feature, mapPackage.artAssets),
+    // Event IDs identify authority history, not pixels. Whole ordinary damage
+    // does not need its old ordinary local hits in the display signature.
+    const signature = JSON.stringify({ damage: { whole: damage.whole, severeWhole: damage.severeWhole,
+      hits: damage.hits.filter(hit => !damage.whole || hit.severe)
+        .map(hit => ({ polygon: hit.polygon, severe: hit.severe })) }, normal: resolveRuinsResource(feature, mapPackage.artAssets),
       severe: resolveRuinsResource(feature, mapPackage.artAssets, true) });
     const existing = ruinRecords.get(feature.id);
     if (existing?.signature === signature) { reusedObjectCount++; return; }
+    const cached = inactiveRuins.get(feature.id);
+    const reusable = cached?.signature === signature && !cached.group.querySelector('[data-ruin-asset-failed]');
+    if (reusable) inactiveRuins.delete(feature.id);
     removeRuin(feature.id);
+    if (reusable) {
+      runtimeDefs.append(...cached.definitions); ruinsLayer.append(cached.group);
+      const node = featureNode(feature.id);
+      if (cached.whole) {
+        node?.classList.add('scene-destroyed');
+        for (const label of baseSvg.querySelectorAll('[data-label-for="' + CSS.escape(feature.id) + '"]')) label.classList.add('scene-label-destroyed');
+      } else node?.setAttribute('mask', `url(#${cached.originalMaskId})`);
+      ruinRecords.set(feature.id, cached); reusedObjectCount++;
+      return;
+    }
     const geometry = outline(feature);
     if (!geometry.bounds) return;
     const prefix = `scene-ruin-${index}`;
@@ -186,7 +211,8 @@ export function createSceneRenderer({ baseSvg, mapPackage, getSceneEvents, getDa
     }
     runtimeDefs.append(...definitions);
     ruinsLayer.append(group);
-    ruinRecords.set(feature.id, { signature, group, definitions });
+    ruinRecords.set(feature.id, { signature, group, definitions, whole: damage.whole,
+      originalMaskId: prefix + '-original' });
     maskBuildCount++;
   }
 
@@ -301,7 +327,8 @@ export function createSceneRenderer({ baseSvg, mapPackage, getSceneEvents, getDa
   }
 
   function reset() {
-    for (const id of [...ruinRecords.keys()]) removeRuin(id);
+    for (const id of [...ruinRecords.keys()]) removeRuin(id, false);
+    inactiveRuins.clear();
     for (const [id, node] of featureNodes) {
       node?.classList.remove('preview-hit', 'scene-destroyed'); node?.removeAttribute('mask');
       for (const label of baseSvg.querySelectorAll('[data-label-for="' + CSS.escape(id) + '"]')) label.classList.remove('scene-label-destroyed');
@@ -318,5 +345,7 @@ export function createSceneRenderer({ baseSvg, mapPackage, getSceneEvents, getDa
     ruinObjects: ruinRecords.size, craterObjects: craterRecord ? 1 : 0, floodObjects: floodRecords.size,
     maskBuilds: maskBuildCount, reusedObjects: reusedObjectCount, lastRenderMs, maxRenderMs,
     cachedFeatureGeometry, cachedNodes: featureNodes.size, ruinObjectsLimit: featureById.size,
+    inactiveRuins: inactiveRuins.size, inactiveRuinsLimit,
+    largestRuinVersions: Math.max(0, ...[...featureById.keys()].map(id => Number(ruinRecords.has(id)) + Number(inactiveRuins.has(id)))),
     cachedNodesLimit: featureById.size, featureGeometryLimit: featureById.size, craterObjectsLimit: 1 }) };
 }
