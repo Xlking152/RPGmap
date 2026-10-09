@@ -171,28 +171,30 @@ test('public full validation never trusts a shallow-frozen document from a canon
 });
 
 test('single-path JSON summaries promote through many aliases without changing bytes or occurrence budgets', () => {
-  const validate = createCanonicalWorldValidator();
-  const shared = { ranges: Array.from({ length: 1000 }, (_, index) => [index, index + 1]) };
-  const first = { first: shared };
-  validate(first);
-  assert.equal(validate.serializedBytes(first), Buffer.byteLength(JSON.stringify(first)));
-  // More than eight paths exercises the bounded alias cache and eviction;
-  // revisiting the initial path must still enforce the same full accounting.
-  for (let index = 0; index < 12; index++) {
-    const value = { [`alias${index}`]: shared, repeated: shared };
-    assert.equal(assertWorldState(value), value);
-    assert.equal(validate(value), value);
-    assert.equal(validate.serializedBytes(value), Buffer.byteLength(JSON.stringify(value)));
+  for (const compactMetadata of [false, true]) {
+    const validate = createCanonicalWorldValidator({ compactMetadata });
+    const shared = { ranges: Array.from({ length: 1000 }, (_, index) => [index, index + 1]) };
+    const first = { first: shared };
+    validate(first);
+    assert.equal(validate.serializedBytes(first), Buffer.byteLength(JSON.stringify(first)));
+    // More than eight paths exercises the bounded alias cache and eviction;
+    // revisiting the initial path must still enforce the same full accounting.
+    for (let index = 0; index < 12; index++) {
+      const value = { [`alias${index}`]: shared, repeated: shared };
+      assert.equal(assertWorldState(value), value);
+      assert.equal(validate(value), value);
+      assert.equal(validate.serializedBytes(value), Buffer.byteLength(JSON.stringify(value)));
+    }
+    assert.equal(validate({ first: shared }).first, shared);
+    const tooManyOccurrences = { repeated: Array(67).fill(shared) };
+    assertSameRejection(validate, tooManyOccurrences);
+    const rejected = { first: shared, changed: { invalid: Infinity } };
+    assertSameRejection(validate, rejected);
+    assert.equal(Object.isFrozen(rejected.changed), false);
+    rejected.changed.invalid = 1;
+    assert.equal(validate(rejected), rejected);
+    assert.equal(validate.isImmutableData(rejected), true);
   }
-  assert.equal(validate({ first: shared }).first, shared);
-  const tooManyOccurrences = { repeated: Array(67).fill(shared) };
-  assertSameRejection(validate, tooManyOccurrences);
-  const rejected = { first: shared, changed: { invalid: Infinity } };
-  assertSameRejection(validate, rejected);
-  assert.equal(Object.isFrozen(rejected.changed), false);
-  rejected.changed.invalid = 1;
-  assert.equal(validate(rejected), rejected);
-  assert.equal(validate.isImmutableData(rejected), true);
 });
 
 test('server compact metadata keeps complete validation, byte counts, purity and changing dependencies', () => {
@@ -213,6 +215,7 @@ test('server compact metadata keeps complete validation, byte counts, purity and
       badReference.preferences.worldV2.scenes[0].tokens[0].actorId = 'missing-actor';
       assertSameRejection(validate, badReference);
       assert.equal(Object.isFrozen(badReference.preferences.worldV2.scenes[0].tokens[0]), false);
+      assert.throws(() => validate.serializedBytes(badReference.preferences.worldV2.scenes[0].tokens[0]), /verified canonical/);
       const badDefinitions = movedCandidate(next);
       badDefinitions.preferences.entitySystem.statusDefinitions = [{ id: 'invalid' }];
       assertSameRejection(validate, badDefinitions);

@@ -353,16 +353,27 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
   // accepted JSON object avoids repeatedly resizing separate weak tables during
   // large Fog commits. Public validators keep their original intrinsic calls.
   const metadata = compactMetadata ? new WeakMap() : null;
+  const missingMetadata = metadata ? Symbol('missing canonical metadata') : null;
   const recordFor = value => {
     let record = metadata.get(value);
-    if (!record) { record = Object.create(null); metadata.set(value, record); }
+    if (!record) {
+      // Fixed own slots avoid a separate property dictionary on every node.
+      // The sentinel retains Map.has/delete semantics, including stored undefined.
+      record = { summaries: missingMetadata, singleSummary: missingMetadata, bytes: missingMetadata,
+        immutable: false, accepted: false, pure: false, documents: missingMetadata, collections: missingMetadata };
+      metadata.set(value, record);
+    }
     return record;
   };
   const weakMap = field => metadata ? {
-    get: value => metadata.get(value)?.[field],
-    has: value => { const record = metadata.get(value); return Boolean(record && Object.hasOwn(record, field)); },
+    get(value) { const entry = metadata.get(value)?.[field]; return entry === missingMetadata ? undefined : entry; },
+    has: value => { const record = metadata.get(value); return Boolean(record && record[field] !== missingMetadata); },
     set(value, entry) { recordFor(value)[field] = entry; },
-    delete(value) { const record = metadata.get(value); return Boolean(record && Object.hasOwn(record, field) && delete record[field]); },
+    delete(value) {
+      const record = metadata.get(value);
+      if (!record || record[field] === missingMetadata) return false;
+      record[field] = missingMetadata; return true;
+    },
   } : new WeakMap();
   const weakSet = field => metadata ? {
     has: value => metadata.get(value)?.[field] === true,
