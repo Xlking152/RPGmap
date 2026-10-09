@@ -14,6 +14,22 @@ import {
 import { journalVisibleToAudience } from '../journal/model.js';
 
 const clone = structuredClone;
+const indexMap = Map, indexString = String, indexArray = Array;
+const indexMapSet = Object.getOwnPropertyDescriptor(Map.prototype, 'set')?.value;
+const indexArrayMap = Object.getOwnPropertyDescriptor(Array.prototype, 'map')?.value;
+const indexArrayIterator = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator)?.value;
+const indexSpecies = Object.getOwnPropertyDescriptor(Array, Symbol.species)?.get;
+const indexIterator = (() => {
+  try {
+    const methods = [indexMap, indexString, indexArray, indexMapSet, indexArrayMap, indexArrayIterator, indexSpecies];
+    if (!methods.every(method => typeof method === 'function'
+      && Function.prototype.toString.call(method).includes('[native code]'))) return null;
+    const prototype = Object.getPrototypeOf(indexArrayIterator.call([]));
+    const next = Object.getOwnPropertyDescriptor(prototype, 'next')?.value;
+    return typeof next === 'function' && Function.prototype.toString.call(next).includes('[native code]')
+      ? { prototype, next } : null;
+  } catch { return null; }
+})();
 const projectionAudiences = new WeakMap();
 const projectionPolicies = new WeakMap();
 const vagueActorDocuments = new WeakSet();
@@ -152,12 +168,33 @@ function actorMap(world, cacheCanonical = false) {
 function canonicalTokenMap(tokens) {
   const cached = canonicalTokenMaps.get(tokens);
   if (cached) return cached;
-  const result = new Map(tokens.map(token => [String(token.id), token]));
+  const immutable = hasImmutableVisionData(tokens);
+  const ordinaryIndex = immutable && indexIterator && Map === indexMap && String === indexString && Array === indexArray
+    && Map.prototype.set === indexMapSet
+    && Object.getOwnPropertyDescriptor(Array.prototype, 'map')?.value === indexArrayMap
+    && Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator)?.value === indexArrayIterator
+    && Object.getOwnPropertyDescriptor(Array.prototype, 'constructor')?.value === indexArray
+    && Object.getOwnPropertyDescriptor(Array, Symbol.species)?.get === indexSpecies
+    && Object.getOwnPropertyDescriptor(indexIterator.prototype, 'next')?.value === indexIterator.next
+    && Reflect.ownKeys(tokens).length === tokens.length + 1;
+  let result = null, stringIds = ordinaryIndex;
+  if (ordinaryIndex) {
+    result = new Map();
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      if (typeof token?.id !== 'string' || !token.id.length) { result = null; stringIds = false; break; }
+      result.set(token.id, token);
+    }
+  }
+  // Accepted ordinary Tokens already have string IDs. Build their index without
+  // allocating a temporary pair Array for every Token; all unqualified/custom
+  // mapping environments retain the complete original map/iterator behavior.
+  result ||= new Map(tokens.map(token => [String(token.id), token]));
   // The previous canonical array was qualified as a whole when its audience
   // was projected. Reuse that immutable proof without scanning every document
   // again. Unqualified and duplicate-ID arrays keep the legacy fresh map.
-  if (hasImmutableVisionData(tokens) && result.size === tokens.length
-    && tokens.every(token => typeof token?.id === 'string' && token.id.length > 0)) {
+  if (immutable && result.size === tokens.length
+    && (stringIds || tokens.every(token => typeof token?.id === 'string' && token.id.length > 0))) {
     canonicalTokenMaps.set(tokens, result);
   }
   return result;
