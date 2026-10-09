@@ -46,7 +46,11 @@ export function sceneVisionContext(map, scene = {}) {
   let derivedScene = null, key = null, effectiveKey = null;
   if (!value) {
     key = JSON.stringify([scene.id, scene.featureStates || {}, scene.sceneEvents || [], scene.occlusionShapes || []]);
-    if (immutableGeometry && mapRefs.every(reference => immutable(reference))) {
+    if (immutableGeometry && mapRefs.every(reference => immutable(reference))
+      && ['id', 'featureStates', 'sceneEvents', 'occlusionShapes']
+        .every((field, index) => fixedLightInput(scene, field, geometryRefs[index]))
+      && ['features', 'visionOccluders', 'occlusionShapes', 'metersPerUnit']
+        .every((field, index) => fixedLightInput(map, field, mapRefs[index]))) {
       derivedScene = deriveSceneState(scene.sceneEvents || []);
       effectiveKey = JSON.stringify([scene.id, scene.featureStates || {}, scene.occlusionShapes || [],
         derivedScene.destroyedObjectIds, derivedScene.clipHits.map(hit => [hit.featureId, hit.polygon])]);

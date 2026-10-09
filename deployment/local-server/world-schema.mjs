@@ -359,7 +359,7 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
     if (!record) {
       // Fixed own slots avoid a separate property dictionary on every node.
       // The sentinel retains Map.has/delete semantics, including stored undefined.
-      record = { summaries: missingMetadata, singleSummary: missingMetadata, bytes: missingMetadata,
+      record = { summaries: missingMetadata, singlePath: missingMetadata, singleSummary: missingMetadata, bytes: missingMetadata,
         immutable: false, accepted: false, pure: false, documents: missingMetadata, collections: missingMetadata };
       metadata.set(value, record);
     }
@@ -383,7 +383,7 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
   // Most frozen JSON branches recur at one canonical path. Avoid allocating
   // a Map for every Token/Fog row; aliases still promote to the original
   // bounded path map, so global occurrence/depth/key accounting is unchanged.
-  const singleSummaries = weakMap('singleSummary');
+  const singleSummaries = metadata ? null : new WeakMap();
   const byteSizes = weakMap('bytes');
   const immutableData = weakSet('immutable');
   const acceptedData = weakSet('accepted');
@@ -453,8 +453,15 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
     };
     const visit = (current, path, depth) => {
       if (current && typeof current === 'object') {
-        const single = singleSummaries.get(current);
-        const cached = single?.path === path ? single.summary : summaries.get(current)?.get(path);
+        let cached;
+        if (metadata) {
+          const record = metadata.get(current);
+          cached = record?.singlePath === path ? record.singleSummary
+            : record && record.summaries !== missingMetadata ? record.summaries.get(path) : null;
+        } else {
+          const single = singleSummaries.get(current);
+          cached = single?.path === path ? single.summary : summaries.get(current)?.get(path);
+        }
         if (cached) { consume(cached, path, depth); return cached; }
       }
       consume(ONE_JSON_NODE, path, depth);
@@ -530,14 +537,18 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
         if (entry.summary.cacheable) {
           record.immutable = true;
           let byPath = record.summaries === missingMetadata ? null : record.summaries;
-          const single = record.singleSummary === missingMetadata ? null : record.singleSummary;
-          if (!byPath && (single?.path === entry.path || !single && singleSummaryAllowed)) {
-            if (single) single.summary = entry.summary;
-            else record.singleSummary = { path: entry.path, summary: entry.summary };
+          const hasSingle = record.singlePath !== missingMetadata;
+          if (!byPath && (record.singlePath === entry.path || !hasSingle && singleSummaryAllowed)) {
+            // Keep the path and summary in this existing weak record. Ordinary
+            // Fog spans need no separate wrapper object for their one path.
+            record.singlePath = entry.path; record.singleSummary = entry.summary;
           } else {
             if (!byPath) {
               byPath = new Map(); record.summaries = byPath;
-              if (single) { byPath.set(single.path, single.summary); record.singleSummary = missingMetadata; }
+              if (hasSingle) {
+                byPath.set(record.singlePath, record.singleSummary);
+                record.singlePath = missingMetadata; record.singleSummary = missingMetadata;
+              }
             }
             if (byPath.size >= 8 && !byPath.has(entry.path)) byPath.delete(byPath.keys().next().value);
             byPath.set(entry.path, entry.summary);

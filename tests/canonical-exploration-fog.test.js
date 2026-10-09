@@ -98,3 +98,14 @@ test('the complete authority validator still rejects an oversized derived row', 
   assert.equal(value.exploredByParty.a.rows[0], spans);
   assert.equal(spans.length, 1000);
 });
+
+test('party names inherited from Object.prototype still create an own empty exploration record', () => {
+  for (const partyId of ['toString', 'valueOf', 'hasOwnProperty']) {
+    const value = fog({}), { merge, validate } = fixture(value);
+    const next = merge(value, partyId, {}, map);
+    assert.ok(Object.hasOwn(next.exploredByParty, partyId));
+    assert.deepEqual(next, mergeExplorationChunkFog(structuredClone(value), partyId, {}, map));
+    validate(next);
+    assert.deepEqual(merge(next, partyId, { 0: [[0, 2]] }, map).exploredByParty[partyId].rows, { 0: [[0, 2]] });
+  }
+});

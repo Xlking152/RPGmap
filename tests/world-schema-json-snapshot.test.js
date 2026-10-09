@@ -387,7 +387,8 @@ test('a failed freeze cannot seed the complete-acceptance proof', () => {
 });
 
 test('array cache remains path-specific and rejected candidates do not freeze or seed snapshots', () => {
-  for (const factory of [createCanonicalWorldValidator, previousValidator]) {
+  for (const factory of [createCanonicalWorldValidator, previousValidator,
+    () => createCanonicalWorldValidator({ compactMetadata: true })]) {
     const validate = factory();
     const rows = Object.fromEntries(Array.from({ length: 300 }, (_, index) => [index, [[0, 0]]]));
     const first = { scene: { fog: { exploredByParty: { party: { rows } } } }, payload: [[{ value: 1 }]] };
@@ -404,6 +405,25 @@ test('array cache remains path-specific and rejected candidates do not freeze or
     const changed = { ...first, payload: [[{ value: 2 }]] };
     validate(changed);
     assert.equal(validate.serializedBytes(changed), Buffer.byteLength(JSON.stringify(changed)));
+  }
+});
+
+test('compact single-path summaries preserve alias accounting and bytes through bounded promotion', () => {
+  for (const factory of [previousValidator, () => createCanonicalWorldValidator({ compactMetadata: true })]) {
+    const validate = factory();
+    const branch = { spans: [[0, 3], [10, 12]], unicode: '废墟', empty: [] };
+    for (let i = 0; i < 30; i++) {
+      const candidate = { [`path${i % 12}`]: branch, [`alias${i % 11}`]: branch, payload: [branch, branch] };
+      validate(candidate);
+      assert.equal(validate.serializedBytes(candidate), Buffer.byteLength(JSON.stringify(candidate)));
+    }
+    let nested = branch;
+    for (let i = 0; i < WORLD_LIMITS.maxDepth; i++) nested = { nested };
+    assert.throws(() => validate({ nested }), { code: 'world_limit' });
+    assert.equal(Object.isFrozen(nested), false);
+    const repaired = { restored: branch };
+    validate(repaired);
+    assert.equal(validate.serializedBytes(repaired), Buffer.byteLength(JSON.stringify(repaired)));
   }
 });
 

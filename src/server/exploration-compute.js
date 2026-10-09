@@ -97,7 +97,7 @@ export function createCanonicalExplorationFogMerger(isCanonicalData) {
     if (!equivalent(rawFog, bounds) || !normalizedRows(addedRows || {}, bounds, false)) {
       return mergeExplorationChunkFog(rawFog, partyId, addedRows, map);
     }
-    const previous = rawFog.exploredByParty[partyId];
+    const previous = Object.hasOwn(rawFog.exploredByParty, partyId) ? rawFog.exploredByParty[partyId] : null;
     let rows = null;
     for (const [row, spans] of Object.entries(addedRows || {})) {
       const before = previous?.rows[row] || [], merged = mergeRows(before, spans);

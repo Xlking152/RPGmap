@@ -75,3 +75,18 @@ test('mutable histories keep the complete content fallback and mutable maps stil
   assert.notEqual(moved.geometryVersion, first.geometryVersion); assertKernel(packageMap, fixed, moved);
   releaseVisionContexts(packageMap);
 });
+
+test('accessor and replaceable owners cannot qualify equivalent history for effective reuse', () => {
+  const packageMap = frozen(map());
+  for (const accessor of [false, true]) {
+    let events = frozen([{ id: 'first', type: 'restore', featureIds: ['wall'] }]);
+    const current = accessor ? Object.freeze({ ...frozen(scene()), get sceneEvents() { return events; } })
+      : { ...frozen(scene()), sceneEvents: events };
+    const first = sceneVisionContext(packageMap, current);
+    events = frozen([...events, { id: 'next', type: 'restore', featureIds: ['wall'] }]);
+    if (!accessor) current.sceneEvents = events;
+    const value = sceneVisionContext(packageMap, current);
+    assert.notEqual(value.geometryVersion, first.geometryVersion);
+    assertKernel(packageMap, current, value); releaseVisionContexts(packageMap);
+  }
+});
