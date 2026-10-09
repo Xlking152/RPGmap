@@ -20,6 +20,7 @@ async function measureLocalPlay() {
   };
   const initialDiagnostics = api.diagnostics.enabled;
   const phases = [];
+  await api.entities.openToken(tokenId);
   api.diagnostics.setEnabled(true);
   try {
     for (const [name, lighting, rangeMeters] of [['normal', 'normal', 120], ['dark', 'dark', 500]]) {
@@ -36,6 +37,13 @@ async function measureLocalPlay() {
       if (!destination) throw new Error('Local performance fixture has no ordinary movement route');
       api.diagnostics.reset();
       const frameSamplesMs = [], inputs = [], moves = [], longTasks = [];
+      // Match the existing input.frame gate: capture an actual sheet input
+      // event, before its handlers, and observe its next animation frame.
+      const captureInput = () => {
+        const begin = performance.now();
+        requestAnimationFrame(() => inputs.push(performance.now() - begin));
+      };
+      document.addEventListener('input', captureInput, true);
       const observer = new PerformanceObserver(list => longTasks.push(...list.getEntries().map(entry =>
         ({ startTime: entry.startTime, duration: entry.duration }))));
       observer.observe({ type: 'longtask', buffered: false });
@@ -50,12 +58,6 @@ async function measureLocalPlay() {
         while (performance.now() - startedAt < 60_000) {
           const started = performance.now(), from = api.tokens.get(tokenId);
           const target = moves.length % 2 ? { x: origin.x, y: origin.y } : destination;
-          const inputStarted = performance.now();
-          document.querySelector('.leaflet-container').dispatchEvent(new PointerEvent('pointermove', {
-            bubbles: true, clientX: 300 + moves.length % 20, clientY: 300, pointerId: 1, pointerType: 'mouse' }));
-          const inputFrame = new Promise(resolve => requestAnimationFrame(() => {
-            inputs.push(performance.now() - inputStarted); resolve();
-          }));
           let revision = null, result;
           const off = api.on('state:patch', event => {
             if (event.detail?.source === 'document.document.batch') revision = api.getStateRevision();
@@ -64,6 +66,9 @@ async function measureLocalPlay() {
           if (!result.valid) throw new Error('Local performance movement rejected: ' + result.reason);
           if (!Number.isSafeInteger(revision)) throw new Error('Local performance movement authority revision missing');
           const commitMs = performance.now() - started;
+          const input = document.querySelector('.entity-sheet-v3 input:not([type="checkbox"]):not([type="radio"])');
+          if (!input) throw new Error('Local performance actual sheet input missing');
+          input.dispatchEvent(new Event('input', { bubbles: true }));
           for (;;) {
             const feedback = api.vision.getFeedbackState(), visual = api.renderer.getVisualTokenPoint(tokenId);
             if (feedback?.rendered && feedback.stateRevision >= revision && feedback.requestedAt >= started
@@ -72,19 +77,20 @@ async function measureLocalPlay() {
             if (performance.now() - started > 2000) throw new Error('Local performance mask failed to follow movement');
             await wait(1);
           }
-          await inputFrame;
           moves.push({ from: { x: from.x, y: from.y }, target, revision, commitMs, feedbackMs: performance.now() - started });
           await wait(Math.max(0, 500 - (performance.now() - started)));
         }
       } finally {
         cancelAnimationFrame(frameId);
+        document.removeEventListener('input', captureInput, true);
         longTasks.push(...observer.takeRecords().map(entry => ({ startTime: entry.startTime, duration: entry.duration })));
         observer.disconnect();
       }
       const endedAt = performance.now(), averageFPS = 1000 * frameSamplesMs.length / frameSamplesMs.reduce((sum, value) => sum + value, 0);
       const phase = { name, lighting, rangeMeters, startedAt, endedAt, durationMs: endedAt - startedAt,
         frameSamplesMs, averageFPS, frameP95Ms: percentile(frameSamplesMs), inputSamplesMs: inputs,
-        inputP95Ms: percentile(inputs), moves, longTasks, maxLongTaskMs: Math.max(0, ...longTasks.map(task => task.duration)) };
+        inputMeasurement: 'entity-sheet-input-capture', inputP95Ms: percentile(inputs),
+        diagnostics: api.diagnostics.snapshot(), moves, longTasks, maxLongTaskMs: Math.max(0, ...longTasks.map(task => task.duration)) };
       phases.push(phase);
       if (averageFPS < 58 || phase.frameP95Ms > 20 || Math.round(phase.inputP95Ms * 1e6) > 16_700_000
         || phase.maxLongTaskMs > 100) throw new Error('Local performance gate failed: ' + JSON.stringify(phase));

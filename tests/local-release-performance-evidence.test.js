@@ -310,6 +310,7 @@ function localPlayFixture() {
       startedAt: index * 70_000, endedAt: index * 70_000 + 60_000, durationMs: 60_000,
       frameSamplesMs: Array(3600).fill(1000 / 60), averageFPS: 60, frameP95Ms: 1000 / 60,
       inputSamplesMs: Array(120).fill(10), inputP95Ms: 10, longTasks: [], maxLongTaskMs: 0,
+      inputMeasurement: 'entity-sheet-input-capture', diagnostics: { metrics: { 'input.frame': { count: 120, p95: 10 } } },
       moves: Array.from({ length: 120 }, (_, step) => ({ from: { x: step % 2, y: 0 },
         target: { x: 1 - step % 2, y: 0 }, revision: step + 1, commitMs: 5, feedbackMs: 20 })) })) };
 }

@@ -699,7 +699,10 @@ function localPerformance(report) {
     'Local ordinary play requires two complete sixty-second moving phases');
     const frames = phase.frameSamplesMs, inputs = phase.inputSamplesMs;
     requireCondition(frames?.length >= 3000 && frames.every(value => finite(value) && value > 0)
-      && inputs?.length === phase.moves.length && inputs.every(value => finite(value) && value >= 0),
+      && phase.inputMeasurement === 'entity-sheet-input-capture'
+      && inputs?.length === phase.moves.length && inputs.every(value => finite(value) && value >= 0)
+      && phase.diagnostics?.metrics?.['input.frame']?.count >= phase.moves.length
+      && withinMillisecondsBudget(phase.diagnostics.metrics['input.frame'].p95, 16.7),
     'Local ordinary play raw frame/input observations missing');
     const p95 = values => [...values].sort((a, b) => a - b)[Math.ceil(values.length * .95) - 1];
     const fps = 1000 * frames.length / frames.reduce((sum, value) => sum + value, 0);
