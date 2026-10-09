@@ -6,6 +6,8 @@ import { effectiveFeatureOpen } from '../world/feature-states.js';
 
 const EPSILON = 1e-9;
 const NORMALIZED_VISION_OCCLUDERS = new WeakSet();
+const OWNED_VISION_OCCLUDER_COLLECTIONS = new WeakSet();
+const VERIFIED_OWNED_VISION_COLLECTIONS = new WeakSet();
 const LIGHTING_CACHE = new WeakMap();
 const IMMUTABLE_LIGHTS = new WeakSet();
 const VISION_HOST_FILTERS = new WeakMap();
@@ -396,7 +398,26 @@ export function deriveVisionOccluders(mapPackage, scene = null, derivedScene = n
     if (prepared) entries.set(hostId, prepared);
     else entries.delete(hostId);
   }
-  return [...entries.values()];
+  const collection = [...entries.values()];
+  OWNED_VISION_OCCLUDER_COLLECTIONS.add(collection);
+  return collection;
+}
+
+// A receipt belongs only to the constructor's actual array and normalized
+// own-data records. Frozen public lookalikes and Proxy wrappers cannot mint it.
+// The public derivation remains mutable until its context owner freezes it.
+export function isOwnedVisionOccluderCollection(value) {
+  if (!OWNED_VISION_OCCLUDER_COLLECTIONS.has(value)) return false;
+  if (VERIFIED_OWNED_VISION_COLLECTIONS.has(value)) return true;
+  if (!Object.isFrozen(value) || Object.getPrototypeOf(value) !== Array.prototype
+    || Reflect.ownKeys(value).length !== value.length + 1) return false;
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !Object.hasOwn(descriptor, 'value') || descriptor.enumerable !== true
+      || !NORMALIZED_VISION_OCCLUDERS.has(descriptor.value)) return false;
+  }
+  VERIFIED_OWNED_VISION_COLLECTIONS.add(value);
+  return true;
 }
 
 /** New damage must pass this shared preflight before any authoritative commit. */

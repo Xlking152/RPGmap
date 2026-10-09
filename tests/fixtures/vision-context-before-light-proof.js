@@ -1,23 +1,11 @@
-import { deriveSceneState } from '../engine/state.js';
-import { deriveVisionOccluders, deriveSceneLightSources, releaseOcclusionGeometryCache } from '../spatial/kernel.js';
-import { isImmutableVisionData as immutable } from './immutable-data.js';
+import { deriveSceneState } from '../../src/engine/state.js';
+import { deriveVisionOccluders, deriveSceneLightSources, releaseOcclusionGeometryCache } from '../../src/spatial/kernel.js';
+import { isImmutableVisionData as immutable } from '../../src/vision/immutable-data.js';
 
 const contexts = new WeakMap();
 const mapGeometrySignatures = new WeakMap();
 const explorationContexts = new WeakMap();
 let version = 0;
-
-function fixedLightInput(owner, key, value) {
-  const descriptor = Object.getOwnPropertyDescriptor(owner, key);
-  if (descriptor) return Object.hasOwn(descriptor, 'value') && descriptor.value === value
-    && descriptor.configurable === false && descriptor.writable === false;
-  if (value !== undefined || !Object.isFrozen(owner)) return false;
-  for (let prototype = Object.getPrototypeOf(owner); prototype; prototype = Object.getPrototypeOf(prototype)) {
-    if (Object.getOwnPropertyDescriptor(prototype, key)) return false;
-  }
-  return true;
-}
-
 function mapGeometrySignature(map, refs) {
   const reusable = refs.every(reference => immutable(reference));
   const previous = reusable && mapGeometrySignatures.get(map);
@@ -61,21 +49,11 @@ export function sceneVisionContext(map, scene = {}) {
     const sameLightInputs = lightTokens && value.lightRefs && value.lightRefs[1] === map.lights
       && value.lightTokens?.length === lightTokens.length
       && lightTokens.every((token, index) => token === value.lightTokens[index]);
-    const proofEligible = immutableLighting && fixedLightInput(scene, 'tokens', lightRefs[0])
-      && fixedLightInput(map, 'lights', lightRefs[1]);
-    const proof = proofEligible && value.lastImmutableLightProof;
-    const sameVerifiedLights = proof && proof.mapLights === lightRefs[1] && proof.key === value.lightKey
-      && proof.lightTokens.length === lightTokens.length
-      && lightTokens.every((token, index) => token === proof.lightTokens[index]);
-    if (!sameLightInputs && !sameVerifiedLights) {
+    if (!sameLightInputs) {
       const lights = deriveSceneLightSources(map, scene);
       const lightKey = JSON.stringify(lights);
       if (lightKey !== value.lightKey) Object.assign(value, { lightKey, lights: Object.freeze(lights), lightVersion: ++version });
     }
-    // A mutable transaction still derives every time, but cannot erase the
-    // last accepted light inputs. Keep only luminous documents, never its
-    // Token collection or World; a changed current key prevents stale reuse.
-    if (proofEligible) value.lastImmutableLightProof = { mapLights: lightRefs[1], lightTokens, key: value.lightKey };
     value.lightTokens = lightTokens;
     value.lightRefs = immutableLighting ? lightRefs : null;
   }

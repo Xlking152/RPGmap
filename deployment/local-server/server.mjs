@@ -77,6 +77,7 @@ import {
   websocketAccept,
 } from './websocket-runtime.mjs';
 import { createWorldWal } from './world-wal.mjs';
+import { encodeResumePatch, decodeResumePatch } from './resume-patch-codec.mjs';
 import { createWorldCheckpoint } from './world-checkpoint.mjs';
 import { mapForScene, validateAuthoritativeTokenMovePath } from './movement-authority.mjs';
 import { createContentStorage, prepareContentUpgrade } from './content-storage.mjs';
@@ -567,7 +568,10 @@ function advanceResumeBase(entry) {
   }
   // This base is a private detached replay copy; resume responses clone it.
   // Advancing it cannot mutate canonical state or a recipient projection.
-  resumeBaseState = applyWorldOperationPatch(resumeBaseState, entry.patch, { mutate: true });
+  let patch;
+  try { patch = decodeResumePatch(entry.patch); }
+  catch { discardResumeHistory(); return; }
+  resumeBaseState = applyWorldOperationPatch(resumeBaseState, patch, { mutate: true });
   resumeBaseRevision = Number(entry.revision);
 }
 function resetResumeHistory() {
@@ -575,11 +579,23 @@ function resetResumeHistory() {
   resumeBaseRevision = Number(world.revision) || 0;
   resumeBaseState = world.state ? structuredClone(world.state) : null;
 }
+function discardResumeHistory() {
+  // The authoritative commit is already durable. A private codec failure
+  // must cause a full audience sync, never fail that commit's ACK or keep the
+  // old live patch graph. A missing base is also a valid full-sync fallback.
+  resumeHistory.length = 0;
+  resumeBaseRevision = Number(world.revision) || 0;
+  try { resumeBaseState = world.state ? structuredClone(world.state) : null; }
+  catch { resumeBaseState = null; }
+}
 function rememberResumeCommit({
   beforeState, afterState, operationId, baseRevision, revision, updatedAt,
   results, originSessionId, documentBatch, fog, patch,
 }) {
   const now = Date.now();
+  let encodedPatch;
+  try { encodedPatch = encodeResumePatch(patch || createWorldOperationPatch(beforeState, afterState)); }
+  catch { discardResumeHistory(); return; }
   if (!resumeHistory.length) {
     resumeBaseRevision = Number(baseRevision);
     resumeBaseState = structuredClone(beforeState);
@@ -588,7 +604,7 @@ function rememberResumeCommit({
     baseRevision: Number(baseRevision),
     revision: Number(revision),
     at: now,
-    patch: patch || createWorldOperationPatch(beforeState, afterState),
+    patch: encodedPatch,
     operationId: String(operationId),
     updatedAt: String(updatedAt),
     results: structuredClone(results || []),
@@ -614,7 +630,10 @@ function resumableCommits(session, revision, fingerprint) {
   const result = [];
   for (const entry of resumeHistory) {
     if (entry.baseRevision !== expected || entry.revision !== expected + 1) return null;
-    const nextCanonical = applyWorldOperationPatch(canonical, entry.patch);
+    let patch;
+    try { patch = decodeResumePatch(entry.patch); }
+    catch { discardResumeHistory(); return null; }
+    const nextCanonical = applyWorldOperationPatch(canonical, patch);
     if (entry.revision <= requested) {
       canonical = nextCanonical;
       expected = entry.revision;

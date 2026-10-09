@@ -45,6 +45,7 @@ for (const file of [
   'world-v2.mjs',
   'websocket-runtime.mjs',
   'world-wal.mjs',
+  'resume-patch-codec.mjs',
   'world-checkpoint.mjs',
   'exploration-queue.mjs',
   'exploration-worker.mjs',

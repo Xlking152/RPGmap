@@ -2,7 +2,7 @@ import { readConnectionState } from "../multiplayer/connection-state.js";
 import { createVisionBackground } from './background.js';
 import { computeFogExplorationAsync } from './fog.js';
 import { computeFogExplorationDeltaAsync } from './exploration-delta.js';
-import { ownedExplorationSnapshot, prepareOwnedExplorationJob, isOrdinaryExplorationJobs } from './owned-exploration-snapshot.js';
+import { ownedExplorationSnapshot, prepareOwnedExplorationJob, createQueuedExplorationJob, isOrdinaryExplorationJobs } from './owned-exploration-snapshot.js';
 
 export function createLocalExplorationQueue(api, commit, { getExploredRows } = {}) {
   let state = api.getLocalExploration?.();
@@ -72,10 +72,14 @@ export function createLocalExplorationQueue(api, commit, { getExploredRows } = {
   return {
     enqueue(input, sceneId) {
       const id = `${session}:${++sequence}`;
+      if (snapshotsEnabled) {
+        state.jobs.push(createQueuedExplorationJob(id, String(sceneId), input, session));
+        saveMetadata();
+        return id;
+      }
       const job = { id, sceneId: String(sceneId), input: { ...input,
         contextVersion: `local:${session}:${input.contextVersion ?? id}` } };
-      state.jobs.push(snapshotsEnabled ? prepareOwnedExplorationJob(job)
-        : { ...job, input: structuredClone(job.input) });
+      state.jobs.push({ ...job, input: structuredClone(job.input) });
       saveMetadata();
       return id;
     },

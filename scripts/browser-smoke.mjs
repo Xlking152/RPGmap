@@ -176,7 +176,11 @@ try {
   }
   // Attach observers before navigation so cached/fast dynamic imports cannot
   // finish before Network.enable and disappear from the package asset audit.
-  await send('Page.navigate', { url: targetUrl });
+  // Cold navigation shares the declared startup deadline. The generic 5 s
+  // command limit must not cut that deadline short on a fresh Chrome profile.
+  const initialNavigationBudget = deadline - Date.now();
+  if (initialNavigationBudget <= 0) throw new Error('Browser startup deadline exceeded before navigation');
+  await send('Page.navigate', { url: targetUrl }, initialNavigationBudget);
 
   if (mode === 'bootstrap') {
     const entryState = await retry(
@@ -691,7 +695,7 @@ try {
     if (feedbackError) throw new Error(`${feedbackError.message}; storageSizes=${JSON.stringify(storageSizes)}`);
     occlusionAudit = { zoom: zoomRecords, editor, feedback, storageSizes };
     offlineServer = await createPackagedOfflineServer(packageRoot);
-    await openPersistentOfflineRuntime({ evaluate, navigate:url=>send('Page.navigate',{url}), url:offlineServer.url });
+    await openPersistentOfflineRuntime({ evaluate, navigate:url=>send('Page.navigate',{url},timeoutMs), url:offlineServer.url });
     const ruinsProfilePath=process.env.RPGMAP_SMOKE_RUINS_CPU_PROFILE;
     ruinsAudit = await runRuinsBrowserSmoke(evaluate, ruinsProfilePath ? {
       beforeRecovery:async()=>{

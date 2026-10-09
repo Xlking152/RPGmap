@@ -1,4 +1,5 @@
 import { isImmutableVisionData } from './immutable-data.js';
+import { isOwnedVisionOccluderCollection } from '../spatial/kernel.js';
 
 const ownedJobs = new WeakSet(), snapshots = new WeakSet();
 
@@ -63,6 +64,50 @@ export function prepareOwnedExplorationJob(job) {
   // continue through the old setter on every metadata save.
   const owned = structuredClone(job);
   if (owned && typeof owned === 'object' && freezeOwnedExplorationData(owned)) ownedJobs.add(owned);
+  return owned;
+}
+
+const queuedInputFields = new Set(['partyId', 'payload', 'map', 'occluders', 'contextVersion',
+  'lineOfSightEnabled', 'sourceRangeMeters']);
+const payloadFields = new Set(['sceneId', 'partyId', 'visionSourceTokenId', 'tokenId',
+  'x', 'y', 'elevationMeters', 'radiusMeters', 'from', 'to']);
+const pointFields = new Set(['x', 'y', 'elevationMeters']);
+const mapFields = new Set(['width', 'height', 'metersPerUnit']);
+const routePointFields = new Set(['from', 'to']);
+const scalar = value => value === null || ['undefined', 'string', 'number', 'boolean'].includes(typeof value);
+
+function smallDataRecord(value, fields, children = null) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!fields.has(key) || !descriptor || !Object.hasOwn(descriptor, 'value')) return false;
+    if (children?.has(key)) {
+      if (!smallDataRecord(descriptor.value, pointFields)) return false;
+    } else if (!scalar(descriptor.value)) return false;
+  }
+  return true;
+}
+
+// This factory performs the queue's original spread before qualification, so
+// input getters retain their order. Its job/input containers are newly owned;
+// only the kernel constructor's immutable geometry may be shared. Small fields
+// cannot alias any geometry record/ring/point; extensions use the full clone.
+export function createQueuedExplorationJob(id, sceneId, rawInput, session) {
+  const job = { id, sceneId, input: { ...rawInput,
+    contextVersion: `local:${session}:${rawInput.contextVersion ?? id}` } };
+  const input = job.input, geometry = input.occluders;
+  const eligible = typeof id === 'string' && typeof sceneId === 'string'
+    && isOwnedVisionOccluderCollection(geometry) && isImmutableVisionData(geometry)
+    && Reflect.ownKeys(input).every(key => queuedInputFields.has(key))
+    && Object.entries(input).every(([key, value]) => ['payload', 'map', 'occluders'].includes(key) || scalar(value))
+    && smallDataRecord(input.payload, payloadFields, routePointFields)
+    && smallDataRecord(input.map, mapFields);
+  if (!eligible) return prepareOwnedExplorationJob(job);
+  // Keep the original native rejection boundary for payload/map/route Proxies,
+  // even when their descriptor traps imitate the small supported shape.
+  const owned = structuredClone({ ...job, input: { ...input, occluders: undefined } });
+  owned.input.occluders = geometry;
+  if (freezeOwnedExplorationData(owned)) ownedJobs.add(owned);
   return owned;
 }
 
