@@ -16,7 +16,7 @@ export { canUserControlToken, projectStateForAudience, advanceFogProjectionMetad
 export { sphereGroundRadiusMeters } from '../spatial/kernel.js';
 export { sceneVisionContext, sceneExplorationContext };
 export { mergeExploration } from '../vision/fog.js';
-export { computeExplorationChunk, mergeExplorationChunkFog } from './exploration-compute.js';
+export { computeExplorationChunk, mergeExplorationChunkFog, createCanonicalExplorationFogMerger } from './exploration-compute.js';
 export { createExplorationOperationCapture } from '../vision/exploration-operations.js';
 export { createServerMovementAdjudicationActorResolver } from './movement-adjudication.js';
 

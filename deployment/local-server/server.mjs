@@ -58,7 +58,7 @@ import {
   serverRuleset,
   sphereGroundRadiusMeters,
   sceneExplorationContext,
-  mergeExplorationChunkFog,
+  createCanonicalExplorationFogMerger,
   validateSceneOcclusion,
   createExplorationOperationCapture,
   createServerMovementAdjudicationActorResolver,
@@ -441,6 +441,7 @@ world = await worldWal.replay(world);
 if (world.state?.preferences?.worldV2) world.state = projectWorldOperationState(world.state);
 const canonicalDiagnostics = process.env.RPGMAP_CANONICAL_DIAGNOSTICS === '1';
 const assertCanonicalWorldState = createCanonicalWorldValidator({ diagnostics: canonicalDiagnostics, compactMetadata: true });
+const mergeCanonicalExplorationFog = createCanonicalExplorationFogMerger(assertCanonicalWorldState.isImmutableData);
 if (canonicalDiagnostics) process.once('exit', () => {
   console.error(JSON.stringify({ canonicalValidationDiagnostics: assertCanonicalWorldState.getDiagnostics() }));
 });
@@ -1840,7 +1841,7 @@ async function commitExplorationResults(results) {
     const canonical = state.preferences.worldV2;
     const scene = canonical.scenes.find(item => String(item.id) === job.sceneId);
     if (!scene) continue;
-    const fog = mergeExplorationChunkFog(scene.fog, job.partyId, result.rows, world.exploration.contexts[job.contextId]?.map || {});
+    const fog = mergeCanonicalExplorationFog(scene.fog, job.partyId, result.rows, world.exploration.contexts[job.contextId]?.map || {});
     state = { ...state, preferences: { ...state.preferences, worldV2: { ...canonical,
       scenes: canonical.scenes.map(item => item === scene ? { ...item, fog } : item) } } };
     operations.push({ type: 'scene.fog.explore', payload: { sceneId: job.sceneId, partyId: job.partyId } });
@@ -1897,7 +1898,7 @@ function kickExploration() {
         const queued = world.exploration.jobs[pending.id];
         if (queued?.sceneId === job.sceneId && queued.partyId === job.partyId
           && queued.epoch === pending.epoch && queued.worldEpoch === pending.worldEpoch) {
-          explored = mergeExplorationChunkFog(explored, job.partyId, pending.rows, context.map);
+          explored = mergeCanonicalExplorationFog(explored, job.partyId, pending.rows, context.map);
         }
       }
       const result = await workerExploration(job, context, explored?.exploredByParty?.[job.partyId]?.rows || {});

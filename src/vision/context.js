@@ -39,15 +39,33 @@ export function sceneVisionContext(map, scene = {}) {
     && entry.mapKey === mapKey && geometryRefs.every((reference, index) => reference === entry.geometryRefs[index])) : null;
   // Keep the large static signature out of the Scene serialization. Mutable
   // public inputs still get content checks, including deeply mutable map data.
-  const key = value ? null : JSON.stringify([scene.id, scene.featureStates || {}, scene.sceneEvents || [], scene.occlusionShapes || []]);
+  // Accepted immutable histories can grow while their effective blockers are
+  // unchanged (restore, undo, or crater-only edits). Cache those exact geometry
+  // inputs, preserving clip order and full coordinate precision. Mutable/public
+  // histories retain their complete content signature and validation behavior.
+  let derivedScene = null, key = null, effectiveKey = null;
+  if (!value) {
+    key = JSON.stringify([scene.id, scene.featureStates || {}, scene.sceneEvents || [], scene.occlusionShapes || []]);
+    if (immutableGeometry && mapRefs.every(reference => immutable(reference))) {
+      derivedScene = deriveSceneState(scene.sceneEvents || []);
+      effectiveKey = JSON.stringify([scene.id, scene.featureStates || {}, scene.occlusionShapes || [],
+        derivedScene.destroyedObjectIds, derivedScene.clipHits.map(hit => [hit.featureId, hit.polygon])]);
+    }
+  }
   value ||= entries.get(key);
   if (value?.mapKey !== mapKey) value = null;
+  if (effectiveKey && value && !value.effectiveKey) value = null;
+  if (!value && effectiveKey) value = [...entries.values()].find(entry => entry.mapKey === mapKey && entry.effectiveKey === effectiveKey);
   const hit = Boolean(value);
   if (!value) {
-    value = { mapKey, geometryVersion: ++version,
-      occluders: Object.freeze(deriveVisionOccluders(map, scene, deriveSceneState(scene.sceneEvents || []))) };
+    value = { mapKey, key, effectiveKey, geometryVersion: ++version,
+      occluders: Object.freeze(deriveVisionOccluders(map, scene, derivedScene || deriveSceneState(scene.sceneEvents || []))) };
     entries.set(key, value);
     if (entries.size > 2) entries.delete(entries.keys().next().value);
+  } else if (key !== null && key !== value.key) {
+    // Retain only the latest full signature for this geometry. A mutable
+    // interlude with that exact history still uses its original content path.
+    entries.delete(value.key); entries.set(key, value); value.key = key;
   }
   value.geometryRefs = immutableGeometry ? geometryRefs : null;
   const lightRefs = [scene.tokens, map.lights];
