@@ -56,9 +56,14 @@ async function measureLocalPlay() {
           const inputFrame = new Promise(resolve => requestAnimationFrame(() => {
             inputs.push(performance.now() - inputStarted); resolve();
           }));
-          const result = await api.movementFast.moveTokenTo(tokenId, target);
+          let revision = null, result;
+          const off = api.on('state:patch', event => {
+            if (event.detail?.source === 'document.document.batch') revision = api.getStateRevision();
+          });
+          try { result = await api.movementFast.moveTokenTo(tokenId, target); } finally { off(); }
           if (!result.valid) throw new Error('Local performance movement rejected: ' + result.reason);
-          const commitMs = performance.now() - started, revision = api.getStateRevision();
+          if (!Number.isSafeInteger(revision)) throw new Error('Local performance movement authority revision missing');
+          const commitMs = performance.now() - started;
           for (;;) {
             const feedback = api.vision.getFeedbackState(), visual = api.renderer.getVisualTokenPoint(tokenId);
             if (feedback?.rendered && feedback.stateRevision >= revision && feedback.requestedAt >= started
