@@ -352,7 +352,21 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
   // The fixed server reducer owns these derived facts. One weak record per
   // accepted JSON object avoids repeatedly resizing separate weak tables during
   // large Fog commits. Public validators keep their original intrinsic calls.
-  const metadata = compactMetadata ? new WeakMap() : null;
+  // Spread new identities across four smaller weak tables. A large Fog history
+  // should not make a tiny movement pause while one whole table grows. Each
+  // object still owns exactly one record; lookup reads identities only.
+  const metadataTables = compactMetadata ? [new WeakMap(), new WeakMap(), new WeakMap(), new WeakMap()] : null;
+  let nextMetadataTable = 0;
+  const metadata = metadataTables ? {
+    get(value) {
+      return metadataTables[0].get(value) || metadataTables[1].get(value)
+        || metadataTables[2].get(value) || metadataTables[3].get(value);
+    },
+    set(value, record) {
+      metadataTables[nextMetadataTable].set(value, record);
+      nextMetadataTable = (nextMetadataTable + 1) % metadataTables.length;
+    },
+  } : null;
   const missingMetadata = metadata ? Symbol('missing canonical metadata') : null;
   const recordFor = value => {
     let record = metadata.get(value);
