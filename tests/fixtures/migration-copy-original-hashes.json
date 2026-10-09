@@ -1,0 +1,48 @@
+{
+  "description": "Original v2.5.4 metric/status migration full-copy result bytes, including alias-linked metadata and cross-Scene duplicate Token ids.",
+  "sourceCommit": "ed7e13baab0f116222333c20431e19ab63b60e37",
+  "records": [
+    {
+      "schemaVersion": 2,
+      "configured": false,
+      "result": "b61e2c08bccbdf7d6162c382a6e714f8e1327b5f79d6f5b4447074b18f9fd6a2",
+      "migrated": true,
+      "fromSchemaVersion": 2
+    },
+    {
+      "schemaVersion": 2,
+      "configured": true,
+      "result": "06f4aa1f29cf77539468dd541a43de16288afb11146b4a0282ec05494337940a",
+      "migrated": true,
+      "fromSchemaVersion": 2
+    },
+    {
+      "schemaVersion": 3,
+      "configured": false,
+      "result": "ca5e91efa84052d65dd4e62270fbce88f154ddfa425cf9f158ebbcc7ab1f6a2f",
+      "migrated": true,
+      "fromSchemaVersion": 3
+    },
+    {
+      "schemaVersion": 3,
+      "configured": true,
+      "result": "58e01a5cb10e98bfa24e1a34a57ee70415f9f64cfe891e5a8bbffa9b538be07a",
+      "migrated": true,
+      "fromSchemaVersion": 3
+    },
+    {
+      "schemaVersion": 4,
+      "configured": false,
+      "result": "716b462d716180b864e08f3e0b14c811dc61b3b653b985eb789e116d1319b485",
+      "migrated": true,
+      "fromSchemaVersion": 4
+    },
+    {
+      "schemaVersion": 4,
+      "configured": true,
+      "result": "dbb51ed3d91b31ae12c82404252a144d01646cbf6bf39c2eba54d4cadcf17dfe",
+      "migrated": true,
+      "fromSchemaVersion": 4
+    }
+  ]
+}

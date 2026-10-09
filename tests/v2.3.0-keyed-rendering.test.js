@@ -46,7 +46,8 @@ test('unaffected Actor Sheet Parts and inactive overlays do not enter render que
 });
 
 test('Token movement does not rescan all Feature visual state', () => {
-  assert.match(featureInteractions, /'state:import', 'state:commit', 'scene:restore', 'feature:state-change'/);
+  assert.match(featureInteractions, /'state:import', 'state:commit', 'feature:state-change', 'scene:activate'/);
+  assert.match(featureInteractions, /api\.on\?\.\('scene:restore', refreshCommitted\)/);
   assert.match(featureInteractions, /'token:create', 'token:delete', 'token:move', 'token:property-change'/);
   assert.doesNotMatch(featureInteractions, /'token:move'[^\]]*\]\) off\.push\(api\.on\?\.\(eventName, \(\) => \{ syncFeatureVisualState\(\)/s);
   assert.match(featureInteractions, /if \(selectedFeatureId\) renderInspection\(\)/);
@@ -54,7 +55,7 @@ test('Token movement does not rescan all Feature visual state', () => {
 
 test('scene area rendering uses an event-refreshed attack area cache', () => {
   assert.match(sceneAreas, /const initialState = api\.getState\(\)/);
-  assert.match(sceneAreas, /let cachedAreas = clone\(initialState\?\.attackAreas \|\| \[\]\)/);
+  assert.match(sceneAreas, /let cachedAreas = clone\(activeScene\(initialState\)\?\.attackAreas \|\| initialState\?\.attackAreas \|\| \[\]\)/);
   assert.match(sceneAreas, /const areas = \(\) => cachedAreas/);
   assert.match(sceneAreas, /const state = event\?\.detail\?\.state \|\| api\.getState\(\)/);
   assert.match(sceneAreas, /areas\(\)\.some\(area => area\.anchor\?\.type === kind/);

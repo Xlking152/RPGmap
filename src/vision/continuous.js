@@ -18,7 +18,8 @@ function lightRegions(lights, occluders, metersPerUnit) {
     const normalRadius = sphereGroundRadiusMeters(normalRange, light.elevationMeters) ?? 0;
     const geometry = light.occlusion === 'none'
       ? { shadows: [], fallback: false }
-      : projectVisionOcclusion({ source: light, radiusUnits: radius / metersPerUnit, occluders, metersPerUnit });
+      : projectVisionOcclusion({ source: light, radiusUnits: radius / metersPerUnit, occluders, metersPerUnit,
+        includeFacades: false });
     return { x: Number(light.x), y: Number(light.y), radiusUnits: radius / metersPerUnit,
       normalRadiusUnits: normalRadius / metersPerUnit, shadows: geometry.shadows,
       fallback: geometry.fallback, blocked: geometry.blocked === true };

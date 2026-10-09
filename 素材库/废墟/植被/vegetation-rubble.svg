@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs><pattern id="brush" width="64" height="64" patternUnits="userSpaceOnUse"><rect width="64" height="64" fill="#79735a"/><path d="M8 57 41 11M27 31 7 20M29 26 53 34M48 57 18 8" fill="none" stroke="#514c35" stroke-width="5"/><path d="M5 12Q17 4 24 13Q16 24 5 12M36 45Q55 38 60 50Q46 60 36 45" fill="#536142"/></pattern></defs>
+  <rect width="256" height="256" fill="url(#brush)"/>
+</svg>

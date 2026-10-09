@@ -1,6 +1,6 @@
 import { readConnectionState } from "../multiplayer/connection-state.js";
 import L from 'leaflet';
-import { worldToLatLng, latLngToWorld } from './geometry.js';
+import { worldToLatLng } from './geometry.js';
 import { featureBounds } from './feature-selection.js';
 import {
   commitResetSceneEvent,
@@ -13,20 +13,19 @@ import {
   exportRuntimeState,
   prepareRuntimeState,
   stringifyTrustedRuntimeState,
+  yieldRuntimeValidationFrame,
   validateRuntimeState,
 } from './runtime-state.js';
 import { createMapPresentation } from '../render/map-presentation.js';
+import { createMapGridRenderer, createMapViewportScheduler } from '../render/map-grid.js';
 import { createSceneRenderer } from '../render/scene-renderer.js';
 import { applyDocumentChanges, documentChangeSet } from '../documents/changes.js';
 import { registerRuntimeStateReader } from './state-access.js';
+import { occlusionGeometryCacheStats } from '../spatial/kernel.js';
 
 const MAX_SAVE_FILE_BYTES = 5 * 1024 * 1024;
 
 const clone = structuredClone;
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
 
 function parseSvg(markup) {
   const parser = new DOMParser();
@@ -110,7 +109,6 @@ export function createRpgMapRuntime({
   let activePanel = 'actors';
   let selectedFeatureId = null;
   let destroyed = false;
-  let gridFrame = null;
   let importPending = false;
   let recoveryBlocked = false;
   let remoteWorldIsolation = null;
@@ -130,7 +128,9 @@ export function createRpgMapRuntime({
     ruleset,
     storageAdapter,
     getState: () => state,
+    getStateRevision: () => stateRevision,
     stringifyTrustedState: current => stringifyTrustedRuntimeState(current, { mapPackage }),
+    validationYieldTask: ({ signal } = {}) => yieldRuntimeValidationFrame({ signal, view: documentNode.defaultView }),
     onSaved: () => bus.dispatchEvent(new CustomEvent('state:saved')),
     onError: error => showToast(`自动保存失败，已暂停后续写入：${error.message}`, 'error'),
     initialLoad,
@@ -221,41 +221,13 @@ export function createRpgMapRuntime({
     return 500;
   }
 
-  function renderGrid() {
-    gridLayer.clearLayers();
-    const spacing = gridSpacing();
-    const bounds = map.getBounds();
-    const northWest = latLngToWorld({ lat: bounds.getNorth(), lng: bounds.getWest() }, mapPackage.height);
-    const southEast = latLngToWorld({ lat: bounds.getSouth(), lng: bounds.getEast() }, mapPackage.height);
-    const minX = clamp(Math.min(northWest.x, southEast.x), 0, mapPackage.width);
-    const maxX = clamp(Math.max(northWest.x, southEast.x), 0, mapPackage.width);
-    const minY = clamp(Math.min(northWest.y, southEast.y), 0, mapPackage.height);
-    const maxY = clamp(Math.max(northWest.y, southEast.y), 0, mapPackage.height);
-    const firstX = Math.floor(minX / spacing) * spacing;
-    const firstY = Math.floor(minY / spacing) * spacing;
-    for (let x = firstX; x <= maxX + spacing; x += spacing) {
-      L.polyline([
-        worldToLatLng({ x, y: minY }, mapPackage.height),
-        worldToLatLng({ x, y: maxY }, mapPackage.height),
-      ], { pane: 'gridPane', interactive: false, weight: 0.7, className: 'grid-minor' }).addTo(gridLayer);
-    }
-    for (let y = firstY; y <= maxY + spacing; y += spacing) {
-      L.polyline([
-        worldToLatLng({ x: minX, y }, mapPackage.height),
-        worldToLatLng({ x: maxX, y }, mapPackage.height),
-      ], { pane: 'gridPane', interactive: false, weight: 0.7, className: 'grid-minor' }).addTo(gridLayer);
-    }
-  }
+  const renderGrid = createMapGridRenderer({ map, mapPackage, layer: gridLayer, leaflet: L, getSpacing: gridSpacing });
+  const viewportScheduler = createMapViewportScheduler({ map, presentation: mapPresentation, renderGrid });
 
   function renderScene() {
     if (destroyed) return;
     sceneRenderer.render();
-    mapPresentation.schedule();
-    if (gridFrame) cancelAnimationFrame(gridFrame);
-    gridFrame = requestAnimationFrame(() => {
-      gridFrame = null;
-      renderGrid();
-    });
+    viewportScheduler.schedule();
   }
 
   function setActivePanel(name) {
@@ -388,6 +360,8 @@ export function createRpgMapRuntime({
     assertWritable();
     const local = options !== false && options.persist !== false && !readConnectionState(api)?.connected;
     if (local) importPending = true;
+    // Fence pending saves before content preparation or IndexedDB can yield.
+    persistence.cancel();
     try { return await importPreparedState(raw, options); }
     catch (error) {
       if (error.recoveryRequired) {
@@ -536,6 +510,12 @@ export function createRpgMapRuntime({
       : persistence.persistNow();
   }
 
+  function persistValidatedAsync() {
+    if (destroyed || importPending || recoveryBlocked) return Promise.resolve(false);
+    api.diagnostics?.record('world.persistTrusted', 0);
+    return persistence.persistValidatedAsync();
+  }
+
   const uiPanels = Object.freeze({
     canonical: true,
     actors: elements.panels.actors,
@@ -560,8 +540,10 @@ export function createRpgMapRuntime({
     applyAuthoritativeDocumentChanges,
     commitAuthoritativeState,
     persistNow,
+    persistValidatedAsync,
     getLocalExploration: () => persistence.getLocalExploration(),
     setLocalExploration: value => persistence.setLocalExploration(value),
+    setLocalExplorationSnapshot: value => persistence.setLocalExplorationSnapshot(value),
     isLocalWorldActive: () => !remoteWorldIsolation.active,
     exportState,
     importState,
@@ -572,6 +554,8 @@ export function createRpgMapRuntime({
     focusFeature,
     focusFeatureIds,
     restoreFeatures,
+    getSceneRenderDiagnostics: () => sceneRenderer.getDiagnostics?.() || {},
+    getOcclusionGeometryCacheDiagnostics: () => occlusionGeometryCacheStats(mapPackage),
     undoScene,
     resetScene,
     setStatus,
@@ -584,8 +568,10 @@ export function createRpgMapRuntime({
       destroyed = true;
       persistence.cancel();
       persistNow();
-      if (gridFrame) cancelAnimationFrame(gridFrame);
+      persistence.dispose();
+      viewportScheduler.dispose();
       mapPresentation.destroy();
+      sceneRenderer.dispose?.();
       map.remove();
       container.replaceChildren();
       return true;

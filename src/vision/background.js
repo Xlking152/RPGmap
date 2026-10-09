@@ -11,11 +11,23 @@ export function createVisionBackground({ diagnostics = null } = {}) {
     for (const request of pending.values()) request.reject(error);
     pending.clear();
   }
+  function invalidate() {
+    const ids = [...pending.keys()];
+    const error = new Error('视觉后台计算已取消');
+    for (const request of pending.values()) request.reject(error);
+    pending.clear();
+    contextKey = null;
+    if (worker && ids.length) {
+      try { worker.postMessage({ cancelIds: ids }); }
+      catch { stop(error); }
+    }
+  }
   return {
     async run(input) {
       if (disposed) throw new Error('视觉后台计算已取消');
       if (!worker) {
         worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+        diagnostics?.record('vision.workerStart', 1);
         worker.onmessage = ({ data }) => {
           const request = pending.get(data.id);
           if (!request) return;
@@ -46,7 +58,7 @@ export function createVisionBackground({ diagnostics = null } = {}) {
         catch (error) { pending.delete(id); reject(error); }
       });
     },
-    cancel: stop,
+    cancel(options = {}) { if (options?.terminate === false) invalidate(); else stop(); },
     dispose() { disposed = true; stop(); },
   };
 }

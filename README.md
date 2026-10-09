@@ -1,6 +1,6 @@
 # RPGmap
 
-RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.5.4**，提供 World/Scene 管理、Actor 模板与 Token 实例、米制空间移动、生命/伤势、Status V4、战斗、折叠聊天、四级权限投影、三维感知与光源、战争迷雾、模板资料库和 Journal，以及 Windows 本机/局域网多人运行包。
+RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.5.5**，提供 World/Scene 管理、Actor 模板与 Token 实例、米制空间移动、生命/伤势、Status V4、战斗、折叠聊天、四级权限投影、三维感知与光源、战争迷雾、模板资料库和 Journal，以及 Windows 本机/局域网多人运行包。
 
 内置的“北宋兰州城”是复杂 Reference MapPackage，用于验证建筑、城墙、城门、桥梁、水体、破坏、洪水、导航、有限高度 LOS 和 29 张 WebP 美术资源能够通过通用 Core 运行。v2.4.0 将旧英尺字段迁移到米制空间，并保持稳定 Feature、Actor、Token 与 Scene 引用。
 
@@ -9,7 +9,7 @@ RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前�
 正式 Windows Release：
 
 1. 安装 Node.js `20.19+` 或 `22.12+`。
-2. 下载并解压 [RPGmap-v2.5.4.zip](https://github.com/Xlking152/RPGmap/releases/download/v2.5.4/RPGmap-v2.5.4.zip)。
+2. 下载并解压 [RPGmap-v2.5.5.zip](https://github.com/Xlking152/RPGmap/releases/download/v2.5.5/RPGmap-v2.5.5.zip)。
 3. 双击 `start-rpgmap.bat`。
 4. GM 使用启动窗口中的 Local URL 与 GM Secret；同一局域网的 Player 使用 LAN URL 与 Join Code。
 
@@ -41,7 +41,7 @@ RPGmap 仅面向本机和可信局域网，不应直接暴露到公网。World�
 - 视野与迷雾：玩家选择自己控制的 Token 作为唯一实时视野来源；联机移动由服务器确认后播放权威路径动画，视野圆心与 Fog/LOS 在动画过程中逐帧跟随 Token，探索只按服务器确认结果写入。模糊范围使用保留地图原色的冷灰透明薄雾，未探索区仍接近纯黑，历史探索保持极暗。精确与模糊范围实际看过的 5 米网格区域按 Scene 与队伍持久化共享，GM 可重置或重新隐藏。显式导入或实例覆盖的侦测距离按 Ruleset 原值运行，不再被 Fog 的 120 m 实现上限截断。
 - 隐身与可见性：Token 支持公开、队伍、仅 GM 和指定用户；隐身 Token 仅向 GM、控制者、队友及明确授权用户以半透明形式投影。
 - 其他指示物：陷阱、目标点、区域和注释使用轻量 Marker；指示物库分别提供怪物、NPC 与其他模板区域，怪物/NPC 的首次 XLSX 导入不需要预先打开角色库。GM 可在模板卡 Edit 模式修改新实例的默认生命规则，但不改动已有 Unlinked Token；也可在危险区删除模板及所有 Scene 中的关联实例。当前 Scene 实例抽屉可检查 Ruleset 生命字段与状态，并执行批量状态、伤害和恢复。怪物、NPC 与召唤物状态写入各自 Synthetic Actor Token 的 `actorDelta.effects`，不会修改模板或其他实例。
-- 发布验证：audit、全量测试、500 Token/七会话基准、tracked syntax、bundle budget、严格包清单、SHA-256，以及 Windows Edge/Chrome 双浏览器 smoke。
+- 发布验证：依赖审计、全量测试、500 Token/七会话基准、语法、包清单、SHA-256 和 Windows Chrome 验收。v2.5.5 记录包体积，按最终包验证破坏差量、Player 权限、WAL 保存、断线重连及服务重启；不额外打包完整制图素材库。
 
 ## 架构边界
 

@@ -1,6 +1,7 @@
 import { resolveStatuses } from '../status/model.js';
 import { validateStatusDefinitionForActors } from '../status/target-validation.js';
 import { applySyntheticActorStatusBatch, applySyntheticActorStatusOperation } from './synthetic-status.js';
+import { readRuntimeState } from '../engine/state-access.js';
 
 const clone = structuredClone;
 
@@ -32,12 +33,18 @@ function syntheticStatusState(api, context) {
   const tokenId = tokenIdentity(context);
   if (tokenId == null || typeof api.tokens?.resolveActor !== 'function') return null;
 
+  // Linked Tokens use the controller's current Base Actor status snapshot.
+  // Inspecting the Token avoids rebuilding an Actor merely to rediscover that.
+  let token;
+  try { token = api.tokens.get?.(tokenId); } catch { /* Keep the legacy resolver fallback. */ }
+  if (token && token.actorLink !== false) return null;
+
   let resolved;
   try { resolved = api.tokens.resolveActor(tokenId); }
   catch { return null; }
   if (!resolved?.synthetic || !resolved.actor) return null;
 
-  const raw = api.getState?.()?.preferences?.entitySystem;
+  const raw = readRuntimeState(api)?.preferences?.entitySystem;
   if (!raw || typeof raw !== 'object') return null;
   const state = clone(raw);
   const index = (state.actors || []).findIndex(actor => String(actor?.id) === String(resolved.actor.id));

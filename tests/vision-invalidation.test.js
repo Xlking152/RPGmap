@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { classifyVisionChange, visionStatusTargets } from '../src/vision/invalidation.js';
 import { createVisionFogSystem } from '../src/vision/system.js';
 import { registerRuntimeStateReader } from '../src/engine/state-access.js';
+import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 
 function fixtureState() {
   const scene = { id: 's', mapPackage: { id: 'map' }, featureStates: {}, sceneEvents: [], occlusionShapes: [],
@@ -142,7 +143,7 @@ test('status targets support canonical payloads, synthetic instances and mixed b
   assert.equal(visionStatusTargets({ type: 'status.definition.upsert' }), null);
 });
 
-function fakeRuntime(connected = false) {
+function fakeRuntime(connected = false, ruleset = null) {
   let state = fixtureState(), revision = 1, sequence = 0, explorationClears = 0;
   const handlers = new Map(), frames = new Map(), requests = [], toasts = [];
   const documentNode = { defaultView: { requestAnimationFrame(fn) { const id = ++sequence; frames.set(id, fn); return id; },
@@ -161,7 +162,7 @@ function fakeRuntime(connected = false) {
     latLngToContainerPoint: point => ({ x: point.lng, y: mapPackage.height - point.lat }), on() {}, off() {} },
     getState: () => structuredClone(state), getStateRevision: () => revision,
     world: { queuesConfirmedExploration: true, performOperations: async () => null },
-    ruleset: { vision: { describe: () => ({ preciseRangeMeters: 60, vagueRangeMeters: 80 }) } },
+    ruleset: ruleset || { vision: { describe: () => ({ preciseRangeMeters: 60, vagueRangeMeters: 80 }) } },
     on(name, handler) { const list = handlers.get(name) || []; list.push(handler); handlers.set(name, list);
       return () => handlers.set(name, list.filter(fn => fn !== handler)); },
     emit(name, detail) { for (const handler of handlers.get(name) || []) handler({ detail }); },
@@ -176,6 +177,48 @@ function fakeRuntime(connected = false) {
     flush() { const entries = [...frames]; frames.clear(); for (const [, fn] of entries) fn(); },
     destroy() { api.emit('app:destroy'); } };
 }
+
+test('built-in geometry edits reuse only unchanged perception; source, settings and custom rules refresh it', async () => {
+  const runtime = fakeRuntime(false, infiniteHorrorRuleset), { api } = runtime;
+  let resolutions = 0;
+  api.tokens = { resolveActor() { resolutions++; return { actor: runtime.state.preferences.worldV2.actors[0] }; } };
+  try {
+    await api.vision.setSource('scout');
+    const initial = api.vision.getVisibleRegion();
+    assert.equal(resolutions, 1);
+    const wallChange = index => {
+      runtime.replace(replaceScene(runtime.state, scene => ({ ...scene,
+        sceneEvents: [{ id: `wall-${index}`, type: 'damage', objectIds: ['wall'], clipHits: [] }] })));
+      api.emit('state:patch', { changeSet: { sceneContent: [{ sceneId: 's', types: ['SceneEvent'] }] } });
+    };
+    for (let index = 0; index < 12; index++) {
+      wallChange(index);
+      assert.equal(runtime.frames.size, 1, 'changed walls still schedule a fresh mask');
+      assert.deepEqual(api.vision.getVisibleRegion(), initial);
+    }
+    assert.equal(resolutions, 1, 'unchanged actor is not resolved once per destruction');
+    runtime.replace(changeToken(runtime.state, 'scout', { x: 21, elevationMeters: 4,
+      vision: { preciseRangeOverrideMeters: 500, vagueRangeOverrideMeters: 1000 } }));
+    api.emit('state:patch', { changeSet: tokenSet('scout', ['x', 'elevationMeters', 'vision']) });
+    assert.equal(resolutions, 2);
+    assert.equal(api.vision.getVisibleRegion().vagueRangeMeters, 1000);
+    assert.equal(api.vision.getVisibleRegion().elevationMeters, 4);
+    runtime.replace(replaceScene(runtime.state, scene => ({ ...scene, settings: { lighting: 'normal' } })));
+    api.emit('state:patch', { changeSet: { scenes: { upsertIds: ['s'] } } });
+    assert.equal(resolutions, 3);
+    assert.equal(api.vision.getVisibleRegion().lighting, 'normal');
+    api.emit('state:patch', { changeSet: { statusDefinitionsChanged: true } });
+    assert.equal(resolutions, 4);
+    api.ruleset = { ...infiniteHorrorRuleset };
+    wallChange(13);
+    assert.equal(resolutions, 5, 'an integration copying built-in methods is still a custom ruleset');
+    wallChange(14);
+    assert.equal(resolutions, 6, 'custom descriptions may depend on the complete scene');
+    api.ruleset = infiniteHorrorRuleset;
+    api.emit('state:patch', {});
+    assert.equal(resolutions, 7, 'unknown changes conservatively refresh perception');
+  } finally { runtime.destroy(); }
+});
 
 test('offline and LAN events suppress unrelated commits and preserve every source animation frame', async () => {
   const previousWorker = globalThis.Worker;

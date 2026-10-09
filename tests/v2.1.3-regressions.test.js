@@ -27,8 +27,10 @@ test('chat composer acknowledges successful sends and clears only after the tran
 test('Token-bound attack areas keep the live anchor but preview and damage use a resolved free snapshot', () => {
   assert.match(areaSystem, /anchor: \{ type: 'free', markerId: null \}/);
   assert.match(areaSystem, /origin: resolvedOrigin\(area\)/);
-  assert.match(areaSystem, /createDamagePreview\(resolved, api\.mapPackage\.features \|\| \[\], categories\)/);
-  assert.match(areaSystem, /commitDamageEvent\(api\.getState\(\), resolved, current\)/);
+  assert.match(areaSystem, /createDamagePreview\(resolved, api\.mapPackage\.features \|\| \[\], categories, api\.mapPackage\)/);
+  assert.match(areaSystem, /commitDamageEvent\(before, resolved, current\)/);
+  assert.match(areaSystem, /const before = scene \? \{ \.\.\.state, sceneEvents: scene\.sceneEvents \|\| \[\] \} : state/);
+  assert.match(areaSystem, /await api\.world\.performOperations\(\[\{ type: 'scene\.content\.replace'/);
   assert.match(areaSystem, /resolvedOrigin\(\{ \.\.\.area, anchor \}\)/);
   assert.match(areaSystem, /anchor = type === 'token' \? \{ type: 'token', tokenId: value \}/);
 });

@@ -1,5 +1,6 @@
 import {
   damageFeatureState,
+  createFeatureReadContext,
   featureInteractionSnapshot,
   getFeatureRuntimeState,
   listFeatureInteractions,
@@ -7,7 +8,7 @@ import {
   setFeatureOpenState,
 } from './model.js';
 import { commitRestoreEvent } from '../engine/state.js';
-import { featureStatusMutations } from './status-rules.js';
+import { featureStatusMutations, featureStatusRule } from './status-rules.js';
 
 function featureById(mapPackage, featureId) {
   return (mapPackage?.features || []).find(feature => String(feature.id) === String(featureId)) || null;
@@ -38,6 +39,8 @@ function actionMessage(action, feature) {
 export function createFeatureOperations({
   mapPackage,
   getState,
+  readState = null,
+  getStateRevision = null,
   replaceState,
   performOperations = null,
   selectFeature = null,
@@ -57,31 +60,80 @@ export function createFeatureOperations({
 
   const send = (name, detail) => emit?.(name, detail);
 
+  let cachedRead = null;
+  const prepareReadContext = (state, revision, qualified) => {
+    // Only the private runtime reader with a committed revision qualifies for
+    // reuse. Legacy/public ports may return mutable objects and are rederived.
+    if (qualified && cachedRead?.state === state && cachedRead.revision === revision) return cachedRead.context;
+    const context = createFeatureReadContext(state);
+    cachedRead = qualified ? { state, revision, context } : null;
+    return context;
+  };
+  const readContext = () => {
+    const state = typeof readState === 'function' ? readState() : getState();
+    const revision = typeof getStateRevision === 'function' ? getStateRevision() : null;
+    return prepareReadContext(state, revision,
+      typeof readState === 'function' && Number.isSafeInteger(revision));
+  };
+
+  const modernReadContext = () => {
+    if (typeof performOperations === 'function' && typeof readState === 'function'
+      && typeof getStateRevision === 'function') {
+      const state = readState(), revision = getStateRevision();
+      if (state?.preferences?.worldV2?.schemaVersion === 4 && Number.isSafeInteger(revision)) {
+        return { ...prepareReadContext(state, revision, true), privateInput: true };
+      }
+    }
+    return null;
+  };
+
+  const executionContext = () => {
+    const prepared = modernReadContext();
+    if (prepared) return prepared;
+    // Legacy drafts and standalone operation ports still receive the original
+    // detached public snapshot, including mutable status-effect input.
+    const rawState = getState();
+    const world = rawState.preferences?.worldV2;
+    const scene = world?.scenes?.find(item => String(item.id) === String(world.activeSceneId));
+    return { state: scene ? { ...rawState, sceneEvents: scene.sceneEvents || [] } : rawState,
+      derivedScene: null, privateInput: false };
+  };
+
+  const contentHistory = (prepared, sceneEvents) => {
+    const history = { expectedSceneEvents: prepared.state.sceneEvents || [], sceneEvents };
+    // Copy both histories together: shared prior event leaves retain the same
+    // command aliasing while the authority's private history stays isolated.
+    return prepared.privateInput ? structuredClone(history) : history;
+  };
+
+  const committedFeatureState = feature => {
+    const prepared = modernReadContext();
+    return prepared ? getFeatureRuntimeState(prepared.state, feature, prepared.derivedScene)
+      : getFeatureRuntimeState(getState(), feature);
+  };
+
   const statusWorldOperations = mutations => mutations.map(({ type, ...payload }) => ({ type, payload }));
 
-  const actionsForFeature = (featureId, context = {}) => listFeatureInteractions({
-    mapPackage,
-    state: getState(),
-    featureId,
-    tokenId: context.tokenId ?? null,
-    resolveStatus,
-  });
+  const actionsForFeature = (featureId, context = {}) => {
+    const prepared = context.readContext || readContext();
+    return listFeatureInteractions({ mapPackage, state: prepared.state, derivedScene: prepared.derivedScene,
+      featureId, tokenId: context.tokenId ?? null, resolveStatus });
+  };
 
-  const snapshot = (featureId, context = {}) => featureInteractionSnapshot({
-    mapPackage,
-    state: getState(),
-    featureId,
-    tokenId: context.tokenId ?? null,
-    resolveStatus,
-  });
+  const snapshot = (featureId, context = {}) => {
+    const prepared = context.readContext || readContext();
+    return featureInteractionSnapshot({ mapPackage, state: prepared.state, derivedScene: prepared.derivedScene,
+      featureId, tokenId: context.tokenId ?? null, resolveStatus });
+  };
 
-  const statusMutationsFor = (feature, action, state, tokenId) => featureStatusMutations({
-    feature,
-    action,
-    state,
-    tokenId,
-    definitions: typeof getStatusDefinitions === 'function' ? getStatusDefinitions() : [],
-  });
+  const statusMutationsFor = (feature, action, state, tokenId) => {
+    const effects = featureStatusRule(feature, action)?.onSuccess;
+    const apply = effects?.apply || [], remove = effects?.remove || [];
+    const empty = Array.isArray(apply) && Array.isArray(remove) && !apply.length && !remove.length;
+    return featureStatusMutations({ feature, action, state, tokenId,
+      definitions: !empty && typeof getStatusDefinitions === 'function' ? getStatusDefinitions() : [],
+    });
+  };
 
   const applyStatusEffects = (draft, feature, action, tokenId) => {
     const mutations = statusMutationsFor(feature, action, draft, tokenId);
@@ -95,9 +147,9 @@ export function createFeatureOperations({
     return { state: next, mutations };
   };
 
-  const stateForFeature = featureId => {
+  const stateForFeature = (featureId, prepared = readContext()) => {
     const feature = featureById(mapPackage, featureId);
-    return feature ? getFeatureRuntimeState(getState(), feature) : null;
+    return feature ? getFeatureRuntimeState(prepared.state, feature, prepared.derivedScene) : null;
   };
 
   const patchState = (featureId, patch) => {
@@ -112,7 +164,7 @@ export function createFeatureOperations({
         source: 'feature:patch', featureId: feature.id,
       });
     return Promise.resolve(commit).then(() => {
-      const featureState = getFeatureRuntimeState(getState(), feature);
+      const featureState = committedFeatureState(feature);
       send('interaction:state-change', { featureId: feature.id, state: featureState });
       return featureState;
     });
@@ -120,7 +172,8 @@ export function createFeatureOperations({
 
   const execute = async (action, options = {}) => {
     const featureId = options.featureId;
-    const state = getState();
+    const prepared = executionContext();
+    const state = prepared.state;
     const feature = featureById(mapPackage, featureId);
     if (!feature) return result(action, featureId, false, 'Feature 不存在');
 
@@ -128,6 +181,7 @@ export function createFeatureOperations({
     const descriptor = listFeatureInteractions({
       mapPackage,
       state,
+      derivedScene: prepared.derivedScene,
       featureId: feature.id,
       tokenId,
       resolveStatus,
@@ -167,24 +221,44 @@ export function createFeatureOperations({
       if (action === 'damage') {
         const damaged = damageFeatureState(state, mapPackage, feature.id);
         if (damaged === state) return result(action, feature.id, false, '对象当前无法继续破坏');
-        const draft = applyStatusEffects(damaged, feature, action, tokenId);
-        await Promise.resolve(replaceState(draft.state, { source: 'feature:damage', featureId: feature.id }));
-        const committed = getState();
-        const event = committed.sceneEvents?.at?.(-1) || null;
-        getFeatureRuntimeState(committed, feature);
+        const mutations = statusMutationsFor(feature, action, damaged, tokenId);
+        if (typeof performOperations === 'function') {
+          const sceneId = state.preferences?.worldV2?.activeSceneId;
+          await performOperations([
+            { type: 'scene.content.replace', payload: { ...(sceneId ? { sceneId } : {}),
+              ...(sceneId ? { expectedActiveSceneId: sceneId } : {}),
+              ...contentHistory(prepared, damaged.sceneEvents) } },
+            ...statusWorldOperations(mutations),
+          ], { source: 'feature:damage' });
+        } else {
+          const draft = applyStatusEffects(damaged, feature, action, tokenId);
+          await Promise.resolve(replaceState(draft.state, { source: 'feature:damage', featureId: feature.id }));
+        }
+        const event = damaged.sceneEvents.at(-1);
         send('scene:damage', event ? structuredClone(event) : null);
-        return result(action, feature.id, true, '', { tokenId, event, statusMutations: draft.mutations, message: actionMessage(action, feature) });
+        return result(action, feature.id, true, '', { tokenId, event, statusMutations: mutations, message: actionMessage(action, feature) });
       }
 
       if (action === 'restore') {
         const restored = commitRestoreEvent(state, [feature.id]);
         if (restored === state) return result(action, feature.id, false, '对象当前完整');
-        const draft = applyStatusEffects(restored, feature, action, tokenId);
-        await Promise.resolve(replaceState(draft.state, { source: 'feature:restore', featureId: feature.id }));
-        const event = getState().sceneEvents?.at?.(-1) || null;
+        const mutations = statusMutationsFor(feature, action, restored, tokenId);
+        if (typeof performOperations === 'function') {
+          const sceneId = state.preferences?.worldV2?.activeSceneId;
+          await performOperations([
+            { type: 'scene.content.replace', payload: { ...(sceneId ? { sceneId } : {}),
+              ...(sceneId ? { expectedActiveSceneId: sceneId } : {}),
+              ...contentHistory(prepared, restored.sceneEvents) } },
+            ...statusWorldOperations(mutations),
+          ], { source: 'feature:restore' });
+        } else {
+          const draft = applyStatusEffects(restored, feature, action, tokenId);
+          await Promise.resolve(replaceState(draft.state, { source: 'feature:restore', featureId: feature.id }));
+        }
+        const event = restored.sceneEvents.at(-1);
         send('scene:restore', event ? structuredClone(event) : null);
         return result(action, feature.id, true, '', {
-          tokenId, event, statusMutations: draft.mutations, message: actionMessage(action, feature),
+          tokenId, event, statusMutations: mutations, message: actionMessage(action, feature),
         });
       }
 
@@ -205,7 +279,7 @@ export function createFeatureOperations({
           const draft = applyStatusEffects(changed, feature, action, tokenId);
           await Promise.resolve(replaceState(draft.state, { source: `feature:${action}`, featureId: feature.id }));
         }
-        const featureState = getFeatureRuntimeState(getState(), feature);
+        const featureState = committedFeatureState(feature);
         send('interaction:state-change', { featureId: feature.id, open, state: featureState, tokenId });
         return result(action, feature.id, true, '', { tokenId, open, state: featureState, statusMutations: mutations, message: actionMessage(action, feature) });
       }
@@ -217,6 +291,8 @@ export function createFeatureOperations({
   };
 
   return Object.freeze({
+    readContext,
+    dispose() { cachedRead = null; },
     actionsForFeature,
     execute,
     snapshot,

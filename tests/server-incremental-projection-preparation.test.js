@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createDocumentChanges, createFogDocumentChanges } from '../src/documents/changes.js';
-import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, targetedProjectionCollectionChanges, projectionCollectionChanges } from '../src/vision/audience.js';
+import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges } from '../src/vision/audience.js';
 import { createPreviousProjectionFunctions } from './fixtures/server-incremental-before-preparation.js';
 
 const server = readFileSync(new URL('../deployment/local-server/server.mjs', import.meta.url), 'utf8');
@@ -11,7 +11,7 @@ const functionSource = server.slice(server.indexOf('function lightweightProjecti
 const currentFactory = new Function('dependencies', `
   const { sessions, audienceStateFor, projectMotionForSession, createFogDocumentChanges,
     createDocumentChanges, sendSocket, rememberResumeCommit, committedPatches,
-    describeVisionForToken, describeServerVision, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, targetedProjectionCollectionChanges, projectionCollectionChanges, visionMapForScene,
+    describeVisionForToken, describeServerVision, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, visionMapForScene,
     findUser, assertCanonicalWorldState, structuredClone, metrics } = dependencies;
   ${functionSource}
   const shell = lightweightProjectionShell;
@@ -61,7 +61,7 @@ function harness(previous = false, overrides = {}) {
     calls: [], responses: [], resumptions: [] };
   const dependencies = {
     sessions: new Map(), committedPatches: new WeakMap(), metrics,
-    advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, targetedProjectionCollectionChanges, projectionCollectionChanges,
+    advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges,
     describeServerVision: () => ({}), visionMapForScene: () => null, findUser: () => null,
     assertCanonicalWorldState: { isImmutableData: () => false },
     structuredClone(value) { metrics.clones++; return structuredClone(value); },
@@ -98,6 +98,30 @@ function harness(previous = false, overrides = {}) {
 
 const move = ids => [{ type: 'token.movePath', payload: { tokenIds: ids } }];
 const session = { id: 'player', role: 'player', visionSourceTokenId: 'source' };
+
+test('Fog reset and hide use a full fresh per-recipient projection with predecessor hints only', () => {
+  for (const types of [['scene.fog.reset'], ['scene.fog.hide'], ['scene.fog.reset', 'scene.fog.hide'],
+    ['scene.fog.reset', 'scene.settings.patch'], ['scene.settings.patch']]) {
+    const values = fixture(), runner = harness();
+    const viewer = { ...session, identityStatus: 'active', audienceRevision: 1,
+      audienceProjection: values.projection };
+    runner.dependencies.sessions.set('player-socket', viewer);
+    runner.broadcastOperationCommit({ beforeState: values.before, afterState: values.after,
+      operationId: 'refresh', baseRevision: 1, revision: 2, updatedAt: 'after', results: [],
+      originSessionId: viewer.id, operations: types.map(type => ({ type, payload: {} })) });
+    assert.ok(runner.metrics.calls.includes('full:player'));
+    const knownFogOnly = types.every(type => ['scene.fog.reset', 'scene.fog.hide'].includes(type));
+    const cache = runner.metrics.caches[0];
+    if (knownFogOnly) {
+      assert.equal(cache.beforeState, values.before);
+      assert.equal(cache.previousProjection, values.projection);
+      assert.equal(cache.tokenIds.size, 0);
+      assert.equal(runner.metrics.freshDetection[0], true, 'no historic perception result may skip target detection');
+    } else assert.equal(cache, undefined, 'mixed and unknown changes retain complete cache invalidation');
+    assert.equal(runner.metrics.responses.length, 1);
+    assert.equal(viewer.audienceProjection.preferences.worldV2.actors[0].name, 'player');
+  }
+});
 
 function compareIncremental({ before, projection, after }, operations, results = [], viewer = session) {
   const input = structuredClone({ before, projection, after, operations, results, viewer });

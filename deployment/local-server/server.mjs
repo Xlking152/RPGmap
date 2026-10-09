@@ -53,13 +53,15 @@ import {
   projectStateForAudience,
   advanceFogProjectionMetadata,
   advancePublicChatProjectionMetadata,
+  matchesSourceFreeProjectionScope,
   projectionCollectionChanges,
   serverRuleset,
   sphereGroundRadiusMeters,
   sceneExplorationContext,
-  mergeExplorationChunkFog,
+  createCanonicalExplorationFogMerger,
   validateSceneOcclusion,
   createExplorationOperationCapture,
+  createServerMovementAdjudicationActorResolver,
 } from './ruleset-authority.mjs';
 import {
   networkUrls as listNetworkUrls,
@@ -75,6 +77,7 @@ import {
   websocketAccept,
 } from './websocket-runtime.mjs';
 import { createWorldWal } from './world-wal.mjs';
+import { encodeResumePatch, decodeResumePatch } from './resume-patch-codec.mjs';
 import { createWorldCheckpoint } from './world-checkpoint.mjs';
 import { mapForScene, validateAuthoritativeTokenMovePath } from './movement-authority.mjs';
 import { createContentStorage, prepareContentUpgrade } from './content-storage.mjs';
@@ -82,6 +85,7 @@ import { hasRetainedContentReference } from './content-history.mjs';
 import { commitStorageUpgrade, recoverStorageUpgrade } from './storage-upgrade.mjs';
 import { emptyExploration, validateExploration, enqueueExploration, explorationDelta,
   invalidateExploration, finishExplorationChunk, selectExplorationJob } from './exploration-queue.mjs';
+import { createExplorationFogSender } from './exploration-fog-transfer.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '0.0.0.0';
@@ -435,7 +439,15 @@ if (upgradeRequired) {
 // No upgrade is needed now. Only after validation may a torn WAL tail be trimmed.
 world = await worldWal.replay(world);
 if (world.state?.preferences?.worldV2) world.state = projectWorldOperationState(world.state);
-const assertCanonicalWorldState = createCanonicalWorldValidator();
+const canonicalDiagnostics = process.env.RPGMAP_CANONICAL_DIAGNOSTICS === '1';
+const assertCanonicalWorldState = createCanonicalWorldValidator({ diagnostics: canonicalDiagnostics, compactMetadata: true });
+const mergeCanonicalExplorationFog = createCanonicalExplorationFogMerger(assertCanonicalWorldState.isImmutableData);
+if (canonicalDiagnostics) process.once('exit', () => {
+  console.error(JSON.stringify({ canonicalValidationDiagnostics: assertCanonicalWorldState.getDiagnostics() }));
+});
+const prepareMovementAdjudicationActor = createServerMovementAdjudicationActorResolver({
+  isCanonicalData: assertCanonicalWorldState.isImmutableData,
+});
 if (world.state) assertCanonicalWorldState(world.state);
 const assertWorldSnapshotSize = createWorldSnapshotSizeValidator(assertCanonicalWorldState, { maxStateBytes: MAX_WS_PAYLOAD });
 
@@ -561,7 +573,10 @@ function advanceResumeBase(entry) {
   }
   // This base is a private detached replay copy; resume responses clone it.
   // Advancing it cannot mutate canonical state or a recipient projection.
-  resumeBaseState = applyWorldOperationPatch(resumeBaseState, entry.patch, { mutate: true });
+  let patch;
+  try { patch = decodeResumePatch(entry.patch); }
+  catch { discardResumeHistory(); return; }
+  resumeBaseState = applyWorldOperationPatch(resumeBaseState, patch, { mutate: true });
   resumeBaseRevision = Number(entry.revision);
 }
 function resetResumeHistory() {
@@ -569,11 +584,23 @@ function resetResumeHistory() {
   resumeBaseRevision = Number(world.revision) || 0;
   resumeBaseState = world.state ? structuredClone(world.state) : null;
 }
+function discardResumeHistory() {
+  // The authoritative commit is already durable. A private codec failure
+  // must cause a full audience sync, never fail that commit's ACK or keep the
+  // old live patch graph. A missing base is also a valid full-sync fallback.
+  resumeHistory.length = 0;
+  resumeBaseRevision = Number(world.revision) || 0;
+  try { resumeBaseState = world.state ? structuredClone(world.state) : null; }
+  catch { resumeBaseState = null; }
+}
 function rememberResumeCommit({
   beforeState, afterState, operationId, baseRevision, revision, updatedAt,
-  results, originSessionId, documentBatch, fog, patch,
+  results, originSessionId, documentBatch, fog, patch, backgroundFogOnly = false,
 }) {
   const now = Date.now();
+  let encodedPatch;
+  try { encodedPatch = encodeResumePatch(patch || createWorldOperationPatch(beforeState, afterState)); }
+  catch { discardResumeHistory(); return; }
   if (!resumeHistory.length) {
     resumeBaseRevision = Number(baseRevision);
     resumeBaseState = structuredClone(beforeState);
@@ -582,18 +609,40 @@ function rememberResumeCommit({
     baseRevision: Number(baseRevision),
     revision: Number(revision),
     at: now,
-    patch: patch || createWorldOperationPatch(beforeState, afterState),
+    patch: encodedPatch,
     operationId: String(operationId),
     updatedAt: String(updatedAt),
     results: structuredClone(results || []),
     originSessionId: originSessionId || null,
     documentBatch: documentBatch === true,
+    backgroundFogOnly: backgroundFogOnly === true,
     fog: structuredClone(fog || []),
   });
   while (resumeHistory.length > RESUME_HISTORY_LIMIT
     || (resumeHistory[0] && now - resumeHistory[0].at > RESUME_HISTORY_MAX_AGE_MS)) {
     advanceResumeBase(resumeHistory.shift());
   }
+}
+function canRebaseStatusOverBackgroundFog(baseRevision, operations, documentBatch) {
+  // Only the bundled Status reducer's narrow document intents commute with
+  // completed exploration. Never rebase over a reset, source change, user
+  // operation or missing history. Authorization and reduction still run
+  // against the current state, followed by the same durable WAL transaction.
+  if (documentBatch !== true || !operations.length
+    || !operations.every(operation => ['status.apply', 'status.remove'].includes(operation.type))
+    || !Number.isSafeInteger(baseRevision) || baseRevision < 0 || baseRevision >= world.revision
+    || !resumeBaseState || baseRevision < resumeBaseRevision) return false;
+  const now = Date.now();
+  let expected = world.revision;
+  for (let index = resumeHistory.length - 1; index >= 0; index--) {
+    const entry = resumeHistory[index];
+    if (entry.revision !== expected || entry.baseRevision !== expected - 1
+      || entry.backgroundFogOnly !== true || now < entry.at
+      || now - entry.at > RESUME_HISTORY_MAX_AGE_MS) return false;
+    expected = entry.baseRevision;
+    if (expected === baseRevision) return true;
+  }
+  return false;
 }
 function resumableCommits(session, revision, fingerprint) {
   const requested = Number(revision);
@@ -608,7 +657,10 @@ function resumableCommits(session, revision, fingerprint) {
   const result = [];
   for (const entry of resumeHistory) {
     if (entry.baseRevision !== expected || entry.revision !== expected + 1) return null;
-    const nextCanonical = applyWorldOperationPatch(canonical, entry.patch);
+    let patch;
+    try { patch = decodeResumePatch(entry.patch); }
+    catch { discardResumeHistory(); return null; }
+    const nextCanonical = applyWorldOperationPatch(canonical, patch);
     if (entry.revision <= requested) {
       canonical = nextCanonical;
       expected = entry.revision;
@@ -932,13 +984,39 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
     };
     const canonicalScene = canonicalWorldScene(afterState, next.preferences.worldV2.activeSceneId);
     const mapPackage = visionMapForScene(canonicalScene);
-    return advancePublicChatProjectionMetadata(beforeProjection, next, beforeState, afterState, {
+    const projectionContext = {
       role: session.role, userId: session.userId,
       user: session.userId ? findUser(session.userId) : null,
       visionSourceTokenId: session.visionSourceTokenId, describeVision: describeServerVision,
       mapPackage, mapMetrics: { metersPerUnit: mapPackage?.metersPerUnit || 1 },
       trustedProjection: true, isCanonicalData: assertCanonicalWorldState.isImmutableData,
-    });
+    };
+    const advanced = advancePublicChatProjectionMetadata(beforeProjection, next, beforeState, afterState, projectionContext);
+    if (advanced) return advanced;
+    // A prior eligible status/move may leave optimization metadata behind its
+    // correctly masked projection. With no vision source, a pure public append
+    // does not change detection. Keep this already prepared increment only if
+    // every other canonical field is identical; retain the stale metadata so
+    // future movement cannot claim an unproved predecessor relationship.
+    if (!matchesSourceFreeProjectionScope(beforeProjection, projectionContext)
+      || !assertCanonicalWorldState.isImmutableData(beforeState)
+      || !assertCanonicalWorldState.isImmutableData(afterState)) return null;
+    const unchanged = (before, after, omitted = []) => before && after
+      && Object.keys(before).length === Object.keys(after).length
+      && Object.keys(before).every(key => Object.hasOwn(after, key)
+        && (omitted.includes(key) || Object.is(before[key], after[key])));
+    const beforePreferences = beforeState.preferences, afterPreferences = afterState.preferences;
+    const beforeChat = beforePreferences?.chatSystem, afterChat = afterPreferences?.chatSystem;
+    const oldMessages = beforeChat?.messages, messages = afterChat?.messages;
+    if (!unchanged(beforeState, afterState, ['preferences'])
+      || !unchanged(beforePreferences, afterPreferences, ['worldV2', 'entitySystem', 'chatSystem'])
+      || !unchanged(beforePreferences.worldV2, afterPreferences.worldV2, ['updatedAt'])
+      || !unchanged(beforePreferences.entitySystem, afterPreferences.entitySystem)
+      || !unchanged(beforeChat, afterChat, ['messages'])
+      || !Array.isArray(oldMessages) || !Array.isArray(messages)
+      || messages.length !== oldMessages.length + appended.length || messages.length > 500
+      || oldMessages.some((message, index) => message !== messages[index])) return null;
+    return next;
   }
 
   const movementTargets = preparedMovementTargets === undefined
@@ -1100,7 +1178,7 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
 }
 
 
-function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, operations = [], documentBatch = false, onOriginProjection = null }) {
+function broadcastOperationCommit({ beforeState, afterState, operationId, baseRevision, revision, updatedAt, results, originSessionId, operations = [], documentBatch = false, onOriginProjection = null, backgroundFogOnly = false }) {
   const fog = results.filter(result => Object.hasOwn(result, 'dirtyBounds'));
   const fogOnly = operations.length && operations.every(operation => operation.type === 'scene.fog.explore');
   // These describe the authoritative commit, not any viewer's permissions.
@@ -1111,6 +1189,7 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
     && results.every(result => ['token.move', 'token.movePath', 'token.reposition'].includes(result.action));
   const tokenIds = pureMovement ? new Set(results.flatMap(result => result.tokenIds || [result.tokenId]).map(String)) : null;
   const ordinaryStatus = operations.length && operations.every(operation => ['status.apply', 'status.remove'].includes(operation.type));
+  const fogRefresh = operations.length && operations.every(operation => ['scene.fog.reset', 'scene.fog.hide'].includes(operation.type));
   const recipients = [...sessions];
   const originIndex = recipients.findIndex(([, session]) => session.id === originSessionId);
   if (originIndex > 0) recipients.unshift(...recipients.splice(originIndex, 1));
@@ -1120,12 +1199,15 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
     const incrementalProjection = tryIncrementalAudienceProjection(
       session, beforeProjection, afterState, operations, results, beforeState, movementTargets,
     );
-    const afterProjection = incrementalProjection || audienceStateFor(session, afterState, pureMovement || ordinaryStatus ? {
+    const afterProjection = incrementalProjection || audienceStateFor(session, afterState, pureMovement || ordinaryStatus || fogRefresh ? {
       movementCache: { beforeState, previousProjection: beforeProjection,
         tokenIds: tokenIds || new Set() },
       // Status hooks can affect other Tokens or lights. Recheck every target's
       // perception; only private geometry rays and immutable policy inputs
       // with their exact canonical predecessor may be reused.
+      // Reset/hide changes historical memory, so it also needs full fresh
+      // target detection. Stable geometry rays and detached unchanged leaves
+      // can retain their bounded per-recipient cache through that full pass.
       forceFreshDetection: !pureMovement,
     } : {});
     session.audienceProjection = afterProjection;
@@ -1134,7 +1216,8 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
       : [];
     const response = {
       type: documentBatch ? 'document.batch.committed' : 'world.operation.committed', operationId, baseRevision, revision, updatedAt,
-      changes: fogOnly ? createFogDocumentChanges(beforeProjection, afterProjection, { fog })
+      changes: fogOnly ? createFogDocumentChanges(beforeProjection, afterProjection, { fog,
+        isCanonicalData: assertCanonicalWorldState.isImmutableData })
         : createDocumentChanges(beforeProjection, afterProjection, null, { motion, fog,
           collectionChanges: projectionCollectionChanges(beforeProjection, afterProjection) }),
       ...(motion.length ? { motion } : {}),
@@ -1147,6 +1230,7 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
   rememberResumeCommit({
     beforeState, afterState, operationId, baseRevision, revision, updatedAt,
     results, originSessionId, documentBatch, fog, patch: committedPatches.get(afterState),
+    ...(backgroundFogOnly === true ? { backgroundFogOnly: true } : {}),
   });
 }
 function sendAudienceSnapshot(socket, session, reason = 'audience.changed') {
@@ -1678,6 +1762,7 @@ let explorationLane = null;
 let explorationRetryTimer = null;
 let pendingExploration = [];
 let lastExplorationCommitAt = 0;
+const explorationFogSender = createExplorationFogSender(assertCanonicalWorldState.isImmutableData);
 const worldCheckpoint = createWorldCheckpoint({
   getWorld: () => world,
   serialize(task) {
@@ -1707,19 +1792,23 @@ function workerExploration(job, context, exploredRows) {
     explorationWorker.on('message', message => {
       if (message.requestId !== explorationRequest?.id) return;
       const request = explorationRequest; explorationRequest = null;
-      if (message.error) request.reject(new Error(message.error)); else request.resolve(message.result);
+      if (message.error) {
+        explorationFogSender.clear(); request.reject(new Error(message.error));
+      } else request.resolve(message.result);
     });
     const instance = explorationWorker;
     const failed = error => {
       if (explorationWorker !== instance) return;
       explorationRequest?.reject(error); explorationRequest = null;
       explorationWorker = null; explorationWorkerContextId = null;
+      explorationFogSender.clear();
       instance.terminate();
     };
     instance.on('error', failed);
     instance.on('exit', code => {
       if (explorationWorker !== instance) return;
       explorationWorker = null; explorationWorkerContextId = null;
+      explorationFogSender.clear();
       if (explorationRequest) {
         explorationRequest.reject(new Error(`Exploration Worker stopped (${code})`)); explorationRequest = null;
       }
@@ -1728,9 +1817,15 @@ function workerExploration(job, context, exploredRows) {
   return new Promise((resolve, reject) => {
     const id = ++explorationSequence;
     explorationRequest = { id, resolve, reject };
-    explorationWorker.postMessage({ requestId: id, job, contextId: job.contextId,
-      ...(explorationWorkerContextId === job.contextId ? {} : { context }), exploredRows, budgetMs: 8 });
-    explorationWorkerContextId = job.contextId;
+    try {
+      const fogKey = JSON.stringify([job.worldEpoch, job.sceneId, job.partyId, job.epoch]);
+      const fogTransfer = explorationFogSender.prepare(fogKey, exploredRows);
+      explorationWorker.postMessage({ requestId: id, job, contextId: job.contextId,
+        ...(explorationWorkerContextId === job.contextId ? {} : { context }), ...fogTransfer, budgetMs: 8 });
+      explorationWorkerContextId = job.contextId;
+    } catch (error) {
+      explorationRequest = null; explorationWorkerContextId = null; explorationFogSender.clear(); reject(error);
+    }
   });
 }
 
@@ -1746,7 +1841,7 @@ async function commitExplorationResults(results) {
     const canonical = state.preferences.worldV2;
     const scene = canonical.scenes.find(item => String(item.id) === job.sceneId);
     if (!scene) continue;
-    const fog = mergeExplorationChunkFog(scene.fog, job.partyId, result.rows, world.exploration.contexts[job.contextId]?.map || {});
+    const fog = mergeCanonicalExplorationFog(scene.fog, job.partyId, result.rows, world.exploration.contexts[job.contextId]?.map || {});
     state = { ...state, preferences: { ...state.preferences, worldV2: { ...canonical,
       scenes: canonical.scenes.map(item => item === scene ? { ...item, fog } : item) } } };
     operations.push({ type: 'scene.fog.explore', payload: { sceneId: job.sceneId, partyId: job.partyId } });
@@ -1761,7 +1856,8 @@ async function commitExplorationResults(results) {
   await persistWorldCommit(nextWorld, beforeState, operationId);
   world = nextWorld;
   broadcastOperationCommit({ beforeState, afterState: state, operationId, baseRevision,
-    revision: world.revision, updatedAt: now, results: fogResults, operations, originSessionId: null, documentBatch: true });
+    revision: world.revision, updatedAt: now, results: fogResults, operations, originSessionId: null,
+    documentBatch: true, backgroundFogOnly: true });
 }
 
 async function flushExploration() {
@@ -1802,7 +1898,7 @@ function kickExploration() {
         const queued = world.exploration.jobs[pending.id];
         if (queued?.sceneId === job.sceneId && queued.partyId === job.partyId
           && queued.epoch === pending.epoch && queued.worldEpoch === pending.worldEpoch) {
-          explored = mergeExplorationChunkFog(explored, job.partyId, pending.rows, context.map);
+          explored = mergeCanonicalExplorationFog(explored, job.partyId, pending.rows, context.map);
         }
       }
       const result = await workerExploration(job, context, explored?.exploredByParty?.[job.partyId]?.rows || {});
@@ -2200,7 +2296,10 @@ server.on('upgrade', (req, socket) => {
       }
       const safeMoveRebase = message._documentBatch === true
         && envelope.operations.every(operation => operation.type === 'token.movePath');
-      if (envelope.baseRevision !== world.revision && !safeMoveRebase) {
+      const safeStatusRebase = canRebaseStatusOverBackgroundFog(
+        envelope.baseRevision, envelope.operations, message._documentBatch === true,
+      );
+      if (envelope.baseRevision !== world.revision && !safeMoveRebase && !safeStatusRebase) {
         return sendWorldOperationDenied(socket, message, 'revision_conflict', 'World 已被其他操作更新，请先重新载入最新状态');
       }
 
@@ -2222,6 +2321,7 @@ server.on('upgrade', (req, socket) => {
           now,
           isCanonicalData: assertCanonicalWorldState.isImmutableData,
           trustedOperationHooks: true,
+          prepareMovementAdjudicationActor,
           ruleset: serverRuleset,
           mapMetrics: visionMapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)) || { metersPerUnit: 1 },
           mapPackage: visionMapForScene(canonicalScene(world.state?.preferences?.worldV2?.activeSceneId)),
@@ -2493,6 +2593,7 @@ function shutdown() {
   shuttingDown = true;
   worldCheckpoint.close();
   explorationClosed = true;
+  explorationFogSender.clear();
   clearTimeout(explorationRetryTimer);
   explorationWorker?.terminate();
   const connections = [...sessions.keys()];

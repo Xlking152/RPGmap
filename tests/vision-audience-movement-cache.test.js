@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { projectStateForAudience } from '../src/vision/audience.js';
+import { isImmutableVisionData } from '../src/vision/immutable-data.js';
 
 const ruleset = { vision: { describe: () => ({ preciseRangeMeters: 120, vagueRangeMeters: 300, senses: {} }) } };
 const map = { id: 'cache-map', version: '1', width: 1000, height: 1000, metersPerUnit: 1, features: [] };
@@ -127,4 +128,59 @@ test('precise hostile Tokens and hidden Tokens do not reserve opaque identities'
   const near = projected.preferences.worldV2.scenes[0].tokens.find(item => item.id === 'near');
   assert.equal(near?.audienceVisibility, 'precise');
   assert.deepEqual(calls, []);
+});
+
+function freezeGraph(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) freezeGraph(child);
+  return Object.freeze(value);
+}
+
+test('500 immutable Tokens match independent full projections across source movement and recipients', () => {
+  let before = fixture();
+  const scene = before.preferences.worldV2.scenes[0];
+  while (scene.tokens.length < 500) {
+    const index = scene.tokens.length;
+    scene.tokens.push(token(`hostile-${index}`, 'hostile', (index * 37) % 950, (index * 19) % 950,
+      index % 11 === 0 ? { visibility: { mode: 'gm', userIds: [] } } : {}));
+  }
+  before = freezeGraph(before);
+  const viewers = [
+    { ...context, isCanonicalData: isImmutableVisionData },
+    { ...context, userId: 'hostile-owner', user: { ownership: { scout: 'owner', hostile: 'owner' }, placementGrants: {} },
+      isCanonicalData: isImmutableVisionData },
+  ];
+  let projections = viewers.map(viewer => projectStateForAudience(before, viewer));
+  for (const x of [90, 120, 350, 50]) {
+    const after = freezeGraph(update(before, { tokenId: 'source', patch: { x } }));
+    projections = viewers.map((viewer, index) => {
+      const reused = projectStateForAudience(after, { ...viewer, movementCache: { beforeState: before,
+        previousProjection: projections[index], tokenIds: new Set(['source']) } });
+      const independent = projectStateForAudience(structuredClone(after), viewer);
+      assert.deepEqual(reused, independent);
+      return reused;
+    });
+    before = after;
+  }
+  assert.equal(projections[0].preferences.worldV2.scenes[0].tokens.some(item => item.id === 'hostile-11'), false);
+  assert.equal(projections[1].preferences.worldV2.actors.find(actor => actor.id === 'hostile')?.name, 'Hostile');
+});
+
+test('custom Array mapping keeps its observable legacy calls for immutable previous Tokens', () => {
+  const before = freezeGraph(fixture()), viewer = { ...context, isCanonicalData: isImmutableVisionData };
+  const previousProjection = projectStateForAudience(before, viewer);
+  const after = freezeGraph(update(before, { tokenId: 'source', patch: { x: 90 } }));
+  const priorTokens = before.preferences.worldV2.scenes[0].tokens;
+  const original = Object.getOwnPropertyDescriptor(Array.prototype, 'map');
+  let observedPrior = false, reused;
+  try {
+    Object.defineProperty(Array.prototype, 'map', { ...original, value: function(callback, receiver) {
+      if (this === priorTokens) observedPrior = true;
+      return Reflect.apply(original.value, this, [callback, receiver]);
+    } });
+    reused = projectStateForAudience(after, { ...viewer, movementCache: { beforeState: before,
+      previousProjection, tokenIds: new Set(['source']) } });
+  } finally { Object.defineProperty(Array.prototype, 'map', original); }
+  assert.equal(observedPrior, true);
+  assert.deepEqual(reused, projectStateForAudience(structuredClone(after), viewer));
 });

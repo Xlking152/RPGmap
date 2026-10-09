@@ -12,6 +12,7 @@ import { STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { assertTemplateLibrary } from '../library/model.js';
 import { normalizeMovementBudget, normalizeMovementState } from '../movement/model.js';
 import { normalizeJournalCollection } from '../journal/model.js';
+import { cloneWithReplacements } from '../engine/detached-metadata.js';
 
 export { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 
@@ -127,8 +128,7 @@ function normalizeScene(raw, {
     seen.add(token.id);
     tokens.push(token);
   }
-  return {
-    ...clone(source),
+  return cloneWithReplacements(source, {
     id: id(source.id, sceneIdForMap(mapId)),
     name: text(source.name, text(mapPackage?.title ?? mapPackage?.name, mapId)),
     mapPackage: { ...clone(mapRef), id: mapId, version: mapVersion },
@@ -146,7 +146,7 @@ function normalizeScene(raw, {
       movementBudgetMetersPerTurn: normalizeMovementBudget(source.settings?.movementBudgetMetersPerTurn),
       defaultDoorInteractionRangeMeters: Math.max(0, finite(source.settings?.defaultDoorInteractionRangeMeters, 2)),
     },
-  };
+  });
 }
 
 export function normalizeWorldV2(raw, { mapPackage = null, ruleset = null } = {}) {
@@ -172,8 +172,7 @@ export function normalizeWorldV2(raw, { mapPackage = null, ruleset = null } = {}
   const activeSceneId = sceneIds.has(id(source.activeSceneId)) ? id(source.activeSceneId) : scenes[0].id;
   const rulesetRef = object(source.ruleset);
   const now = new Date().toISOString();
-  return {
-    ...clone(source),
+  return cloneWithReplacements(source, {
     schemaVersion: WORLD_SCHEMA_VERSION,
     id: id(source.id, 'world-default'),
     name: text(source.name, `${text(ruleset?.title, 'RPGmap')} World`),
@@ -189,7 +188,7 @@ export function normalizeWorldV2(raw, { mapPackage = null, ruleset = null } = {}
     scenes,
     createdAt: text(source.createdAt, now),
     updatedAt: text(source.updatedAt, now),
-  };
+  });
 }
 
 export function activeWorldScene(world) {
@@ -289,25 +288,29 @@ export function projectWorldV2ToRuntimeState(state, rawWorld, { mapPackage, rule
   }
   const actorIds = new Set(world.actors.map(actor => String(actor?.id)));
   const tokens = scene.tokens.filter(token => actorIds.has(String(token.actorId)));
-  const next = clone(state || {});
-  next.mapId = currentMap.id;
-  next.mapVersion = currentMap.version;
-  next.markers = clone(scene.markers);
-  next.attackAreas = canonicalAttackAreas(scene.attackAreas);
-  next.sceneEvents = clone(scene.sceneEvents);
-  delete next.characters;
-  next.preferences ||= {};
-  next.preferences.gridVisible = scene.settings?.gridVisible !== false;
-  next.preferences.featureStates = clone(scene.featureStates || {});
-  delete next.preferences.featureInteractions;
-  next.preferences.entitySystem = {
-    ...clone(object(next.preferences.entitySystem)),
+  const entitySystem = cloneWithReplacements(object(state?.preferences?.entitySystem), {
     schemaVersion: STATUS_SCHEMA_VERSION,
     statusDefinitions: clone(world.statusDefinitions),
     actors: clone(world.actors),
     tokens: tokens.map(runtimeTokenFromWorld),
-  };
-  next.preferences[WORLD_STATE_KEY] = clone(world);
+  });
+  const preferences = cloneWithReplacements(state?.preferences || {}, {
+    gridVisible: scene.settings?.gridVisible !== false,
+    featureStates: clone(scene.featureStates || {}),
+    featureInteractions: undefined,
+    entitySystem,
+    [WORLD_STATE_KEY]: clone(world),
+  }, { preserveContainer: true });
+  delete preferences.featureInteractions;
+  const next = cloneWithReplacements(state || {}, {
+    mapId: currentMap.id,
+    mapVersion: currentMap.version,
+    markers: clone(scene.markers),
+    attackAreas: canonicalAttackAreas(scene.attackAreas),
+    sceneEvents: clone(scene.sceneEvents),
+    preferences,
+  }, { preserveContainer: true });
+  delete next.characters;
   return next;
 }
 

@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { closeOwnedBrowser } from './owned-browser-close.mjs';
 
 if (process.platform !== 'win32') throw new Error('Final sheet browser smoke requires Windows Edge');
 const targetUrl = String(process.argv[2] || '').trim();
@@ -47,6 +48,7 @@ const edge = spawn(edgePath(), [
 ], { stdio:['ignore','ignore','pipe'], windowsHide:true });
 let edgeError = '';
 let browserClosed = false;
+let socket;
 edge.stderr.setEncoding('utf8');
 edge.stderr.on('data', chunk => { edgeError += chunk; });
 
@@ -57,7 +59,7 @@ try {
     const pages = await response.json();
     return pages.find(item => item.type === 'page' && item.webSocketDebuggerUrl);
   }, 'Edge CDP endpoint', deadline);
-  const socket = new WebSocket(page.webSocketDebuggerUrl);
+  socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Edge CDP WebSocket open timed out')), 5000);
     socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once:true });
@@ -91,7 +93,8 @@ try {
     const id = nextId++;
     const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Edge CDP command timed out: ${method}`)); }, 7500);
     pending.set(id, { resolve, reject, timer });
-    socket.send(JSON.stringify({ id, method, params }));
+    try { socket.send(JSON.stringify({ id, method, params })); }
+    catch (error) { pending.delete(id); clearTimeout(timer); reject(error); }
   });
   const evaluate = async expression => {
     const result = await send('Runtime.evaluate', { expression, returnByValue:true, awaitPromise:true });
@@ -201,10 +204,11 @@ try {
   if(failures.length) throw new Error(`Final browser requests failed: ${failures.join('; ')}`);
   if(exceptions.length) throw new Error(`Final browser runtime errors: ${exceptions.join('; ')}`);
   console.log(JSON.stringify({ready,fixture,cards,linkedHealth:{change:healthChange,shared:true},resize:{before:resizeBefore,applied:resizeApplied,captured:resizeCaptured,rerender:resizeRerender,reopen:resizeReopen},playEdit}));
-  await send('Browser.close');browserClosed=true;
+  await closeOwnedBrowser({process:edge,send,pending,label:'Final v2 sheet browser smoke'});browserClosed=true;
 } catch(error) {
   throw new Error(`${error.message}${edgeError?`\nEdge stderr:\n${edgeError.slice(-4000)}`:''}`);
 } finally {
+  socket?.close();
   if(!browserClosed&&edge.exitCode===null)edge.kill('SIGKILL');
   if(edge.exitCode===null)await new Promise(resolve=>{const timer=setTimeout(resolve,2000);edge.once('exit',()=>{clearTimeout(timer);resolve();});});
   await rm(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100}).catch(error=>console.warn(`Final sheet smoke profile cleanup deferred: ${error.message}`));

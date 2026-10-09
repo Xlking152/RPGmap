@@ -42,7 +42,12 @@ function parseJson(raw) {
 }
 
 export function inspectWorldSave(raw) {
-  const state = parseJson(raw);
+  return inspectWorldStateHeader(parseJson(raw));
+}
+
+// Internal committed state can be inspected without copying its Actors,
+// Tokens, Fog or content. Returned metadata contains detached scalars only.
+export function inspectWorldStateHeader(state) {
   const world = object(state?.preferences?.worldV2);
   if (!world.id) return null;
   const scenes = array(world.scenes);
@@ -160,8 +165,7 @@ export function createWorldCatalogManager(storageAdapter, { idFactory = newWorld
     return clone(descriptor);
   }
 
-  function updateFromSave(worldId, raw) {
-    const header = inspectWorldSave(raw);
+  function updateFromHeader(worldId, header) {
     const catalog = readCatalog();
     const index = catalog.worlds.findIndex(world => String(world.id) === String(worldId));
     if (index < 0) return null;
@@ -176,6 +180,14 @@ export function createWorldCatalogManager(storageAdapter, { idFactory = newWorld
       writeCatalog(catalog);
     }
     return clone(catalog.worlds[index]);
+  }
+
+  function updateFromSave(worldId, raw) {
+    return updateFromHeader(worldId, inspectWorldSave(raw));
+  }
+
+  function updateFromState(worldId, state) {
+    return updateFromHeader(worldId, inspectWorldStateHeader(state));
   }
 
   function activateStoredScene(worldId, sceneId) {
@@ -258,6 +270,7 @@ export function createWorldCatalogManager(storageAdapter, { idFactory = newWorld
     select,
     create,
     updateFromSave,
+    updateFromState,
     activateStoredScene,
     remove,
     adoptLegacyMapWorld,

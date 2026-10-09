@@ -4,6 +4,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { runRuinsBrowserSmoke } from './ruins-browser-smoke.mjs';
+import { runLocalBrowserPerformance } from './local-browser-performance.mjs';
+import { createPackagedOfflineServer, openPersistentOfflineRuntime } from './ruins-offline-browser-support.mjs';
+import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
+import { closeOwnedBrowser } from './owned-browser-close.mjs';
+import { cdpCommandEnvelope, proveLiveValidationWorker } from './live-validation-worker-proof.mjs';
 
 if (process.platform !== 'win32') throw new Error('Packaged browser smoke requires Windows');
 const browserName = String(process.env.RPGMAP_SMOKE_BROWSER || 'edge').toLowerCase();
@@ -13,6 +20,13 @@ if (!/^http:\/\/127\.0\.0\.1:\d+\/?/.test(targetUrl)) throw new Error('Browser s
 const timeoutMs = Math.max(10_000, Number(process.argv[3]) || 30_000);
 const mode = String(process.argv[4] || 'bootstrap');
 if (!['bootstrap', 'fog'].includes(mode)) throw new Error(`Unknown browser smoke mode: ${mode}`);
+const packageRoot = String(process.argv[5] || '').trim();
+if (!packageRoot) throw new Error('Browser smoke requires the actual served package directory');
+const buildInfo = await benchmarkBuildInfo(process.cwd(), path.resolve(packageRoot));
+const versionResponse = await fetch(new URL('/api/version', targetUrl), { cache: 'no-store' });
+if (!versionResponse.ok || !isDeepStrictEqual(await versionResponse.json(), buildInfo.metadata)) {
+  throw new Error('Browser smoke server version does not match the actual package');
+}
 const viewportMatch = /^(\d{2,4})x(\d{2,4})$/.exec(String(process.env.RPGMAP_SMOKE_VIEWPORT || ''));
 
 function edgePath() {
@@ -73,6 +87,8 @@ let edgeError = '';
 edge.stderr.setEncoding('utf8');
 edge.stderr.on('data', chunk => { edgeError += chunk; });
 let browserClosed = false;
+let socket;
+let offlineServer = null;
 
 try {
   const deadline = Date.now() + timeoutMs;
@@ -82,7 +98,7 @@ try {
     return pages.find(item => item.type === 'page' && item.webSocketDebuggerUrl);
   }, 'Edge CDP endpoint', deadline);
 
-  const socket = new WebSocket(page.webSocketDebuggerUrl);
+  socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Edge CDP WebSocket open timed out')), 5_000);
     socket.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
@@ -137,14 +153,15 @@ try {
       resolveTraceCompletion = null;
     }
   });
-  const send = (method, params = {}, commandTimeoutMs = 5000) => new Promise((resolve, reject) => {
+  const send = (method, params = {}, commandTimeoutMs = 5000, sessionId) => new Promise((resolve, reject) => {
     const id = nextId++;
     const timeout = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`Edge CDP command timed out: ${method}`));
     }, commandTimeoutMs);
     pending.set(id, { resolve, reject, timeout });
-    socket.send(JSON.stringify({ id, method, params }));
+    try { socket.send(JSON.stringify(cdpCommandEnvelope(id, method, params, sessionId))); }
+    catch (error) { pending.delete(id); clearTimeout(timeout); reject(error); }
   });
   const evaluate = async (expression, commandTimeoutMs) => {
     const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, commandTimeoutMs);
@@ -160,7 +177,11 @@ try {
   }
   // Attach observers before navigation so cached/fast dynamic imports cannot
   // finish before Network.enable and disappear from the package asset audit.
-  await send('Page.navigate', { url: targetUrl });
+  // Cold navigation shares the declared startup deadline. The generic 5 s
+  // command limit must not cut that deadline short on a fresh Chrome profile.
+  const initialNavigationBudget = deadline - Date.now();
+  if (initialNavigationBudget <= 0) throw new Error('Browser startup deadline exceeded before navigation');
+  await send('Page.navigate', { url: targetUrl }, initialNavigationBudget);
 
   if (mode === 'bootstrap') {
     const entryState = await retry(
@@ -417,6 +438,7 @@ try {
     await writeFile(process.env.RPGMAP_SMOKE_CPU_PROFILE, JSON.stringify(cpuProfile));
   }
   let occlusionAudit = null;
+  let ruinsAudit = null;
   if (mode === 'fog' && await evaluate(`Boolean(document.querySelector('#app').rpgMapApp.occlusionEditor)`)) {
     const zoomRecords = [];
     for (const dpr of [1, 1.25, 1.5, 2]) {
@@ -428,9 +450,18 @@ try {
         api.map.invalidateSize({ animate: false });
         const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
         let maxProjectionError = 0, maxCenterAlpha = 0;
+        const verifyViewportLabels = () => {
+          const svg = document.querySelector('.leaflet-base-pane svg.leaflet-image-layer');
+          const scale = svg.getBoundingClientRect().width / api.mapPackage.width;
+          const expectedTier = scale <= 0.24 ? 'overview' : scale <= 0.52 ? 'mid' : 'detail';
+          if (svg.dataset.zoomTier !== expectedTier) throw new Error('Viewport label tier did not follow zoom/resize: ' + JSON.stringify({
+            zoom: api.map.getZoom(), actual: svg.dataset.zoomTier, expected: expectedTier }));
+          if (!document.querySelector('.leaflet-grid-pane path.grid-minor')) throw new Error('Viewport grid is missing');
+        };
         for (let zoom = -4; zoom <= 5; zoom += 0.25) {
           api.map.setView([api.mapPackage.height - source.y, source.x], zoom, { animate: false });
           await frame(); await frame(); api.vision.render(); await frame();
+          verifyViewportLabels();
           const canvas = document.querySelector('.rpgmap-vision-fog-perception');
           const point = api.map.latLngToContainerPoint([api.mapPackage.height - source.y, source.x]);
           const ratio = canvas.width / api.map.getSize().x;
@@ -443,6 +474,7 @@ try {
           maxProjectionError = Math.max(maxProjectionError, Math.abs(exact.x - point.x), Math.abs(exact.y - point.y));
         }
         api.map.panBy([47, -31], { animate: false }); await frame(); api.vision.render(); await frame();
+        verifyViewportLabels();
         api.map.fitBounds([[api.mapPackage.height - source.y - 200, source.x - 200],
           [api.mapPackage.height - source.y + 200, source.x + 200]], { animate: false });
         await frame(); api.vision.render(); await frame();
@@ -663,6 +695,41 @@ try {
     })()`);
     if (feedbackError) throw new Error(`${feedbackError.message}; storageSizes=${JSON.stringify(storageSizes)}`);
     occlusionAudit = { zoom: zoomRecords, editor, feedback, storageSizes };
+    offlineServer = await createPackagedOfflineServer(packageRoot);
+    await openPersistentOfflineRuntime({ evaluate, navigate:url=>send('Page.navigate',{url},timeoutMs), url:offlineServer.url });
+    const ruinsProfilePath=process.env.RPGMAP_SMOKE_RUINS_CPU_PROFILE;
+    ruinsAudit = await runRuinsBrowserSmoke(evaluate, {
+      // Hosted CI records frames on its different machine. Formal local
+      // publication always requires the same-machine frame gate and raw proof.
+      enforceFrameGate: !(buildInfo.metadata.version === '2.5.5'
+        && process.env.RPGMAP_SMOKE_HOSTED_FRAME_OBSERVATION === '1'),
+      ...(ruinsProfilePath ? {
+      beforeRecovery:async()=>{
+        await evaluate(`(()=>{const diagnostics=document.querySelector('#app').rpgMapApp.diagnostics;
+          globalThis.__ruinsDiagnosticWasEnabled=diagnostics.enabled;diagnostics.setEnabled(true);diagnostics.reset();})()`);
+        await send('Profiler.enable');await send('Profiler.start');
+      },
+      afterRecovery:async()=>{
+        const {profile}=await send('Profiler.stop');await writeFile(ruinsProfilePath,JSON.stringify(profile));
+        const pipeline=await evaluate(`(()=>{const diagnostics=document.querySelector('#app').rpgMapApp.diagnostics;
+          const snapshot=diagnostics.snapshot();diagnostics.setEnabled(globalThis.__ruinsDiagnosticWasEnabled===true);return snapshot;})()`);
+        await writeFile(ruinsProfilePath+'.pipeline.json',JSON.stringify(pipeline));
+      },
+      } : {}),
+    });
+    ruinsAudit.storageMode = 'persistent-offline';
+    if (process.env.RPGMAP_SMOKE_LOCAL_PERFORMANCE === '1') {
+      ruinsAudit.localPerformance = await runLocalBrowserPerformance(evaluate);
+    }
+    try {
+      ruinsAudit.validationWorker = await proveLiveValidationWorker(send);
+    } catch (error) {
+      const stress = ruinsAudit.stress;
+      const completedRuinsStress = { rounds: stress.rounds,
+        frames: { count: stress.frames.count, averageFPS: stress.frames.averageFPS, p95Ms: stress.frames.p95Ms },
+        maxLongTaskMs: stress.maxLongTaskMs, damageP95Ms: stress.damageP95Ms, restoreP95Ms: stress.restoreP95Ms };
+      throw new Error(`${error.message}; completedRuinsStress=${JSON.stringify(completedRuinsStress)}`, { cause: error });
+    }
   }
   const assetAudit = await evaluate(`(async () => {
     const response = await fetch('./.vite/manifest.json', { cache: 'no-store' });
@@ -754,12 +821,20 @@ try {
       throw new Error(`Browser did not load required Runtime asset: ${pattern}; visual=${JSON.stringify(visualState)}; responses=${JSON.stringify(responses.slice(-20))}`);
     }
   }
-  console.log(JSON.stringify({ worldManager: mode === 'bootstrap', map: 'northern-song-lanzhou-1104', assets: assetAudit, fog: fogAudit, movement: movementAudit, occlusion: occlusionAudit, layout: layoutAudit, ...runtime }));
-  await send('Browser.close');
+  if (!isDeepStrictEqual(await benchmarkBuildInfo(process.cwd(), path.resolve(packageRoot)), buildInfo)) {
+    throw new Error('Browser smoke package changed during validation');
+  }
+  console.log(JSON.stringify({ version: buildInfo.metadata.version, build: buildInfo,
+    diagnosticProfiling:Boolean(process.env.RPGMAP_SMOKE_CPU_PROFILE||process.env.RPGMAP_SMOKE_FEEDBACK_CPU_PROFILE||process.env.RPGMAP_SMOKE_RUINS_CPU_PROFILE),
+    worldManager: mode === 'bootstrap', map: 'northern-song-lanzhou-1104', assets: assetAudit, fog: fogAudit,
+    movement: movementAudit, occlusion: occlusionAudit, ruins: ruinsAudit, layout: layoutAudit, ...runtime }));
+  await closeOwnedBrowser({ process: edge, send, pending, label: `${browserName} browser smoke` });
   browserClosed = true;
 } catch (error) {
   throw new Error(`${error.message}${edgeError ? `\nEdge stderr:\n${edgeError.slice(-4000)}` : ''}`);
 } finally {
+  socket?.close();
+  await offlineServer?.close();
   if (!browserClosed && edge.exitCode === null) edge.kill('SIGKILL');
   if (edge.exitCode === null) {
     await new Promise(resolve => {

@@ -32,6 +32,7 @@ function runtime(storage) {
     persistNow: () => persistence.persistNow(),
     getLocalExploration: () => persistence.getLocalExploration(),
     setLocalExploration: value => persistence.setLocalExploration(value),
+    setLocalExplorationSnapshot: value => persistence.setLocalExplorationSnapshot(value),
     vision: { getSource: () => 'scout', getVisibleRegion: () => ({ vagueRangeMeters: 20, rangeMeters: 20 }) },
     on(name, callback) { const list = handlers.get(name) || []; list.push(callback); handlers.set(name, list); },
     emit(name, detail) { for (const callback of handlers.get(name) || []) callback({ detail }); } };

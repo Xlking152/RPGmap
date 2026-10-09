@@ -3,6 +3,7 @@ import { normalizeFogState } from './fog.js';
 import { normalizeActorPublicProfile } from '../actor/public-profile.js';
 import { canPlaceActorTemplate } from '../permissions/model.js';
 import { sceneVisionContext } from './context.js';
+import { isImmutableVisionData as immutablePolicyDocument, hasImmutableVisionData, recordImmutableVisionData } from './immutable-data.js';
 import {
   deriveSceneLightSources,
   perceptionLevelAtPoint,
@@ -13,9 +14,24 @@ import {
 import { journalVisibleToAudience } from '../journal/model.js';
 
 const clone = structuredClone;
+const indexMap = Map, indexString = String, indexArray = Array;
+const indexMapSet = Object.getOwnPropertyDescriptor(Map.prototype, 'set')?.value;
+const indexArrayMap = Object.getOwnPropertyDescriptor(Array.prototype, 'map')?.value;
+const indexArrayIterator = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator)?.value;
+const indexSpecies = Object.getOwnPropertyDescriptor(Array, Symbol.species)?.get;
+const indexIterator = (() => {
+  try {
+    const methods = [indexMap, indexString, indexArray, indexMapSet, indexArrayMap, indexArrayIterator, indexSpecies];
+    if (!methods.every(method => typeof method === 'function'
+      && Function.prototype.toString.call(method).includes('[native code]'))) return null;
+    const prototype = Object.getPrototypeOf(indexArrayIterator.call([]));
+    const next = Object.getOwnPropertyDescriptor(prototype, 'next')?.value;
+    return typeof next === 'function' && Function.prototype.toString.call(next).includes('[native code]')
+      ? { prototype, next } : null;
+  } catch { return null; }
+})();
 const projectionAudiences = new WeakMap();
 const projectionPolicies = new WeakMap();
-const immutablePolicyDocuments = new WeakSet();
 const vagueActorDocuments = new WeakSet();
 const canonicalActorMaps = new WeakMap();
 const canonicalTokenMaps = new WeakMap();
@@ -118,22 +134,6 @@ function plainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function immutablePolicyDocument(value) {
-  if (value === null || !['object', 'function'].includes(typeof value)) return !['function', 'symbol', 'bigint'].includes(typeof value);
-  if (immutablePolicyDocuments.has(value)) return true;
-  if (typeof value !== 'object' || !Object.isFrozen(value)
-    || (Array.isArray(value) ? Object.getPrototypeOf(value) !== Array.prototype
-      : ![Object.prototype, null].includes(Object.getPrototypeOf(value)))) return false;
-  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
-    if (!Object.hasOwn(descriptor, 'value') || !immutablePolicyDocument(descriptor.value)) return false;
-  }
-  for (let prototype = Object.getPrototypeOf(value); prototype; prototype = Object.getPrototypeOf(prototype)) {
-    const toJSON = Object.getOwnPropertyDescriptor(prototype, 'toJSON');
-    if (toJSON && (!Object.hasOwn(toJSON, 'value') || typeof toJSON.value === 'function')) return false;
-  }
-  immutablePolicyDocuments.add(value);
-  return true;
-}
 
 function hasId(value, target) {
   return Array.isArray(value) && Boolean(target) && value.some(item => String(item ?? '') === target);
@@ -168,12 +168,33 @@ function actorMap(world, cacheCanonical = false) {
 function canonicalTokenMap(tokens) {
   const cached = canonicalTokenMaps.get(tokens);
   if (cached) return cached;
-  const result = new Map(tokens.map(token => [String(token.id), token]));
+  const immutable = hasImmutableVisionData(tokens);
+  const ordinaryIndex = immutable && indexIterator && Map === indexMap && String === indexString && Array === indexArray
+    && Map.prototype.set === indexMapSet
+    && Object.getOwnPropertyDescriptor(Array.prototype, 'map')?.value === indexArrayMap
+    && Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator)?.value === indexArrayIterator
+    && Object.getOwnPropertyDescriptor(Array.prototype, 'constructor')?.value === indexArray
+    && Object.getOwnPropertyDescriptor(Array, Symbol.species)?.get === indexSpecies
+    && Object.getOwnPropertyDescriptor(indexIterator.prototype, 'next')?.value === indexIterator.next
+    && Reflect.ownKeys(tokens).length === tokens.length + 1;
+  let result = null, stringIds = ordinaryIndex;
+  if (ordinaryIndex) {
+    result = new Map();
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      if (typeof token?.id !== 'string' || !token.id.length) { result = null; stringIds = false; break; }
+      result.set(token.id, token);
+    }
+  }
+  // Accepted ordinary Tokens already have string IDs. Build their index without
+  // allocating a temporary pair Array for every Token; all unqualified/custom
+  // mapping environments retain the complete original map/iterator behavior.
+  result ||= new Map(tokens.map(token => [String(token.id), token]));
   // The previous canonical array was qualified as a whole when its audience
   // was projected. Reuse that immutable proof without scanning every document
   // again. Unqualified and duplicate-ID arrays keep the legacy fresh map.
-  if (immutablePolicyDocuments.has(tokens) && result.size === tokens.length
-    && tokens.every(token => typeof token?.id === 'string' && token.id.length > 0)) {
+  if (immutable && result.size === tokens.length
+    && (stringIds || tokens.every(token => typeof token?.id === 'string' && token.id.length > 0))) {
     canonicalTokenMaps.set(tokens, result);
   }
   return result;
@@ -410,7 +431,7 @@ function movementPartyInputs(world, previous) {
   if (movementPartyRelations.get(world.scenes)?.has(previous.scenes)) {
     return { actors: world.actors, scenes: world.scenes };
   }
-  const knownScenes = immutablePolicyDocuments.has(world.scenes);
+  const knownScenes = hasImmutableVisionData(world.scenes);
   if (!knownScenes && (Object.getPrototypeOf(world.scenes) !== Array.prototype
     || Object.getOwnPropertyNames(world.scenes).length !== world.scenes.length + 1
     || Object.getOwnPropertySymbols(world.scenes).length)) return null;
@@ -430,7 +451,7 @@ function movementPartyInputs(world, previous) {
     }
     const tokens = fields.tokens?.value;
     if (!Array.isArray(tokens) || !Object.isFrozen(tokens) || tokens.length !== before.tokens.length) return null;
-    const knownTokens = immutablePolicyDocuments.has(tokens);
+    const knownTokens = hasImmutableVisionData(tokens);
     if (!knownTokens && (Object.getPrototypeOf(tokens) !== Array.prototype
       || Object.getOwnPropertyNames(tokens).length !== tokens.length + 1 || Object.getOwnPropertySymbols(tokens).length)) return null;
     for (let index = 0; index < tokens.length; index += 1) {
@@ -443,10 +464,9 @@ function movementPartyInputs(world, previous) {
     }
     // All other fields are the same previously verified immutable documents;
     // every new Token has also been checked, proving the replacement is immutable.
-    immutablePolicyDocuments.add(tokens);
-    immutablePolicyDocuments.add(scene);
+    if (!immutablePolicyDocument(tokens) || !recordImmutableVisionData(scene, fields)) return null;
   }
-  immutablePolicyDocuments.add(world.scenes);
+  if (!immutablePolicyDocument(world.scenes)) return null;
   // This proof concerns only immutable collection structure, never a user's
   // party membership or projection. Keep one predecessor per live result,
   // with both arrays weakly keyed, so old Worlds cannot form a retained chain.
@@ -787,7 +807,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const definitionsUnchanged = movementCache && previousWorld?.statusDefinitions === rawState.preferences.worldV2.statusDefinitions;
   const reusePolicies = Boolean(sourceIdentityUnchanged && partiesUnchanged && definitionsUnchanged);
   const policies = new WeakMap();
-  const immutableActors = immutablePolicyDocuments.has(rawWorld.actors);
+  const immutableActors = hasImmutableVisionData(rawWorld.actors);
   const oldActive = previousScenes.get(String(world.activeSceneId));
   const rawActive = activeScene(rawState.preferences.worldV2);
   const geometryUnchanged = oldActive && oldActive.featureStates === rawActive?.featureStates
@@ -838,7 +858,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
         id: token ? String(token.id) : null, actorId: token ? String(token.actorId) : null,
       });
     };
-    const immutableScenePolicies = immutableActors && immutablePolicyDocuments.has(scene.tokens);
+    const immutableScenePolicies = immutableActors && hasImmutableVisionData(scene.tokens);
     for (const rawToken of scene.tokens || []) {
       const actor = actors.get(String(rawToken.actorId));
       const unchanged = movementCache && actor && previousTokens.get(String(rawToken.id)) === rawToken
@@ -1024,6 +1044,24 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   state.attackAreas = clone(active?.attackAreas || []);
   state.audienceProjection = true;
   return state;
+}
+
+// This proves only the private audience scope, never a canonical predecessor.
+// A source-free public append may retain older optimization metadata, but the
+// server must still prove that every non-chat canonical field is unchanged.
+export function matchesSourceFreeProjectionScope(previousProjection, rawContext = {}) {
+  const audience = previousProjection?.preferences?.audienceVision;
+  const metadata = projectionPolicies.get(audience);
+  const context = { ...rawContext, userId: rawContext.userId == null ? '' : String(rawContext.userId) };
+  return context.trustedProjection === true && audience?.source === null
+    && !context.visionSourceTokenId && Boolean(metadata?.canonicalState)
+    && metadata.sourceTokenId === '' && metadata.targetedIndex === null
+    && permissionsCacheable(context.user)
+    && projectionAudiences.get(audience) === audienceKey(context)
+    && metadata.mapPackage === context.mapPackage
+    && metadata.metersPerUnit === Math.max(0.000001, Number(context.mapMetrics?.metersPerUnit) || 1)
+    && Array.isArray(audience.partyIds) && audience.partyIds.length === metadata.partyIds.length
+    && audience.partyIds.every((id, index) => id === metadata.partyIds[index]);
 }
 
 // Only a proved public append can carry private perception metadata forward.

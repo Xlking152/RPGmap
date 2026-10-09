@@ -4,8 +4,10 @@ import { computeVisibilityRowsAsync } from './visibility.js';
 import { sceneVisionContext, releaseVisionContexts } from './context.js';
 import { createVisionBackground } from './background.js';
 import { createVisionViewport, visionZoomTransform } from './viewport.js';
-import { createContinuousMaskRenderer } from './mask-renderer.js';
+import { createContinuousMaskRenderer, copyViewportCanvas } from './mask-renderer.js';
 import { readRuntimeState } from '../engine/state-access.js';
+import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
+import { registeredInfiniteHorrorRuleset } from '../ruleset/index.js';
 import { classifyVisionChange, tokenVisionLight, visionStatusTargets, visionScene as runtimeScene } from './invalidation.js';
 import {
   sphereGroundRadiusMeters,
@@ -13,6 +15,16 @@ import {
 } from '../spatial/kernel.js';
 
 const FOG_PANE = 'fogVisionPane';
+const builtInVisionDescribe = infiniteHorrorRuleset.vision.describe;
+const builtInActorDerive = infiniteHorrorRuleset.actor.derive;
+const builtInStatusDerive = infiniteHorrorRuleset.statuses.derive;
+
+function independentScenePerception(ruleset) {
+  return (ruleset === infiniteHorrorRuleset || ruleset === registeredInfiniteHorrorRuleset)
+    && ruleset.vision?.describe === builtInVisionDescribe
+    && ruleset.actor?.derive === builtInActorDerive
+    && ruleset.statuses?.derive === builtInStatusDerive;
+}
 
 function exploredRows(fog, partyIds) {
   const byRow = new Map();
@@ -133,7 +145,9 @@ export function createVisionFogSystem() {
         visibilitySignature = '';
         visibilityAbort?.abort();
         visibilityAbort = null;
-        visibilityBackground?.cancel();
+        // Reject the old task and cancel its work, retaining the initialized
+        // Worker for the next scene geometry rather than paying startup again.
+        visibilityBackground?.cancel({ terminate: false });
       }
 
       function requestVisibility(request) {
@@ -472,7 +486,7 @@ export function createVisionFogSystem() {
         }
 
         perception.globalCompositeOperation = 'source-over';
-        perception.drawImage(explorationCanvas, 0, 0, size.x, size.y);
+        copyViewportCanvas(perception, explorationCanvas, size.x, size.y, dpr);
         const preciseRange = Number(source?.preciseGroundRangeMeters ?? source?.preciseRangeMeters ?? source?.rangeMeters) || 0;
         const vagueRange = Number(source?.vagueGroundRangeMeters ?? source?.vagueRangeMeters ?? source?.rangeMeters) || 0;
         // With full ambient precision, the precise pass clears every vague
@@ -593,7 +607,9 @@ export function createVisionFogSystem() {
         cachedState = next;
         snapshotRevision = api.getStateRevision?.();
         // Ruleset descriptions receive the Scene, including its ambient light.
-        if (invalidation.sourceChanged || invalidation.spatialChanged) cachedSubject = null;
+        const samePerceptionContext = !invalidation.unknown && independentScenePerception(api.ruleset)
+          && runtimeScene(observedState)?.settings === runtimeScene(next)?.settings;
+        if (invalidation.sourceChanged || invalidation.spatialChanged && !samePerceptionContext) cachedSubject = null;
         if (invalidation.spatialChanged) spatial = null;
         if (invalidation.exploredChanged) { exploredDirty = true; explorationDirty = true; }
         else if (exploredFogReference === runtimeScene(observedState)?.fog) {

@@ -1,10 +1,20 @@
 import { normalizeVisionOccluder, inspectLineOfSight, visionOccludersForSource, resolveSourceHostOccluderId } from '../spatial/kernel.js';
 import { queryOccluders, boundsOf } from '../spatial/index.js';
-import { polygonDifference } from '../engine/geometry.js';
 import { finishWorkSync } from './work.js';
 
 const ascendingNumber = (a, b) => a - b;
 const ascendingInterval = (a, b) => a[0] - b[0];
+const ringAreas = new WeakMap();
+
+function normalizedRingArea(ring) {
+  const cached = ringAreas.get(ring);
+  if (cached !== undefined) return cached;
+  // Only privately normalized, recursively frozen rings reach this helper.
+  // Their winding is independent of the observer; retain the exact sum order.
+  const area = ring.reduce((sum, p, i) => { const q = ring[(i + 1) % ring.length]; return sum + p[0] * q[1] - q[0] * p[1]; }, 0);
+  ringAreas.set(ring, area);
+  return area;
+}
 
 /** Continuous shadows use the same edge projection as authoritative five-metre Fog. */
 export function projectVisionOcclusion({ source, radiusUnits, occluders = [], metersPerUnit = 1,
@@ -28,11 +38,11 @@ export function projectVisionOcclusion({ source, radiusUnits, occluders = [], me
   }
   const extent = radiusUnits + paddingUnits;
   const candidates = [];
-  const add = (rings, id) => { shadows.push(rings); owners.push(id); };
+  const add = (rings, id) => { shadows.push(rings); if (includeFacades) owners.push(id); };
   for (const raw of queryOccluders(visibleOccluders, [source.x - extent, source.y - extent, source.x + extent, source.y + extent])) {
     const obstacle = normalizeVisionOccluder(raw);
     if (!obstacle) continue;
-    candidates.push(obstacle);
+    if (includeFacades) candidates.push(obstacle);
     for (const rings of obstacle.polygons) {
       const outer = rings[0];
       if (outer.every(p => p[0] < source.x - extent) || outer.every(p => p[0] > source.x + extent)
@@ -40,7 +50,7 @@ export function projectVisionOcclusion({ source, radiusUnits, occluders = [], me
       add(rings, obstacle.id);
       for (let ringIndex = 0; ringIndex < rings.length; ringIndex++) {
         const ring = rings[ringIndex];
-        const area = ring.reduce((sum, p, i) => { const q = ring[(i + 1) % ring.length]; return sum + p[0] * q[1] - q[0] * p[1]; }, 0);
+        const area = normalizedRingArea(ring);
         for (let i = 0; i < ring.length; i++) {
         const a = ring[i], b = ring[(i + 1) % ring.length];
         const dx = b[0] - a[0], dy = b[1] - a[1];
@@ -81,13 +91,18 @@ export function projectVisionOcclusion({ source, radiusUnits, occluders = [], me
     }));
     if (!visibleFront) continue;
     const box = boundsOf(obstacle.polygons.flat(2));
-    const otherShadows = shadows.filter((_, index) => {
+    const otherShadowIndices = [];
+    for (let index = 0; index < shadows.length; index++) {
       const bounds = shadowBounds[index];
-      return owners[index] !== obstacle.id && bounds[0] <= box[2] && bounds[2] >= box[0]
-        && bounds[1] <= box[3] && bounds[3] >= box[1];
-    });
-    const polygons = otherShadows.length ? polygonDifference(obstacle.polygons, otherShadows) : obstacle.polygons;
-    if (polygons.length) facades.push({ id: obstacle.id, featureId: obstacle.featureId, polygons });
+      if (owners[index] !== obstacle.id && bounds[0] <= box[2] && bounds[2] >= box[0]
+        && bounds[1] <= box[3] && bounds[3] >= box[1]) otherShadowIndices.push(index);
+    }
+    // Presentation uses an alpha mask instead of floating-point polygon
+    // difference. Destruction edges can coincide with several projected edges
+    // and make the clipping library's sweep queue fail. Index the shared shadow
+    // array so Worker results do not copy the same projected polygons per facade.
+    facades.push({ id: obstacle.id, featureId: obstacle.featureId,
+      polygons: obstacle.polygons, otherShadowIndices });
   }
   return result;
 }
@@ -102,12 +117,17 @@ export function* groundShadowRowsSteps(source, radiusUnits, occluders, cellUnits
   if (projection.fallback) return null;
   const shapes = projection.shadows.map(rings => {
     const edges = [];
+    let minY = Infinity, maxY = -Infinity;
     for (const ring of rings) for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
       const a = ring[i], b = ring[j];
-      if (a[1] !== b[1]) edges.push({ ax: a[0], ay: a[1], dx: b[0] - a[0], dy: b[1] - a[1],
-        minY: Math.min(a[1], b[1]), maxY: Math.max(a[1], b[1]) });
+      if (a[1] !== b[1]) {
+        const edge = { ax: a[0], ay: a[1], dx: b[0] - a[0], dy: b[1] - a[1],
+          minY: Math.min(a[1], b[1]), maxY: Math.max(a[1], b[1]) };
+        edges.push(edge);
+        minY = Math.min(minY, edge.minY); maxY = Math.max(maxY, edge.maxY);
+      }
     }
-    return { edges, minY: Math.min(...edges.map(e => e.minY)), maxY: Math.max(...edges.map(e => e.maxY)) };
+    return { edges, minY, maxY };
   });
   const result = {};
   shapes.sort((a, b) => a.minY - b.minY);
@@ -117,6 +137,10 @@ export function* groundShadowRowsSteps(source, radiusUnits, occluders, cellUnits
     const y = (Number(rowKey) + 0.5) * cellUnits;
     const firstCenter = ranges.length ? (ranges[0][0] + 0.5) * cellUnits : undefined;
     const lastCenter = ranges.length ? (ranges.at(-1)[1] + 0.5) * cellUnits : undefined;
+    // At very large coordinates a single ULP can exceed the tangent tolerance.
+    // Such rows keep the original interval path, including its rounding.
+    const canCull = Number.isFinite(firstCenter) && Number.isFinite(lastCenter)
+      && Math.abs(firstCenter) <= 1e7 && Math.abs(lastCenter) <= 1e7;
     const intervals = [];
     let fullyBlocked = false;
     while (nextShape < shapes.length && shapes[nextShape].minY <= y) active.push(shapes[nextShape++]);
@@ -136,6 +160,10 @@ export function* groundShadowRowsSteps(source, radiusUnits, occluders, cellUnits
       xs.sort(ascendingNumber);
       for (let i = 0; i + 1 < xs.length; i += 2) {
         const left = xs[i], right = xs[i + 1];
+        // Along a sweep only the newly explored columns remain in ranges.
+        // Disjoint shadows cannot remove a cell or contribute a tangent ray;
+        // retain the full tolerance band used by the exact boundary check.
+        if (canCull && (right < firstCenter - 1e-7 || left > lastCenter + 1e-7)) continue;
         intervals.push([left, right]);
         if ((firstCenter ?? (ranges[0][0] + 0.5) * cellUnits) > left + 1e-7
           && (lastCenter ?? (ranges.at(-1)[1] + 0.5) * cellUnits) < right - 1e-7) fullyBlocked = true;

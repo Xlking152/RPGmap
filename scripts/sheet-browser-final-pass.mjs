@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { closeOwnedBrowser } from './owned-browser-close.mjs';
 
 if (process.platform !== 'win32') throw new Error('Final sheet browser smoke requires Windows');
 const browserName = String(process.env.RPGMAP_SMOKE_BROWSER || 'edge').toLowerCase();
@@ -42,17 +43,18 @@ const port=await reservePort();
 const profile=await mkdtemp(path.join(os.tmpdir(),`rpgmap-${browserName}-sheet-final-pass-`));
 const edge=spawn(edgePath(),['--headless=new','--disable-gpu','--disable-dev-shm-usage','--no-sandbox','--no-first-run','--no-default-browser-check','--window-size=1440,1000',`--remote-debugging-port=${port}`,`--user-data-dir=${profile}`,targetUrl],{stdio:['ignore','ignore','pipe'],windowsHide:true});
 let edgeError='',browserClosed=false;edge.stderr.setEncoding('utf8');edge.stderr.on('data',chunk=>{edgeError+=chunk;});
+let socket;
 
 try {
   const deadline=Date.now()+timeoutMs;
   const page=await retry(async()=>{const response=await fetch(`http://127.0.0.1:${port}/json/list`);const pages=await response.json();return pages.find(item=>item.type==='page'&&item.webSocketDebuggerUrl);},'Edge CDP endpoint',deadline);
-  const socket=new WebSocket(page.webSocketDebuggerUrl);
+  socket=new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Edge CDP WebSocket open timed out')),5000);socket.addEventListener('open',()=>{clearTimeout(timer);resolve();},{once:true});socket.addEventListener('error',()=>{clearTimeout(timer);reject(new Error('Edge CDP WebSocket failed'));},{once:true});});
   let nextId=1;const pending=new Map(),failures=[],exceptions=[];
   const rejectPending=message=>{for(const item of pending.values()){clearTimeout(item.timer);item.reject(new Error(message));}pending.clear();};
   socket.addEventListener('close',()=>rejectPending('Edge CDP WebSocket closed'));socket.addEventListener('error',()=>rejectPending('Edge CDP WebSocket failed'));
   socket.addEventListener('message',event=>{const message=JSON.parse(String(event.data));if(message.id&&pending.has(message.id)){const item=pending.get(message.id);pending.delete(message.id);clearTimeout(item.timer);return message.error?item.reject(new Error(message.error.message)):item.resolve(message.result);}if(message.method==='Network.loadingFailed'&&message.params?.errorText!=='net::ERR_ABORTED')failures.push(message.params?.errorText||'request failed');if(message.method==='Network.responseReceived'&&Number(message.params?.response?.status)>=400)failures.push(`${message.params.response.status} ${message.params.response.url}`);if(message.method==='Runtime.exceptionThrown')exceptions.push(message.params?.exceptionDetails?.exception?.description||message.params?.exceptionDetails?.text||'runtime exception');if(message.method==='Runtime.consoleAPICalled'&&message.params?.type==='error')exceptions.push((message.params.args||[]).map(arg=>arg.value??arg.description??'').filter(Boolean).join(' ')||'browser console error');});
-  const send=(method,params={})=>new Promise((resolve,reject)=>{const id=nextId++;const timer=setTimeout(()=>{pending.delete(id);reject(new Error(`Edge CDP command timed out: ${method}`));},7500);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));});
+  const send=(method,params={})=>new Promise((resolve,reject)=>{const id=nextId++;const timer=setTimeout(()=>{pending.delete(id);reject(new Error(`Edge CDP command timed out: ${method}`));},7500);pending.set(id,{resolve,reject,timer});try{socket.send(JSON.stringify({id,method,params}));}catch(error){pending.delete(id);clearTimeout(timer);reject(error);}});
   const evaluate=async expression=>{const result=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(result.exceptionDetails)throw new Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text||'evaluation failed');return result.result?.value;};
   await Promise.all([send('Runtime.enable'),send('Network.enable'),send('Log.enable')]);
 
@@ -89,6 +91,6 @@ try {
 
   await new Promise(r=>setTimeout(r,300));if(failures.length)throw new Error(`Final browser requests failed: ${failures.join('; ')}`);if(exceptions.length)throw new Error(`Final browser runtime errors: ${exceptions.join('; ')}`);
   console.log(JSON.stringify({ready,fixture,cards,linkedHealth:{change:healthChange,shared:true},resize:{before:resizeBefore,applied:resizeApplied,captured:resizeCaptured,rerender:resizeRerender,reopen:resizeReopen},playEdit}));
-  await send('Browser.close');browserClosed=true;
+  await closeOwnedBrowser({process:edge,send,pending,label:'Final sheet browser pass'});browserClosed=true;
 } catch(error) { throw new Error(`${error.message}${edgeError?`\nEdge stderr:\n${edgeError.slice(-4000)}`:''}`); }
-finally { if(!browserClosed&&edge.exitCode===null)edge.kill('SIGKILL');if(edge.exitCode===null)await new Promise(resolve=>{const timer=setTimeout(resolve,2000);edge.once('exit',()=>{clearTimeout(timer);resolve();});});await rm(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100}).catch(error=>console.warn(`Final sheet smoke profile cleanup deferred: ${error.message}`)); }
+finally { socket?.close();if(!browserClosed&&edge.exitCode===null)edge.kill('SIGKILL');if(edge.exitCode===null)await new Promise(resolve=>{const timer=setTimeout(resolve,2000);edge.once('exit',()=>{clearTimeout(timer);resolve();});});await rm(profile,{recursive:true,force:true,maxRetries:20,retryDelay:100}).catch(error=>console.warn(`Final sheet smoke profile cleanup deferred: ${error.message}`)); }

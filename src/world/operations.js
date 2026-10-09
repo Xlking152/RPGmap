@@ -24,11 +24,13 @@ import {
   hideFogCircle,
   normalizeFogState,
   resetFogParty,
+  resetImmutableFogParty,
+  createImmutableFogResetScope,
 } from '../vision/fog.js';
 import { sceneVisionContext } from '../vision/context.js';
 import { normalizeOcclusionShape, normalizeOcclusionShapes } from '../vision/occlusion-model.js';
 import { assertOcclusionReferences, normalizeOcclusionConfiguration, exportOcclusionConfiguration, featureForOcclusionDoor } from './occlusion-config.js';
-import { visionIgnoresOcclusion } from '../spatial/kernel.js';
+import { visionIgnoresOcclusion, validateSceneOcclusionGeometry } from '../spatial/kernel.js';
 import { migrateWorldSchema3State } from './migration.js';
 import { normalizeLightweightMarker } from '../marker/model.js';
 import { advanceStatusDurations, STATUS_SCHEMA_VERSION } from '../status/model.js';
@@ -36,6 +38,9 @@ import { DOCUMENT_OPERATION_SCHEMA_VERSION } from '../documents/protocol.js';
 import { movementCapabilityFailure, normalizeMovementBudget } from '../movement/model.js';
 import { validateDoorInteraction } from '../interaction/door-authority.js';
 import { normalizeJournalEntry } from '../journal/model.js';
+import { isCurrentRuntimeOperationInput } from '../engine/state-access.js';
+import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
+import { registeredInfiniteHorrorRuleset } from '../ruleset/index.js';
 
 export {
   DOCUMENT_BATCH_LIMIT,
@@ -137,6 +142,15 @@ const GRANULAR_OPERATION_TYPES = new Set([
 ]);
 
 const clone = structuredClone;
+const privateSceneVisionDescribe = infiniteHorrorRuleset.vision.describe;
+const immutableFogResetScopeKey = Symbol('immutable Fog reset scope');
+
+function immutableFogResetContext(context) {
+  return context.trustedOperationHooks === true
+    && typeof context.isCanonicalData === 'function'
+    && (context.ruleset === infiniteHorrorRuleset || context.ruleset === registeredInfiniteHorrorRuleset)
+    && context.ruleset.vision?.describe === privateSceneVisionDescribe;
+}
 
 function cloneProjection(value) {
   if (Array.isArray(value)) return value.map(cloneProjection);
@@ -184,6 +198,15 @@ function same(left, right) {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
+function sameSceneContent(left, right) {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object'
+    || Array.isArray(left) !== Array.isArray(right)) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length
+    && keys.every(key => Object.hasOwn(right, key) && sameSceneContent(left[key], right[key]));
+}
+
 function mapById(items = []) {
   return new Map((Array.isArray(items) ? items : [])
     .filter(item => item?.id != null)
@@ -208,7 +231,7 @@ function operationMapForScene(context, scene) {
     : plainObject(context.mapMetrics) ? context.mapMetrics : {};
 }
 
-export function markMovementAdjudicationRequired(state, ruleset) {
+export function markMovementAdjudicationRequired(state, ruleset, prepareActor = null) {
   if (!ruleset?.movement?.describe) return false;
   const world = worldFromState(state);
   const linkedActors = new Map();
@@ -224,7 +247,9 @@ export function markMovementAdjudicationRequired(state, ruleset) {
         const key = String(token.actorId);
         actor = token.actorLink !== false ? linkedActors.get(key) : null;
         if (!actor) {
-          actor = resolveTokenActor({ ...world, activeSceneId: scene.id }, token.id, { ruleset })?.actor;
+          actor = token.actorLink !== false && typeof prepareActor === 'function'
+            ? prepareActor({ world, scene, token, ruleset }) : null;
+          if (!actor) actor = resolveTokenActor({ ...world, activeSceneId: scene.id }, token.id, { ruleset })?.actor;
           if (token.actorLink !== false) linkedActors.set(key, actor);
         }
       }
@@ -244,8 +269,40 @@ export function markMovementAdjudicationRequired(state, ruleset) {
   return changed;
 }
 
-function cloneOperationInput(rawState, operations, context) {
-  if (operations.some(operation => !COPY_ON_WRITE_TYPES.has(operation.type) && !STATUS_TYPES.has(operation.type))) return clone(rawState);
+function privateSceneEventsInput(rawState, operations, context) {
+  if (operations.length !== 1 || operations[0].type !== 'scene.content.replace'
+    || !isCurrentRuntimeOperationInput(context.runtimeOperationInputProof, rawState, context)) return false;
+  // Unknown Rulesets may mutate the Actor/Scene supplied to their describer.
+  // Only the actual built-in implementation has the internal read-only contract.
+  if (![infiniteHorrorRuleset, registeredInfiniteHorrorRuleset].includes(context.ruleset)
+    || context.ruleset.vision?.describe !== privateSceneVisionDescribe
+    || context.source?.role !== 'offline'
+    || (context.source.source !== undefined && typeof context.source.source !== 'string')
+    || Object.keys(context.source).some(key => !['role', 'source'].includes(key))) return false;
+  const payload = operations[0].payload;
+  const allowed = new Set(['sceneId', 'expectedActiveSceneId', 'expectedSceneEvents', 'sceneEvents']);
+  if (Object.keys(payload).some(key => !allowed.has(key))
+    || !Array.isArray(payload.sceneEvents) || !Array.isArray(payload.expectedSceneEvents)) return false;
+  const preferences = rawState?.preferences, world = preferences?.worldV2;
+  if (world?.schemaVersion !== 4 || !Array.isArray(world.scenes)) return false;
+  const scene = world.scenes.find(item => String(item?.id ?? '') === String(world.activeSceneId ?? ''));
+  const entity = preferences?.entitySystem;
+  // Alias equality is a projection synchrony check, not a validator. Only an
+  // exact registered private snapshot can reach it; imported/public snapshots
+  // and the initial independently copied projection keep the complete path.
+  return Boolean(scene && String(payload.sceneId) === String(scene.id)
+    && String(payload.expectedActiveSceneId) === String(world.activeSceneId)
+    && entity?.schemaVersion === STATUS_SCHEMA_VERSION
+    && entity.actors === world.actors && entity.tokens === scene.tokens
+    && entity.statusDefinitions === world.statusDefinitions
+    && rawState.markers === scene.markers && rawState.attackAreas === scene.attackAreas
+    && rawState.sceneEvents === scene.sceneEvents && preferences.featureStates === scene.featureStates
+    && !Object.hasOwn(preferences, 'featureInteractions')
+    && (scene.settings?.gridVisible === undefined || preferences.gridVisible === (scene.settings.gridVisible !== false)));
+}
+
+function cloneOperationInput(rawState, operations, context, privateEvents = false) {
+  if (!privateEvents && operations.some(operation => !COPY_ON_WRITE_TYPES.has(operation.type) && !STATUS_TYPES.has(operation.type))) return clone(rawState);
   const hasChat = operations.some(operation => CHAT_TYPES.has(operation.type));
   const chatOnly = hasChat && operations.every(operation => CHAT_TYPES.has(operation.type));
   // Chat historically cloned the complete transaction input. Share unchanged
@@ -478,7 +535,17 @@ export function projectWorldOperationState(rawState) {
   return state;
 }
 
-function projectGranularOperationState(state, operations) {
+function projectGranularOperationState(state, operations, privateEvents = false) {
+  if (privateEvents) {
+    const scene = activeScene(worldFromState(state));
+    // Unchanged projections remain internal read-only leaves. Only the replaced
+    // history needs a fresh projection; the public reducer never uses this path.
+    state.sceneEvents = clone(scene.sceneEvents || []);
+    delete state.preferences.featureInteractions;
+    if (scene.settings?.gridVisible !== undefined) state.preferences.gridVisible = scene.settings.gridVisible !== false;
+    pruneCombatReferences(state);
+    return state;
+  }
   if (operations.some(operation => !GRANULAR_OPERATION_TYPES.has(operation.type))) {
     return projectWorldOperationState(state);
   }
@@ -1009,10 +1076,35 @@ function applyCanonicalOperation(state, operation, context = {}) {
 
   if (type === 'scene.content.replace') {
     const scene = sceneById(world, payload.sceneId);
+    if (payload.expectedActiveSceneId !== undefined
+      && String(world.activeSceneId) !== identifier(payload.expectedActiveSceneId, 'expectedActiveSceneId')) {
+      fail('当前场景已切换，请重新操作', 'scene_content_conflict');
+    }
+    // A queued absolute replacement may be sent at a newer network revision
+    // than the snapshot it was built from. Reject it before changing any field
+    // or applying later status effects in this transaction.
+    for (const [field, expected] of [['sceneEvents', 'expectedSceneEvents'], ['attackAreas', 'expectedAttackAreas']]) {
+      if (payload[expected] === undefined) continue;
+      const previous = array(payload[expected], expected);
+      if (!sameSceneContent(scene[field] || [], previous)) {
+        fail(field === 'sceneEvents' ? '场景破坏历史已更新，请重新操作' : '场景范围已更新，请重新编辑', 'scene_content_conflict');
+      }
+    }
+    const priorEvents = new Map((scene.sceneEvents || []).map(event => [String(event.id), event]));
     for (const key of ['markers', 'attackAreas', 'sceneEvents']) {
       if (payload[key] !== undefined) scene[key] = clone(array(payload[key], key));
     }
     if (payload.settings !== undefined) scene.settings = clone(object(payload.settings, 'settings'));
+    if (payload.sceneEvents !== undefined) {
+      const changedDamage = (scene.sceneEvents || []).filter(event => String(event.type ?? '').toLowerCase() === 'damage'
+        && !same(event, priorEvents.get(String(event.id))));
+      const featureIds = [...new Set(changedDamage.flatMap(event => [
+        ...(event.objectIds || []), ...(event.clipHits || []).map(hit => hit.featureId),
+      ]).map(String))];
+      if (featureIds.length) {
+        validateSceneOcclusionGeometry(operationMapForScene(context, scene), scene, { featureIds });
+      }
+    }
     return { action: type, sceneId: String(scene.id) };
   }
 
@@ -1125,7 +1217,9 @@ function applyCanonicalOperation(state, operation, context = {}) {
 
   if (type.startsWith('scene.fog.')) {
     const { scene, partyId, dirtyBounds, input } = context.preparedFog || prepareFogOperation(state, operation, context);
-    if (type === 'scene.fog.reset') scene.fog = resetFogParty(scene.fog, partyId);
+    if (type === 'scene.fog.reset') scene.fog = immutableFogResetContext(context)
+      ? resetImmutableFogParty(scene.fog, partyId, context.isCanonicalData, context[immutableFogResetScopeKey] || null)
+      : resetFogParty(scene.fog, partyId);
     else if (type === 'scene.fog.hide') scene.fog = hideFogCircle(scene.fog, partyId, input.payload, input.map);
     else scene.fog = (context.computeFogExploration || computeFogExploration)(input, scene.fog);
     return { action: type, sceneId: String(scene.id), partyId, dirtyBounds };
@@ -1254,9 +1348,11 @@ function* worldOperationSteps(rawState, rawOperations, context = {}) {
   if (!operations.length || operations.length > WORLD_OPERATION_BATCH_LIMIT) {
     fail(`operations must contain 1-${WORLD_OPERATION_BATCH_LIMIT} items`, 'world_operation_limit');
   }
-  const state = cloneOperationInput(rawState, operations, context);
+  const privateEvents = privateSceneEventsInput(rawState, operations, context);
+  const state = cloneOperationInput(rawState, operations, context, privateEvents);
   worldFromState(state);
   const results = [];
+  let immutableFogResetScope = null, immutableFogResetReceipt = null, immutableFogResetRuleset = null;
   for (let index = 0; index < operations.length; index += 1) {
     const operation = operations[index];
     const prepared = context.prepareOperation?.({ state, operation, index });
@@ -1279,11 +1375,21 @@ function* worldOperationSteps(rawState, rawOperations, context = {}) {
         const computed = yield { input: preparedFog.input, fog: preparedFog.scene.fog };
         fogContext = { preparedFog, computeFogExploration: () => computed };
       }
-      results.push(applyCanonicalOperation(state, operation, { ...context, ...fogContext, enqueueStatusOperation(value) {
+      const operationContext = { ...context, ...fogContext, enqueueStatusOperation(value) {
         const status = normalizeWorldOperation(value);
         if (!STATUS_TYPES.has(status.type)) fail('Movement may only generate status operations', 'invalid_world_operation');
         generated.push(status);
-      } }));
+      } };
+      if (operation.type === 'scene.fog.reset' && immutableFogResetContext(operationContext)) {
+        if (!immutableFogResetScope || immutableFogResetReceipt !== operationContext.isCanonicalData
+          || immutableFogResetRuleset !== operationContext.ruleset) {
+          immutableFogResetReceipt = operationContext.isCanonicalData;
+          immutableFogResetRuleset = operationContext.ruleset;
+          immutableFogResetScope = createImmutableFogResetScope(immutableFogResetReceipt);
+        }
+        operationContext[immutableFogResetScopeKey] = immutableFogResetScope;
+      }
+      results.push(applyCanonicalOperation(state, operation, operationContext));
       if (generated.length) {
         if (operations.length + generated.length > WORLD_OPERATION_BATCH_LIMIT) fail('Generated operations exceed batch limit', 'world_operation_limit');
         // Feature effects use the just-committed canonical placement, not an old Entity projection.
@@ -1304,11 +1410,11 @@ function* worldOperationSteps(rawState, rawOperations, context = {}) {
     || operation.type.startsWith('status.')
     || ['token.actorDelta.replace', 'token.upsert', 'token.create'].includes(operation.type));
   const movementAdjudicationChanged = shouldRecheckMovement
-    && markMovementAdjudicationRequired(state, context.ruleset);
+    && markMovementAdjudicationRequired(state, context.ruleset, context.prepareMovementAdjudicationActor);
   const world = worldFromState(state);
   world.updatedAt = String(context.now || new Date().toISOString());
   if (movementAdjudicationChanged) projectWorldOperationState(state);
-  else projectGranularOperationState(state, operations);
+  else projectGranularOperationState(state, operations, privateEvents);
   return {
     state,
     operations,

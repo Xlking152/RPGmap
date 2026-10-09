@@ -387,11 +387,18 @@ async function scenario(sourceCount) {
   } finally {
     if (observer) await observer.close();
     await stopBenchmarkServer(runtime);
+    const diagnosticDir = argument('canonical-diagnostics-dir');
+    if (diagnosticDir) {
+      await mkdir(diagnosticDir, { recursive: true });
+      await writeFile(path.join(diagnosticDir, `sources-${sourceCount}.log`), runtime.stderr());
+    }
   }
 }
 
 const report = { repo: root, packageRoot, version: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version,
   build: buildInfo,
+  diagnosticProfiling: Boolean(argument('profile') || argument('canonical-diagnostics-dir')
+    || process.env.RPGMAP_CANONICAL_DIAGNOSTICS === '1'),
   fixture: { actors: actorCount, tokens: tokenCount, players: playerCount, mapId: map.id, occluders: occluders.length,
     nearbyOccluders: route.nearby, lanes: route.lanes, fogCellSizeMeters: 5, pathSampleSpacingMeters: 2.5 },
   scope: 'Loopback WebSocket/WAL measurement. Movement is acknowledged before background Fog; queue completion is checked against all 171 samples and full-path Fog union. Durable WAL job drain is timed separately from read-only checkpoint/WAL replay; completeExploration includes both for comparison with earlier reports. It does not measure Wi-Fi transport, browser input latency, Canvas or FPS. Large-range scenarios also measure four status/chat pairs from other Player sessions per round while their WAL commits still have unfinished exploration samples. Ordinary intents may retry a revision conflict up to three times with the same operation ID; all denied attempts remain inside the first-submission-to-ACK/fanout clock and are reported in raw samples. No additional moves or Fog samples are added. --assert requires movement and ordinary status/chat/aggregate ACK and final fanout p95 <=60 ms in each scenario.',

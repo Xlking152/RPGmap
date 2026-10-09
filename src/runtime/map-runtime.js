@@ -39,6 +39,7 @@ import { createContentSystem } from '../content/runtime.js';
 import { createTemplateLibrarySystem } from '../library/runtime.js';
 import { createJournalSystem } from '../journal/runtime.js';
 import { resolveRulesetReference, setActiveRuleset } from '../ruleset/index.js';
+import { bindRuntimeWorldCatalog } from './world-catalog-sync.js';
 
 export async function startMapRuntime({
   appContainer,
@@ -120,10 +121,6 @@ export async function startMapRuntime({
     ],
   });
 
-  if (worldManager && worldId) {
-    const refreshCatalog = () => worldManager.updateFromSave(worldId, runtime.exportState());
-    refreshCatalog();
-    runtime.on?.('state:saved', refreshCatalog);
-  }
+  bindRuntimeWorldCatalog({ runtime, worldManager, worldId });
   return runtime;
 }

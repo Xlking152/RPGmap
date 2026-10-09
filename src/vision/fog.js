@@ -1,6 +1,7 @@
 import { inspectLineOfSight, visionOccludersForSource, sphereGroundRadiusMeters } from '../spatial/kernel.js';
 import { groundShadowRowsSteps } from './ground-shadow.js';
 import { finishWorkSync, finishWorkAsync } from './work.js';
+import { cloneWithReplacements } from '../engine/detached-metadata.js';
 
 export const FOG_SCHEMA_VERSION = 1;
 export const FOG_CELL_SIZE_METERS = 5;
@@ -114,17 +115,48 @@ function normalizeRows(raw, map = {}) {
   return rows;
 }
 
+function plainMetadata(value) {
+  if (!value || typeof value !== 'object') return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function numericRows(value) {
+  if (!plainMetadata(value)) return false;
+  for (const spans of Object.values(value)) {
+    if (!Array.isArray(spans) || Object.keys(spans).length !== spans.length) return false;
+    for (const span of spans) {
+      if (!Array.isArray(span) || span.length !== 2 || Object.keys(span).length !== 2
+        || typeof span[0] !== 'number' || typeof span[1] !== 'number') return false;
+    }
+  }
+  return true;
+}
+
+function normalizedFogRecord(record, map) {
+  const source = object(record);
+  // Ordinary numeric grids are rebuilt by normalizeRows, so copying their
+  // discarded rows first is unnecessary. Unusual input retains the original
+  // clone boundary, including unsupported values in rows that get discarded.
+  if (!numericRows(source.rows)) return { ...clone(source), rows: normalizeRows(record?.rows, map) };
+  return cloneWithReplacements(source, { rows: normalizeRows(record?.rows, map) });
+}
+
 export function normalizeFogState(raw = {}, map = {}) {
   const source = object(raw);
   const exploredByParty = {};
+  let replacePartyMetadata = plainMetadata(source.exploredByParty);
   for (const [rawPartyId, record] of Object.entries(object(source.exploredByParty))) {
     const partyId = String(rawPartyId).trim().slice(0, 80);
+    if (!partyId || !plainMetadata(record)) replacePartyMetadata = false;
     if (!partyId) continue;
-    exploredByParty[partyId] = {
-      ...clone(object(record)),
-      rows: normalizeRows(record?.rows, map),
-    };
+    exploredByParty[partyId] = normalizedFogRecord(record, map);
   }
+  if (replacePartyMetadata) return cloneWithReplacements(source, {
+    schemaVersion: FOG_SCHEMA_VERSION,
+    cellSizeMeters: FOG_CELL_SIZE_METERS,
+    exploredByParty,
+  });
   return {
     ...clone(source),
     schemaVersion: FOG_SCHEMA_VERSION,
@@ -142,7 +174,13 @@ function partyRows(fog, partyId) {
 }
 
 function addSpan(rows, row, start, end) {
-  rows[String(row)] = mergeSpans([...(rows[String(row)] || []), [start, end]]);
+  const key = String(row), previous = rows[key];
+  // Raster rows are owned by this calculation. A first, already canonical
+  // interval needs neither normalization nor sorting; legacy values keep the
+  // same merge boundary below.
+  if (!previous && Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end >= start) {
+    rows[key] = [[start, end]];
+  } else rows[key] = mergeSpans([...(previous || []), [start, end]]);
 }
 
 function removeSpan(rows, row, start, end) {
@@ -235,7 +273,7 @@ export function exploreFogVisibleCircle(rawFog, partyId, circle, map = {}, {
 } = {}) {
   const fog = normalizeFogState(rawFog, map);
   const rows = partyRows(fog, partyId);
-  const visible = visibleFogRowsForCircle(circle, map, { sourceElevationMeters, occluders, allowHostExemption });
+  const visible = visibleFogRowsForCircle(circle, map, { sourceElevationMeters, occluders, allowHostExemption, exploredRows: rows });
   for (const [row, spans] of Object.entries(visible)) rows[row] = mergeSpans([...(rows[row] || []), ...spans]);
   return fog;
 }
@@ -444,6 +482,84 @@ export function resetFogParty(rawFog, partyId) {
   const fog = normalizeFogState(rawFog);
   delete fog.exploredByParty[String(partyId ?? '').trim()];
   return fog;
+}
+
+const normalizedImmutablePartyRecords = new WeakSet();
+const immutableFogResetScopes = new WeakMap();
+const derivedImmutableResetFogs = new WeakMap();
+
+// A batch owns only this nonce and its authority receipt, never a World or an
+// earlier Fog. Derived middle states may use it only in that same batch.
+export function createImmutableFogResetScope(isCanonicalData) {
+  if (typeof isCanonicalData !== 'function') return null;
+  const scope = Object.freeze({});
+  immutableFogResetScopes.set(scope, isCanonicalData);
+  return scope;
+}
+
+function normalizedImmutablePartyRecord(record, references) {
+  if (!record || typeof record !== 'object') return false;
+  // Canonical JSON acceptance proves immutable own data, but does not prove
+  // that a Fog grid is normalized. Restrict sharing to the exact ordinary
+  // representation; extensions and legacy/coercible grids retain the complete
+  // normalizer, including its clone and alias behavior.
+  if (Object.getPrototypeOf(record) !== Object.prototype
+    || !Object.isFrozen(record)
+    || Object.keys(record).length !== 1 || !Object.hasOwn(record, 'rows')
+    || !record.rows || Object.getPrototypeOf(record.rows) !== Object.prototype
+    || !Object.isFrozen(record.rows)
+    || references.has(record) || references.has(record.rows)) return false;
+  references.add(record); references.add(record.rows);
+  const normalized = normalizedImmutablePartyRecords.has(record);
+  for (const rowKey of Object.keys(record.rows)) {
+    const row = Number(rowKey), spans = record.rows[rowKey];
+    if (!Number.isSafeInteger(row) || row < 0 || String(row) !== rowKey
+      || !Array.isArray(spans) || !spans.length || spans.length > MAX_ROW_SPANS
+      || Object.getPrototypeOf(spans) !== Array.prototype || !Object.isFrozen(spans)
+      || Object.keys(spans).length !== spans.length || references.has(spans)) return false;
+    references.add(spans);
+    let previousEnd = -2;
+    for (let index = 0; index < spans.length; index++) {
+      const span = spans[index];
+      if (!Array.isArray(span) || span.length !== 2 || Object.keys(span).length !== 2
+        || Object.getPrototypeOf(span) !== Array.prototype || !Object.isFrozen(span)
+        || references.has(span)) return false;
+      references.add(span);
+      if (!normalized && (!Number.isSafeInteger(span[0]) || !Number.isSafeInteger(span[1])
+        || Object.is(span[0], -0) || Object.is(span[1], -0)
+        || span[0] < 0 || span[1] < span[0] || span[0] <= previousEnd + 1)) return false;
+      previousEnd = span[1];
+    }
+  }
+  normalizedImmutablePartyRecords.add(record);
+  return true;
+}
+
+// Internal authority entry: unchanged records may be shared only after the
+// server's accepted immutable-data receipt AND normalization-equivalence proof.
+// The public reset above always returns completely detached mutable data.
+export function resetImmutableFogParty(rawFog, partyId, isCanonicalData, scope = null) {
+  const scoped = scope !== null && immutableFogResetScopes.get(scope) === isCanonicalData;
+  const derived = scoped && derivedImmutableResetFogs.get(rawFog) === scope;
+  if (typeof isCanonicalData !== 'function' || !derived && isCanonicalData(rawFog) !== true
+    || !rawFog || Object.getPrototypeOf(rawFog) !== Object.prototype
+    || !Object.isFrozen(rawFog) || Object.keys(rawFog).length !== 3
+    || !Object.hasOwn(rawFog, 'schemaVersion') || !Object.hasOwn(rawFog, 'cellSizeMeters')
+    || rawFog.schemaVersion !== FOG_SCHEMA_VERSION || rawFog.cellSizeMeters !== FOG_CELL_SIZE_METERS
+    || !Object.hasOwn(rawFog, 'exploredByParty') || !rawFog.exploredByParty
+    || Object.getPrototypeOf(rawFog.exploredByParty) !== Object.prototype
+    || !Object.isFrozen(rawFog.exploredByParty)) return resetFogParty(rawFog, partyId);
+  const references = derived ? null : new WeakSet();
+  if (!derived) for (const id of Object.keys(rawFog.exploredByParty)) {
+    if (!id || id !== id.trim().slice(0, 80) || id === '__proto__'
+      || !normalizedImmutablePartyRecord(rawFog.exploredByParty[id], references)) return resetFogParty(rawFog, partyId);
+  }
+  const exploredByParty = { ...rawFog.exploredByParty };
+  delete exploredByParty[String(partyId ?? '').trim()];
+  if (!scoped) return { ...rawFog, exploredByParty };
+  const next = Object.freeze({ ...rawFog, exploredByParty: Object.freeze(exploredByParty) });
+  derivedImmutableResetFogs.set(next, scope);
+  return next;
 }
 
 export function isFogCellExplored(rawFog, partyId, point, { metersPerUnit = 1 } = {}) {

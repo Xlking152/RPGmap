@@ -39,8 +39,10 @@ const EXPECTED_ROOT_ENTRIES = [
   'world-operations.mjs',
   'exploration-queue.mjs',
   'exploration-worker.mjs',
+  'exploration-fog-transfer.mjs',
   'movement-authority.mjs',
   'world-wal.mjs',
+  'resume-patch-codec.mjs',
   'world-checkpoint.mjs',
   'storage-upgrade.mjs',
   'world-schema.mjs',
@@ -187,7 +189,7 @@ const archiveRoot = path.basename(root);
 if (!listing.length || listing.some(item => item !== archiveRoot && !item.startsWith(`${archiveRoot}/`))) {
   fail('ZIP contains entries outside its versioned package root');
 }
-if (listing.some(item => item.includes('/reference/') || item.includes('/src/') || item.includes('/tests/'))) {
+if (listing.some(item => item.includes('/reference/') || item.includes('/src/') || item.includes('/tests/') || item.includes('/素材库/'))) {
   fail('ZIP contains forbidden source or reference trees');
 }
 

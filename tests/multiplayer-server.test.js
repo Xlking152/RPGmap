@@ -2360,6 +2360,51 @@ test('LAN access changes rebuild only the affected audience projection without c
   }
 });
 
+test('Status document rebasing across background Fog keeps current permissions, durable state and idempotency', async () => {
+  const runtime = await startServer();
+  let gm, player;
+  try {
+    gm = await openAndHello(runtime.url, { name: 'Fog Rebase GM', requestedRole: 'gm' });
+    const initialized = waitForMessage(gm.ws, value => value.type === 'world.snapshot' && value.revision === 1);
+    gm.ws.send(JSON.stringify({ type: 'world.push', baseRevision: 0, state: initialTokenVisionWorld(), reason: 'init' }));
+    await initialized;
+    const claimPromise = waitForMessage(gm.ws, value => value.type === 'access.claim');
+    gm.ws.send(JSON.stringify({ type: 'access.user.create', name: 'Fog Rebase Player', defaultActorId: 'actor-a',
+      ownership: { 'actor-a': 'owner' } }));
+    const claim = await claimPromise;
+    player = await openAndClaim(runtime.url, { name: 'Fog Rebase Player', claimCode: claim.claimCode });
+    const sourceAck = waitForMessage(gm.ws, value => value.type === 'vision.source.ack');
+    gm.ws.send(JSON.stringify({ type: 'vision.source.set', tokenId: 'token-a' }));
+    const staleBase = (await sourceAck).revision;
+    const drained = await waitForExplorationDrained(runtime);
+    assert.ok(drained.revision > staleBase, 'the test must cross actual durable background Fog commits');
+    const write = targetId => ({ action: 'update', document: { type: 'Status', id: targetId, parent: null },
+      intent: 'status.apply', data: { scope: 'actor', targetId, statusId: 'status-rooted' }, precondition: {} });
+    const submit = (operationId, targetId) => player.ws.send(JSON.stringify({ type: 'document.batch',
+      operationSchema: WORLD_OPERATION_SCHEMA_VERSION, operationId, baseRevision: staleBase, writes: [write(targetId)] }));
+    const unauthorized = waitForMessage(player.ws, value => value.operationId === 'fog-rebase-unowned' && value.type === 'document.batch.denied');
+    submit('fog-rebase-unowned', 'actor-b');
+    assert.equal((await unauthorized).code, 'status_target_not_controlled');
+    const committed = waitForMessage(player.ws, value => value.operationId === 'fog-rebase-owned' && value.type === 'document.batch.committed');
+    const acknowledged = waitForMessage(player.ws, value => value.operationId === 'fog-rebase-owned' && value.type === 'document.batch.ack');
+    submit('fog-rebase-owned', 'actor-a');
+    const [commit, ack] = await Promise.all([committed, acknowledged]);
+    assert.equal(commit.baseRevision, drained.revision);
+    assert.equal(ack.revision, drained.revision + 1);
+    const durable = await durableWorld(runtime.mapDir);
+    assert.equal(durable.revision, ack.revision);
+    assert.deepEqual(durable.state.preferences.worldV2.scenes[0].fog, drained.state.preferences.worldV2.scenes[0].fog);
+    const effects = durable.state.preferences.worldV2.actors.find(actor => actor.id === 'actor-a').effects;
+    assert.equal(effects.filter(effect => effect.definitionId === 'status-rooted').length, 1);
+    const duplicate = waitForMessage(player.ws, value => value.operationId === 'fog-rebase-owned' && value.type === 'document.batch.ack');
+    submit('fog-rebase-owned', 'actor-a');
+    assert.equal((await duplicate).duplicate, true);
+    const stale = waitForMessage(player.ws, value => value.operationId === 'fog-rebase-after-status' && value.type === 'document.batch.denied');
+    submit('fog-rebase-after-status', 'actor-a');
+    assert.equal((await stale).code, 'revision_conflict', 'another Status change must retain optimistic conflicts');
+  } finally { gm?.ws.close(); player?.ws.close(); await stopServer(runtime); }
+});
+
 test('LAN shares explored fog by party while keeping realtime vision per session across reconnect and restart', async () => {
   let runtime = await startServer();
   const mapDir = runtime.mapDir;

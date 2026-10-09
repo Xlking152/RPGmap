@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata } from '../src/vision/audience.js';
+import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope } from '../src/vision/audience.js';
 import { projectStateForAudience as oldFullProjection } from './fixtures/audience-before-targeted-movement.mjs';
 import { createPreviousProjectionFunctions } from './fixtures/server-incremental-before-preparation.js';
 import { createCanonicalWorldValidator } from '../deployment/local-server/world-schema.mjs';
@@ -16,7 +16,7 @@ const serverFunctions = server.slice(server.indexOf('function lightweightProject
 const currentFactory = new Function('dependencies', `
   const { sessions, committedPatches, audienceStateFor, projectMotionForSession,
     createFogDocumentChanges, createDocumentChanges, sendSocket, rememberResumeCommit,
-    describeVisionForToken, describeServerVision, structuredClone, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata,
+    describeVisionForToken, describeServerVision, structuredClone, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope,
     visionMapForScene, findUser, assertCanonicalWorldState } = dependencies;
   ${serverFunctions}
   return { tryIncrementalAudienceProjection, broadcastOperationCommit };
@@ -122,7 +122,7 @@ function harness(state, contexts = [state.context], previous = false) {
   const calls = [], responses = [], sessions = new Map();
   const users = new Map(contexts.map(context => [context.userId, context.user]));
   const dependencies = { sessions, committedPatches: new WeakMap(), structuredClone,
-    createDocumentChanges, createFogDocumentChanges, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata,
+    createDocumentChanges, createFogDocumentChanges, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope,
     describeServerVision: ruleset.vision.describe,
     assertCanonicalWorldState: state.validate, visionMapForScene: () => map, findUser: id => users.get(id),
     describeVisionForToken: () => { throw new Error('Fog cannot request movement vision'); },
@@ -152,6 +152,36 @@ function checkedMove(state, before, prior, tokenIds = ['near'], hit = true) {
   assert.equal(actorsOf(result) === actorsOf(prior), hit, 'Actor collection identity proves actual targeted hit');
   return { before: after, projected: result };
 }
+
+test('fresh reset/hide projection preserves only exact private ray context and unchanged detached leaves', () => {
+  const state = setup();
+  for (const explored of [{}, { 'party-a': { rows: { 1: [[0, 1]] } },
+    'party-private': { rows: { 99: [[999, 999]] } } }]) {
+    const after = withFogParties(state.before, explored); state.validate(after);
+    const priorJson = JSON.stringify(state.projected);
+    const { value: projected, records } = captureRegistrations(() => projectStateForAudience(after, {
+      ...state.context, forceFreshDetection: true,
+      movementCache: { beforeState: state.before, previousProjection: state.projected, tokenIds: new Set() },
+    }));
+    assert.deepEqual(projected, oldFullProjection(after, state.context));
+    assert.deepEqual(createDocumentChanges(state.projected, projected),
+      createDocumentChangesFull(state.projected, oldFullProjection(after, state.context)));
+    assert.equal(JSON.stringify(state.projected), priorJson);
+    assert.equal(projected.preferences.worldV2.actors[0], state.projected.preferences.worldV2.actors[0]);
+    assert.notEqual(projected.preferences.worldV2.actors[0], worldOf(after).actors[0], 'private authority is never exposed');
+    const metadata = metadataFor(records, projected);
+    assert.equal(metadata.canonicalState, after);
+    assert.equal(metadata.rayContexts[0], state.metadata.rayContexts[0]);
+    assert.ok(!Object.hasOwn(sceneOf(projected).fog.exploredByParty, 'party-private'));
+    for (const contextPatch of [{ userId: 'other', user: { ownership: {}, placementGrants: {} } },
+      { visionSourceTokenId: 'source-b' }, { mapMetrics: { metersPerUnit: 2 } }]) {
+      const viewer = { ...state.context, ...contextPatch };
+      const actual = projectStateForAudience(after, { ...viewer, forceFreshDetection: true,
+        movementCache: { beforeState: state.before, previousProjection: state.projected, tokenIds: new Set() } });
+      assert.deepEqual(actual, oldFullProjection(after, viewer), 'scope changes still require current full visibility');
+    }
+  }
+});
 
 test('real server Fog branch advances fresh private metadata and preserves the old full output', () => {
   const state = setup(), after = fogAfter(state.before); state.validate(after);

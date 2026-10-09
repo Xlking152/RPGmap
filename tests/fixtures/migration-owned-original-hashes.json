@@ -1,0 +1,11 @@
+{
+  "sourceCommit": "ed7e13baab0f116222333c20431e19ab63b60e37",
+  "records": [
+    { "schemaVersion": 2, "configured": false, "result": "e36a357143ae642a479af8230106135f41da0219a5ee76527ca57d22300754da", "migrated": true, "fromSchemaVersion": 2 },
+    { "schemaVersion": 2, "configured": true, "result": "3d15521c8ae869864fe36bc234d543b7b4261369024338979db34cbc30b3a184", "migrated": true, "fromSchemaVersion": 2 },
+    { "schemaVersion": 3, "configured": false, "result": "e40cbc73732d79dd2375966b3d7bc31a8a0b0a061ddcc7604449cfe0cb0b5697", "migrated": true, "fromSchemaVersion": 3 },
+    { "schemaVersion": 3, "configured": true, "result": "e86b58e823e08576808d1fe316e59a62ab12d1ff913b5e82fc04dd75297db330", "migrated": true, "fromSchemaVersion": 3 },
+    { "schemaVersion": 4, "configured": false, "result": "4f6cf40d968a13dd14529915bcd67a95207b7fbee7702ec6b8858a161d9dc727", "migrated": true, "fromSchemaVersion": 4 },
+    { "schemaVersion": 4, "configured": true, "result": "0c15f65604d24effbb8d98714c2189429df881b4e5246bd243d672ffb71eafdc", "migrated": true, "fromSchemaVersion": 4 }
+  ]
+}

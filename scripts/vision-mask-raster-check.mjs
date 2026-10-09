@@ -5,10 +5,19 @@ import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { captureVisionSourceProof, assertVisionSourceProofUnchanged } from './vision-source-proof.mjs';
+import { closeOwnedBrowser, rejectPendingCdp } from './owned-browser-close.mjs';
+
+const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const sourceProof = await captureVisionSourceProof(sourceRoot);
 
 // Independent full-viewport raster reference before local-surface optimization.
 const reference = await readFile(new URL('../tests/fixtures/vision-mask-raster-reference.js', import.meta.url), 'utf8');
 const candidate = await readFile(new URL('../src/vision/mask-renderer.js', import.meta.url), 'utf8');
+const facadeMask = await readFile(new URL('../src/vision/facade-mask.js', import.meta.url), 'utf8');
+const candidateScript = facadeMask.replaceAll('export ', '') + '\n' +
+  candidate.replace(/^import .*from ['"]\.\/facade-mask\.js['"];\s*/m, '').replaceAll('export ', '');
 const executable = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA]
   .filter(Boolean).map(root => path.join(root, 'Google/Chrome/Application/chrome.exe')).find(existsSync);
 assert(executable, 'Chrome is required for the raster oracle');
@@ -32,6 +41,8 @@ try {
   await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
   let nextId = 0;
   const pending = new Map();
+  socket.addEventListener('close', () => rejectPendingCdp(pending, 'Chrome CDP WebSocket closed'));
+  socket.addEventListener('error', () => rejectPendingCdp(pending, 'Chrome CDP WebSocket failed'));
   socket.addEventListener('message', event => {
     const message = JSON.parse(String(event.data)), task = pending.get(message.id);
     if (!task) return;
@@ -40,7 +51,9 @@ try {
   });
   function send(method, params = {}) { return new Promise((resolve, reject) => {
     const id = ++nextId, timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)); }, 60_000);
-    pending.set(id, { resolve, reject, timer }); socket.send(JSON.stringify({ id, method, params }));
+    pending.set(id, { resolve, reject, timer });
+    try { socket.send(JSON.stringify({ id, method, params })); }
+    catch (error) { pending.delete(id); clearTimeout(timer); reject(error); }
   }); }
   // Keep each CDP command bounded without placing all software-rendered cases
   // in one long command. Every case still draws both frames and checks every
@@ -48,7 +61,7 @@ try {
   const initialized = await send('Runtime.evaluate', { returnByValue: true, expression: `
     globalThis.rpgmapMaskRasterIterator = (function* () {
     const oldFactory = (() => { ${reference.replaceAll('export ', '')}; return createContinuousMaskRenderer; })();
-    const newFactory = (() => { ${candidate.replaceAll('export ', '')}; return createContinuousMaskRenderer; })();
+    const newFactory = (() => { ${candidateScript}; return createContinuousMaskRenderer; })();
     let cases = 0, differingPixels = 0, maxChannelError = 0, maxAlphaError = 0, maxPremultipliedError = 0, worstDifference = null, firstDifference = null;
     const ring = [[-15,-25],[10,-25],[10,35],[-15,35]];
     const geometry = { blocked: false, shadows: [[ring, [[-5,-5],[-5,8],[2,8],[2,-5]]]],
@@ -109,11 +122,12 @@ try {
     progress = result.result.value;
     assert(Number.isSafeInteger(progress?.value?.cases), 'Raster oracle progress missing');
   } while (!progress.done);
-  console.log(JSON.stringify(progress.value, null, 2));
+  await assertVisionSourceProofUnchanged(sourceProof, sourceRoot);
+  console.log(JSON.stringify({ ...sourceProof, ...progress.value }, null, 2));
   assert.equal(progress.value.cases, 2304, 'Raster oracle must complete all cases');
   assert.equal(progress.value.framesPerCase, 2, 'Raster oracle must draw both consecutive frames');
   assert.equal(progress.value.differingPixels, 0, 'Cropped mask must match full-viewport software raster pixels');
-  await send('Browser.close');
+  await closeOwnedBrowser({ process: browser, send, pending, label: 'Chrome raster oracle' });
 } finally {
   socket?.close();
   if (browser.exitCode === null) browser.kill('SIGKILL');

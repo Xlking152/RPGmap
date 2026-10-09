@@ -1,14 +1,34 @@
 import { createMovementAuthority } from '../movement/authority.js';
 import { createMinimalReferencePackage } from '../../reference/maps/minimal/package.js';
 import lanzhouMapPackage from '../../reference/maps/lanzhou/runtime.json' with { type: 'json' };
-import { resolveTokenActor } from '../token/actor.js';
+import { normalizeActorDocument } from '../actor/model.js';
 import { resolveStatuses } from '../status/model.js';
 import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
 
+// Own the fixed bundled data before freezing it. Imported JSON and reference
+// factories also serve public mutable adapters; freezing their shared inputs
+// would change those contracts. Scene changes remain separate mutable inputs.
+function ownBundledMap(source) {
+  const { createSvg, ...data } = source;
+  const owned = structuredClone(data);
+  function freezeData(value) {
+    if (value && typeof value === 'object') {
+      Object.values(value).forEach(freezeData);
+      Object.freeze(value);
+    }
+    return value;
+  }
+  freezeData(owned);
+  // Only the minimal map has this fixed renderer. Preserve its function and
+  // top-level key order while all geometry and light data stays privately owned.
+  return Object.freeze(Object.fromEntries(Object.keys(source).map(key =>
+    [key, key === 'createSvg' ? createSvg : owned[key]])));
+}
+const lanzhou = ownBundledMap(lanzhouMapPackage);
 const packages = new Map([
-  [String(lanzhouMapPackage.id), lanzhouMapPackage],
+  [String(lanzhou.id), lanzhou],
 ]);
-const minimal = createMinimalReferencePackage();
+const minimal = ownBundledMap(createMinimalReferencePackage());
 packages.set(String(minimal.id), minimal);
 
 export function mapForScene(scene) {
@@ -39,16 +59,22 @@ export function prepareCanonicalMovementInputs({ world, scene, token, ruleset, i
   if (token.actorLink !== true || ![actor.createdAt, actor.updatedAt]
     .every(value => typeof value === 'string' && value.trim().length > 0)) return null;
   if (!canonicalMovementScope || canonicalMovementScope.worldId !== world.id || canonicalMovementScope.sceneId !== scene.id
-    || canonicalMovementScope.actors !== world.actors || canonicalMovementScope.definitions !== definitions
+    || canonicalMovementScope.definitions !== definitions
     || canonicalMovementScope.ruleset !== ruleset) {
     canonicalMovementInputs.clear();
-    canonicalMovementScope = { worldId: world.id, sceneId: scene.id, actors: world.actors, definitions, ruleset };
+    canonicalMovementScope = { worldId: world.id, sceneId: scene.id, definitions, ruleset };
   }
   const key = JSON.stringify([actor.id, token.id]);
   let entry = canonicalMovementInputs.get(key);
+  // An unrelated Actor update replaces the collection, not this document.
+  // The fresh first-match lookup and exact Actor dependency below still
+  // invalidate replacement, reordering of duplicate IDs and same-ID imports.
   if (!entry || entry.ruleset !== ruleset || entry.actor !== actor || entry.definitions !== definitions
     || entry.actorLink !== token.actorLink || entry.actorDelta !== token.actorDelta || entry.effects !== token.effects) {
-    const resolvedActor = resolveTokenActor({ ...world, activeSceneId: scene.id, scenes: [scene] }, token.id, { ruleset }).actor;
+    // The guarded linked Token already selected this exact first-match Actor.
+    // Run the same complete normalization without building the resolver's
+    // discarded Token/baseActor copies. Status and returned copies stay fresh.
+    const resolvedActor = normalizeActorDocument(actor, { ruleset });
     const status = resolveStatuses({ schemaVersion: 4, actors: [resolvedActor], tokens: [token], statusDefinitions: definitions },
       { actorId: token.actorId, tokenId: token.id, ruleset });
     entry = { ruleset, actor, definitions, actorLink: token.actorLink, actorDelta: token.actorDelta, effects: token.effects,

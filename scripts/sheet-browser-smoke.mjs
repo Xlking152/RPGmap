@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { closeOwnedBrowser } from './owned-browser-close.mjs';
 
 if (process.platform !== 'win32') throw new Error('Actor sheet browser smoke requires Windows');
 const browserName = String(process.env.RPGMAP_SMOKE_BROWSER || 'edge').toLowerCase();
@@ -60,6 +61,7 @@ const edge = spawn(edgePath(), [
 ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
 let edgeError = '';
 let browserClosed = false;
+let socket;
 edge.stderr.setEncoding('utf8');
 edge.stderr.on('data', chunk => { edgeError += chunk; });
 
@@ -71,7 +73,7 @@ try {
     return pages.find(item => item.type === 'page' && item.webSocketDebuggerUrl);
   }, 'Edge CDP endpoint', deadline);
 
-  const socket = new WebSocket(page.webSocketDebuggerUrl);
+  socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Edge CDP WebSocket open timed out')), 5_000);
     socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
@@ -132,7 +134,8 @@ try {
     const id = nextId++;
     const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Edge CDP command timed out: ${method}`)); }, 7_500);
     pending.set(id, { resolve, reject, timer });
-    socket.send(JSON.stringify({ id, method, params }));
+    try { socket.send(JSON.stringify({ id, method, params })); }
+    catch (error) { pending.delete(id); clearTimeout(timer); reject(error); }
   });
   const evaluate = async expression => {
     const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
@@ -588,11 +591,12 @@ try {
   console.log(JSON.stringify({ ready, fixtureRevision: setup.revision, liveSheets: opened, drag: dragAudit, tabs: tabAudit,
     health: { fieldId: healthBefore.fieldId, change: healthChange, isolated: true }, status: statusAudit, restored: restoreAudit, playEdit: playEditAudit, drafts: draftAudit, publicProfile: publicProfileAudit,
     portrait: { reference: portraitAudit.reference, runtimePreserved: true }, library: libraryAudit, journal: journalAudit, mobile: mobileAudit, offlineUpgrade }));
-  await send('Browser.close');
+  await closeOwnedBrowser({ process: edge, send, pending, label: 'Actor sheet browser smoke' });
   browserClosed = true;
 } catch (error) {
   throw new Error(`${error.message}${edgeError ? `\nEdge stderr:\n${edgeError.slice(-4000)}` : ''}`);
 } finally {
+  socket?.close();
   if (!browserClosed && edge.exitCode === null) edge.kill('SIGKILL');
   if (edge.exitCode === null) {
     await new Promise(resolve => {

@@ -108,3 +108,39 @@ test('cache turnover across 70 canonical Actors does not change later results or
   }
   check(state, validate);
 });
+
+test('unrelated Actor collection replacement preserves only exact accepted Actor dependencies', () => {
+  const { state: original, validate } = setup();
+  const originalWorld = worldOf(original);
+  const other = { ...structuredClone(originalWorld.actors[0]), id: 'actor-other', name: 'Other' };
+  const state = { ...original, preferences: { ...original.preferences,
+    worldV2: { ...originalWorld, actors: [...originalWorld.actors, other] } } };
+  validate(state);
+  let calls = 0;
+  // The host's fixed bundled instance can be instrumented without mutating
+  // the public Ruleset. This counter proves reuse while outputs stay identical.
+  const fixed = Object.freeze({ ...ruleset, statuses: Object.freeze({ ...ruleset.statuses,
+    derive(...values) { calls++; return ruleset.statuses.derive(...values); } }) });
+  const prepare = next => prepareCanonicalMovementInputs({ ...args(next, validate),
+    ruleset: fixed, canonicalMovementRuleset: fixed });
+  const initial = prepare(state);
+  assert.equal(calls, 1);
+  const unrelated = { ...state, preferences: { ...state.preferences,
+    worldV2: { ...worldOf(state), actors: [worldOf(state).actors[0],
+      { ...structuredClone(worldOf(state).actors[1]), name: 'Changed other' }] } } };
+  validate(unrelated);
+  assert.deepEqual(prepare(unrelated), initial);
+  assert.equal(calls, 1, 'unchanged accepted Actor does not rederive because the collection changed');
+  const changed = { ...unrelated, preferences: { ...unrelated.preferences,
+    worldV2: { ...worldOf(unrelated), actors: [{ ...structuredClone(worldOf(unrelated).actors[0]),
+      effects: [{ id: 'stop-a', definitionId: 'stop', stacks: 1, enabled: true }] }, worldOf(unrelated).actors[1]] } } };
+  changed.preferences.entitySystem = { ...changed.preferences.entitySystem };
+  projectWorldOperationState(changed); validate(changed);
+  const result = prepare(changed);
+  assert.equal(calls, 2, 'same-ID replacement still requires new status derivation');
+  assert.equal(result.status.capabilities.canMove, false);
+  assert.deepEqual(result.actor, resolveTokenActor(worldOf(changed), 'token-inputs', { ruleset }).actor);
+  result.status.capabilities.canMove = true;
+  assert.equal(prepare(changed).status.capabilities.canMove, false, 'returned data is still detached');
+  check(changed, validate);
+});

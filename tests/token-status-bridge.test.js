@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { resolveStatuses } from '../src/status/model.js';
 import { createTokenStatusBridgeSystem } from '../src/token/status-bridge.js';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
+import { registerRuntimeStateReader } from '../src/engine/state-access.js';
 
 function baseActor() {
   return {
@@ -79,4 +80,46 @@ test('linked Token keeps the existing Base Actor status resolution path', () => 
   const snapshot = api.status.resolve({ tokenId: 'npc-1' });
   assert.equal(snapshot.actorStatuses.some(status => status.definitionId === 'status-rooted'), false);
   assert.notEqual(snapshot.capabilities.canMove, false);
+});
+
+test('linked status reads avoid Actor preparation but recheck the current Token on each call', () => {
+  let linked = true, prepared = 0;
+  const token = { id: 't', actorId: 'a' };
+  const api = {
+    tokens: {
+      get: () => ({ ...token, actorLink: linked }),
+      resolveActor: () => { prepared++; return { synthetic: false }; },
+    },
+    status: { resolve: context => ({ tokenId: context.tokenId, capabilities: { canInteract: false } }) },
+  };
+  createTokenStatusBridgeSystem().register(api);
+  assert.equal(api.status.resolve({ tokenId: 't' }).capabilities.canInteract, false);
+  assert.equal(prepared, 0);
+  linked = false;
+  api.status.resolve({ tokenId: 't' });
+  assert.equal(prepared, 1);
+});
+
+test('unknown or failed Token lookup preserves the resolver fallback', () => {
+  for (const get of [() => null, () => { throw new Error('lookup failed'); }]) {
+    let prepared = 0;
+    const api = { tokens: { get, resolveActor: () => { prepared++; throw new Error('unknown'); } },
+      status: { resolve: () => ({ statuses: [], capabilities: { canMove: false } }) } };
+    createTokenStatusBridgeSystem().register(api);
+    assert.equal(api.status.resolve({ tokenId: 'missing' }).capabilities.canMove, false);
+    assert.equal(prepared, 1);
+  }
+});
+
+test('synthetic status reads copy only the private Entity view and keep authority unchanged', () => {
+  const api = fixture();
+  const state = api.getState();
+  const before = structuredClone(state);
+  const off = registerRuntimeStateReader(api, () => state);
+  api.getState = () => { throw new Error('full World copies are unnecessary'); };
+  try {
+    const snapshot = api.status.resolve({ tokenId: 'npc-1' });
+    assert.equal(snapshot.capabilities.canMove, false);
+    assert.deepEqual(state, before);
+  } finally { off(); }
 });

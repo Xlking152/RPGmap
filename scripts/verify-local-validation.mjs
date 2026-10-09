@@ -1,21 +1,75 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { inflateRawSync } from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { worldWalChecksum } from '../deployment/local-server/world-wal.mjs';
+import { withinMillisecondsBudget } from './performance-budget.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const execFileAsync = promisify(execFile);
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const requiredChecks = ['tests', 'build', 'bundle', 'package', 'benchmark', 'lanBenchmark', 'chrome'];
+const v254Commit = 'ed7e13baab0f116222333c20431e19ab63b60e37';
+const committedVisionSources = new Map();
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 function requireCondition(condition, message) { if (!condition) throw new Error(message); }
 function equal(actual, expected, message) {
   try { assert.deepEqual(actual, expected); } catch { throw new Error(message); }
+}
+
+// Git objects are immutable, so one batch can bind every measured baseline
+// source to its claimed commit without depending on a local baseline checkout.
+export async function visionSourceAtCommit(sourceRoot, commit) {
+  requireCondition(/^[a-f0-9]{40}$/.test(commit || ''), 'Vision baseline commit invalid');
+  const key = `${path.resolve(sourceRoot)}:${commit}`;
+  if (!committedVisionSources.has(key)) committedVisionSources.set(key, (async () => {
+    const tree = (await execFileAsync('git', ['ls-tree', '-r', '-z', commit, '--', 'src', 'deployment/local-server',
+      'reference/maps/lanzhou/runtime.json', 'package.json'], { cwd: sourceRoot, maxBuffer: 4 * 1024 * 1024 })).stdout;
+    const entries = tree.split('\0').filter(Boolean).map(record => {
+      const match = /^\d+ blob ([a-f0-9]{40})\t(.+)$/.exec(record);
+      requireCondition(match, 'Vision baseline source tree invalid');
+      return { object: match[1], file: match[2] };
+    }).filter(({ file }) => /\.(js|mjs)$/.test(file) || file === 'reference/maps/lanzhou/runtime.json' || file === 'package.json');
+    requireCondition(entries.some(entry => entry.file === 'package.json')
+      && entries.some(entry => entry.file === 'src/spatial/kernel.js'), 'Vision baseline source tree missing');
+    const contents = await new Promise((resolve, reject) => {
+      const child = spawn('git', ['cat-file', '--batch'], { cwd: sourceRoot, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      const chunks = [], errors = []; let bytes = 0;
+      child.stdout.on('data', chunk => {
+        if ((bytes += chunk.length) > 64 * 1024 * 1024) {
+          child.kill(); reject(new Error('Vision baseline source objects too large'));
+        } else chunks.push(chunk);
+      });
+      child.stderr.on('data', chunk => errors.push(chunk));
+      child.once('error', reject);
+      child.stdin.once('error', reject);
+      child.once('close', code => code === 0 ? resolve(Buffer.concat(chunks))
+        : reject(new Error(`Vision baseline source objects unavailable: ${Buffer.concat(errors).toString('utf8')}`)));
+      child.stdin.end(entries.map(entry => entry.object).join('\n') + '\n');
+    });
+    const sourceFileHashes = {}; let cursor = 0, version;
+    for (const entry of entries) {
+      const end = contents.indexOf(10, cursor);
+      requireCondition(end >= cursor, 'Vision baseline source object truncated');
+      const header = /^([a-f0-9]{40}) blob (\d+)$/.exec(contents.subarray(cursor, end).toString('ascii'));
+      requireCondition(header && header[1] === entry.object, 'Vision baseline source object invalid');
+      const size = Number(header[2]), start = end + 1;
+      requireCondition(Number.isSafeInteger(size) && size >= 0 && start + size < contents.length
+        && contents[start + size] === 10, 'Vision baseline source object truncated');
+      const text = contents.subarray(start, start + size).toString('utf8').replaceAll('\r\n', '\n');
+      if (entry.file === 'package.json') version = JSON.parse(text).version;
+      else sourceFileHashes[entry.file] = sha256(text);
+      cursor = start + size + 1;
+    }
+    requireCondition(cursor === contents.length && typeof version === 'string', 'Vision baseline source objects invalid');
+    return { version, sourceFileHashes };
+  })());
+  return structuredClone(await committedVisionSources.get(key));
 }
 
 // Read the candidate itself rather than trusting a second manually supplied
@@ -43,6 +97,7 @@ function archiveBuild(archive, version) {
     requireCondition(name.startsWith(prefix) && !name.includes('\\') && !name.split('/').includes('..'), 'Candidate ZIP entry outside package');
     if (name.endsWith('/')) continue;
     const relative = name.slice(prefix.length);
+    requireCondition(!relative.startsWith('素材库/'), 'Release must not contain the complete ruins authoring library');
     requireCondition(!files.has(relative), 'Candidate ZIP contains duplicate entries');
     requireCondition(!(flags & 1) && [0, 8].includes(method) && size <= 32 * 1024 * 1024
       && (totalBytes += size) <= 128 * 1024 * 1024, 'Candidate ZIP entry is unsupported or too large');
@@ -65,6 +120,18 @@ function requireBuild(report, build, version, name) {
   requireCondition(report.version === version, `${name} report version mismatch`);
   equal(report.build, build, `${name} report build fingerprint does not match the ZIP`);
 }
+function requireRasterSource(report, candidate, validation, name) {
+  requireCondition(report?.version === validation.version && report.sourceCommit === validation.commit
+    && /^[a-f0-9]{40}$/.test(report.sourceCommit || ''), `${name} source identity mismatch`);
+  requireCondition(report.sourceHashEncoding === 'utf8-lf', `${name} source fingerprint encoding missing`);
+  requireCondition(report.sourceFileHashes && typeof report.sourceFileHashes === 'object'
+    && !Array.isArray(report.sourceFileHashes) && Object.keys(report.sourceFileHashes).length > 0
+    && Object.values(report.sourceFileHashes).every(digest), `${name} complete source fingerprint missing`);
+  equal({ version: report.version, sourceCommit: report.sourceCommit, sourceHashEncoding: report.sourceHashEncoding,
+    sourceFileHashes: report.sourceFileHashes },
+  { version: candidate.version, sourceCommit: candidate.sourceCommit, sourceHashEncoding: candidate.sourceHashEncoding,
+    sourceFileHashes: candidate.sourceFileHashes }, `${name} source proof differs from the vision candidate`);
+}
 function latency(summary, name, count, maximum = 60) {
   requireCondition(summary?.count === count && finite(summary.medianMs) && summary.medianMs >= 0
     && finite(summary.p95Ms) && summary.p95Ms >= summary.medianMs && summary.p95Ms <= maximum, `${name} latency gate failed`);
@@ -82,7 +149,9 @@ function ordinaryLan(report) {
   'LAN move packet gate failed');
 }
 
-function largeLan(report) {
+function largeLan(report, { requireFrameMean = false } = {}) {
+  if (requireFrameMean) requireCondition(report.diagnosticProfiling === false,
+    'Large-range LAN diagnostic profiling cannot be formal performance evidence');
   const fixture = report.fixture;
   requireCondition(fixture?.actors === 100 && fixture.tokens === 500 && fixture.players === 6
     && fixture.fogCellSizeMeters === 5 && fixture.pathSampleSpacingMeters === 2.5
@@ -212,11 +281,352 @@ function maskRaster(report) {
   'Continuous mask raster gate failed');
 }
 
+function ruinsRendererDiagnostics(value, name) {
+  requireCondition(Number.isSafeInteger(value?.renders) && value.renders > 0
+    && Number.isSafeInteger(value.maskBuilds) && value.maskBuilds >= 0
+    && Number.isSafeInteger(value.reusedObjects) && value.reusedObjects >= 0,
+  `${name} renderer observations missing`);
+  for (const [key, limitKey, limit] of [['ruinObjects', 'ruinObjectsLimit', 103], ['cachedNodes', 'cachedNodesLimit', 103],
+    ['cachedFeatureGeometry', 'featureGeometryLimit', 103], ['craterObjects', 'craterObjectsLimit', 1],
+    ['inactiveRuins', 'inactiveRuinsLimit', 103]]) {
+    requireCondition(value[limitKey] === limit && Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= limit,
+      `${name} renderer cache limit failed: ${key}`);
+  }
+  requireCondition(Number.isSafeInteger(value.largestRuinVersions) && value.largestRuinVersions >= 0
+    && value.largestRuinVersions <= 2, `${name} renderer cache limit failed: ruin versions`);
+  requireCondition(Number.isSafeInteger(value.floodObjects) && value.floodObjects >= 0
+    && finite(value.lastRenderMs) && value.lastRenderMs >= 0 && finite(value.maxRenderMs)
+    && value.maxRenderMs >= value.lastRenderMs, `${name} renderer timing/count invalid`);
+}
+
+function ruinsGeometryCache(value, name) {
+  requireCondition(value?.maxEntries === 512 && value.maxVersionsPerFeature === 2
+    && Number.isSafeInteger(value.entries) && value.entries >= 0 && value.entries <= 512
+    && Number.isSafeInteger(value.features) && value.features >= 0 && value.features <= value.entries
+    && Number.isSafeInteger(value.largestFeatureVersions) && value.largestFeatureVersions >= 0 && value.largestFeatureVersions <= 2
+    && (value.entries === 0 ? value.features === 0 && value.largestFeatureVersions === 0 : value.features > 0 && value.largestFeatureVersions > 0)
+    && ['hits', 'misses', 'evictions', 'failures'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0),
+  `${name} geometry cache bounds/observations invalid`);
+}
+
+function ruinsFeedback(value, name, point = null) {
+  requireCondition(value?.rendered === true && finite(value.elapsedMs) && value.elapsedMs >= 0
+    && Number.isSafeInteger(value.revision) && value.revision > 0
+    && Number.isSafeInteger(value.stateRevision) && value.stateRevision >= value.revision
+    && finite(value.requestedAt) && value.requestedAt >= 0 && finite(value.x) && finite(value.y),
+  `${name} completed-mask/revision proof invalid`);
+  if (point) requireCondition(Math.abs(value.x - point.x) <= 0.001 && Math.abs(value.y - point.y) <= 0.001,
+    `${name} vision source differs from confirmed position`);
+}
+
+function ruinsSmoke(value) {
+  const eye = { x: 3628.528142813593, y: 1242.984768981114 };
+  requireCondition(value?.passed === true && value.cleanup === true && value.reproduction?.rangeMeters === 1000
+    && value.reproduction.radiusMeters === 206.80454093031585, 'Ruins SweepEvent reproduction fixture missing');
+  equal(value.reproduction.area, { x: 3581.491689174436, y: 1553.9528916589916 }, 'Ruins SweepEvent attack differs');
+  equal(value.reproduction.source, eye, 'Ruins SweepEvent source differs');
+  for (const name of ['first', 'second', 'severe']) {
+    const operation = value.reproduction[name];
+    requireCondition(finite(operation?.commitMs) && operation.commitMs >= 0, `Ruins ${name} commit timing missing`);
+    ruinsFeedback(operation.feedback, `Ruins ${name}`, eye);
+    requireCondition(operation.feedback.elapsedMs >= operation.commitMs, `Ruins ${name} feedback precedes commit`);
+  }
+  const image = (record, name) => {
+    requireCondition(typeof record?.featureId === 'string' && record.featureId.length > 0 && record.groups === 1
+      && record.normalImages === 1 && [0, 1].includes(record.severeImages) && record.taggedEntity === false
+      && typeof record.href === 'string' && record.href.length > 0,
+    `Ruins ${name} bound untagged texture proof invalid`);
+    requireCondition(['x', 'y', 'width', 'height'].every(key => typeof record.anchor?.[key] === 'string'
+      && Number.isFinite(Number(record.anchor[key]))) && Number(record.anchor.width) > 0 && Number(record.anchor.height) > 0
+      && (record.anchor.viewBox === null || typeof record.anchor.viewBox === 'string'), `Ruins ${name} world anchor invalid`);
+  };
+  for (const name of ['partial', 'overlap', 'severe', 'whole']) image(value[name], name);
+  for (const name of ['partial', 'overlap', 'severe']) requireCondition(typeof value[name].mask === 'string'
+    && value[name].mask.length > 0, `Ruins ${name} actual-cut mask missing`);
+  equal(value.overlap.anchor, value.partial.anchor, 'Ruins overlap changed world anchor');
+  equal(value.severe.anchor, value.partial.anchor, 'Ruins severe damage changed world anchor');
+  requireCondition(value.partial.featureId === value.overlap.featureId && value.partial.featureId === value.severe.featureId
+    && value.partial.href === value.overlap.href && value.partial.severeImages === 0 && value.overlap.severeImages === 0
+    && value.severe.severeImages === 1 && value.whole.featureId !== value.partial.featureId && value.whole.mask === null
+    && value.whole.originalHidden === true && value.whole.destructionConfirmed === true,
+  'Ruins partial/overlap/severe/whole behavior proof invalid');
+  requireCondition(value.wholeAction?.action === 'damage' && value.wholeAction.featureId === value.whole.featureId
+    && finite(value.wholeAction.commitMs) && value.wholeAction.commitMs >= 0, 'Ruins whole-damage action missing');
+  ruinsFeedback(value.wholeAction.feedback, 'Ruins whole damage', eye);
+  requireCondition(value.wholeAction.feedback.elapsedMs >= value.wholeAction.commitMs, 'Ruins whole feedback precedes commit');
+  requireCondition(value.movement?.length === 3, 'Ruins damaged-scene movement samples missing');
+  equal(value.movementOrigin, {x:eye.x,y:1345}, 'Ruins damaged-scene movement must start on its dry-ground fixture');
+  for (const [index, offset] of [0.25, 2.5, 0].entries()) ruinsFeedback(value.movement[index], `Ruins movement ${index}`,
+    { x: value.movementOrigin.x + offset, y: value.movementOrigin.y });
+  equal(value.zoom?.map(sample => sample.zoom), [-2, 0.25, 2, 0], 'Ruins damaged-scene zoom coverage differs');
+  requireCondition(value.zoom.every(sample => Number.isSafeInteger(sample.centerAlpha)
+    && sample.centerAlpha >= 0 && sample.centerAlpha <= 12), 'Ruins damaged-scene zoom became opaque');
+  ruinsRendererDiagnostics(value.beforeReload?.diagnostics, 'Ruins before reload');
+  requireCondition(value.beforeReload?.queue?.queued === 0 && value.beforeReload.queue.running === false,
+    'Ruins before reload exploration did not drain');
+  requireCondition(value.storageMode === 'persistent-offline'
+    && ['worldIdRetained', 'sceneEventsRetained', 'attackAreasRetained', 'anchorRetained'].every(key => value.reload?.[key] === true)
+    && value.restore?.singleObjectOnly === true && value.restore.independentCraterRetained === true
+    && value.restore.actions?.length === 2, 'Ruins persistence/single-object restoration proof missing');
+  requireCondition(value.validationWorker?.started === true && value.validationWorker.liveCount === 1
+    && /^\/assets\/world-validation-worker-[A-Za-z0-9_-]+\.js$/.test(value.validationWorker.asset || ''),
+  'Ruins full-save Module Worker startup/reuse proof missing');
+  equal(value.restore.actions.map(action => action.featureId), [value.whole.featureId, value.partial.featureId],
+    'Ruins restoration targets differ');
+  for (const operation of value.restore.actions) requireCondition(finite(operation.commitMs) && operation.commitMs >= 0
+    && finite(operation.feedbackMs) && operation.feedbackMs >= operation.commitMs
+    && Number.isSafeInteger(operation.stateRevision) && operation.stateRevision > 0, 'Ruins restore timing/revision invalid');
+  ruinsRendererDiagnostics(value.afterRestore?.diagnostics, 'Ruins after restore');
+  requireCondition(Number.isSafeInteger(value.afterRestore.remainingRuins) && value.afterRestore.remainingRuins >= 0
+    && value.afterRestore.remainingRuins <= 103, 'Ruins after restore object count invalid');
+  const stress = value.stress;
+  requireCondition(stress?.rounds === 12 && stress.samples?.length === 12, 'Ruins stress requires twelve complete rounds');
+  const damage = [], restore = [];
+  for (const [index, sample] of stress.samples.entries()) {
+    requireCondition(sample.round === index && sample.damageOk === true && sample.restoreOk === true
+      && finite(sample.damageCommitMs) && sample.damageCommitMs >= 0 && finite(sample.damageFeedbackMs)
+      && sample.damageFeedbackMs >= sample.damageCommitMs && finite(sample.restoreCommitMs) && sample.restoreCommitMs >= 0
+      && finite(sample.restoreFeedbackMs) && sample.restoreFeedbackMs >= sample.restoreCommitMs,
+    `Ruins stress round ${index} actual operation/timing proof invalid`);
+    ruinsFeedback(sample.damageFeedback, `Ruins stress damage ${index}`, eye);
+    ruinsFeedback(sample.restoreFeedback, `Ruins stress restore ${index}`, eye);
+    requireCondition(sample.damageFeedback.elapsedMs === sample.damageFeedbackMs
+      && sample.restoreFeedback.elapsedMs === sample.restoreFeedbackMs,
+    `Ruins stress round ${index} feedback raw samples disagree`);
+    requireCondition(sample.restoreFeedback.revision > sample.damageFeedback.revision
+      && (index === 0 || sample.damageFeedback.revision > stress.samples[index - 1].restoreFeedback.revision),
+    `Ruins stress round ${index} operation revisions did not advance`);
+    ruinsRendererDiagnostics(sample.diagnostics, `Ruins stress round ${index}`);
+    ruinsGeometryCache(sample.geometryCache, `Ruins stress round ${index}`);
+    damage.push(sample.damageFeedbackMs); restore.push(sample.restoreFeedbackMs);
+  }
+  for (const [name, samples] of [['damage', damage], ['restore', restore]]) {
+    const p95 = [...samples].sort((a, b) => a - b)[11];
+    requireCondition(stress[`${name}P95Ms`] === p95 && p95 <= 100, `Ruins stress ${name} feedback p95 gate failed`);
+  }
+  const frames = stress.frames;
+  requireCondition(frames?.samplesMs?.length >= 24 && frames.samplesMs.every(sample => finite(sample) && sample > 0)
+    && frames.count === frames.samplesMs.length && finite(frames.averageFPS) && finite(frames.p95Ms),
+  'Ruins stress raw frame observations missing');
+  const averageFPS = 1000 * frames.samplesMs.length / frames.samplesMs.reduce((sum, sample) => sum + sample, 0);
+  const frameP95 = [...frames.samplesMs].sort((a, b) => a - b)[Math.ceil(frames.samplesMs.length * 0.95) - 1];
+  requireCondition(Math.abs(averageFPS - frames.averageFPS) <= 1e-6 && Math.abs(frameP95 - frames.p95Ms) <= 1e-6
+    && averageFPS >= 58 && frameP95 <= 20, 'Ruins stress frame summary/gate failed');
+  requireCondition(stress.observerSupported === true && finite(stress.startedAt) && stress.startedAt >= 0
+    && finite(stress.endedAt) && stress.endedAt > stress.startedAt
+    && stress.durationMs === stress.endedAt - stress.startedAt && Array.isArray(stress.longTasks)
+    && stress.longTasks.every(task => finite(task.startTime) && task.startTime >= 0
+      && task.startTime <= stress.endedAt && finite(task.duration) && task.duration >= 0
+      && task.startTime + task.duration >= stress.startedAt),
+  'Ruins stress raw long-task observations missing');
+  const maxLongTask = Math.max(0, ...stress.longTasks.map(task => task.duration));
+  requireCondition(stress.maxLongTaskMs === maxLongTask && maxLongTask <= 100, 'Ruins stress long-task gate failed');
+  ruinsRendererDiagnostics(stress.finalDiagnostics, 'Ruins final');
+  ruinsGeometryCache(stress.finalGeometryCache, 'Ruins final');
+  requireCondition(stress.finalQueue?.queued === 0 && stress.finalQueue.running === false, 'Ruins final exploration did not drain');
+}
+
+function ruinsLanHistory(events) {
+  requireCondition(Array.isArray(events), 'Ruins LAN raw history missing');
+  const undone = new Set(events.filter(event => event.type === 'undo').map(event => String(event.targetEventId)));
+  const objects = new Set(), clips = new Map(), craters = new Map(), active = [];
+  const point = value => ({ x: Number(value.x ?? value[0]), y: Number(value.y ?? value[1]) });
+  for (const event of events) {
+    requireCondition(event && typeof event.id === 'string' && ['damage', 'restore', 'reset', 'undo'].includes(event.type),
+      'Ruins LAN raw history event invalid');
+    if (event.type === 'undo' || undone.has(event.id)) continue;
+    active.push(event.id);
+    if (event.type === 'reset') { objects.clear(); clips.clear(); craters.clear(); continue; }
+    if (event.type === 'restore') {
+      for (const id of event.featureIds || []) { objects.delete(id); clips.delete(id); }
+      continue;
+    }
+    for (const id of event.objectIds || []) objects.add(id);
+    for (const hit of event.clipHits || []) {
+      const values = clips.get(hit.featureId) || [];
+      values.push({ eventId: event.id, featureId: hit.featureId, polygon: hit.polygon.map(point) });
+      clips.set(hit.featureId, values);
+    }
+    if (event.craterPolygon) craters.set(event.id, { eventId: event.id, polygon: event.craterPolygon.map(point) });
+  }
+  const destroyedObjectIds = [...objects].sort(), clipHits = [...clips.values()].flat().sort((a, b) =>
+    a.featureId.localeCompare(b.featureId) || a.eventId.localeCompare(b.eventId));
+  return { destroyedObjectIds, clipHits, damagedFeatureIds: [...new Set([...destroyedObjectIds, ...clips.keys()])].sort(),
+    craterRegions: [...craters.values()].sort((a, b) => a.eventId.localeCompare(b.eventId)),
+    activeSceneEventIds: active, undoneEventIds: [...undone].sort() };
+}
+
+function ruinsLan(report, build, version) {
+  requireBuild(report, build, version, 'Ruins LAN');
+  requireCondition(report.identity === true && report.audienceProjection === true && report.visionSource === true
+    && report.documentMovePath === true && report.durableMovementAndPath === true && report.backgroundFogDrained === true
+    && report.restartRecovery === true && report.diagnosticProfiling === false, 'Ruins LAN baseline/profile proof missing');
+  const value = report.ruinsLan;
+  requireCondition(value?.passed === true && value.fixture?.source === 'actual-package'
+    && value.fixture.mapId === 'northern-song-lanzhou-1104' && typeof value.fixture.sceneId === 'string'
+    && value.fixture.sceneId.length > 0 && typeof value.featureId === 'string' && value.featureId.length > 0
+    && finite(value.partialCoverage) && value.partialCoverage > 0 && value.partialCoverage < 0.95
+    && value.fixture.area?.shape === 'circle' && finite(value.fixture.area.radius) && value.fixture.area.radius > 0,
+  'Ruins LAN actual packaged partial-range fixture missing');
+  requireBuild(value, build, version, 'Ruins LAN destruction');
+  const canonicalHash = events => sha256(JSON.stringify((function stable(item) {
+    return Array.isArray(item) ? item.map(stable) : item && typeof item === 'object'
+      ? Object.fromEntries(Object.keys(item).sort().map(key => [key, stable(item[key])])) : item;
+  })(events)));
+  let history = value.originalSceneEvents;
+  const original = ruinsLanHistory(history);
+  requireCondition(!original.damagedFeatureIds.includes(value.featureId) && value.samples?.length === 3,
+    'Ruins LAN fixture must begin undamaged and execute three transactions');
+  const histories = [], revisions = [];
+  for (const [index, kind] of ['partial', 'whole', 'restore'].entries()) {
+    const sample = value.samples[index], event = sample?.playerChange?.changed;
+    requireCondition(sample?.kind === kind && sample.operationId === `smoke-ruins-${kind}`
+      && Number.isSafeInteger(sample.baseRevision) && sample.baseRevision >= 0
+      && sample.revision === sample.baseRevision + 1 && (index === 0 || sample.baseRevision >= revisions[index - 1])
+      && finite(sample.elapsedMs) && sample.elapsedMs >= 0 && sample.walConfirmed === true && sample.canonicalConfirmed === true,
+    `Ruins LAN ${kind} ACK/raw revision proof invalid`);
+    requireCondition(event && sample.playerChange.action === 'create'
+      && sample.playerChange.document?.type === 'SceneEvent' && sample.playerChange.document.id === event.id
+      && sample.playerChange.document.parent?.type === 'Scene'
+      && sample.playerChange.document.parent.id === value.fixture.sceneId,
+    `Ruins LAN ${kind} actual Player SceneEvent delta missing`);
+    if (kind === 'partial') {
+      requireCondition(event.type === 'damage' && event.id === value.fixture.partialEventId
+        && event.objectIds?.length === 0 && event.clipHits?.length === 1
+        && event.clipHits[0].featureId === value.featureId && event.clipHits[0].polygon?.length >= 16
+        && event.clipHits[0].polygon.every(point => finite(point.x) && finite(point.y))
+        && event.areaSnapshot?.shape === 'circle' && event.areaSnapshot.radius === value.fixture.area.radius,
+      'Ruins LAN partial range geometry proof invalid');
+      equal(event.areaSnapshot.origin, value.fixture.area.origin, 'Ruins LAN partial attack position differs');
+    } else if (kind === 'whole') {
+      requireCondition(event.type === 'damage' && event.id === 'lan-ruins-whole-event' && event.clipHits?.length === 0,
+        'Ruins LAN whole damage proof invalid');
+      equal(event.objectIds, [value.featureId], 'Ruins LAN whole destruction touched another object');
+    } else {
+      requireCondition(event.type === 'restore', 'Ruins LAN restore event missing');
+      equal(event.featureIds, [value.featureId], 'Ruins LAN restore touched another object');
+    }
+    requireCondition(!history.some(previous => previous.id === event.id), 'Ruins LAN duplicated a destruction event');
+    history = [...history, event]; histories.push(history); revisions.push(sample.revision);
+    equal(sample.durableSceneEvents, history, `Ruins LAN ${kind} durable history differs`);
+    equal(sample.canonicalSceneEvents, history, `Ruins LAN ${kind} canonical history differs`);
+    requireCondition(sample.sceneEventsHash === canonicalHash(history)
+      && sample.durableSceneEventsHash === canonicalHash(sample.durableSceneEvents), `Ruins LAN ${kind} raw history hash differs`);
+    const wal = sample.walRecord;
+    requireCondition(wal?.walVersion === 2 && wal.operationId === sample.operationId && wal.revision === sample.revision
+      && wal.baseRevision === sample.baseRevision && digest(wal.checksum) && worldWalChecksum(wal) === wal.checksum,
+    `Ruins LAN ${kind} actual WAL record/checksum invalid`);
+    const content = wal.patch?.world?.scenes?.content;
+    requireCondition(content?.length === 1 && content[0].sceneId === value.fixture.sceneId,
+      `Ruins LAN ${kind} WAL Scene content missing`);
+    equal(content[0].sceneEvents, history, `Ruins LAN ${kind} WAL history differs`);
+  }
+  requireCondition(value.permissions?.length === 2, 'Ruins LAN Player damage/restore denials missing');
+  for (const [index, kind] of ['damage', 'restore'].entries()) {
+    const proof = value.permissions[index], denial = proof?.denial;
+    requireCondition(proof?.kind === kind && proof.operationId === `smoke-ruins-player-${kind}`
+      && proof.code === 'scene_content_replace_gm_only' && Number.isSafeInteger(proof.beforeRevision)
+      && proof.beforeRevision >= revisions[1] && proof.beforeRevision < revisions[2] && proof.revision === proof.beforeRevision
+      && proof.noRollbackState === true && denial?.type === 'world.operation.denied'
+      && denial.operationId === proof.operationId && denial.code === proof.code && !Object.hasOwn(denial, 'state'),
+    `Ruins LAN Player ${kind} raw denial/revision proof invalid`);
+    equal(proof.sceneEvents, histories[1], `Ruins LAN Player ${kind} changed damage history`);
+    requireCondition(proof.sceneEventsHash === canonicalHash(proof.sceneEvents), 'Ruins LAN Player denial history hash differs');
+  }
+  const reconnect = value.reconnect;
+  requireCondition(reconnect?.identityRetained === true && reconnect.identityStatus === 'active'
+    && typeof reconnect.userId === 'string' && reconnect.userId.length > 0 && reconnect.userId === reconnect.expectedUserId
+    && typeof reconnect.worldId === 'string' && reconnect.worldId.length > 0 && reconnect.worldId === reconnect.expectedWorldId
+    && reconnect.sourceTokenId === 'smoke-pc-token' && reconnect.source?.tokenId === reconnect.sourceTokenId
+    && reconnect.source.x === 2940 && reconnect.source.y === 2500
+    && reconnect.wholeDestructionRetained === true && reconnect.hiddenTokenAbsent === true,
+  'Ruins LAN actual Player identity/source reconnect proof invalid');
+  equal(reconnect.sceneEvents, histories[1], 'Ruins LAN reconnect lost acknowledged destruction');
+  requireCondition(reconnect.sceneEventsHash === canonicalHash(reconnect.sceneEvents), 'Ruins LAN reconnect history hash differs');
+  for (const [key, index] of [['restart', 1], ['restoredRestart', 2]]) {
+    const restart = value[key], expected = ruinsLanHistory(histories[index]);
+    requireCondition(restart?.featureId === value.featureId && Number.isSafeInteger(restart.revision)
+      && restart.revision >= revisions[index] && restart.sceneEventsRetained === true
+      && restart.privateQueueAbsent === true && restart.queueDrained === true,
+    `Ruins LAN ${key} actual package restart proof missing`);
+    equal(restart.sceneEvents, histories[index], `Ruins LAN ${key} lost durable history`);
+    equal(restart.effectiveDamage, expected, `Ruins LAN ${key} effective destruction differs`);
+    requireCondition(restart.sceneEventsHash === canonicalHash(restart.sceneEvents)
+      && restart.expectedSceneEventsHash === canonicalHash(histories[index]), `Ruins LAN ${key} raw history hash differs`);
+    requireCondition(restart.wholeDestructionRetained === expected.destroyedObjectIds.includes(value.featureId)
+      && restart.restorationRetained === !expected.damagedFeatureIds.includes(value.featureId), `Ruins LAN ${key} result differs`);
+  }
+  equal(ruinsLanHistory(history).destroyedObjectIds, original.destroyedObjectIds, 'Ruins LAN restoration altered another object');
+  equal(ruinsLanHistory(history).clipHits, original.clipHits, 'Ruins LAN restoration altered another partial damage');
+  equal(ruinsLanHistory(history).craterRegions, original.craterRegions, 'Ruins LAN restoration removed an independent crater');
+  requireCondition(value.originalFeatureStates && typeof value.originalFeatureStates === 'object'
+    && !Array.isArray(value.originalFeatureStates) && value.restoredFeatureStates && typeof value.restoredFeatureStates === 'object'
+    && !Array.isArray(value.restoredFeatureStates), 'Ruins LAN raw Tag/door overrides missing');
+  equal(value.restoredFeatureStates, value.originalFeatureStates, 'Ruins LAN restoration changed Tag/door overrides');
+  requireCondition(value.restoration?.singleObjectOnly === true && value.restoration.tagsAndDoorStateRetained === true
+    && value.restoration.independentCraterRetained === true, 'Ruins LAN restoration scope proof missing');
+}
+
+function facadeRaster(report) {
+  const axes = { geometryIds: ['rect', 'concave', 'hole', 'fragments'], elevations: [0, 15],
+    sizes: [[400, 300], [401, 301]], dprs: [1, 1.25, 1.5, 2], scales: [0.25, 1, 3.5],
+    modes: ['all', 'normal', 'dark-and-normal'], centers: [[173.37, 131.21], [-20.13, 80.27]] };
+  requireCondition(report?.passed === true && report.cases === 1152 && report.framesPerCase === 2
+    && report.rawCases?.length === 1152, 'Facade raster requires 1152 raw cases and two consecutive frames');
+  equal(report.axes, axes, 'Facade raster geometry/DPR/elevation/viewport coverage differs');
+  requireCondition(report.diagnosticSubset !== true, 'Diagnostic facade raster subsets cannot promote a package');
+  equal(report.boundaryOracle, { kind: 'final-visible-vector', circleSegments: 2048,
+    edgeToleranceCss: 1, fractionalCopies: 'legacy-chain', partialAlphaEdges: 'reference-compositing-operands' },
+  'Facade raster final-visible vector boundary proof missing');
+  const expected = new Set();
+  for (const geometryId of axes.geometryIds) for (const elevationMeters of axes.elevations) for (const [width, height] of axes.sizes)
+    for (const dpr of axes.dprs) for (const scale of axes.scales) for (const mode of axes.modes) for (const center of axes.centers)
+      expected.add(JSON.stringify([geometryId, elevationMeters, width, height, dpr, scale, mode, center]));
+  let differingPixels = 0, maxChannelError = 0, maxEdgeErrorCss = 0, interiorLeakedPixels = 0, outsideEdgeHaloPixels = 0;
+  for (const sample of report.rawCases) {
+    const key = JSON.stringify([sample.geometryId, sample.elevationMeters, sample.width, sample.height, sample.dpr,
+      sample.scale, sample.mode, sample.center]);
+    requireCondition(expected.delete(key) && sample.frames?.length === 2, 'Facade raster case missing, duplicated or outside coverage');
+    for (const [index, frame] of sample.frames.entries()) {
+      requireCondition(frame.frame === index && Number.isSafeInteger(frame.differingPixels) && frame.differingPixels >= 0
+        && frame.differingPixels <= Math.ceil(sample.width * sample.dpr) * Math.ceil(sample.height * sample.dpr)
+        && finite(frame.maxChannelError) && frame.maxChannelError >= 0 && frame.maxChannelError <= 255
+        && (frame.differingPixels === 0 ? frame.maxChannelError === 0 : frame.maxChannelError > 0)
+        && finite(frame.maxEdgeErrorCss) && frame.maxEdgeErrorCss >= 0 && frame.maxEdgeErrorCss <= 1
+        && frame.interiorLeakedPixels === 0 && frame.outsideEdgeHaloPixels === 0,
+      'Facade raster frame edge/interior visibility gate failed');
+      differingPixels += frame.differingPixels; maxChannelError = Math.max(maxChannelError, frame.maxChannelError);
+      maxEdgeErrorCss = Math.max(maxEdgeErrorCss, frame.maxEdgeErrorCss);
+      interiorLeakedPixels += frame.interiorLeakedPixels; outsideEdgeHaloPixels += frame.outsideEdgeHaloPixels;
+    }
+  }
+  requireCondition(expected.size === 0, 'Facade raster case coverage incomplete');
+  equal({ differingPixels: report.differingPixels, maxChannelError: report.maxChannelError, maxEdgeErrorCss: report.maxEdgeErrorCss,
+    interiorLeakedPixels: report.interiorLeakedPixels, outsideEdgeHaloPixels: report.outsideEdgeHaloPixels },
+  { differingPixels, maxChannelError, maxEdgeErrorCss, interiorLeakedPixels, outsideEdgeHaloPixels },
+  'Facade raster raw pixels disagree with summary');
+  const regression = report.regression;
+  requireCondition(regression?.sweepReproduced === true && regression.records?.length === 4,
+    'Facade raster original SweepEvent regression missing');
+  equal(regression.records.map(record => record.dpr), axes.dprs, 'Facade raster SweepEvent DPR coverage differs');
+  for (const record of regression.records) {
+    requireCondition(record.completed === true && record.frames?.length === 2, 'Facade raster SweepEvent frames incomplete');
+    for (const [index, frame] of record.frames.entries()) {
+      requireCondition(frame.frame === index && Number.isSafeInteger(frame.checkedInteriorPixels)
+        && Number.isSafeInteger(frame.visibleInteriorPixels) && frame.visibleInteriorPixels > 1000
+        && Number.isSafeInteger(frame.hiddenInteriorPixels) && frame.hiddenInteriorPixels > 1000
+        && frame.checkedInteriorPixels === frame.visibleInteriorPixels + frame.hiddenInteriorPixels
+        && frame.interiorLeakedPixels === 0 && frame.missingVisibleInteriorPixels === 0,
+      'Facade raster SweepEvent actual visible/hidden interior proof invalid');
+    }
+  }
+}
+
 function dependencyAudit(report, name) {
   requireCondition(report.metadata?.vulnerabilities?.total === 0, `${name} dependency audit gate failed`);
 }
 
-function browser(report) {
+function browser(report, { requireFrameMean = false } = {}) {
   requireCondition(report.diagnosticProfileSession == null, 'Diagnostic browser profiles are not acceptance evidence');
   requireCondition(report.browser === 'chrome' && report.headless === true && report.fixture?.sessions === 7
     && report.fixture.actors === 100 && report.fixture.tokens === 500 && report.fixture.viewport === '1920x1080', 'Chrome fixture invalid');
@@ -236,8 +646,11 @@ function browser(report) {
       requireCondition(finite(session.diagnostics.averageFps) && session.diagnostics.averageFps >= 58
         && finite(metric('frame')?.p95) && metric('frame').p95 >= 0 && metric('frame').p95 <= 20 && metric('frame').count > 0,
       `${expectedName}/${session.name} Chrome frame gate failed`);
+      if (requireFrameMean) requireCondition(finite(metric('frame').mean) && metric('frame').mean > 0
+        && Math.abs(session.diagnostics.averageFps - 1000 / metric('frame').mean) <= 1e-6,
+      `${expectedName}/${session.name} Chrome FPS differs from the observed frame mean`);
       requireCondition(session.inputStimuli === phase.operations && finite(metric('input.frame')?.p95)
-        && metric('input.frame').p95 >= 0 && metric('input.frame').p95 <= 16.7
+        && withinMillisecondsBudget(metric('input.frame').p95, 16.7)
         && metric('input.frame').count >= session.inputStimuli, `${expectedName}/${session.name} Chrome input gate failed`);
       requireCondition(!metric('longtask') || (finite(metric('longtask').max) && metric('longtask').max >= 0 && metric('longtask').max <= 100),
         `${expectedName}/${session.name} Chrome long task gate failed`);
@@ -272,7 +685,45 @@ function timing(result, name) {
   const sorted = [...result.samplesMs].sort((a, b) => a - b);
   requireCondition(result.medianMs === sorted[2] && result.p95Ms === sorted[4], `${name} timing summary invalid`);
 }
-async function vision(baseline, candidate, validation, sourceRoot) {
+
+function localPerformance(report) {
+  requireCondition(report?.storageMode === 'persistent-offline' && report.connected === false
+    && report.secondsPerPhase === 60 && typeof report.tokenId === 'string' && report.tokenId.length > 0
+    && Number.isSafeInteger(report.tokenCount) && report.tokenCount > 0 && report.featureCount === 103
+    && report.phases?.length === 2, 'Local ordinary play fixture missing');
+  for (const [index, phase] of report.phases.entries()) {
+    requireCondition(phase.name === ['normal', 'dark'][index] && phase.lighting === phase.name
+      && phase.rangeMeters === [120, 500][index] && finite(phase.startedAt) && phase.startedAt >= 0
+      && finite(phase.endedAt) && phase.durationMs === phase.endedAt - phase.startedAt
+      && phase.durationMs >= 60_000 && phase.moves?.length >= 100,
+    'Local ordinary play requires two complete sixty-second moving phases');
+    const frames = phase.frameSamplesMs, inputs = phase.inputSamplesMs;
+    requireCondition(frames?.length >= 3000 && frames.every(value => finite(value) && value > 0)
+      && phase.inputMeasurement === 'entity-sheet-input-capture'
+      && inputs?.length === phase.moves.length && inputs.every(value => finite(value) && value >= 0)
+      && phase.diagnostics?.metrics?.['input.frame']?.count >= phase.moves.length
+      && withinMillisecondsBudget(phase.diagnostics.metrics['input.frame'].p95, 16.7),
+    'Local ordinary play raw frame/input observations missing');
+    const p95 = values => [...values].sort((a, b) => a - b)[Math.ceil(values.length * .95) - 1];
+    const fps = 1000 * frames.length / frames.reduce((sum, value) => sum + value, 0);
+    requireCondition(finite(phase.averageFPS) && Math.abs(phase.averageFPS - fps) <= 1e-6 && fps >= 58
+      && phase.frameP95Ms === p95(frames) && phase.frameP95Ms <= 20
+      && phase.inputP95Ms === p95(inputs) && withinMillisecondsBudget(phase.inputP95Ms, 16.7),
+    'Local ordinary play frame/input summary or gate failed');
+    requireCondition(phase.moves.every(move => finite(move.from?.x) && finite(move.from?.y)
+      && finite(move.target?.x) && finite(move.target?.y)
+      && (move.from.x !== move.target.x || move.from.y !== move.target.y)
+      && Number.isSafeInteger(move.revision) && move.revision > 0 && finite(move.commitMs) && move.commitMs >= 0
+      && finite(move.feedbackMs) && move.feedbackMs >= move.commitMs), 'Local ordinary play confirmed movements missing');
+    requireCondition(Array.isArray(phase.longTasks) && phase.longTasks.every(task => finite(task.startTime)
+      && task.startTime >= phase.startedAt && task.startTime <= phase.endedAt && finite(task.duration) && task.duration >= 0)
+      && phase.maxLongTaskMs === Math.max(0, ...phase.longTasks.map(task => task.duration)) && phase.maxLongTaskMs <= 100,
+    'Local ordinary play long-task gate failed');
+  }
+  requireCondition(report.finalQueue?.queued === 0 && report.finalQueue.running === false,
+    'Local ordinary play exploration did not drain');
+}
+async function vision(baseline, candidate, validation, sourceRoot, needsRuinsEvidence) {
   requireCondition(/^[a-f0-9]{40}$/.test(validation.baselineCommit || '') && baseline.sourceCommit === validation.baselineCommit
     && candidate.sourceCommit === validation.commit && candidate.version === validation.version, 'Vision source commit mismatch');
   requireCondition(baseline.occluders === 81 && candidate.occluders === baseline.occluders, 'Vision geometry differs');
@@ -281,6 +732,13 @@ async function vision(baseline, candidate, validation, sourceRoot) {
     'Vision source fingerprint missing');
   requireCondition(candidate.sourceHashEncoding === 'utf8-lf' && baseline.sourceHashEncoding === 'utf8-lf',
     'Vision source fingerprint encoding missing');
+  if (needsRuinsEvidence) requireCondition(validation.baselineCommit === v254Commit && baseline.version === '2.5.4',
+    'Vision ruins baseline must be the released v2.5.4 commit');
+  const committedBaseline = await visionSourceAtCommit(sourceRoot, validation.baselineCommit);
+  requireCondition(baseline.version === committedBaseline.version, 'Vision baseline version mismatch');
+  equal(Object.keys(baseline.sourceFileHashes).sort(), Object.keys(committedBaseline.sourceFileHashes).sort(),
+    'Vision baseline source fingerprint is incomplete');
+  equal(baseline.sourceFileHashes, committedBaseline.sourceFileHashes, 'Vision baseline source fingerprint mismatch');
   const tracked = (await execFileAsync('git', ['ls-files', '-z', '--', 'src', 'deployment/local-server',
     'reference/maps/lanzhou/runtime.json'], { cwd: sourceRoot })).stdout.split('\0').filter(file => /\.(js|mjs)$/.test(file)
       || file === 'reference/maps/lanzhou/runtime.json').sort();
@@ -314,7 +772,18 @@ export async function verifyLocalValidation({ directory, version, commit, source
   if (validation.version !== version || validation.commit !== commit) throw new Error('Local validation source mismatch');
   const [major, minor, patch] = version.split('.').map(Number);
   const needsEvidence = major > 2 || (major === 2 && (minor > 5 || (minor === 5 && patch >= 4)));
-  const checks = needsEvidence ? [...requiredChecks, 'visionBenchmark', 'occlusionLanBenchmark', 'browserBenchmark'] : requiredChecks;
+  const needsRuinsEvidence = major > 2 || (major === 2 && (minor > 5 || (minor === 5 && patch >= 5)));
+  // The v2.5.5 scope was explicitly changed to local performance by the user.
+  // Other versions and reports without this exact scope keep all original gates.
+  const localOnly = validation.performanceScope === 'local-single-player';
+  requireCondition(validation.performanceScope === undefined || (localOnly && version === '2.5.5'),
+    'Unsupported local performance scope');
+  const checks = localOnly ? [...requiredChecks.filter(name => name !== 'lanBenchmark'), 'visionBenchmark', 'localPerformance']
+    : needsEvidence ? [...requiredChecks, 'visionBenchmark', 'occlusionLanBenchmark', 'browserBenchmark'] : requiredChecks;
+  if (localOnly) {
+    for (const check of ['lanBenchmark', 'occlusionLanBenchmark', 'browserBenchmark'])
+      requireCondition(validation.checks?.[check] === 'deferred', `Deferred multiplayer check mislabeled: ${check}`);
+  }
   for (const check of checks) {
     if (validation.checks?.[check] !== 'passed') throw new Error(`Local check missing: ${check}`);
   }
@@ -329,18 +798,38 @@ export async function verifyLocalValidation({ directory, version, commit, source
       && !file.split(/[\\/]/).includes('..'), `${name} evidence file missing or outside candidate`);
     return JSON.parse(await readFile(path.join(directory, file), 'utf8'));
   };
-  for (const [name, verify] of [['lanBenchmark', ordinaryLan], ['occlusionLanBenchmark', largeLan], ['browserBenchmark', browser]]) {
+  for (const [name, verify] of localOnly ? [] : [['lanBenchmark', ordinaryLan], ['occlusionLanBenchmark', largeLan], ['browserBenchmark', browser]]) {
     const report = await readEvidence(validation.evidence?.[name], name);
-    requireBuild(report, build, version, name); verify(report);
+    requireBuild(report, build, version, name); verify(report, { requireFrameMean: needsRuinsEvidence });
   }
-  chromeSmoke(await readEvidence(validation.evidence?.chromeSmoke, 'Chrome smoke'));
-  maskRaster(await readEvidence(validation.evidence?.maskRaster, 'mask raster'));
+  const smoke = await readEvidence(validation.evidence?.chromeSmoke, 'Chrome smoke');
+  // Older v2.5.4 release evidence predates this package binding. New ruins
+  // releases must prove that their complete feature smoke used this exact ZIP.
+  if (needsRuinsEvidence || smoke.build || smoke.version) requireBuild(smoke, build, version, 'Chrome smoke');
+  chromeSmoke(smoke);
+  const evidence = validation.evidence?.visionBenchmark;
+  const candidateVision = needsRuinsEvidence ? await readEvidence(evidence?.candidate, 'vision candidate') : null;
+  if (needsRuinsEvidence) {
+    requireCondition(smoke.diagnosticProfiling === false, 'Chrome diagnostic profiling cannot be formal performance evidence');
+    ruinsSmoke(smoke.ruins);
+    if (localOnly) {
+      requireCondition(smoke.ruins.stress.framesGateEnforced === true,
+        'Hosted frame observations cannot be formal local performance evidence');
+      localPerformance(smoke.ruins.localPerformance);
+    }
+    const facade = await readEvidence(validation.evidence?.facadeRaster, 'facade raster');
+    requireRasterSource(facade, candidateVision, validation, 'Facade raster');
+    facadeRaster(facade);
+    ruinsLan(await readEvidence(validation.evidence?.ruinsLan, 'Ruins LAN'), build, version);
+  }
+  const raster = await readEvidence(validation.evidence?.maskRaster, 'mask raster');
+  if (needsRuinsEvidence) requireRasterSource(raster, candidateVision, validation, 'Mask raster');
+  maskRaster(raster);
   const auditEvidence = validation.evidence?.dependencyAudit;
   dependencyAudit(await readEvidence(auditEvidence?.all, 'all dependency audit'), 'All');
   dependencyAudit(await readEvidence(auditEvidence?.production, 'production dependency audit'), 'Production');
-  const evidence = validation.evidence?.visionBenchmark;
-  await vision(await readEvidence(evidence?.baseline, 'vision baseline'), await readEvidence(evidence?.candidate, 'vision candidate'),
-    validation, sourceRoot);
+  await vision(await readEvidence(evidence?.baseline, 'vision baseline'), candidateVision || await readEvidence(evidence?.candidate, 'vision candidate'),
+    validation, sourceRoot, needsRuinsEvidence);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

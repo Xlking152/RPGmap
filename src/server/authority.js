@@ -12,12 +12,13 @@ import {
   visionIgnoresOcclusion,
 } from '../spatial/kernel.js';
 
-export { canUserControlToken, projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, targetedProjectionCollectionChanges, projectionCollectionChanges } from '../vision/audience.js';
+export { canUserControlToken, projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges } from '../vision/audience.js';
 export { sphereGroundRadiusMeters } from '../spatial/kernel.js';
 export { sceneVisionContext, sceneExplorationContext };
 export { mergeExploration } from '../vision/fog.js';
-export { computeExplorationChunk, mergeExplorationChunkFog } from './exploration-compute.js';
+export { computeExplorationChunk, mergeExplorationChunkFog, createCanonicalExplorationFogMerger } from './exploration-compute.js';
 export { createExplorationOperationCapture } from '../vision/exploration-operations.js';
+export { createServerMovementAdjudicationActorResolver } from './movement-adjudication.js';
 
 export const serverRuleset = infiniteHorrorRuleset;
 const canonicalVisionDescriptions = new WeakMap();

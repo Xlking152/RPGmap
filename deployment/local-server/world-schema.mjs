@@ -1,6 +1,8 @@
 import { types } from 'node:util';
+import { performance } from 'node:perf_hooks';
 import { assertCanonicalStatusState, assertStatusState } from './status-operations.mjs';
 import { assertCanonicalWorldV2, assertWorldV2 } from './world-v2.mjs';
+const diagnosticNow = performance.now.bind(performance);
 
 // The release server applies these hostile-input limits before any permission
 // projection or authoritative World mutation.
@@ -346,15 +348,65 @@ export function assertWorldState(value) {
 // a different key limit. Unchanged, immutable Actor/definition arrays reuse
 // their private structural indexes; new Token collections and all references
 // still use the current candidate. Getter/Proxy branches never seed a cache.
-export function createCanonicalWorldValidator() {
-  const summaries = new WeakMap();
-  const byteSizes = new WeakMap();
-  const immutableData = new WeakSet();
-  const acceptedData = new WeakSet();
-  const immutableDataProofs = new WeakSet();
+export function createCanonicalWorldValidator({ diagnostics = false, compactMetadata = false } = {}) {
+  // The fixed server reducer owns these derived facts. One weak record per
+  // accepted JSON object avoids repeatedly resizing separate weak tables during
+  // large Fog commits. Public validators keep their original intrinsic calls.
+  // Spread new identities across four smaller weak tables. A large Fog history
+  // should not make a tiny movement pause while one whole table grows. Each
+  // object still owns exactly one record; lookup reads identities only.
+  const metadataTables = compactMetadata ? [new WeakMap(), new WeakMap(), new WeakMap(), new WeakMap()] : null;
+  let nextMetadataTable = 0;
+  const metadata = metadataTables ? {
+    get(value) {
+      return metadataTables[0].get(value) || metadataTables[1].get(value)
+        || metadataTables[2].get(value) || metadataTables[3].get(value);
+    },
+    set(value, record) {
+      metadataTables[nextMetadataTable].set(value, record);
+      nextMetadataTable = (nextMetadataTable + 1) % metadataTables.length;
+    },
+  } : null;
+  const missingMetadata = metadata ? Symbol('missing canonical metadata') : null;
+  const recordFor = value => {
+    let record = metadata.get(value);
+    if (!record) {
+      // Fixed own slots avoid a separate property dictionary on every node.
+      // The sentinel retains Map.has/delete semantics, including stored undefined.
+      record = { summaries: missingMetadata, singlePath: missingMetadata, singleSummary: missingMetadata, bytes: missingMetadata,
+        immutable: false, accepted: false, pure: false, documents: missingMetadata, collections: missingMetadata };
+      metadata.set(value, record);
+    }
+    return record;
+  };
+  const weakMap = field => metadata ? {
+    get(value) { const entry = metadata.get(value)?.[field]; return entry === missingMetadata ? undefined : entry; },
+    has: value => { const record = metadata.get(value); return Boolean(record && record[field] !== missingMetadata); },
+    set(value, entry) { recordFor(value)[field] = entry; },
+    delete(value) {
+      const record = metadata.get(value);
+      if (!record || record[field] === missingMetadata) return false;
+      record[field] = missingMetadata; return true;
+    },
+  } : new WeakMap();
+  const weakSet = field => metadata ? {
+    has: value => metadata.get(value)?.[field] === true,
+    add(value) { recordFor(value)[field] = true; },
+  } : new WeakSet();
+  const summaries = weakMap('summaries');
+  // Most frozen JSON branches recur at one canonical path. Avoid allocating
+  // a Map for every Token/Fog row; aliases still promote to the original
+  // bounded path map, so global occurrence/depth/key accounting is unchanged.
+  const singleSummaries = metadata ? null : new WeakMap();
+  const byteSizes = weakMap('bytes');
+  const immutableData = weakSet('immutable');
+  const acceptedData = weakSet('accepted');
+  const immutableDataProofs = weakSet('pure');
   const isImmutableData = value => {
-    if (!value || typeof value !== 'object' || types.isProxy(value) || !acceptedData.has(value)) return false;
-    if (immutableDataProofs.has(value)) return true;
+    if (!value || typeof value !== 'object' || types.isProxy(value)) return false;
+    const record = metadata?.get(value);
+    if (metadata ? !record?.accepted : !acceptedData.has(value)) return false;
+    if (metadata ? record.pure : immutableDataProofs.has(value)) return true;
     const proven = [];
     if (!readOnlyJsonGraph(value, immutableDataProofs,
       current => acceptedData.has(current) && Object.isFrozen(current), proven)) return false;
@@ -365,9 +417,11 @@ export function createCanonicalWorldValidator() {
     return true;
   };
   const acceptedDataProof = { has: isImmutableData };
-  const verifiedDocuments = new WeakMap();
-  const verifiedCollections = new WeakMap();
+  const verifiedDocuments = weakMap('documents');
+  const verifiedCollections = weakMap('collections');
+  const measurements = [];
   const validate = value => {
+    const times = diagnostics ? { start: diagnosticNow() } : null;
     const pending = [];
     const pendingDocuments = [];
     const pendingCollections = [];
@@ -375,14 +429,16 @@ export function createCanonicalWorldValidator() {
     // root is ordinary data and traversal intrinsics remain standard. Share
     // that one proof only within this call; a partial or failed proof seeds
     // neither this memo nor the accepted/frozen graph caches.
-    let snapshotData = acceptedDataProof;
+    let snapshotData = acceptedDataProof, singleSummaryAllowed = false;
     if (wholeSnapshotProofAllowed()) {
       const proven = [];
       if (readOnlyJsonGraph(value, acceptedDataProof, null, proven, true)) {
         const localProof = new WeakSet(proven);
         snapshotData = { has: current => localProof.has(current) || acceptedDataProof.has(current) };
+        singleSummaryAllowed = true;
       }
     }
+    if (times) times.proof = diagnosticNow();
     const documentCache = {
       verified(kind, document, ...dependencies) {
         if (!document || typeof document !== 'object' || !immutableData.has(document)) return false;
@@ -411,7 +467,15 @@ export function createCanonicalWorldValidator() {
     };
     const visit = (current, path, depth) => {
       if (current && typeof current === 'object') {
-        const cached = summaries.get(current)?.get(path);
+        let cached;
+        if (metadata) {
+          const record = metadata.get(current);
+          cached = record?.singlePath === path ? record.singleSummary
+            : record && record.summaries !== missingMetadata ? record.summaries.get(path) : null;
+        } else {
+          const single = singleSummaries.get(current);
+          cached = single?.path === path ? single.summary : summaries.get(current)?.get(path);
+        }
         if (cached) { consume(cached, path, depth); return cached; }
       }
       consume(ONE_JSON_NODE, path, depth);
@@ -468,25 +532,66 @@ export function createCanonicalWorldValidator() {
         summary.bytes += child.bytes + (Array.isArray(current) ? 0 : Buffer.byteLength(JSON.stringify(key)) + 1);
         if (!child.cacheable) summary.cacheable = false;
       }
-      pending.push({ value: current, path, summary });
+      pending.push(metadata ? { value: current, path, summary, metadataRecord: null }
+        : { value: current, path, summary });
       return summary;
     };
     visit(value, 'state', 0);
+    if (times) times.json = diagnosticNow();
     assertWorldStateStructure(value, documentCache);
+    if (times) times.structure = diagnosticNow();
     // Children precede parents. No rejected candidate can seed trusted entries.
     for (const entry of pending) {
       Object.freeze(entry.value);
+      if (metadata) {
+        // One lookup per newly frozen branch; retain the same bounded alias
+        // summaries and delay acceptance until every branch has frozen.
+        const record = recordFor(entry.value);
+        entry.metadataRecord = record;
+        if (entry.summary.cacheable) {
+          record.immutable = true;
+          let byPath = record.summaries === missingMetadata ? null : record.summaries;
+          const hasSingle = record.singlePath !== missingMetadata;
+          if (!byPath && (record.singlePath === entry.path || !hasSingle && singleSummaryAllowed)) {
+            // Keep the path and summary in this existing weak record. Ordinary
+            // Fog spans need no separate wrapper object for their one path.
+            record.singlePath = entry.path; record.singleSummary = entry.summary;
+          } else {
+            if (!byPath) {
+              byPath = new Map(); record.summaries = byPath;
+              if (hasSingle) {
+                byPath.set(record.singlePath, record.singleSummary);
+                record.singlePath = missingMetadata; record.singleSummary = missingMetadata;
+              }
+            }
+            if (byPath.size >= 8 && !byPath.has(entry.path)) byPath.delete(byPath.keys().next().value);
+            byPath.set(entry.path, entry.summary);
+          }
+        }
+        record.bytes = entry.summary.cacheable ? entry.summary.bytes : null;
+        continue;
+      }
       if (entry.summary.cacheable) {
         immutableData.add(entry.value);
         let byPath = summaries.get(entry.value);
-        if (!byPath) { byPath = new Map(); summaries.set(entry.value, byPath); }
-        if (byPath.size >= 8 && !byPath.has(entry.path)) byPath.delete(byPath.keys().next().value);
-        byPath.set(entry.path, entry.summary);
+        const single = singleSummaries.get(entry.value);
+        if (!byPath && (single?.path === entry.path || !single && singleSummaryAllowed)) {
+          if (single) single.summary = entry.summary;
+          else singleSummaries.set(entry.value, { path: entry.path, summary: entry.summary });
+        } else {
+          if (!byPath) {
+            byPath = new Map(); summaries.set(entry.value, byPath);
+            if (single) { byPath.set(single.path, single.summary); singleSummaries.delete(entry.value); }
+          }
+          if (byPath.size >= 8 && !byPath.has(entry.path)) byPath.delete(byPath.keys().next().value);
+          byPath.set(entry.path, entry.summary);
+        }
       }
       // A null entry proves whole-candidate acceptance without trusting an
       // accessor/Proxy branch's earlier observed serialized size.
       byteSizes.set(entry.value, entry.summary.cacheable ? entry.summary.bytes : null);
     }
+    if (times) times.freeze = diagnosticNow();
     const immutableDependencies = dependencies => dependencies.every(dependency =>
       !dependency || typeof dependency !== 'object' || immutableData.has(dependency));
     for (const entry of pendingDocuments) {
@@ -505,7 +610,17 @@ export function createCanonicalWorldValidator() {
       // tuple for each fixed validator kind, never a history of old Worlds.
       records.set(entry.kind, { value: entry.value, dependencies: entry.dependencies });
     }
-    for (let index = 0; index < pending.length; index++) acceptedData.add(pending[index].value);
+    for (let index = 0; index < pending.length; index++) {
+      if (metadata) pending[index].metadataRecord.accepted = true;
+      else acceptedData.add(pending[index].value);
+    }
+    if (times) {
+      measurements.push({ objects: pending.length, documents: pendingDocuments.length,
+        collections: pendingCollections.length, proofMs: times.proof - times.start,
+        jsonMs: times.json - times.proof, structureMs: times.structure - times.json,
+        freezeMs: times.freeze - times.structure, metadataMs: diagnosticNow() - times.freeze });
+      if (measurements.length > 256) measurements.shift();
+    }
     return value;
   };
   // Data graphs are proved lazily; repeated queries are O(1). Consumers never
@@ -513,6 +628,7 @@ export function createCanonicalWorldValidator() {
   const immutableProofDescriptor = Object.create(null);
   immutableProofDescriptor.value = isImmutableData;
   Object.defineProperty(validate, 'isImmutableData', immutableProofDescriptor);
+  if (diagnostics) validate.getDiagnostics = () => measurements.map(entry => ({ ...entry }));
   validate.serializedBytes = (value, { omitPreferencesKeys = [] } = {}) => {
     const bytesFor = current => {
       if (current === null || typeof current !== 'object') return Buffer.byteLength(JSON.stringify(current));
