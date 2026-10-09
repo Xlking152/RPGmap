@@ -828,7 +828,9 @@ try {
     diagnosticProfiling:Boolean(process.env.RPGMAP_SMOKE_CPU_PROFILE||process.env.RPGMAP_SMOKE_FEEDBACK_CPU_PROFILE||process.env.RPGMAP_SMOKE_RUINS_CPU_PROFILE),
     worldManager: mode === 'bootstrap', map: 'northern-song-lanzhou-1104', assets: assetAudit, fog: fogAudit,
     movement: movementAudit, occlusion: occlusionAudit, ruins: ruinsAudit, layout: layoutAudit, ...runtime }));
-  await closeOwnedBrowser({ process: edge, send, pending, label: `${browserName} browser smoke` });
+  // This cleanup is outside all performance measurements. Windows Chromium
+  // can take longer to exit; still require this owned process's normal exit.
+  await closeOwnedBrowser({ process: edge, send, pending, label: `${browserName} browser smoke`, timeoutMs: 30_000 });
   browserClosed = true;
 } catch (error) {
   throw new Error(`${error.message}${edgeError ? `\nEdge stderr:\n${edgeError.slice(-4000)}` : ''}`);

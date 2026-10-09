@@ -38,7 +38,7 @@ export function closeOwnedBrowser({ process: child, send, pending, label = 'Brow
       exited(child.exitCode, child.signalCode);
       return;
     }
-    const waitMs = Math.min(5000, Math.max(1, Number(timeoutMs) || 5000));
+    const waitMs = Math.min(30_000, Math.max(1, Number(timeoutMs) || 5000));
     timer = setTimeout(() => finish(new Error(`${label} shutdown timed out after ${waitMs}ms`
       + (commandError ? `: ${commandError.message}` : ''), commandError ? { cause: commandError } : undefined)), waitMs);
     try {

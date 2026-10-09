@@ -138,12 +138,40 @@ test('process exit also settles an unacknowledged Close and removes its long CDP
   assertReleased(child, pending);
 });
 
-test('shutdown deadline is capped at five seconds even with a larger caller option', async t => {
+test('default shutdown deadline remains five seconds', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const child = new OwnedProcess();
+  const closing = closeOwnedBrowser({ process: child, send: async () => ({}) });
+  const failed = assert.rejects(closing, /shutdown timed out after 5000ms/);
+  t.mock.timers.tick(5000);
+  await failed;
+  assertReleased(child);
+});
+
+test('a caller grace period accepts a slow normal exit and keeps CDP work bounded', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const child = new OwnedProcess(), pending = new Map();
+  let settled = false, rejectClose;
+  const command = new Promise((resolve, reject) => { rejectClose = reject; });
+  pending.set(1, { timer: setTimeout(() => assert.fail('CDP close timer leaked'), 60_000), reject: rejectClose });
+  const closing = closeOwnedBrowser({ process: child, pending, timeoutMs: 30_000, send: () => command });
+  closing.then(() => { settled = true; });
+  t.mock.timers.tick(6000);
+  await Promise.resolve();
+  assert.equal(settled, false);
+  child.exit();
+  await closing;
+  await assert.rejects(command, /process closed/);
+  t.mock.timers.tick(60_000);
+  assertReleased(child, pending);
+});
+
+test('shutdown deadline is capped at thirty seconds even with a larger caller option', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const child = new OwnedProcess();
   const closing = closeOwnedBrowser({ process: child, timeoutMs: 60_000, send: async () => ({}) });
-  const failed = assert.rejects(closing, /shutdown timed out after 5000ms/);
-  t.mock.timers.tick(5000);
+  const failed = assert.rejects(closing, /shutdown timed out after 30000ms/);
+  t.mock.timers.tick(30000);
   await failed;
   assertReleased(child);
 });
