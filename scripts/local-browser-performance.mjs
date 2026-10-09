@@ -23,7 +23,8 @@ async function measureLocalPlay() {
   api.diagnostics.setEnabled(true);
   try {
     for (const [name, lighting, rangeMeters] of [['normal', 'normal', 120], ['dark', 'dark', 500]]) {
-      await api.world.performOperations([{ type: 'scene.settings.patch', payload: { sceneId: scene.id, patch: { lighting } } }],
+      await api.world.performOperations([{ type: 'scene.content.replace', payload: { sceneId: scene.id,
+        settings: { ...scene.settings, lighting } } }],
         { source: 'local-performance:lighting' });
       await api.tokens.update(tokenId, { vision: { ...original.vision,
         preciseRangeOverrideMeters: rangeMeters, vagueRangeOverrideMeters: rangeMeters } });
@@ -90,8 +91,8 @@ async function measureLocalPlay() {
   } finally {
     await api.tokens.update(tokenId, { vision: original.vision });
     await api.tokens.reposition(tokenId, { x: original.x, y: original.y });
-    await api.world.performOperations([{ type: 'scene.settings.patch', payload: { sceneId: scene.id,
-      patch: { lighting: scene.settings.lighting } } }], { source: 'local-performance:cleanup' });
+    await api.world.performOperations([{ type: 'scene.content.replace', payload: { sceneId: scene.id,
+      settings: scene.settings } }], { source: 'local-performance:cleanup' });
     api.diagnostics.setEnabled(initialDiagnostics);
   }
 }
