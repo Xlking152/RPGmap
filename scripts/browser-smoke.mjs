@@ -698,7 +698,12 @@ try {
     offlineServer = await createPackagedOfflineServer(packageRoot);
     await openPersistentOfflineRuntime({ evaluate, navigate:url=>send('Page.navigate',{url},timeoutMs), url:offlineServer.url });
     const ruinsProfilePath=process.env.RPGMAP_SMOKE_RUINS_CPU_PROFILE;
-    ruinsAudit = await runRuinsBrowserSmoke(evaluate, ruinsProfilePath ? {
+    ruinsAudit = await runRuinsBrowserSmoke(evaluate, {
+      // Hosted CI records frames on its different machine. Formal local
+      // publication always requires the same-machine frame gate and raw proof.
+      enforceFrameGate: !(buildInfo.metadata.version === '2.5.5'
+        && process.env.RPGMAP_SMOKE_HOSTED_FRAME_OBSERVATION === '1'),
+      ...(ruinsProfilePath ? {
       beforeRecovery:async()=>{
         await evaluate(`(()=>{const diagnostics=document.querySelector('#app').rpgMapApp.diagnostics;
           globalThis.__ruinsDiagnosticWasEnabled=diagnostics.enabled;diagnostics.setEnabled(true);diagnostics.reset();})()`);
@@ -710,7 +715,8 @@ try {
           const snapshot=diagnostics.snapshot();diagnostics.setEnabled(globalThis.__ruinsDiagnosticWasEnabled===true);return snapshot;})()`);
         await writeFile(ruinsProfilePath+'.pipeline.json',JSON.stringify(pipeline));
       },
-    } : {});
+      } : {}),
+    });
     ruinsAudit.storageMode = 'persistent-offline';
     if (process.env.RPGMAP_SMOKE_LOCAL_PERFORMANCE === '1') {
       ruinsAudit.localPerformance = await runLocalBrowserPerformance(evaluate);

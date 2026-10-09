@@ -812,7 +812,11 @@ export async function verifyLocalValidation({ directory, version, commit, source
   if (needsRuinsEvidence) {
     requireCondition(smoke.diagnosticProfiling === false, 'Chrome diagnostic profiling cannot be formal performance evidence');
     ruinsSmoke(smoke.ruins);
-    if (localOnly) localPerformance(smoke.ruins.localPerformance);
+    if (localOnly) {
+      requireCondition(smoke.ruins.stress.framesGateEnforced === true,
+        'Hosted frame observations cannot be formal local performance evidence');
+      localPerformance(smoke.ruins.localPerformance);
+    }
     const facade = await readEvidence(validation.evidence?.facadeRaster, 'facade raster');
     requireRasterSource(facade, candidateVision, validation, 'Facade raster');
     facadeRaster(facade);

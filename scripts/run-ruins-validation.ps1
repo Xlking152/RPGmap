@@ -33,8 +33,8 @@ function Invoke-Check {
 
 Invoke-Check 'full-tests' { npm test }
 Invoke-Check 'syntax' { node --input-type=module -e "import{execFileSync}from'node:child_process';const files=[...new Set(execFileSync('git',['ls-files','-z','--cached','--others','--exclude-standard','--','*.js','*.mjs'],{encoding:'utf8'}).split('\0').filter(Boolean))];for(const f of files)execFileSync(process.execPath,['--check',f],{stdio:'pipe'});console.log(files.length+' modules: syntax passed');" }
-Invoke-Check 'audit' { npm audit --json } 'json'
-Invoke-Check 'audit-production' { npm audit --omit=dev --json } 'json'
+Invoke-Check 'audit' { npm audit --registry=https://registry.npmjs.org --json } 'json'
+Invoke-Check 'audit-production' { npm audit --registry=https://registry.npmjs.org --omit=dev --json } 'json'
 $env:RPGMAP_PACKAGE_DIR = $packageOutput
 Invoke-Check 'build' { npm run build }
 Invoke-Check 'bundle' { npm run check:bundle }
@@ -51,6 +51,7 @@ node scripts/vision-performance-benchmark.mjs > "artifact/qa/v2.5.5-vision-$labe
 if ($LASTEXITCODE -ne 0) { throw 'Vision candidate failed' }
 Write-Output '[final-main] vision measurements saved'
 $env:RPGMAP_SMOKE_LOCAL_PERFORMANCE = '1'
+Remove-Item Env:RPGMAP_SMOKE_HOSTED_FRAME_OBSERVATION -ErrorAction SilentlyContinue
 Remove-Item Env:RPGMAP_SMOKE_CPU_PROFILE -ErrorAction SilentlyContinue
 Remove-Item Env:RPGMAP_SMOKE_FEEDBACK_CPU_PROFILE -ErrorAction SilentlyContinue
 Remove-Item Env:RPGMAP_SMOKE_RUINS_CPU_PROFILE -ErrorAction SilentlyContinue

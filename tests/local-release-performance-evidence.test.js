@@ -323,11 +323,13 @@ test('v2.5.5 explicit local scope defers multiplayer performance and retains loc
     candidate.validation.checks[key] = 'deferred'; delete candidate.validation.evidence[key];
   }
   const smoke = candidate.reports['chrome-smoke.json'];
+  smoke.ruins.stress.framesGateEnforced = true;
   smoke.ruins.localPerformance = localPlayFixture();
   await candidate.save(); await assert.doesNotReject(candidate.verify());
   const cases = [
     [() => { candidate.validation.checks.occlusionLanBenchmark = 'passed'; }, /Deferred multiplayer check mislabeled/],
     [() => { delete smoke.ruins.localPerformance; }, /Local ordinary play fixture missing/],
+    [() => { smoke.ruins.stress.framesGateEnforced = false; }, /Hosted frame observations cannot/],
     [() => { smoke.ruins.localPerformance.phases[0].inputSamplesMs.fill(17); smoke.ruins.localPerformance.phases[0].inputP95Ms = 17; }, /frame\/input summary or gate/],
     [() => { smoke.ruins.localPerformance.phases[1].durationMs = 5000; }, /sixty-second/],
     [() => { smoke.ruins.localPerformance.phases[0].moves[0].target.x = 0; }, /confirmed movements missing/],
@@ -338,6 +340,7 @@ test('v2.5.5 explicit local scope defers multiplayer performance and retains loc
   const validation = structuredClone(candidate.validation), original = structuredClone(smoke.ruins.localPerformance);
   for (const [change, message] of cases) {
     Object.assign(candidate.validation, structuredClone(validation));
+    smoke.ruins.stress.framesGateEnforced = true;
     smoke.ruins.localPerformance = structuredClone(original);
     candidate.reports['audit.json'].metadata.vulnerabilities.total = 0;
     change(); await candidate.save(); await assert.rejects(candidate.verify(), message);

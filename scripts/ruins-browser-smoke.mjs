@@ -1,7 +1,7 @@
 const STORAGE_KEY = 'rpgmap-packaged-ruins-smoke';
 
 /** Runs after the ordinary Chrome feedback measurements, against the installed package. */
-export async function runRuinsBrowserSmoke(evaluate, { beforeRecovery, afterRecovery } = {}) {
+export async function runRuinsBrowserSmoke(evaluate, { beforeRecovery, afterRecovery, enforceFrameGate = true } = {}) {
   const initial = await evaluate(`(${prepareAndDamage.toString()})(${JSON.stringify(STORAGE_KEY)},(${captureCommittedVisionRevision.toString()}))`, 60_000);
   await evaluate('setTimeout(() => location.reload(), 0); true');
   const deadline = Date.now() + 30_000;
@@ -28,7 +28,7 @@ export async function runRuinsBrowserSmoke(evaluate, { beforeRecovery, afterReco
     status:document.querySelector('[data-rpgmap-boot-status]')?.textContent,api:!!document.querySelector('#app')?.rpgMapApp})`)));
   await beforeRecovery?.();
   let recovered;
-  try { recovered = await evaluate(`(${verifyRecoveryAndRestore.toString()})(${JSON.stringify(STORAGE_KEY)},(${captureCommittedVisionRevision.toString()}),(${matchesCommittedRuinsFeedback.toString()}))`, 60_000); }
+  try { recovered = await evaluate(`(${verifyRecoveryAndRestore.toString()})(${JSON.stringify(STORAGE_KEY)},(${captureCommittedVisionRevision.toString()}),(${matchesCommittedRuinsFeedback.toString()}),${enforceFrameGate !== false})`, 60_000); }
   finally { await afterRecovery?.(); }
   return { ...initial, ...recovered, passed: true };
 }
@@ -211,7 +211,7 @@ async function prepareAndDamage(storageKey, captureRevision) {
     beforeReload:{diagnostics:api.getSceneRenderDiagnostics(),queue:api.world.getExplorationStatus()}};
 }
 
-async function verifyRecoveryAndRestore(storageKey,captureRevision,matchesFeedback) {
+async function verifyRecoveryAndRestore(storageKey,captureRevision,matchesFeedback,enforceFrameGate=true) {
   const api=document.querySelector('#app').rpgMapApp,{original,expected}=JSON.parse(sessionStorage.getItem(storageKey));
   const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const check=(condition,message)=>{if(!condition)throw new Error(message);};
@@ -316,7 +316,7 @@ async function verifyRecoveryAndRestore(storageKey,captureRevision,matchesFeedba
   const frames={samplesMs:frameSamples,count:frameSamples.length,averageFPS:frameSamples.length*1000/frameSamples.reduce((sum,value)=>sum+value,0),p95Ms:percentile(frameSamples)};
   const maxLongTaskMs=Math.max(0,...longTasks.map(task=>task.duration));
   const damageP95Ms=percentile(stress.map(sample=>sample.damageFeedbackMs)),restoreP95Ms=percentile(stress.map(sample=>sample.restoreFeedbackMs));
-  check(frameSamples.length>=24&&frames.averageFPS>=58&&frames.p95Ms<=20,'Continuous damage/restoration failed frame responsiveness: '+JSON.stringify({
+  check(frameSamples.length>=24&&(!enforceFrameGate||(frames.averageFPS>=58&&frames.p95Ms<=20)),'Continuous damage/restoration failed frame responsiveness: '+JSON.stringify({
     frames,stress:stress.map(sample=>({round:sample.round,damageCommitMs:sample.damageCommitMs,restoreCommitMs:sample.restoreCommitMs,
       damageFeedbackMs:sample.damageFeedbackMs,restoreFeedbackMs:sample.restoreFeedbackMs,diagnostics:sample.diagnostics})),longTasks}));
   check(maxLongTaskMs<=100,'Continuous damage/restoration has a long task above 100 ms');
@@ -346,7 +346,7 @@ async function verifyRecoveryAndRestore(storageKey,captureRevision,matchesFeedba
   sessionStorage.removeItem(storageKey);
   return {reload:{worldIdRetained:true,sceneEventsRetained:true,attackAreasRetained:true,anchorRetained:true},
     restore:{singleObjectOnly:true,independentCraterRetained:true,actions:restored},afterRestore,
-    stress:{rounds:stress.length,samples:stress,frames,longTasks,maxLongTaskMs,damageP95Ms,restoreP95Ms,
+    stress:{rounds:stress.length,samples:stress,frames,framesGateEnforced:enforceFrameGate,longTasks,maxLongTaskMs,damageP95Ms,restoreP95Ms,
       observerSupported:true,startedAt:stressStartedAt,endedAt:stressEndedAt,durationMs:stressEndedAt-stressStartedAt,
       heapBytesBefore,heapBytesAfter,finalDiagnostics:stressFinal.diagnostics,
       finalGeometryCache:stressFinal.geometryCache,finalQueue:stressFinal.queue},cleanup:true};
