@@ -23,6 +23,8 @@ if (!['bootstrap', 'fog'].includes(mode)) throw new Error(`Unknown browser smoke
 const packageRoot = String(process.argv[5] || '').trim();
 if (!packageRoot) throw new Error('Browser smoke requires the actual served package directory');
 const buildInfo = await benchmarkBuildInfo(process.cwd(), path.resolve(packageRoot));
+const hostedPerformanceObservation = buildInfo.metadata.version === '2.5.5'
+  && process.env.RPGMAP_SMOKE_HOSTED_PERFORMANCE_OBSERVATION === '1';
 const versionResponse = await fetch(new URL('/api/version', targetUrl), { cache: 'no-store' });
 if (!versionResponse.ok || !isDeepStrictEqual(await versionResponse.json(), buildInfo.metadata)) {
   throw new Error('Browser smoke server version does not match the actual package');
@@ -621,7 +623,7 @@ try {
           const diagnostic = api.diagnostics.snapshot();
           const queueSerializedBytesAtRangeEnd = new Blob([JSON.stringify(api.getLocalExploration())]).size;
           const p95Ms = totalMs[18];
-          if (p95Ms > (range === 1000 ? 100 : 50)) throw new Error('realtime feedback latency failed: ' + JSON.stringify({range,p95Ms,totalMs,samples,diagnostic,queueSerializedBytesAtRangeEnd}));
+          if (!${hostedPerformanceObservation} && p95Ms > (range === 1000 ? 100 : 50)) throw new Error('realtime feedback latency failed: ' + JSON.stringify({range,p95Ms,totalMs,samples,diagnostic,queueSerializedBytesAtRangeEnd}));
           results.push({rangeMeters:range, effectiveRangeMeters:activeRegion.preciseRangeMeters,
             samplesMs:totalMs, phases:samples, p95Ms, queueSerializedBytesAtRangeEnd,
             mask:diagnostic.metrics['vision.feedback'], worker:diagnostic.metrics['vision.worker'],
@@ -655,7 +657,7 @@ try {
           if (performance.now()-started > 60000) throw new Error('local exploration queue did not drain');
           await wait(25);
         }
-        return { ranges:results, blackFlash: { inspectedFrames, maxCenterAlpha },
+        return { ranges:results, performanceGatesEnforced:${!hostedPerformanceObservation}, blackFlash: { inspectedFrames, maxCenterAlpha },
           queue:api.world.getExplorationStatus() };
       } finally { api.diagnostics.setEnabled(initialDiagnostics); }
     })()`, 90000);
@@ -699,10 +701,9 @@ try {
     await openPersistentOfflineRuntime({ evaluate, navigate:url=>send('Page.navigate',{url},timeoutMs), url:offlineServer.url });
     const ruinsProfilePath=process.env.RPGMAP_SMOKE_RUINS_CPU_PROFILE;
     ruinsAudit = await runRuinsBrowserSmoke(evaluate, {
-      // Hosted CI records frames on its different machine. Formal local
-      // publication always requires the same-machine frame gate and raw proof.
-      enforceFrameGate: !(buildInfo.metadata.version === '2.5.5'
-        && process.env.RPGMAP_SMOKE_HOSTED_FRAME_OBSERVATION === '1'),
+      // Hosted CI records timings on its different machine. Formal local
+      // publication requires all same-machine performance gates and raw proof.
+      enforcePerformanceGates: !hostedPerformanceObservation,
       ...(ruinsProfilePath ? {
       beforeRecovery:async()=>{
         await evaluate(`(()=>{const diagnostics=document.querySelector('#app').rpgMapApp.diagnostics;
