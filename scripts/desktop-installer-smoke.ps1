@@ -43,6 +43,7 @@ function Assert-Test([bool]$Condition, [string]$Name) {
 Push-Location $taskRoot
 try {
   New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
+  Remove-Item -LiteralPath (Join-Path $evidenceDirectory 'installer-smoke.json') -Force -ErrorAction SilentlyContinue
   Invoke-TestInstaller
   Assert-Test $true 'NSIS silent installation into the isolated program directory'
   $browserArguments = @('scripts/desktop-browser-smoke.mjs', ('--exe=' + $program), ('--map=' + $Map), ('--installer=' + $Installer))
@@ -86,7 +87,10 @@ try {
   Assert-Test ((Get-FileHash -LiteralPath $usersFile -Algorithm SHA256).Hash -eq $usersHash) 'Reinstalled desktop preserves the same approved Player identities'
   Invoke-TestUninstaller
   Assert-Test $true 'Final test uninstall clears the temporary application registration'
-  $record = @{ at = [DateTime]::UtcNow.ToString('o'); installer = $Installer; installerSha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant(); installDirectory = $installDirectory; dataDirectory = $dataDirectory; findings = $findings; limitations = @('Executed on the development Windows host, not a clean Windows VM.', 'Update uses the same RC installer; this is not a cross-version upgrade test.', 'An interrupted NSIS extraction and automatic program rollback were not tested.', 'System Node.js is used only to drive the test; the installed application runs its bundled Electron runtime.') }
+  $record = @{ outcome = 'passed'; at = [DateTime]::UtcNow.ToString('o'); installer = $Installer; installerSha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant(); installDirectory = $installDirectory; dataDirectory = $dataDirectory; findings = $findings; limitations = @('Executed on the development Windows host, not a clean Windows VM.', 'Update uses the same RC installer; this is not a cross-version upgrade test.', 'An interrupted NSIS extraction and automatic program rollback were not tested.', 'System Node.js is used only to drive the test; the installed application runs its bundled Electron runtime.') }
   $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'installer-smoke.json') -Encoding utf8
   $findings | ConvertTo-Json -Depth 5
+} catch {
+  @{ outcome = 'failed'; at = [DateTime]::UtcNow.ToString('o'); installer = $Installer; installerSha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant(); findings = $findings; error = $_.Exception.Message } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'installer-smoke.json') -Encoding utf8
+  throw
 } finally { Pop-Location }

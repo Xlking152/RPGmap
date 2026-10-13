@@ -24,6 +24,8 @@ if (installer && !reuseData && !mapFile) throw new Error('A running-application 
 if (!dataRoot.startsWith(`${path.join(root, 'artifact')}${path.sep}`)) throw new Error('Unsafe test data directory');
 if (!reuseData) await rm(dataRoot, { recursive: true, force: true });
 await mkdir(evidenceRoot, { recursive: true });
+const recordFile = path.join(evidenceRoot, reuseData ? 'desktop-reuse-smoke.json' : 'desktop-smoke.json');
+await rm(recordFile, { force: true });
 const findings = [];
 const installationManifest = await readFile(path.join(path.dirname(executable), 'resources', 'INSTALL-MANIFEST.json'));
 const buildSource = JSON.parse(installationManifest.toString('utf8')).source;
@@ -31,6 +33,7 @@ const manifestSha256 = createHash('sha256').update(installationManifest).digest(
 let child;
 let debuggerClient;
 let logs = '';
+let runFailure = null;
 
 async function delay(ms) { await new Promise(resolve => setTimeout(resolve, ms)); }
 async function eventually(work, { timeoutMs = 60000, intervalMs = 250 } = {}) {
@@ -294,10 +297,14 @@ try {
   if (worldId) assert.equal(recovered.activeWorldId, worldId);
   findings.push({ test: 'process restart preserves imported package and active World', passed: true });
   await closeDesktop();
-  await writeFile(path.join(evidenceRoot, reuseData ? 'desktop-reuse-smoke.json' : 'desktop-smoke.json'), `${JSON.stringify({ executable, mapFile, reuseData, installer, buildSource, manifestSha256, at: new Date().toISOString(), findings, limitations: ['This tests the packaged executable on the development Windows host, not a clean Windows VM.', 'Map import uses the official management API; native file chooser selection is not automated.'] }, null, 2)}\n`);
+  await writeFile(recordFile, `${JSON.stringify({ outcome: 'passed', executable, mapFile, reuseData, installer, buildSource, manifestSha256, at: new Date().toISOString(), findings, limitations: ['This tests the packaged executable on the development Windows host, not a clean Windows VM.', 'Map import uses the official management API; native file chooser selection is not automated.'] }, null, 2)}\n`);
   console.log(JSON.stringify(findings, null, 2));
+} catch (error) {
+  runFailure = error;
+  throw error;
 } finally {
   debuggerClient?.close();
   child?.kill();
+  if (runFailure) await writeFile(recordFile, `${JSON.stringify({ outcome: 'failed', executable, mapFile, reuseData, installer, buildSource, manifestSha256, at: new Date().toISOString(), findings, error: runFailure.message.slice(0, 1000) }, null, 2)}\n`);
   await writeFile(path.join(evidenceRoot, 'desktop-process.log'), logs);
 }

@@ -168,3 +168,28 @@ test('Runtime sessions inject different Rulesets and map resolvers without globa
   await create(otherRule, otherMap).dispatch(rename('B'));
   assert.deepEqual(seen, [['minimal-rules', 'map'], ['another-rule', 'another-map']]);
 });
+
+test('hosted UI revisions remain independent from lower server ACK revisions after hydration', async () => {
+  let canonical = state(), uiRevision = 100;
+  const observed = [];
+  const acknowledgment = { operationId: 'server-1', revision: 1, results: [] };
+  const core = createRuntimeSession({ ruleset, mapForScene: () => map,
+    getCanonicalState: () => canonical, getCanonicalRevision: () => uiRevision,
+    authority: { async apply({ operations }) {
+      canonical = { ...canonical, preferences: { ...canonical.preferences,
+        worldV2: { ...canonical.preferences.worldV2, name: operations[0].payload.name } } };
+      uiRevision += 1;
+      return acknowledgment;
+    } },
+  });
+  core.subscribe(event => observed.push(event));
+  assert.equal(await core.dispatch(rename('Network committed'), { baseRevision: 100 }), acknowledgment);
+  assert.equal(core.getRevision(), 101);
+  assert.equal(core.getWorld().name, 'Network committed');
+  assert.equal(observed[0].revision, 101);
+  assert.equal(observed[0].result.revision, 1);
+  const standalone = session({ initialRevision: 5, authority: { async apply({ state: input }) { return { state: input, revision: 4 }; } } });
+  await assert.rejects(standalone.dispatch(rename('Rejected')), { code: 'runtime_authority_result_invalid' });
+  assert.equal(standalone.getRevision(), 5);
+  assert.equal(standalone.getWorld().name, 'Initial');
+});

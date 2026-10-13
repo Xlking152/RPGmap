@@ -60,7 +60,10 @@ export function createRuntimeSession({ initialState, ruleset, mapForScene, autho
     if (!hosted && generation !== beforeGeneration) throw fail('runtime_context_changed', 'Runtime state was replaced while applying a command');
     const next = hosted ? stateOf() : applied?.state;
     if (!next || typeof next !== 'object' || Array.isArray(next)) throw fail('runtime_authority_result_invalid');
-    const nextRevision = applied?.revision ?? (hosted ? revisionOf() : beforeRevision + 1);
+    // Hosted UI commits and server ACKs have different revision domains.
+    // Check the host's monotonic counter, retaining the server ACK unchanged.
+    const nextRevision = hosted && typeof getCanonicalRevision === 'function'
+      ? revisionOf() : applied?.revision ?? (hosted ? revisionOf() : beforeRevision + 1);
     if (!Number.isSafeInteger(nextRevision) || nextRevision < beforeRevision) throw fail('runtime_authority_result_invalid');
     if (persist) {
       // Default standalone persistence precedes the visible commit. False is
