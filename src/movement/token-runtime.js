@@ -179,6 +179,18 @@ export function createMovementTokenRuntimeSystem() {
       let navigationRevision = null;
       let pendingPlan = null;
       let pendingGroupPlan = null;
+      let movementGeneration = 0;
+      const movementContext = () => {
+        const world = api.world.get(), scene = world?.scenes?.find(item => String(item.id) === String(world.activeSceneId));
+        return { generation: movementGeneration, identity: JSON.stringify([world?.id, world?.activeSceneId,
+          scene?.mapPackage?.id, scene?.mapPackage?.version]) };
+      };
+      let observedSceneIdentity = movementContext().identity;
+      const currentContext = context => context?.generation === movementGeneration
+        && context.identity === movementContext().identity && !api.world.isSceneTransitionPending?.();
+      const requireContext = context => {
+        if (!currentContext(context)) throw Object.assign(new Error('当前场景已切换或重置，请重新规划移动'), { code: 'scene_content_conflict' });
+      };
       const preferredModes = new Map();
 
       const getPreferredMode = tokenId => preferredModes.get(String(tokenId))
@@ -201,6 +213,7 @@ export function createMovementTokenRuntimeSystem() {
           context,
         });
         if (!navigationGrid || navigationRevision !== revision) {
+          const started = api.diagnostics?.enabled ? performance.now() : null;
           navigationGrid = createNavigationGrid(
             api.mapPackage,
             deriveSceneState(scene?.sceneEvents || state.sceneEvents || []),
@@ -208,7 +221,8 @@ export function createMovementTokenRuntimeSystem() {
             { appState: state, moverContext: context },
           );
           navigationRevision = revision;
-        }
+          if (started !== null) api.diagnostics.record('navigation.prepare', performance.now() - started);
+        } else api.diagnostics?.record('navigation.cacheHit', 1);
         return navigationGrid;
       }
 
@@ -257,6 +271,7 @@ export function createMovementTokenRuntimeSystem() {
       }
 
       function inspectMovementAccess(tokenId, destination, { from = null } = {}) {
+        if (api.world.isSceneTransitionPending?.()) return movementFailure('scene_transition_pending', '场景正在切换或重置，请稍后操作');
         const token = api.tokens.get(tokenId);
         const start = finitePoint(from) || tokenMapPoint(token);
         const to = finitePoint(destination);
@@ -326,9 +341,10 @@ export function createMovementTokenRuntimeSystem() {
       }
 
       async function planTokenMove(tokenId, destination, arrival = null, options = {}) {
+        const context = movementContext();
         const movementMode = options.movementMode || getPreferredMode(tokenId);
         const result = await validateTokenMove(tokenId, destination, { ...options, movementMode });
-        if (!result.valid) {
+        if (!result.valid || !currentContext(context)) {
           pendingPlan = null;
           return null;
         }
@@ -336,6 +352,7 @@ export function createMovementTokenRuntimeSystem() {
         const from = tokenMapPoint(token);
         const to = finitePoint(destination);
         pendingPlan = {
+          context,
           tokenId: token.id,
           actorId: token.actorId,
           from,
@@ -349,11 +366,13 @@ export function createMovementTokenRuntimeSystem() {
       }
 
       async function executePlan(plan) {
+        requireContext(plan.context);
         const current = api.tokens.get(plan.tokenId);
         const from = tokenMapPoint(current);
         const route = await validateTokenMove(plan.tokenId, plan.destination, {
           movementMode: plan.movementMode, verticalAction: plan.verticalAction,
         });
+        requireContext(plan.context);
         if (!route.valid) throw movementError(route);
 
         let world = api.world.get();
@@ -411,12 +430,15 @@ export function createMovementTokenRuntimeSystem() {
       }
 
       async function moveTokenTo(tokenId, destination, arrival = null, options = {}) {
+        const context = movementContext();
         const movementMode = options.movementMode || getPreferredMode(tokenId);
         const result = await validateTokenMove(tokenId, destination, { ...options, movementMode });
         if (!result.valid) return result;
+        if (!currentContext(context)) return movementFailure('scene_content_conflict', '当前场景已切换或重置，请重新规划移动');
         const token = api.tokens.get(tokenId);
         try {
           await executePlan({
+            context,
             tokenId: token.id,
             actorId: token.actorId,
             from: tokenMapPoint(token),
@@ -441,6 +463,7 @@ export function createMovementTokenRuntimeSystem() {
       }
 
       async function validateGroupPlan(plan) {
+        requireContext(plan.context);
         for (const member of plan.members) {
           const token = api.tokens.get(member.tokenId);
           const current = tokenMapPoint(token);
@@ -452,11 +475,13 @@ export function createMovementTokenRuntimeSystem() {
             if (!await findDirectNavigationPath(navigation(token), points[index], points[index + 1])) {
               throw new Error(`Token ${member.tokenId} 的第 ${index + 1} 段路径已不可通行`);
             }
+            requireContext(plan.context);
           }
         }
       }
 
       async function planTokenGroupMove(tokenIds, leaderId, rawPoints) {
+        const context = movementContext();
         pendingGroupPlan = null;
         const ids = [...new Set(array(tokenIds).map(String).filter(Boolean))];
         if (ids.length < 2 || ids.length > 64 || !ids.includes(String(leaderId))) return null;
@@ -473,7 +498,7 @@ export function createMovementTokenRuntimeSystem() {
           return token && origin ? { tokenId: String(token.id), actorId: String(token.actorId), origin } : null;
         });
         if (members.some(member => !member)) return null;
-        const plan = { leaderId: String(leaderId), leaderStart, leaderPoints, members };
+        const plan = { context, leaderId: String(leaderId), leaderStart, leaderPoints, members };
         try {
           await validateGroupPlan(plan);
         } catch {
@@ -590,7 +615,7 @@ export function createMovementTokenRuntimeSystem() {
         setPreferredMode,
         inspectTokenMove,
         exitFeature,
-        cancelPending() { pendingPlan = null; pendingGroupPlan = null; },
+        cancelPending() { movementGeneration++; pendingPlan = null; pendingGroupPlan = null; },
         invalidateNavigation,
         getPendingPlan() { return clone(pendingGroupPlan || pendingPlan); },
       });
@@ -598,6 +623,15 @@ export function createMovementTokenRuntimeSystem() {
       for (const eventName of ['scene:damage', 'scene:restore', 'scene:undo', 'state:import', 'status:change', 'token:size-change', 'elevation:token-change']) {
         api.on?.(eventName, invalidateNavigation);
       }
+      for (const eventName of ['scene:switch-starting', 'scene:reset-starting', 'scene:activate', 'state:import', 'app:destroy']) {
+        api.on?.(eventName, () => { api.movement.cancelPending(); invalidateNavigation(); });
+      }
+      api.on?.('state:commit', () => {
+        const next = movementContext().identity;
+        if (next !== observedSceneIdentity) {
+          observedSceneIdentity = next; api.movement.cancelPending(); invalidateNavigation();
+        }
+      });
       api.on?.('scene:content-change', event => {
         if (event.detail?.types?.includes('SceneEvent')) invalidateNavigation();
       });

@@ -7,7 +7,7 @@ import { createInitialActorDelta } from '../src/token/actor.js';
 import { reduceStatusOperation } from '../src/status/model.js';
 import { infiniteHorrorRuleset as ruleset } from '../src/rulesets/infinite-horror/index.js';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
-import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 import { createNavigationGrid, nearestWalkablePoint } from '../src/engine/navigation.js';
 import { deriveSceneState } from '../src/engine/state.js';
 

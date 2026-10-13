@@ -6,17 +6,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
-import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
+import { benchmarkBuildInfo, benchmarkPackagePaths, installBrowserBenchmarkMap } from './lan-benchmark-support.mjs';
 import { browserBenchmarkMovementTarget, browserBenchmarkPhaseOperations } from './browser-benchmark-movement.mjs';
 import { withinMillisecondsBudget } from './performance-budget.mjs';
 import { closeOwnedBrowser, rejectPendingCdp } from './owned-browser-close.mjs';
+import { runIncrementalEnvironmentAudit } from './v3-incremental-environment-audit.mjs';
 
 if (process.platform !== 'win32') throw new Error('Browser performance benchmark requires Windows');
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packageJson = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const packageRoot = path.resolve(process.env.RPGMAP_BENCHMARK_PACKAGE
-  || path.join(root, 'artifact', `RPGmap-v${packageJson.version}`));
+  || path.join(root, 'artifact', 'desktop-stage', 'resources'));
+const packagePaths = benchmarkPackagePaths(packageRoot);
 const browserName = String(process.env.RPGMAP_BENCHMARK_BROWSER || 'edge').toLowerCase();
 const headless = process.env.RPGMAP_BROWSER_BENCHMARK_HEADLESS === '1';
 const phaseSeconds = Math.max(5, Number(process.env.RPGMAP_BROWSER_BENCHMARK_SECONDS) || 60);
@@ -147,13 +149,17 @@ function fixture(definitions) {
 }
 
 async function launchServer({ port, mapDir }) {
+  const mapImportStartedAt = performance.now();
+  const mapPackage = await installBrowserBenchmarkMap(root, mapDir);
+  const mapImportMs = performance.now() - mapImportStartedAt;
   const startedAt = performance.now();
-  const child = spawn(process.execPath, [path.join(packageRoot, 'server.mjs')], {
-    cwd: packageRoot,
+  const child = spawn(process.execPath, [packagePaths.serverPath], {
+    cwd: packagePaths.runtimeDirectory,
     env: {
       ...process.env, NODE_ENV: 'test', RPGMAP_TEST_ALLOW_MISSING_ORIGIN: '1',
       RPGMAP_GM_SECRET: GM_SECRET, RPGMAP_JOIN_CODE: JOIN_CODE,
-      RPGMAP_MAP_DIR: mapDir, RPGMAP_PUBLIC_DIR: path.join(packageRoot, 'app'), PORT: String(port),
+      RPGMAP_DATA_DIR: '', RPGMAP_MAP_DIR: mapDir, RPGMAP_PACKAGE_DATA_DIR: mapDir,
+      RPGMAP_PUBLIC_DIR: packagePaths.appDirectory, RPGMAP_STATIC_DIR: packagePaths.appDirectory, PORT: String(port),
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true,
   });
@@ -170,7 +176,7 @@ async function launchServer({ port, mapDir }) {
     const response = await fetch(`http://127.0.0.1:${port}/api/health`).catch(() => null);
     return response?.ok;
   }, 'benchmark server');
-  return { child, output: () => output, startupMs: performance.now() - startedAt };
+  return { child, output: () => output, startupMs: performance.now() - startedAt, mapPackage, mapImportMs };
 }
 
 async function stopServer(server) {
@@ -234,18 +240,18 @@ class BrowserSession {
     });
     await Promise.all([this.send('Runtime.enable'), this.send('Network.enable'), this.send('Log.enable')]);
   }
-  send(method, params = {}) {
+  send(method, params = {}, timeoutMs = CDP_WAIT_MS) {
     if (!this.socket || !this.pending) return Promise.reject(new Error(`${this.name} CDP transport is unavailable`));
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`${this.name} ${method} timed out`)); }, CDP_WAIT_MS);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`${this.name} ${method} timed out`)); }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try { this.socket.send(JSON.stringify({ id, method, params })); }
       catch (error) { this.pending.delete(id); clearTimeout(timer); reject(error); }
     });
   }
-  async evaluate(expression) {
-    const result = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+  async evaluate(expression, timeoutMs = CDP_WAIT_MS) {
+    const result = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, timeoutMs);
     if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'evaluation failed');
     return result.result?.value;
   }
@@ -559,12 +565,14 @@ try {
   });
   const recovery = { outageDelayMs: 3000, recoveredMs, ...shutdown, startupMs: server.startupMs,
     reconnectedAt, revisionsBefore, revisionsAfter, synchronizationComplete: true, projectionMatches, projectionDifferences };
+  const incrementalEnvironment = process.env.RPGMAP_BROWSER_BENCHMARK_ENVIRONMENT_AUDIT === '1'
+    ? await runIncrementalEnvironmentAudit((expression, timeout) => sessions[0].evaluate(expression, timeout)) : null;
   const report = {
     version: packageJson.version, browser: browserName, headless, browserExecutable: browserExecutable(),
-    packageRoot, build: buildInfo,
+    packageRoot, build: buildInfo, mapPackage: server.mapPackage,
     fixture: { sessions: SESSION_COUNT, actors: ACTOR_COUNT, tokens: TOKEN_COUNT, viewport: '1920x1080' },
     diagnosticProfileSession: profileSessionIndex,
-    phases, recovery, generatedAt: new Date().toISOString(),
+    phases, recovery, incrementalEnvironment, generatedAt: new Date().toISOString(),
   };
   await writeFile(path.join(outputRoot, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   console.log(JSON.stringify(report, null, 2));

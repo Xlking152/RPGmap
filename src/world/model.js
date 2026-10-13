@@ -13,6 +13,7 @@ import { assertTemplateLibrary } from '../library/model.js';
 import { normalizeMovementBudget, normalizeMovementState } from '../movement/model.js';
 import { normalizeJournalCollection } from '../journal/model.js';
 import { cloneWithReplacements } from '../engine/detached-metadata.js';
+import { createDefaultSceneSettings } from './scene-defaults.js';
 
 export { WORLD_SCHEMA_VERSION, WORLD_STATE_KEY } from './constants.js';
 
@@ -120,6 +121,7 @@ function normalizeScene(raw, {
   const mapRef = object(source.mapPackage);
   const mapId = id(mapRef.id ?? mapRef.mapId, fallbackMap.id);
   const mapVersion = text(mapRef.version ?? mapRef.mapVersion, fallbackMap.version);
+  const settingDefaults = createDefaultSceneSettings();
   const seen = new Set();
   const tokens = [];
   for (const candidate of array(source.tokens)) {
@@ -141,10 +143,10 @@ function normalizeScene(raw, {
     fog: normalizeFogState(source.fog),
     settings: {
       ...clone(object(source.settings)),
-      gridVisible: source.settings?.gridVisible !== false,
-      lineOfSightEnabled: source.settings?.lineOfSightEnabled === true,
-      movementBudgetMetersPerTurn: normalizeMovementBudget(source.settings?.movementBudgetMetersPerTurn),
-      defaultDoorInteractionRangeMeters: Math.max(0, finite(source.settings?.defaultDoorInteractionRangeMeters, 2)),
+      gridVisible: (source.settings?.gridVisible ?? settingDefaults.gridVisible) !== false,
+      lineOfSightEnabled: (source.settings?.lineOfSightEnabled ?? settingDefaults.lineOfSightEnabled) === true,
+      movementBudgetMetersPerTurn: normalizeMovementBudget(source.settings?.movementBudgetMetersPerTurn ?? settingDefaults.movementBudgetMetersPerTurn),
+      defaultDoorInteractionRangeMeters: Math.max(0, finite(source.settings?.defaultDoorInteractionRangeMeters, settingDefaults.defaultDoorInteractionRangeMeters)),
     },
   });
 }
@@ -281,8 +283,8 @@ export function projectWorldV2ToRuntimeState(state, rawWorld, { mapPackage, rule
   const scene = activeWorldScene(world);
   if (!scene) return clone(state);
   const currentMap = mapMetadata(mapPackage || {});
-  if (scene.mapPackage.id !== currentMap.id) {
-    const error = new Error(`Scene ${scene.id} requires MapPackage ${scene.mapPackage.id}; current runtime loaded ${currentMap.id}`);
+  if (scene.mapPackage.id !== currentMap.id || scene.mapPackage.version !== currentMap.version) {
+    const error = new Error(`Scene ${scene.id} requires MapPackage ${scene.mapPackage.id}@${scene.mapPackage.version}; current runtime loaded ${currentMap.id}@${currentMap.version}`);
     error.code = 'world_scene_map_reload_required';
     throw error;
   }
@@ -322,8 +324,8 @@ export function attachWorldV2(state, world) {
   return next;
 }
 
-export function createEmptyWorldScene(world, { mapPackage, id: sceneId, name = '' } = {}) {
-  const normalized = normalizeWorldV2(world, { mapPackage });
+export function createEmptyWorldScene(world, { mapPackage, ruleset = null, id: sceneId, name = '' } = {}) {
+  const normalized = normalizeWorldV2(world, { mapPackage, ruleset });
   const mapRef = mapMetadata(mapPackage || {});
   const candidate = id(sceneId, sceneIdForMap(`${mapRef.id}-${normalized.scenes.length + 1}`));
   if (normalized.scenes.some(scene => scene.id === candidate)) throw new Error(`Scene already exists: ${candidate}`);
@@ -332,7 +334,7 @@ export function createEmptyWorldScene(world, { mapPackage, id: sceneId, name = '
     name: name || `Scene ${normalized.scenes.length + 1}`,
     mapPackage: mapRef,
     tokens: [], markers: [], attackAreas: [], sceneEvents: [], featureStates: {}, fog: normalizeFogState(),
-    settings: { gridVisible: true },
-  }, { mapPackage, actorIds: new Set(normalized.actors.map(actor => String(actor.id))) });
-  return normalizeWorldV2({ ...normalized, scenes: [...normalized.scenes, scene], updatedAt: new Date().toISOString() }, { mapPackage });
+    settings: createDefaultSceneSettings(),
+  }, { mapPackage, ruleset, actorIds: new Set(normalized.actors.map(actor => String(actor.id))) });
+  return normalizeWorldV2({ ...normalized, scenes: [...normalized.scenes, scene], updatedAt: new Date().toISOString() }, { mapPackage, ruleset });
 }

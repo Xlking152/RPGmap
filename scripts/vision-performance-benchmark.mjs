@@ -5,21 +5,27 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { existsSync } from 'node:fs';
+import { captureVisionSourceProof, assertVisionSourceProofUnchanged } from './vision-source-proof.mjs';
+import { visionSourceAtCommit } from './verify-local-validation.mjs';
 
 const root = path.resolve(process.argv.find(v => v.startsWith('--repo='))?.slice(7) || '.');
 const execFileAsync = promisify(execFile);
-const sourceCommit = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim();
-const tracked = (await execFileAsync('git', ['ls-files', '-z', '--', 'src', 'deployment/local-server',
-  'reference/maps/lanzhou/runtime.json'], { cwd: root })).stdout.split('\0').filter(file => /\.(js|mjs)$/.test(file)
-    || file === 'reference/maps/lanzhou/runtime.json').sort();
-const sourceFileHashes = Object.fromEntries(await Promise.all(tracked.map(async file => [file,
-  createHash('sha256').update((await readFile(path.join(root, file), 'utf8')).replaceAll('\r\n', '\n')).digest('hex')])));
+const modernSource = existsSync(path.join(root, 'maps/lanzhou/runtime.json'));
+const proof = modernSource ? await captureVisionSourceProof(root) : null;
+const sourceCommit = proof?.sourceCommit || process.env.RPGMAP_BASELINE_COMMIT || (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim();
+const committed = proof || await visionSourceAtCommit(root, sourceCommit);
+const sourceFileHashes = Object.fromEntries(await Promise.all(Object.keys(committed.sourceFileHashes).map(async file => {
+  const hash = createHash('sha256').update((await readFile(path.join(root, file), 'utf8')).replaceAll('\r\n', '\n')).digest('hex');
+  if (hash !== committed.sourceFileHashes[file]) throw new Error(`Measured archive differs from claimed baseline: ${file}`);
+  return [file, hash];
+})));
 const load = file => import(pathToFileURL(path.join(root, file)).href);
 const { deriveVisionOccluders } = await load('src/spatial/kernel.js');
 const { deriveSceneState } = await load('src/engine/state.js');
 const { computeVisibilityRows } = await load('src/vision/visibility.js');
 const { exploreFogVisibleSweep } = await load('src/vision/fog.js');
-const map = JSON.parse(await readFile(path.join(root, 'reference/maps/lanzhou/runtime.json'), 'utf8'));
+const map = JSON.parse(await readFile(path.join(root, modernSource ? 'maps/lanzhou/runtime.json' : 'reference/maps/lanzhou/runtime.json'), 'utf8'));
 const scene = { featureStates: {}, sceneEvents: [], tokens: [] };
 const derived = deriveSceneState([]);
 const occluders = deriveVisionOccluders(map, scene, derived);
@@ -68,7 +74,8 @@ for (const [file, hash] of Object.entries(sourceFileHashes)) {
     throw new Error(`Vision benchmark source changed during measurement: ${file}`);
   }
 }
-if ((await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim() !== sourceCommit) {
+if (proof) await assertVisionSourceProofUnchanged(proof, root);
+if (!process.env.RPGMAP_BASELINE_COMMIT && (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim() !== sourceCommit) {
   throw new Error('Vision benchmark source commit changed during measurement');
 }
 console.log(JSON.stringify(report, null, 2));

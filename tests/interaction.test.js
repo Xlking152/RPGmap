@@ -15,7 +15,7 @@ import {
   setFeatureOpenState,
 } from '../src/interaction/model.js';
 import { createFeatureOperations } from '../src/interaction/operations.js';
-import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 
 function preparedMinimal() { return prepareMapPackage(createMinimalReferencePackage(), { source: 'test:minimal' }); }
 

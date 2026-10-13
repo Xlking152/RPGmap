@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { createNavigationGrid, findDirectNavigationPath } from '../src/engine/navigation.js';
 import { calculateWaypointRoute } from '../src/movement/path.js';
 import { MovementSession } from '../src/movement/session.js';
-import { applyLanzhouCapabilities } from '../reference/maps/lanzhou/capabilities.js';
-import { createLanzhouMapPackage } from '../reference/maps/lanzhou/package.js';
+import { applyLanzhouCapabilities } from '../maps/lanzhou/capabilities.js';
+import { createLanzhouMapPackage } from '../maps/lanzhou/package.js';
 
 const CITY_GATE_IDS = Object.freeze(['gate-north', 'gate-east', 'gate-south', 'gate-west']);
 

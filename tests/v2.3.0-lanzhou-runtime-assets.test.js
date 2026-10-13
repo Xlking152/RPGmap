@@ -4,11 +4,11 @@ import test from 'node:test';
 
 const read = relative => readFile(new URL(`../${relative}`, import.meta.url), 'utf8');
 
-test('production Lanzhou package loads generated data and SVG as local runtime assets', async () => {
+test('Lanzhou authoring adapter retains v2.5.5 generated data and SVG for independent export', async () => {
   const [defaultMap, runtimeDataText, runtimeSvg, generator] = await Promise.all([
     read('src/map-package/default-map.js'),
-    read('reference/maps/lanzhou/runtime.json'),
-    read('reference/maps/lanzhou/runtime.svg'),
+    read('maps/lanzhou/runtime.json'),
+    read('maps/lanzhou/runtime.svg'),
     read('scripts/generate-lanzhou-runtime-svg.mjs'),
   ]);
   const runtimeData = JSON.parse(runtimeDataText);

@@ -75,7 +75,7 @@ async function runtime(t, { internalReader = false } = {}) {
   const listeners = new Map(), events = [], imports = [], documentCommits = [];
   const snapshots = { state: 0, world: 0 };
   const api = {
-    map: { getContainer: () => map }, mapPackage: { id: 'map' },
+    map: { getContainer: () => map }, mapPackage: { id: 'map', version: '1' },
     getState: () => { snapshots.state++; return structuredClone(state); }, exportState: () => structuredClone(state),
     world: { get: () => { snapshots.world++; return structuredClone(state.preferences.worldV2); } },
     tokens: { get: id => state.preferences.worldV2.scenes[0].tokens.find(token => token.id === id) || null },

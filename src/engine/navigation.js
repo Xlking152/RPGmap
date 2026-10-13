@@ -266,9 +266,48 @@ function makeGridFacade(navigation) {
   });
 }
 
+const frozenBranchRevisions = new WeakMap();
+const verifiedFrozenBranches = new WeakSet();
+
+function isFrozenJsonBranch(value, visiting = new WeakSet()) {
+  if (value === null || typeof value !== 'object') return typeof value !== 'function' && typeof value !== 'bigint';
+  if (verifiedFrozenBranches.has(value)) return true;
+  if (!Object.isFrozen(value) || visiting.has(value) || 'toJSON' in value) return false;
+  const array = Array.isArray(value), prototype = Object.getPrototypeOf(value);
+  if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
+  visiting.add(value);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  // Frozen sparse arrays can still read mutable inherited index properties.
+  if (array) for (let index = 0; index < value.length; index++) {
+    if (!Object.hasOwn(descriptors, String(index))) { visiting.delete(value); return false; }
+  }
+  for (const descriptor of Object.values(descriptors)) {
+    if (!Object.hasOwn(descriptor, 'value') || !isFrozenJsonBranch(descriptor.value, visiting)) {
+      visiting.delete(value); return false;
+    }
+  }
+  visiting.delete(value); verifiedFrozenBranches.add(value); return true;
+}
+
+function branchRevision(value) {
+  // Keep JSON.stringify's existing behavior for mutable data, getters, custom
+  // serializers and invalid/cyclic input. Only proven frozen plain data reuses
+  // a signature; Object.freeze(root) alone is insufficient evidence.
+  let reusable = false;
+  try {
+    reusable = value && typeof value === 'object'
+      && !('toJSON' in Object.prototype) && !('toJSON' in Array.prototype)
+      && (frozenBranchRevisions.has(value) || isFrozenJsonBranch(value));
+  } catch { /* JSON.stringify below preserves the original error contract. */ }
+  if (reusable && frozenBranchRevisions.has(value)) return frozenBranchRevisions.get(value);
+  const serialized = JSON.stringify(value);
+  if (reusable) frozenBranchRevisions.set(value, serialized);
+  return serialized;
+}
+
 function runtimeGridRevision(appState, moverContext, scene) {
   const featureStates = appState?.preferences?.featureStates || {};
-  return `${moverContext.tokenId ?? ''}|${moverContext.elevationMeters}|${moverContext.diameterMeters}|${moverContext.statusVersion || ''}|${moverContext.movementMode || ''}|${moverContext.heightProfileKey || ''}|${(moverContext.collisionBypassGroups || []).join(',')}|${JSON.stringify(featureStates)}|${JSON.stringify(scene || {})}`;
+  return `${moverContext.tokenId ?? ''}|${moverContext.elevationMeters}|${moverContext.diameterMeters}|${moverContext.statusVersion || ''}|${moverContext.movementMode || ''}|${moverContext.heightProfileKey || ''}|${(moverContext.collisionBypassGroups || []).join(',')}|${branchRevision(featureStates)}|${branchRevision(scene || {})}`;
 }
 
 export function createNavigationBase(mapPackage) {

@@ -69,6 +69,7 @@ export function createMovementController({ settings } = {}) {
       let keyboardFrame = null;
       let keyboardRunning = false;
       let activePointerId = null;
+      let inputGeneration = 0;
       const keyboardQueue = [];
 
       const mapToken = tokenId => {
@@ -224,6 +225,7 @@ export function createMovementController({ settings } = {}) {
           reset();
           return true;
         } catch (error) {
+          if (interaction !== current || destroyed) return false;
           current.pending = false;
           status(`移动失败：${error?.message || String(error)}`);
           return false;
@@ -250,7 +252,7 @@ export function createMovementController({ settings } = {}) {
       }
 
       function pointerDown(event) {
-        if (destroyed || event.button !== 0 || interaction?.pending) return;
+        if (destroyed || api.world?.isSceneTransitionPending?.() || event.button !== 0 || interaction?.pending) return;
         const tokenId = tokenIdFromTarget(event.target);
         if (!tokenId) return;
         const token = mapToken(tokenId);
@@ -341,9 +343,10 @@ export function createMovementController({ settings } = {}) {
 
       async function processKeyboardQueue() {
         if (keyboardRunning || destroyed) return;
+        const generation = inputGeneration;
         keyboardRunning = true;
         try {
-          while (keyboardQueue.length && !destroyed) {
+          while (keyboardQueue.length && !destroyed && generation === inputGeneration) {
             const segment = keyboardQueue.shift();
             const token = mapToken(api.selection.getPrimaryTokenId?.());
             if (!token) {
@@ -361,6 +364,7 @@ export function createMovementController({ settings } = {}) {
             const result = await api.movementFast.moveTokenPath(
               [token.id], token.id, waypoints, { method: 'keyboard' },
             );
+            if (generation !== inputGeneration || destroyed) return;
             if (!result?.valid) {
               keyboardQueue.length = 0;
               status(`移动失败：${result?.reason || '当前位置不可通行'}`);
@@ -369,12 +373,15 @@ export function createMovementController({ settings } = {}) {
             status(`WASD 移动 ${formatDistance(Number(result.distance) || settings.step * count)} · 队列 ${keyboardQueue.reduce((sum, item) => sum + item.count, 0)}`);
           }
         } finally {
-          keyboardRunning = false;
-          if (keyboardQueue.length) scheduleKeyboardProcessing();
+          if (generation === inputGeneration) {
+            keyboardRunning = false;
+            if (keyboardQueue.length) scheduleKeyboardProcessing();
+          }
         }
       }
 
       function keydown(event) {
+        if (destroyed || api.world?.isSceneTransitionPending?.()) return;
         const editable = 'input,textarea,select,[contenteditable="true"],.entity-sheet,.actor-sheet,[data-actor-sheet]';
         const focusTarget = event.target?.closest?.(editable) || documentNode.activeElement?.closest?.(editable);
         if (event.defaultPrevented || focusTarget) return;
@@ -506,6 +513,7 @@ export function createMovementController({ settings } = {}) {
 
       api.movementUi = Object.freeze({
         begin(tokenId) {
+          if (destroyed || api.world?.isSceneTransitionPending?.()) return false;
           const token = mapToken(tokenId);
           if (!token) return false;
           settings.beginSession(api.map, api.mapPackage);
@@ -517,14 +525,17 @@ export function createMovementController({ settings } = {}) {
           return true;
         },
         async plan(tokenId, point) {
+          if (destroyed || api.world?.isSceneTransitionPending?.()) return null;
           const token = mapToken(tokenId);
           if (!token) return null;
           if (!interaction || interaction.tokenId !== String(token.id)) beginInteraction(token, { mode: 'click' });
           interaction.current = snapPoint(point);
-          const result = interaction.members.length > 1
-            ? await api.movement.planTokenGroupMove?.(interaction.members.map(member => member.tokenId), interaction.tokenId, [interaction.start, ...interaction.waypoints, interaction.current])
-            : await fastValidate(interaction.tokenId, interaction.current, interaction.waypoints.at(-1) || interaction.start);
-          drawPreview(interaction.current, { valid: result?.valid !== false });
+          const current = interaction;
+          const result = current.members.length > 1
+            ? await api.movement.planTokenGroupMove?.(current.members.map(member => member.tokenId), current.tokenId, [current.start, ...current.waypoints, current.current])
+            : await fastValidate(current.tokenId, current.current, current.waypoints.at(-1) || current.start);
+          if (interaction !== current || destroyed) return null;
+          drawPreview(current.current, { valid: result?.valid !== false });
           return result;
         },
         commit() { return interaction ? commitDirect(interaction.current) : false; },
@@ -559,6 +570,17 @@ export function createMovementController({ settings } = {}) {
         }
       });
       if (stepOff) off.push(stepOff);
+      function cancelSceneInput() {
+        inputGeneration++;
+        keyboardRunning = false;
+        keyboardQueue.length = 0;
+        if (keyboardFrame !== null) windowNode.clearTimeout(keyboardFrame);
+        keyboardFrame = null;
+        reset();
+      }
+      for (const name of ['scene:switch-starting', 'scene:reset-starting', 'scene:activate', 'state:import']) {
+        off.push(api.on?.(name, cancelSceneInput));
+      }
 
       mapElement.addEventListener('pointerdown', pointerDown, true);
       documentNode.addEventListener('pointermove', pointerMove, true);
@@ -574,10 +596,7 @@ export function createMovementController({ settings } = {}) {
 
       off.push(api.on?.('app:destroy', () => {
         destroyed = true;
-        keyboardQueue.length = 0;
-        if (keyboardFrame !== null) windowNode.clearTimeout(keyboardFrame);
-        keyboardFrame = null;
-        reset();
+        cancelSceneInput();
         mapElement.removeEventListener('pointerdown', pointerDown, true);
         documentNode.removeEventListener('pointermove', pointerMove, true);
         documentNode.removeEventListener('pointerup', pointerUp, true);

@@ -1,4 +1,4 @@
-import { BUILT_IN_LANZHOU_MAP } from '../../../src/map-package/constants.js';
+import { BUILT_IN_LANZHOU_MAP } from '../../src/map-package/constants.js';
 
 export const MAP_WIDTH = 6000;
 export const MAP_HEIGHT = 5000;

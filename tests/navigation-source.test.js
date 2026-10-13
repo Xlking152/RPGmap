@@ -6,8 +6,8 @@ import {
 } from '../src/engine/navigation.js';
 import { deriveFloodRegions } from '../src/engine/state.js';
 import { polygonArea } from '../src/engine/geometry.js';
-import { applyLanzhouCapabilities } from '../reference/maps/lanzhou/capabilities.js';
-import lanzhou from '../reference/maps/lanzhou/runtime.json' with { type: 'json' };
+import { applyLanzhouCapabilities } from '../maps/lanzhou/capabilities.js';
+import lanzhou from '../maps/lanzhou/runtime.json' with { type: 'json' };
 
 const rectangle = (x, y, width, height) => [[x, y], [x + width, y], [x + width, y + height], [x, y + height]];
 const obstacle = (id, polygon, navigation = {}) => ({

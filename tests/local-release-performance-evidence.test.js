@@ -18,9 +18,13 @@ const execFileAsync = promisify(execFile);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const commit = 'a'.repeat(40), baselineCommit = 'ed7e13baab0f116222333c20431e19ab63b60e37';
 const baselineSource = await visionSourceAtCommit(root, baselineCommit);
-const files = (await execFileAsync('git', ['ls-files', '-z', '--', 'src', 'deployment/local-server',
-  'reference/maps/lanzhou/runtime.json'], { cwd: root })).stdout.split('\0').filter(file => /\.(js|mjs)$/.test(file)
-    || file === 'reference/maps/lanzhou/runtime.json').sort();
+test('immutable vision baseline has complete repository paths from a nested working directory', async () => {
+  assert.deepEqual(await visionSourceAtCommit(path.join(root, 'src'), baselineCommit), baselineSource);
+  assert.ok(baselineSource.sourceFileHashes['src/spatial/kernel.js']);
+});
+const files = (await execFileAsync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', 'src', 'deployment/local-server',
+  'maps/lanzhou/runtime.json'], { cwd: root })).stdout.split('\0').filter(file => /\.(js|mjs)$/.test(file)
+    || file === 'maps/lanzhou/runtime.json').sort();
 const sourceFileHashes = Object.fromEntries(await Promise.all(files.map(async file => [file,
   hash((await readFile(path.join(root, file), 'utf8')).replaceAll('\r\n', '\n'))])));
 

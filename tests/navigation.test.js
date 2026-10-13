@@ -15,9 +15,9 @@ import { createInitialState, deriveSceneState } from '../src/engine/state.js';
 import { prepareMapPackage } from '../src/map-package/contract.js';
 import { getFeatureInteractionState, setFeatureOpenState } from '../src/interaction/model.js';
 import { recordFeatureInteractionEffects } from '../src/interaction/effects.js';
-import { applyLanzhouCapabilities } from '../reference/maps/lanzhou/capabilities.js';
-import { createLanzhouMapPackage } from '../reference/maps/lanzhou/package.js';
-import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { applyLanzhouCapabilities } from '../maps/lanzhou/capabilities.js';
+import { createLanzhouMapPackage } from '../maps/lanzhou/package.js';
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 
 test('straight movement stays exact even when a nearby road would previously pull A* away', () => {
   const navigation = {

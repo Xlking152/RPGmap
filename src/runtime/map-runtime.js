@@ -55,7 +55,7 @@ export async function startMapRuntime({
   setBootStatus = () => {},
 } = {}) {
   const ruleset = resolveRulesetReference(rulesetReference);
-  setActiveRuleset(ruleset.id);
+  setActiveRuleset({ id: ruleset.id, version: ruleset.version });
   const mapPackage = await mapPackageRegistry.load(mapReference);
   const storageAdapter = serverRuntime ? createMemoryStorage() : bootstrapStorage;
   const initialLoad = await (serverRuntime ? prepareStoredWorldState : prepareStoredWorldWithContent)({
@@ -87,11 +87,6 @@ export async function startMapRuntime({
       createContentSystem({ serverRuntime, worldId }),
       createWorldSystem({ worldId, worldName }),
       createDocumentBackendSystem(),
-      createSceneManagerSystem({
-        mapPackages: mapPackageRegistry,
-        worldCatalogManager: worldManager,
-        worldId,
-      }),
       createTokenRuntimeSystem(),
       selectionSystem,
       createPermissionSystem(),
@@ -107,6 +102,11 @@ export async function startMapRuntime({
       createSceneAreaSystem(),
       createSceneAreaHandleSystem(),
       createAppShellUi(),
+      createSceneManagerSystem({
+        mapPackages: mapPackageRegistry,
+        worldCatalogManager: worldManager,
+        worldId,
+      }),
       createTemplateLibrarySystem({ serverRuntime }),
       createJournalSystem({ serverRuntime }),
       createLightweightMarkerSystem(),

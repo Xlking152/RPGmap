@@ -1,6 +1,6 @@
 import { installStatusUiStyles, renderStatusStrip, resolveStatusUiSnapshot } from '../status/ui.js';
 import { describeActor } from '../actor/index.js';
-import { resetCurrentScene } from './scene-reset.js';
+import { restoreCurrentSceneEnvironment, clearCurrentScene } from './scene-reset.js';
 
 const STYLE_ID = 'rpgmap-app-shell-v2-style';
 
@@ -149,6 +149,7 @@ export function createAppShellUiV2() {
       let exportButton = null;
       let importButton = null;
       let resetButton = null;
+      let clearButton = null;
       if (toolbarRight) {
         toolbarRight.replaceChildren();
         exportButton = button(documentNode, '导出', async () => {
@@ -156,16 +157,18 @@ export function createAppShellUiV2() {
           catch (error) { api.showToast?.(`导出失败：${error.message}`, 'error'); }
         });
         importButton = button(documentNode, '导入', () => importInput.click());
-        resetButton = button(documentNode, '全局回撤', async () => {
-          if (resetButton.disabled) return;
-          resetButton.disabled = true;
+        async function resetAction(action, label) {
+          if (resetButton.disabled || clearButton.disabled) return;
+          resetButton.disabled = true; clearButton.disabled = true;
           try {
-            await resetCurrentScene(api, message => documentNode.defaultView?.confirm?.(message) === true);
+            await action(api, message => documentNode.defaultView?.confirm?.(message) === true);
           } catch (error) {
-            api.showToast?.(`全局回撤失败：${error?.message || error}`, 'error');
-          } finally { resetButton.disabled = false; }
-        });
-        toolbarRight.append(exportButton, importButton, button(documentNode, '回到底图', () => api.resetView?.()), resetButton);
+            api.showToast?.(`${label}失败：${error?.message || error}`, 'error');
+          } finally { resetButton.disabled = false; clearButton.disabled = false; }
+        }
+        resetButton = button(documentNode, '恢复地图环境', () => resetAction(restoreCurrentSceneEnvironment, '恢复地图环境'));
+        clearButton = button(documentNode, '清空当前场景', () => resetAction(clearCurrentScene, '清空当前场景'));
+        toolbarRight.append(exportButton, importButton, button(documentNode, '回到底图', () => api.resetView?.()), resetButton, clearButton);
       }
 
       importInput.addEventListener('change', async () => {
@@ -253,6 +256,7 @@ export function createAppShellUiV2() {
         if (exportButton) exportButton.hidden = player;
         if (importButton) importButton.hidden = player;
         if (resetButton) resetButton.hidden = player;
+        if (clearButton) clearButton.hidden = player;
         if (player && actorPanel?.classList?.contains('active')) activatePanel('current');
         renderCurrent();
       }

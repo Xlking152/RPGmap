@@ -48,6 +48,38 @@ export async function prepareContentUpgrade(state, directory) {
   return { ...prepared, replacements };
 }
 
+/** Publish immutable shared blobs before switching a managed World's snapshot.
+ * An interrupted publish may leave an unreferenced blob, never a missing live dependency. */
+export async function publishManagedContentReplacements(directory, replacements) {
+  await mkdir(directory, { recursive: true });
+  if ((await lstat(directory)).isSymbolicLink()) fail('content_corrupt');
+  for (const [relative, bytes] of Object.entries(replacements)) {
+    const match = /^uploads\/content\/([a-f0-9]{64})\.content$/.exec(relative);
+    if (!match) fail('content_corrupt');
+    const id = match[1], record = JSON.parse(Buffer.from(bytes).toString('utf8'));
+    if (record.id !== id || hash(Buffer.from(record.data, 'base64')) !== id) fail('content_corrupt');
+    inspectContent(Buffer.from(record.data, 'base64'), record.type);
+    const destination = path.join(directory, `${id}.content`);
+    try {
+      const existing = await readContentRecord(directory, id);
+      if (existing.type !== record.type) fail('content_corrupt');
+      continue;
+    } catch (error) { if (error.code !== 'content_not_found') throw error; }
+    const temporary = path.join(directory, `.managed-${randomUUID()}.tmp`);
+    const handle = await open(temporary, 'wx');
+    try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
+    try {
+      if (!(await readFile(temporary)).equals(Buffer.from(bytes))) fail('content_corrupt');
+      await link(temporary, destination);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const existing = await readContentRecord(directory, id);
+      if (existing.type !== record.type) fail('content_corrupt');
+    } finally { await rm(temporary, { force: true }); }
+  }
+  await syncDirectory(directory);
+}
+
 async function syncDirectory(directory) {
   if (process.platform === 'win32') return;
   const handle = await open(directory, 'r');

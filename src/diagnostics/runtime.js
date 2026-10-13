@@ -2,6 +2,8 @@ const STORAGE_KEY = 'rpgmap.diagnostics.enabled';
 const METRICS = new Set(['frame', 'input.frame', 'longtask', 'network.confirm', 'network.requestBytes', 'network.responseBytes', 'documents.apply', 'sheet.dom', 'sheet.queue', 'vision.worker', 'vision.feedback', 'vision.transferBytes', 'vision.queue', 'vision.draw', 'vision.cacheHit', 'vision.cacheSize', 'world.fogPrepare', 'world.reduce', 'world.changes', 'world.commit', 'world.persist']);
 METRICS.add('world.persistTrusted');
 METRICS.add('vision.workerStart');
+METRICS.add('navigation.prepare');
+METRICS.add('navigation.cacheHit');
 
 export function createRuntimeDiagnostics({ clock = performance, windowNode = globalThis, documentNode = globalThis.document, storage = null, limit = 8192 } = {}) {
   let enabled = false;
@@ -63,7 +65,9 @@ export function createRuntimeDiagnostics({ clock = performance, windowNode = glo
   function snapshot() {
     const summaries = Object.fromEntries([...metrics].map(([name, metric]) => {
       const sorted = [...metric.values].sort((a, b) => a - b);
-      return [name, { count: metric.count, mean: metric.total / metric.count, p95: sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)], max: metric.max, retained: sorted.length }];
+      return [name, { count: metric.count, mean: metric.total / metric.count,
+        p50: sorted[Math.max(0, Math.ceil(sorted.length * 0.5) - 1)],
+        p95: sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)], max: metric.max, retained: sorted.length }];
     }));
     return {
       enabled, metrics: summaries,

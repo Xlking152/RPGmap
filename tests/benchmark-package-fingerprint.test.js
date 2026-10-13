@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { benchmarkBuildInfo } from '../scripts/lan-benchmark-support.mjs';
+import { benchmarkBuildInfo, benchmarkPackagePaths } from '../scripts/lan-benchmark-support.mjs';
 
 const hash = text => createHash('sha256').update(text).digest('hex');
 
@@ -40,4 +40,23 @@ test('benchmark cannot silently fingerprint a package without its browser applic
   });
   await writeFile(path.join(directory, 'VERSION.json'), JSON.stringify({ version: '2.5.4' }));
   await assert.rejects(benchmarkBuildInfo(directory, directory), { code: 'ENOENT' });
+});
+
+test('desktop benchmark fingerprints separate server and browser resources', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rpgmap-benchmark-fingerprint-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await Promise.all(['server', 'app/assets', 'packages/maps'].map(relative => mkdir(path.join(directory, relative), { recursive: true })));
+  const metadata = { version: '3.0.0-rc.1', commit: 'b'.repeat(40) };
+  await writeFile(path.join(directory, 'server', 'VERSION.json'), JSON.stringify(metadata));
+  const files = { 'server/server.mjs': 'server', 'server/exploration-worker.mjs': 'worker', 'app/index.html': 'page', 'app/assets/runtime.js': 'client runtime' };
+  for (const [name, contents] of Object.entries(files)) await writeFile(path.join(directory, ...name.split('/')), contents);
+  const packaged = benchmarkPackagePaths(directory);
+  assert.equal(packaged.serverPath, path.join(directory, 'server', 'server.mjs'));
+  assert.equal(packaged.appDirectory, path.join(directory, 'app'));
+  const initial = await benchmarkBuildInfo(directory, directory);
+  assert.deepEqual(initial, { metadata, fileHashes: Object.fromEntries(Object.keys(files).sort().map(name => [name, hash(files[name])])) });
+  await writeFile(path.join(directory, 'packages', 'maps', 'installed-map-receipt.json'), 'mutable content catalogue');
+  assert.deepEqual(await benchmarkBuildInfo(directory, directory), initial);
+  await writeFile(path.join(directory, 'server', 'exploration-worker.mjs'), 'different server worker');
+  assert.notDeepEqual(await benchmarkBuildInfo(directory, directory), initial);
 });

@@ -21,6 +21,8 @@ import { createRuntimeOperationInputProof, readRuntimeState } from '../engine/st
 import { yieldRuntimeValidationFrame } from '../engine/runtime-state.js';
 import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
 import { registeredInfiniteHorrorRuleset } from '../ruleset/index.js';
+import { createRuntimeSession } from '../runtime/core/session.js';
+import { worldOperationsToDocumentWrites } from '../documents/protocol.js';
 
 const clone = structuredClone;
 const TRUSTED_SAVE_TYPES = new Set(['token.create', 'token.move', 'token.reposition', 'token.movePath', 'scene.fog.explore']);
@@ -66,7 +68,9 @@ function requireRuntimeRuleset(world, ruleset) {
 
 function sameMap(scene, mapPackage) {
   const currentId = String(mapPackage?.mapId ?? mapPackage?.id ?? mapPackage?.manifest?.mapId ?? mapPackage?.manifest?.id ?? '');
-  return Boolean(scene && currentId && String(scene.mapPackage?.id) === currentId);
+  const currentVersion = String(mapPackage?.version ?? mapPackage?.mapVersion ?? mapPackage?.manifest?.version ?? '');
+  return Boolean(scene && currentId && String(scene.mapPackage?.id) === currentId
+    && String(scene.mapPackage?.version ?? '') === currentVersion);
 }
 
 export function createWorldSystem({ worldId = 'world-default', worldName = '' } = {}) {
@@ -200,7 +204,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           if (persisted === false) throw new Error('探索进度未能可靠保存，写入已暂停');
           return { offline: true, unchanged: true };
         }
-        return performOperations([operation], { source: 'vision:exploration-commit', addedExploration: added });
+        return api.world.performOperations([operation], { source: 'vision:exploration-commit', addedExploration: added });
       }, { getExploredRows(sceneId, partyId) {
         const world = currentWorldFromState(readRuntimeState(api));
         const scene = world?.scenes?.find(item => String(item.id) === String(sceneId));
@@ -213,11 +217,28 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         : (_name, callback) => callback();
       let explorationEpoch = 0;
       let explorationAbort = new AbortController();
+      let sceneTransition = null;
+      function requireTransitionCommand(operations) {
+        if (sceneTransition && !operations.every(operation => String(operation.payload?.sceneId || '') === sceneTransition.sceneId
+          && (sceneTransition.kind === 'switch' ? operation.type === 'scene.activate'
+            : ['scene.environment.reset', 'scene.clear'].includes(operation.type)))) {
+          throw Object.assign(new Error('场景正在切换或重置，请等待完成后重新操作'), { code: 'scene_transition_pending' });
+        }
+      }
       function invalidateExploration() {
         explorationEpoch += 1; explorationAbort.abort(); explorationAbort = new AbortController(); background?.cancel();
         api.emit?.('vision:exploration-cancel', null);
       }
       for (const event of ['state:import', 'scene:activate', 'vision:source-change']) api.on?.(event, () => { invalidateExploration(); });
+      for (const event of ['scene:switch-starting', 'scene:reset-starting']) api.on?.(event, ({ detail } = {}) => {
+        sceneTransition = { kind: event === 'scene:switch-starting' ? 'switch' : 'reset', sceneId: String(detail?.sceneId || '') };
+        // Cancel temporary computations; confirmed durable exploration jobs keep
+        // their original Scene identity and may resume after the transition.
+        invalidateExploration();
+      });
+      for (const event of ['scene:switch-complete', 'scene:switch-failed', 'scene:environment-reset', 'scene:cleared', 'scene:reset-failed']) {
+        api.on?.(event, () => { sceneTransition = null; });
+      }
       api.on?.('state:import', ({ detail } = {}) => {
         if (detail?.persist === false && ['server', 'offline:resume'].includes(detail?.source)) return;
         localExploration.cancel();
@@ -225,7 +246,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
       api.on?.('multiplayer:capabilities', () => {
         if (api.isLocalWorldActive?.() !== false) localExploration.start();
       });
-      api.on?.('app:destroy', () => { invalidateExploration(); background?.dispose(); localExploration.dispose(); });
+      api.on?.('app:destroy', () => { api.runtimeSession?.dispose(); invalidateExploration(); background?.dispose(); localExploration.dispose(); });
 
       function reduceOperations(state, operations, { source = 'world.operation', now = new Date().toISOString(), computeFogExploration,
         prepareOperation, onOperationApplied, privateSceneEvents = false } = {}) {
@@ -262,6 +283,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         requestedOperationId = null,
         addedExploration = null,
       } = {}) {
+        requireTransitionCommand(operations);
         const multiplayer = readConnectionState(api);
         if (multiplayer?.connected) {
           if (typeof api.multiplayer?.performOperations !== 'function') {
@@ -347,7 +369,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         // Validation must succeed before destructive operations invalidate any
         // previously confirmed paths. Save the cancellation with the new World.
         const invalidating = applied.results.filter(result => ['scene.fog.hide', 'scene.fog.reset',
-          'scene.delete', 'scene.reset', 'scene.upsert'].includes(result.action));
+          'scene.delete', 'scene.reset', 'scene.environment.reset', 'scene.clear', 'scene.upsert'].includes(result.action));
         if (invalidating.length) invalidateExploration();
         for (const event of explorationCapture.events) {
           if (event.type === 'cancel') localExploration.cancel(event.sceneId, event.partyId);
@@ -391,12 +413,57 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
         return { offline: true, operations: clone(applied.operations), results: clone(applied.results), changes };
       }
 
+      api.runtimeSession = createRuntimeSession({
+        ruleset: runtimeRuleset,
+        mapForScene: scene => sameMap(scene, mapPackage) ? mapPackage : null,
+        getCanonicalState: () => readRuntimeState(api),
+        getCanonicalRevision: () => api.getStateRevision?.(),
+        authority: { managesScheduling: true, apply({ operations, context, operationId }) {
+          return performOperations(operations, { ...context, requestedOperationId: operationId ?? context.requestedOperationId });
+        } },
+      });
+
       api.world = {
         queuesConfirmedExploration: true,
+        isSceneTransitionPending: () => Boolean(sceneTransition),
         getExplorationStatus: () => localExploration.stats(),
         schemaVersion: STATUS_SCHEMA_VERSION,
         get: snapshot,
         getActiveScene() { return clone(activeWorldScene(snapshot())); },
+        async createSceneRecoveryPoint(sceneId, { reason = 'scene.reset' } = {}) {
+          const world = snapshot();
+          if (!world.scenes.some(scene => String(scene.id) === String(sceneId))) {
+            throw Object.assign(new Error(`Unknown Scene: ${sceneId}`), { code: 'scene_not_found' });
+          }
+          const connection = readConnectionState(api);
+          const role = connection?.session?.role ?? connection?.role ?? api.multiplayer?.getCapabilities?.()?.role;
+          if (role === 'player' || (connection?.connected && role !== 'gm')) {
+            throw Object.assign(new Error('只有 GM 可以创建场景恢复点'), { code: 'scene_reset_gm_only' });
+          }
+          if (connection?.connected) {
+            if (typeof api.multiplayer?.fetchManagement !== 'function') {
+              throw Object.assign(new Error('当前联机控制器不支持场景恢复点'), { code: 'recovery_point_required' });
+            }
+            const response = await api.multiplayer.fetchManagement('/api/manage/worlds/scene-backup', {
+              method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sceneId: String(sceneId), reason: String(reason) }),
+            });
+            const receipt = await response.json();
+            if (!response.ok || receipt.error) throw Object.assign(new Error(receipt.message || receipt.error || '场景备份失败'),
+              { code: receipt.code || 'recovery_point_failed' });
+            return receipt;
+          }
+          if (api.isLocalWorldActive?.() === false) {
+            throw Object.assign(new Error('请等待联机续传或主动退出后再建立恢复点'), { code: 'world_reconnect_pending' });
+          }
+          if (typeof api.saveSceneRecoveryPoint !== 'function') {
+            throw Object.assign(new Error('当前运行环境无法可靠保存场景恢复点'), { code: 'recovery_point_required' });
+          }
+          const receipt = await api.saveSceneRecoveryPoint({ sceneId: String(sceneId), reason: String(reason),
+            worldId: String(world.id), state: clone(api.getState()) });
+          if (!receipt || receipt === false) throw Object.assign(new Error('场景备份未能可靠保存'), { code: 'recovery_point_failed' });
+          return receipt;
+        },
         listScenes() { return clone(snapshot().scenes); },
         listActors() { return clone(snapshot().actors); },
         async commit(world, options = {}) {
@@ -404,7 +471,7 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           return snapshot();
         },
         async createScene(options = {}) {
-          const next = createEmptyWorldScene(snapshot(), { mapPackage, ...options });
+          const next = createEmptyWorldScene(snapshot(), { mapPackage, ...options, ruleset: runtimeRuleset });
           await commitWorld(next, { source: 'world-v2:scene.create', reason: 'scene.create', render: false });
           return clone(next.scenes[next.scenes.length - 1]);
         },
@@ -417,10 +484,18 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
             error.code = 'world_scene_map_reload_required';
             throw error;
           }
-          await commitWorld({ ...world, activeSceneId: target.id, updatedAt: new Date().toISOString() }, {
-            source: 'world-v2:scene.activate', reason: 'scene.activate', render: true,
-          });
-          return clone(target);
+          const ownsTransition = !sceneTransition;
+          if (ownsTransition) api.emit?.('scene:switch-starting', { sceneId: target.id, mapPackage: clone(target.mapPackage) });
+          try {
+            await commitWorld({ ...world, activeSceneId: target.id, updatedAt: new Date().toISOString() }, {
+              source: 'world-v2:scene.activate', reason: 'scene.activate', render: true,
+            });
+            if (ownsTransition) api.emit?.('scene:switch-complete', { sceneId: target.id, mapPackage: clone(target.mapPackage) });
+            return clone(target);
+          } catch (error) {
+            if (ownsTransition) api.emit?.('scene:switch-failed', { sceneId: target.id });
+            throw error;
+          }
         },
         async rename(name) {
           const world = snapshot();
@@ -429,9 +504,21 @@ export function createWorldSystem({ worldId = 'world-default', worldName = '' } 
           });
           return snapshot();
         },
-        performOperations,
+        async performOperations(operations, options = {}) {
+          requireTransitionCommand(operations);
+          const world = currentWorldFromState(readRuntimeState(api));
+          const writes = worldOperationsToDocumentWrites(operations, { worldId: world?.id, sceneId: world?.activeSceneId });
+          try {
+            return await api.runtimeSession.dispatch(writes, { operationId: options.requestedOperationId, context: options });
+          } catch (error) {
+            if (error?.code === 'runtime_session_disposed') {
+              throw Object.assign(new Error('当前 World 已切换，请重新执行操作'), { code: 'world_operation_context_changed' });
+            }
+            throw error;
+          }
+        },
         patchFeatureState(featureId, patch, options = {}) {
-          return performOperations([{
+          return api.world.performOperations([{
             type: 'scene.featureState.patch',
             payload: {
               sceneId: options.sceneId ?? snapshot().activeSceneId,

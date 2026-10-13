@@ -1,6 +1,6 @@
-import runtimeSvgUrl from '../../reference/maps/lanzhou/runtime.svg?url';
-import runtimeDataUrl from '../../reference/maps/lanzhou/runtime.json?url';
-import { createLanzhouGeneratedArtAssets } from '../../reference/maps/lanzhou/assets.js';
+import runtimeSvgUrl from '../../maps/lanzhou/runtime.svg?url';
+import runtimeDataUrl from '../../maps/lanzhou/runtime.json?url';
+import { createLanzhouGeneratedArtAssets } from '../../maps/lanzhou/assets.js';
 import { prepareMapPackage } from './contract.js';
 
 function resolvePath(source, path) {
@@ -43,6 +43,6 @@ export async function createDefaultMapPackage() {
     createSvg: () => svg,
   };
   return prepareMapPackage(mapPackage, {
-    source: 'reference/maps/lanzhou',
+    source: 'maps/lanzhou',
   });
 }

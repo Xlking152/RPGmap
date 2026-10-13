@@ -6,8 +6,11 @@ import { resolveTokenActor } from '../src/token/actor.js';
 import { infiniteHorrorRuleset as ruleset } from '../src/rulesets/infinite-horror/index.js';
 import { createCanonicalWorldValidator } from '../deployment/local-server/world-schema.mjs';
 import { applyWorldOperations, projectWorldOperationState } from '../src/world/operations.js';
-import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 import { migrateTestStateToWorldV3 } from './helpers/world-v3.js';
+import { installServerMapFixtures } from './helpers/server-map-fixture.js';
+
+installServerMapFixtures();
 
 const map = createMinimalReferencePackage();
 const worldOf = state => state.preferences.worldV2;

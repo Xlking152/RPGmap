@@ -7,7 +7,7 @@ export function registerBuiltInMapPackages(registry = mapPackageRegistry) {
       id: DEFAULT_REFERENCE_MAP_ID,
       version: BUILT_IN_LANZHOU_MAP.version,
       title: BUILT_IN_LANZHOU_MAP.title,
-      source: 'reference/maps/lanzhou',
+      source: 'maps/lanzhou',
       load: async () => {
         const { createDefaultMapPackage } = await import('./default-map.js');
         return createDefaultMapPackage();

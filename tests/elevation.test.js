@@ -17,13 +17,13 @@ import {
 } from '../src/elevation/runtime-context.js';
 import { createNavigationGrid, NAVIGATION_TILES } from '../src/engine/navigation.js';
 import { prepareMapPackage } from '../src/map-package/contract.js';
-import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 import {
   LANZHOU_DEFAULT_BLOCKING_HEIGHT_METERS,
   LANZHOU_OPENABLE_FEATURE_IDS,
   applyLanzhouCapabilities,
-} from '../reference/maps/lanzhou/capabilities.js';
-import { createLanzhouMapPackage } from '../reference/maps/lanzhou/package.js';
+} from '../maps/lanzhou/capabilities.js';
+import { createLanzhouMapPackage } from '../maps/lanzhou/package.js';
 
 function simpleFeature(height = 20) {
   return {

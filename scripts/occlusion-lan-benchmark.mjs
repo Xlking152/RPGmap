@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { watch } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { mkdir, open, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -25,7 +26,7 @@ const [{ createActorFromRulesetImport }, { infiniteHorrorRuleset }, { INFINITE_H
   load('src/token/model.js'), load('src/spatial/kernel.js'), load('src/engine/state.js'), load('src/engine/navigation.js'),
   load('src/vision/fog.js'), load('deployment/local-server/world-wal.mjs'), load('src/world/operations.js'),
 ]);
-const map = JSON.parse(await readFile(path.join(root, 'reference/maps/lanzhou/runtime.json'), 'utf8'));
+const map = JSON.parse(await readFile(path.join(root, existsSync(path.join(root, 'maps/lanzhou/runtime.json')) ? 'maps/lanzhou/runtime.json' : 'reference/maps/lanzhou/runtime.json'), 'utf8'));
 const sceneId = 'occlusion-lan-scene';
 const actorCount = 100, tokenCount = 500, playerCount = 6, distanceMeters = 425, rangeMeters = 1000;
 const emptyScene = { id: sceneId, sceneEvents: [], featureStates: {}, tokens: [] };

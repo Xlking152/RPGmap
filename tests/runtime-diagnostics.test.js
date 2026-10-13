@@ -50,9 +50,20 @@ test('Diagnostics distinguish frames, input scheduling, confirmations and DOM wo
   assert.equal(result.metrics['input.frame'].p95, 16);
   assert.equal(result.metrics['network.confirm'].p95, 9);
   assert.equal(result.metrics['sheet.dom'].p95, 2);
+  assert.equal(result.metrics['sheet.dom'].p50, 2);
   assert.equal(JSON.stringify(result).includes('hidden-token-id'), false);
   f.diagnostic.setEnabled(false);
   assert.equal(f.frames.size, 0); assert.equal(f.listeners.size, 0);
+});
+
+test('Navigation diagnostics retain real rebuild timings and cache query counts with median and p95', () => {
+  const { diagnostic } = fixture(); diagnostic.setEnabled(true);
+  for (const duration of [2, 6, 4]) diagnostic.record('navigation.prepare', duration);
+  diagnostic.record('navigation.cacheHit', 1); diagnostic.record('navigation.cacheHit', 1);
+  const result = diagnostic.snapshot().metrics;
+  assert.equal(result['navigation.prepare'].count, 3);
+  assert.equal(result['navigation.prepare'].p50, 4); assert.equal(result['navigation.prepare'].p95, 6);
+  assert.equal(result['navigation.cacheHit'].count, 2);
 });
 
 test('Diagnostics exclude background frame gaps and keep bounded samples while retaining totals', () => {

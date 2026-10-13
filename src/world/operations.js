@@ -41,6 +41,7 @@ import { normalizeJournalEntry } from '../journal/model.js';
 import { isCurrentRuntimeOperationInput } from '../engine/state-access.js';
 import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
 import { registeredInfiniteHorrorRuleset } from '../ruleset/index.js';
+import { createDefaultSceneSettings } from './scene-defaults.js';
 
 export {
   DOCUMENT_BATCH_LIMIT,
@@ -98,6 +99,8 @@ const OPERATION_TYPES = new Set([
   'scene.delete',
   'scene.content.replace',
   'scene.reset',
+  'scene.environment.reset',
+  'scene.clear',
   'scene.settings.patch',
   'scene.door.use',
   'scene.featureState.patch',
@@ -1072,6 +1075,45 @@ function applyCanonicalOperation(state, operation, context = {}) {
     scene.tokens = [];
     scene.sceneEvents = [];
     return { action: type, sceneId: String(scene.id), tokenIds };
+  }
+
+  if (type === 'scene.environment.reset' || type === 'scene.clear') {
+    if (!['gm', 'offline'].includes(context.source?.role)) {
+      fail('Only the GM can reset the Scene', 'scene_reset_gm_only');
+    }
+    const scene = sceneById(world, payload.sceneId);
+    if (payload.expectedActiveSceneId !== undefined
+      && (String(world.activeSceneId) !== identifier(payload.expectedActiveSceneId, 'expectedActiveSceneId')
+        || String(scene.id) !== String(world.activeSceneId))) {
+      fail('当前场景已切换，请重新操作', 'scene_content_conflict');
+    }
+    scene.sceneEvents = [];
+    scene.featureStates = {};
+    scene.occlusionShapes = [];
+    scene.fog = normalizeFogState();
+    const tokenIds = type === 'scene.clear' ? (scene.tokens || []).map(token => String(token.id)) : [];
+    if (type === 'scene.clear') {
+      scene.tokens = [];
+      scene.markers = [];
+      scene.attackAreas = [];
+      scene.settings = createDefaultSceneSettings();
+    }
+    const positionConflicts = [];
+    if (type === 'scene.environment.reset' && typeof context.validateTokenMovePath === 'function') {
+      for (const token of scene.tokens || []) {
+        if (token.placement !== 'map') continue;
+        const position = { placement: 'map', x: Number(token.x), y: Number(token.y),
+          elevationMeters: Number(token.elevationMeters) || 0 };
+        // Use reposition validation to ignore locks and action restrictions.
+        // This checks the restored geometry without moving or rewriting a Token.
+        const validation = context.validateTokenMovePath({ state, world, scene, token,
+          origin: position, destination: position, waypoints: [position], operationType: 'token.reposition' });
+        if (validation?.valid === false && validation.code === 'path_blocked') positionConflicts.push(String(token.id));
+      }
+    }
+    return { action: type, sceneId: String(scene.id), tokenIds,
+      positionConflicts,
+      resetScope: type === 'scene.clear' ? 'scene' : 'environment' };
   }
 
   if (type === 'scene.content.replace') {

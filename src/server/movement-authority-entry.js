@@ -1,40 +1,23 @@
 import { createMovementAuthority } from '../movement/authority.js';
-import { createMinimalReferencePackage } from '../../reference/maps/minimal/package.js';
-import lanzhouMapPackage from '../../reference/maps/lanzhou/runtime.json' with { type: 'json' };
 import { normalizeActorDocument } from '../actor/model.js';
 import { resolveStatuses } from '../status/model.js';
 import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
 
-// Own the fixed bundled data before freezing it. Imported JSON and reference
-// factories also serve public mutable adapters; freezing their shared inputs
-// would change those contracts. Scene changes remain separate mutable inputs.
-function ownBundledMap(source) {
-  const { createSvg, ...data } = source;
-  const owned = structuredClone(data);
-  function freezeData(value) {
-    if (value && typeof value === 'object') {
-      Object.values(value).forEach(freezeData);
-      Object.freeze(value);
-    }
-    return value;
-  }
-  freezeData(owned);
-  // Only the minimal map has this fixed renderer. Preserve its function and
-  // top-level key order while all geometry and light data stays privately owned.
-  return Object.freeze(Object.fromEntries(Object.keys(source).map(key =>
-    [key, key === 'createSvg' ? createSvg : owned[key]])));
+// The verified package store owns immutable map defaults. Scene changes remain
+// separate mutable inputs; this entry never imports authoring map data.
+let resolveInstalledMap = () => null;
+
+/** The authority receives maps from the verified, versioned package store. */
+export function setServerMapResolver(resolve) {
+  if (typeof resolve !== 'function') throw new TypeError('Map resolver must be a function');
+  resolveInstalledMap = resolve;
 }
-const lanzhou = ownBundledMap(lanzhouMapPackage);
-const packages = new Map([
-  [String(lanzhou.id), lanzhou],
-]);
-const minimal = ownBundledMap(createMinimalReferencePackage());
-packages.set(String(minimal.id), minimal);
 
 export function mapForScene(scene) {
   const reference = scene?.mapPackage || {};
-  const mapPackage = packages.get(String(reference.id ?? reference.mapId ?? '')) || null;
+  const mapPackage = resolveInstalledMap(scene) || null;
   if (!mapPackage) return null;
+  if (String(mapPackage.id) !== String(reference.id ?? reference.mapId ?? '')) return null;
   const requestedVersion = String(reference.version ?? reference.mapVersion ?? '');
   const actualVersion = String(mapPackage.version ?? mapPackage.mapVersion ?? '');
   return requestedVersion && requestedVersion !== actualVersion ? null : mapPackage;

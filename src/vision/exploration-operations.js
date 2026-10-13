@@ -6,7 +6,7 @@ import { sphereGroundRadiusMeters } from '../spatial/kernel.js';
 const worldOf = state => state?.preferences?.worldV2;
 const sceneOf = (state, sceneId) => worldOf(state)?.scenes?.find(scene => String(scene.id) === String(sceneId));
 const movementTypes = new Set(['token.move', 'token.movePath', 'token.reposition']);
-const invalidatingTypes = new Set(['scene.fog.reset', 'scene.fog.hide', 'scene.reset', 'scene.delete', 'scene.upsert']);
+const invalidatingTypes = new Set(['scene.fog.reset', 'scene.fog.hide', 'scene.reset', 'scene.environment.reset', 'scene.clear', 'scene.delete', 'scene.upsert']);
 const pointOf = token => ({ x: Number(token.x), y: Number(token.y), elevationMeters: Number(token.elevationMeters) || 0 });
 const samePoint = (a, b) => a.x === b.x && a.y === b.y && a.elevationMeters === b.elevationMeters;
 
@@ -115,7 +115,7 @@ export function createExplorationOperationCapture({ sourceIds = [], ruleset, map
         }
       }
       const status = operation.type.startsWith('status.');
-      const refresh = !movementTypes.has(operation.type) && (/^scene\.(?:door|occlusion|featureState|content|settings)/.test(operation.type)
+      const refresh = !movementTypes.has(operation.type) && (/^scene\.(?:door|occlusion|featureState|content|settings|environment\.reset)/.test(operation.type)
         || /^token\.(?:access|actorDelta|light)/.test(operation.type) || /^actor\./.test(operation.type));
       if (refresh || status) for (const tokenId of watched) {
         const source = describe(state, tokenId, worldOf(state)?.activeSceneId);

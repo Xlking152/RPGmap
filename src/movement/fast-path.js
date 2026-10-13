@@ -1,6 +1,7 @@
 import { tokenElevationMeters } from '../elevation/model.js';
 import { createMovementAuthority } from './authority.js';
 import { normalizeMovementMode } from './model.js';
+import { readRuntimeState } from '../engine/state-access.js';
 
 const clone = structuredClone;
 
@@ -36,8 +37,20 @@ export function createMovementFastPathSystem() {
 
       const authoritativeValidate = createMovementAuthority(() => api.mapPackage);
       const grids = new Map();
+      let generation = 0;
+      const sceneIdentity = () => {
+        const world = readRuntimeState(api)?.preferences?.worldV2 || api.world.get();
+        const scene = world?.scenes?.find(item => String(item.id) === String(world.activeSceneId));
+        return JSON.stringify([world?.id, world?.activeSceneId, scene?.mapPackage?.id, scene?.mapPackage?.version]);
+      };
+      let observedScene = sceneIdentity();
+      const transitionFailure = () => failure('scene_content_conflict', '当前场景已切换或重置，请重新规划移动');
+      const captureScene = () => ({ generation, identity: sceneIdentity(), sceneId: String(api.world.get()?.activeSceneId || '') });
+      const isCurrent = context => context.generation === generation && context.identity === sceneIdentity()
+        && api.world?.isSceneTransitionPending?.() !== true;
 
       async function validateTokenMove(tokenId, destination, options = {}) {
+        if (api.world?.isSceneTransitionPending?.()) return transitionFailure();
         const access = api.movement.inspectMovementAccess?.(tokenId, destination, options);
         if (!access?.valid) return access || failure('movement_access_denied', '当前 Token 无法移动');
         const movementMode = normalizeMovementMode(options.movementMode, access.token.movement?.mode || 'walk');
@@ -59,6 +72,8 @@ export function createMovementFastPathSystem() {
       }
 
       async function moveTokenPath(rawTokenIds, leaderId, rawWaypoints, { method = 'drag', movementMode = null, verticalAction = null } = {}) {
+        const context = captureScene();
+        if (!isCurrent(context)) return transitionFailure();
         const tokenIds = [...new Set((Array.isArray(rawTokenIds) ? rawTokenIds : []).map(String).filter(Boolean))];
         const leader = api.tokens?.get?.(leaderId);
         movementMode ||= api.movement?.getPreferredMode?.(leaderId) || leader?.movement?.mode || 'walk';
@@ -88,6 +103,7 @@ export function createMovementFastPathSystem() {
             let from = origin;
             for (const destination of route) {
               const validation = await validateTokenMove(tokenId, destination, { from, movementMode, verticalAction });
+              if (!isCurrent(context)) return transitionFailure();
               if (!validation?.valid) return validation;
               distance += Number(validation.distance) || Math.hypot(destination.x - from.x, destination.y - from.y);
               from = destination;
@@ -96,7 +112,8 @@ export function createMovementFastPathSystem() {
           }
           // Both offline and LAN animation starts from committed document changes.
           // A render during prediction could otherwise enqueue the old canonical origin.
-          const sceneId = String(api.world.get()?.activeSceneId || '');
+          if (!isCurrent(context)) return transitionFailure();
+          const sceneId = context.sceneId;
           const result = await api.documents.dispatch({
             action: 'move',
             document: { type: 'Token', id: String(leaderId), parent: { type: 'Scene', id: sceneId } },
@@ -117,6 +134,7 @@ export function createMovementFastPathSystem() {
       }
 
       function inspectTokenMove(tokenId, destination, options = {}) {
+        if (api.world?.isSceneTransitionPending?.()) return transitionFailure();
         const access = api.movement.inspectMovementAccess?.(tokenId, destination, options);
         if (!access?.valid) return access || failure('movement_access_denied', '当前 Token 无法移动');
         const movementMode = normalizeMovementMode(options.movementMode,
@@ -146,6 +164,13 @@ export function createMovementFastPathSystem() {
       for (const eventName of ['scene:damage', 'scene:restore', 'scene:undo', 'state:import']) {
         api.on?.(eventName, () => grids.clear());
       }
+      for (const eventName of ['scene:switch-starting', 'scene:reset-starting', 'scene:activate', 'state:import', 'app:destroy']) {
+        api.on?.(eventName, () => { generation++; grids.clear(); });
+      }
+      api.on?.('state:commit', () => {
+        const next = sceneIdentity();
+        if (next !== observedScene) { generation++; grids.clear(); observedScene = next; }
+      });
       api.on?.('scene:content-change', event => {
         if (event.detail?.types?.includes('SceneEvent')) grids.clear();
       });

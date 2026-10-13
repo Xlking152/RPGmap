@@ -77,6 +77,13 @@ export function createSelectionController(state, notify) {
       let marquee = null;
       let restoreDragging = false;
       let spaceHeld = false;
+      let destroyed = false;
+      const off = [];
+      const listen = (target, name, callback, options) => {
+        target?.addEventListener?.(name, callback, options);
+        off.push(() => target?.removeEventListener?.(name, callback, options));
+      };
+      const on = (name, callback) => { off.push(api.on(name, callback)); };
 
       api.setTool = tool => {
         currentTool = String(tool || 'pan');
@@ -145,13 +152,15 @@ export function createSelectionController(state, notify) {
       }
 
       function cleanupMarquee() {
+        if (marquee) { try { mapElement.releasePointerCapture?.(marquee.pointerId); } catch {} }
         marquee?.node?.remove();
         marquee = null;
         if (restoreDragging) api.map.dragging.enable();
         restoreDragging = false;
       }
 
-      documentNode.addEventListener('pointerdown', event => {
+      listen(documentNode, 'pointerdown', event => {
+        if (destroyed || api.world?.isSceneTransitionPending?.()) return;
         if (event.button !== 0 || editableTarget(event.target)) return;
         if (!mapElement.contains(event.target)) return;
         if (event.target.closest?.('.leaflet-control, .ui-menu, .ui-context-menu')) return;
@@ -191,14 +200,14 @@ export function createSelectionController(state, notify) {
         setMarqueeBox(startClient, startClient);
       }, true);
 
-      documentNode.addEventListener('click', event => {
+      listen(documentNode, 'click', event => {
         if (!mapElement.contains(event.target) || !event.target.closest?.('.rpg-token-v2')) return;
         if (!event.shiftKey && !event.altKey) return;
         event.preventDefault();
         event.stopImmediatePropagation();
       }, true);
 
-      documentNode.addEventListener('pointermove', event => {
+      listen(documentNode, 'pointermove', event => {
         if (!marquee || event.pointerId !== marquee.pointerId) return;
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -207,7 +216,7 @@ export function createSelectionController(state, notify) {
         setMarqueeBox(marquee.startClient, { x: event.clientX, y: event.clientY });
       }, true);
 
-      documentNode.addEventListener('pointerup', event => {
+      listen(documentNode, 'pointerup', event => {
         if (!marquee || event.pointerId !== marquee.pointerId) return;
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -223,47 +232,58 @@ export function createSelectionController(state, notify) {
         apply(ids, drag.mode, ids.at(-1) || null);
       }, true);
 
-      documentNode.addEventListener('pointercancel', event => {
+      listen(documentNode, 'pointercancel', event => {
         if (!marquee || event.pointerId !== marquee.pointerId) return;
         cleanupMarquee();
       }, true);
 
-      documentNode.addEventListener('keydown', event => {
+      listen(documentNode, 'keydown', event => {
         if (event.code !== 'Space' || editableTarget(event.target)) return;
         spaceHeld = true;
         event.preventDefault();
       }, true);
-      documentNode.addEventListener('keyup', event => { if (event.code === 'Space') spaceHeld = false; }, true);
-      globalThis.addEventListener?.('blur', () => { spaceHeld = false; });
+      listen(documentNode, 'keyup', event => { if (event.code === 'Space') spaceHeld = false; }, true);
+      listen(globalThis, 'blur', () => { spaceHeld = false; });
 
-      api.on('token:select', event => {
+      on('token:select', event => {
         const id = event.detail?.tokenId || event.detail?.id;
         if (!id) return;
         state.replace([id], id);
         publish('single');
       });
-      api.on('token:move', event => {
+      on('token:move', event => {
         const tokenId = String(event.detail?.tokenId || event.detail?.id || '');
         if (tokenId && state.snapshot().ids.includes(tokenId)) renderSelection();
       });
-      api.on('token:delete', event => {
+      on('token:delete', event => {
         const id = event.detail?.tokenId || event.detail?.id;
         if (!id) return;
         state.remove([id]);
         publish('delete');
       });
-      api.on('state:import', () => {
+      on('state:import', () => {
         const valid = new Set(tokens().map(token => String(token.id)));
         state.replace(state.snapshot().ids.filter(id => valid.has(id)), state.primaryId);
         publish('import');
       });
-      api.on('state:commit', event => {
+      for (const name of ['scene:switch-starting', 'scene:reset-starting', 'scene:activate']) {
+        on(name, () => {
+          cleanupMarquee(); spaceHeld = false;
+          state.clear(); publish('scene-transition');
+        });
+      }
+      on('state:commit', event => {
         const source = String(event.detail?.source || '');
         if (!source.startsWith('token-v2:') && !source.startsWith('world-v2:')
           && !source.startsWith('movement:') && !source.startsWith('feature:')) return;
         const valid = new Set(tokens().map(token => String(token.id)));
         state.replace(state.snapshot().ids.filter(id => valid.has(id)), state.primaryId);
         publish(source);
+      });
+      on('app:destroy', () => {
+        destroyed = true; cleanupMarquee(); spaceHeld = false; state.clear();
+        highlightLayer.clearLayers(); api.map.removeLayer?.(highlightLayer);
+        off.splice(0).forEach(dispose => dispose?.());
       });
 
       renderSelection();

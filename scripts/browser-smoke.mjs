@@ -747,8 +747,8 @@ try {
     }
     const assets = (entry?.assets || []).filter(file => file.endsWith('.webp'));
     const runtimeAssets = [
-      manifest['reference/maps/lanzhou/runtime.json']?.file,
-      manifest['reference/maps/lanzhou/runtime.svg']?.file,
+      manifest['maps/lanzhou/runtime.json']?.file,
+      manifest['maps/lanzhou/runtime.svg']?.file,
     ];
     if (assets.length !== 29) throw new Error('expected 29 Lanzhou WebP assets, got ' + assets.length);
     if (runtimeAssets.some(file => !file) || runtimeAssets.some(file => !(entry?.assets || []).includes(file))) {

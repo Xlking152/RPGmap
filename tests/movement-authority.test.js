@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 import { validateAuthoritativeTokenMovePath } from '../src/server/movement-authority-entry.js';
-import lanzhou from '../reference/maps/lanzhou/runtime.json' with { type: 'json' };
+import lanzhou from '../maps/lanzhou/runtime.json' with { type: 'json' };
 import { createNavigationGrid, inspectDirectNavigationPath } from '../src/engine/navigation.js';
 import { deriveSceneState } from '../src/engine/state.js';
 import { createMovementAuthority, resolveMovementStatus } from '../src/movement/authority.js';
 import { getActiveRuleset } from '../src/ruleset/index.js';
+import { installServerMapFixtures } from './helpers/server-map-fixture.js';
+
+installServerMapFixtures();
 
 function context(overrides = {}) {
   const mapPackage = createMinimalReferencePackage();
@@ -26,7 +29,7 @@ function context(overrides = {}) {
   };
 }
 
-test('server movement authority accepts a clear path on a built-in map', () => {
+test('server movement authority accepts a clear path on a verified installed map', () => {
   const result = validateAuthoritativeTokenMovePath({
     ...context(), waypoints: [{ x: 740, y: 430 }],
   });
@@ -102,12 +105,12 @@ test('server movement authority validates every segment and rejects collision', 
   assert.equal(result.segmentIndex, 0);
 });
 
-test('unknown external MapPackages use the explicit bounds-only fallback', () => {
+test('unknown external MapPackages fail closed without bypassing collision checks', () => {
   const value = context();
   value.scene.mapPackage = { id: 'external-map', version: '9.9.9' };
   assert.deepEqual(validateAuthoritativeTokenMovePath({
     ...value, waypoints: [{ x: 9999, y: 9999 }],
-  }), { valid: true, collisionValidation: 'bounds-only' });
+  }), { valid: false, code: 'movement_map_unavailable', reason: 'movement_map_unavailable' });
 });
 
 test('shared level-route collision caches match fresh checks across movers, doors, heights and inactive Scenes', () => {

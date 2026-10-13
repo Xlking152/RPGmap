@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 import { MapPackageRegistry } from '../src/map-package/registry.js';
 
 test('MapPackage Registry lazy-loads and caches a registered package', async () => {

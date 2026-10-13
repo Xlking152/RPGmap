@@ -1,19 +1,21 @@
 # RPGmap
 
-RPGmap 是一个面向桌面跑团的自托管 Web 战术地图工具。当前版本为 **2.5.5**，提供 World/Scene 管理、Actor 模板与 Token 实例、米制空间移动、生命/伤势、Status V4、战斗、折叠聊天、四级权限投影、三维感知与光源、战争迷雾、模板资料库和 Journal，以及 Windows 本机/局域网多人运行包。
+RPGmap 是面向桌面跑团的自托管战术地图工具。当前开发版本为 **3.0.0-rc.1**，使用 Windows 桌面启动器管理 World、地图、规则和恢复点，玩家仍通过浏览器加入。World schema 4、权限、米制空间、Actor/Token 实例和 WAL 机制保持兼容。
 
-内置的“北宋兰州城”是复杂 Reference MapPackage，用于验证建筑、城墙、城门、桥梁、水体、破坏、洪水、导航、有限高度 LOS 和 29 张 WebP 美术资源能够通过通用 Core 运行。v2.4.0 将旧英尺字段迁移到米制空间，并保持稳定 Feature、Actor、Token 与 Scene 引用。
+“北宋兰州城”作为独立的 `.rpgmap` 推荐地图，与安装器一起提供，通过正式导入流程安装。程序本身不内置兰州地图；地图无引用时可卸载。制作项目在 `maps/`，公共制图素材及索引在 `素材库/`。
 
 ## 快速开始
 
-正式 Windows Release：
+Windows 候选交付目录：`artifact/RPGmap-v3.0.0-rc.1-验收/`。是否通过全部验收，以其中的报告为准；候选版本不能视为正式 v3.0.0。
 
-1. 安装 Node.js `20.19+` 或 `22.12+`。
-2. 下载并解压 [RPGmap-v2.5.5.zip](https://github.com/Xlking152/RPGmap/releases/download/v2.5.5/RPGmap-v2.5.5.zip)。
-3. 双击 `start-rpgmap.bat`。
-4. GM 使用启动窗口中的 Local URL 与 GM Secret；同一局域网的 Player 使用 LAN URL 与 Join Code。
+1. 运行 `RPGmap-Setup-3.0.0-rc.1.exe` 安装，然后打开桌面 RPGmap 图标。无需系统 Node.js。
+2. 在管理首页导入随附的 `北宋兰州城-1.1.0.rpgmap`。
+3. 选择规则和地图创建 World，点击启动。
+4. 玩家使用管理首页显示的局域网地址，通过浏览器申请身份，由 GM 分配角色与权限。
 
-RPGmap 仅面向本机和可信局域网，不应直接暴露到公网。World、用户和备份保存在解压目录的 `map/` 下；升级前应复制整个 `map/`。
+程序与用户数据分离。World、权限、操作日志、内容包、上传及备份位于 `%LOCALAPPDATA%/RPGmap/UserData`。覆盖安装保留用户数据；旧版 `map/` 可通过桌面导入向导复制、校验后迁移，原目录保留。
+
+现行开发与制图规范见 [v3 开发与制图说明](文档/RPGmap-v3.0.0-开发与制图说明.md)；完整目标和验收范围见 [任务书](文档/RPGmap-v3.0.0-架构分层与启动器实施任务书.md)。v2.x 发布说明继续保留用于历史行为对照。
 
 ### Radmin VPN 联机
 

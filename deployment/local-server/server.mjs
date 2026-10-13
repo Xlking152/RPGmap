@@ -4,6 +4,12 @@ import { readFile, stat, writeFile, rename, copyFile, readdir, rm, open } from '
 import { Worker } from 'node:worker_threads';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
+import { MapPackageStore } from './package-store.mjs';
+import { RulesetPackageStore } from './ruleset-store.mjs';
+import { ManagedWorldStore, writeManagedJson, ensureManagedDirectory } from './managed-worlds.mjs';
+import { importLegacyDirectory } from './legacy-import.mjs';
+import { inspectContentPackage } from './package-inspection.mjs';
+import { rulesetRegistry, setActiveRuleset } from '../../src/ruleset/index.js';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { canPermission, canPlaceActorTemplate } from './permissions-model.mjs';
@@ -56,6 +62,7 @@ import {
   matchesSourceFreeProjectionScope,
   projectionCollectionChanges,
   serverRuleset,
+  configureServerRuleset,
   sphereGroundRadiusMeters,
   sceneExplorationContext,
   createCanonicalExplorationFogMerger,
@@ -79,8 +86,8 @@ import {
 import { createWorldWal } from './world-wal.mjs';
 import { encodeResumePatch, decodeResumePatch } from './resume-patch-codec.mjs';
 import { createWorldCheckpoint } from './world-checkpoint.mjs';
-import { mapForScene, validateAuthoritativeTokenMovePath } from './movement-authority.mjs';
-import { createContentStorage, prepareContentUpgrade } from './content-storage.mjs';
+import { mapForScene, setServerMapResolver, validateAuthoritativeTokenMovePath } from './movement-authority.mjs';
+import { createContentStorage, prepareContentUpgrade, publishManagedContentReplacements } from './content-storage.mjs';
 import { hasRetainedContentReference } from './content-history.mjs';
 import { commitStorageUpgrade, recoverStorageUpgrade } from './storage-upgrade.mjs';
 import { emptyExploration, validateExploration, enqueueExploration, explorationDelta,
@@ -88,10 +95,20 @@ import { emptyExploration, validateExploration, enqueueExploration, explorationD
 import { createExplorationFogSender } from './exploration-fog-transfer.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
+const MANAGEMENT_ROOT = path.resolve(process.env.RPGMAP_DATA_DIR || process.env.RPGMAP_PACKAGE_DATA_DIR || path.join(ROOT, 'data'));
+const MANAGED = Boolean(process.env.RPGMAP_DATA_DIR);
+const MANAGER_SECRET = String(process.env.RPGMAP_MANAGER_SECRET || '');
+const mapPackages = await new MapPackageStore({ root: path.join(MANAGEMENT_ROOT, 'packages', 'maps') }).initialize();
+const rulePackages = await new RulesetPackageStore({ root: path.join(MANAGEMENT_ROOT, 'packages', 'rulesets'), builtins: [serverRuleset] }).initialize();
+const managedWorlds = await new ManagedWorldStore({ root: MANAGEMENT_ROOT, maps: mapPackages, rulesets: rulePackages, validateState: assertWorldState }).initialize();
+if (MANAGED) await ensureManagedDirectory(MANAGEMENT_ROOT, 'uploads/content');
+setServerMapResolver(scene => scene ? mapPackages.mapForScene(scene) : null);
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 30000);
-const WORLD_ID = String(process.env.RPGMAP_WORLD_ID || 'default').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'default';
-const STORAGE = createPortableStorage({ root: ROOT, worldId: WORLD_ID, env: process.env });
+const WORLD_ID = process.env.RPGMAP_WORLD_ID || managedWorlds.activeId() || 'default';
+managedWorlds.worldDirectory(WORLD_ID);
+const STORAGE = createPortableStorage({ root: ROOT, worldId: WORLD_ID, env: { ...process.env,
+  ...(MANAGED ? { RPGMAP_MAP_DIR: managedWorlds.worldDirectory(WORLD_ID), RPGMAP_UPLOAD_DIR: path.join(MANAGEMENT_ROOT, 'uploads') } : {}) } });
 const PUBLIC_DIR = STORAGE.appDir;
 const MAP_DIR = STORAGE.mapDir;
 const WORLD_FILE = STORAGE.worldFile;
@@ -100,7 +117,6 @@ const ACCESS_FILE = STORAGE.usersFile;
 const PLAYER_JOIN_CODE = String(process.env.RPGMAP_JOIN_CODE || '').trim();
 const GM_SECRET = String(process.env.RPGMAP_GM_SECRET || randomBytes(4).toString('hex').toUpperCase());
 const MAX_WS_PAYLOAD = 8 * 1024 * 1024;
-const fallbackVisionMaps = new Map();
 const BACKUP_RETENTION = 10;
 const TEST_ALLOW_MISSING_ORIGIN = process.env.NODE_ENV === 'test' && process.env.RPGMAP_TEST_ALLOW_MISSING_ORIGIN === '1';
 
@@ -412,6 +428,13 @@ if (loadedAccess !== undefined) {
 let upgradeRequired = loadedAccess !== undefined && JSON.stringify(access) !== JSON.stringify(loadedAccess);
 let upgradeContents = {};
 if (world.state) {
+  const reference = world.state.preferences?.worldV2?.ruleset;
+  if (reference) {
+    const selectedRuleset = await rulePackages.get(reference);
+    rulesetRegistry.register(selectedRuleset);
+    setActiveRuleset(reference);
+    configureServerRuleset(selectedRuleset);
+  }
   const oldCanonical = world.state.preferences?.worldV2;
   const oldStatusSchema = world.state.preferences?.entitySystem?.schemaVersion;
   const contentMigration = await prepareContentUpgrade(world.state, path.join(STORAGE.uploadsDir, 'content'));
@@ -429,8 +452,9 @@ if (world.state) {
   upgradeRequired ||= featureMigration.migrated || schemaChanged;
 }
 if (upgradeRequired) {
+  if (MANAGED) await publishManagedContentReplacements(path.join(STORAGE.uploadsDir, 'content'), upgradeContents);
   await commitStorageUpgrade(STORAGE, {
-    ...upgradeContents,
+    ...(MANAGED ? {} : upgradeContents),
     'world.json': Buffer.from(JSON.stringify(world)),
     'world.operations.ndjson': Buffer.alloc(0),
     ...(loadedAccess === undefined ? {} : { 'users.json': Buffer.from(JSON.stringify(access)) }),
@@ -1295,6 +1319,7 @@ function operationDenied(code, message) {
   throw error;
 }
 function authorizeOperations(session, operations) {
+  if (worldTransitionPending || shuttingDown) operationDenied('world_transition_pending', 'World 正在切换，请等待重新连接');
   if (operations.some(operation => operation.type === 'scene.fog.explore')) {
     operationDenied('fog_explore_server_only', 'Fog exploration is derived from the authoritative vision source');
   }
@@ -1531,18 +1556,7 @@ function authorizeOperations(session, operations) {
 function visionMapForScene(scene) {
   const registered = mapForScene(scene);
   if (registered || !scene) return registered;
-  const ref = scene.mapPackage || {};
-  const key = JSON.stringify(ref);
-  let map = fallbackVisionMaps.get(key);
-  if (!map) {
-    map = { id: ref.id || 'unknown-map', version: ref.version || '1',
-      metersPerUnit: Number(ref.metersPerUnit) > 0 ? Number(ref.metersPerUnit) : 1,
-      ...(Number(ref.width) > 0 ? { width: Number(ref.width) } : {}),
-      ...(Number(ref.height) > 0 ? { height: Number(ref.height) } : {}) };
-    fallbackVisionMaps.set(key, map);
-    if (fallbackVisionMaps.size > 2) fallbackVisionMaps.delete(fallbackVisionMaps.keys().next().value);
-  }
-  return map;
+  throw Object.assign(new Error('Scene requires an installed MapPackage'), { code: 'map_package_not_found' });
 }
 function explorationContextFor(state, sceneId) {
   const scene = canonicalWorldScene(state, sceneId);
@@ -1697,7 +1711,7 @@ const contentStorage = createContentStorage({
   directory: path.join(STORAGE.uploadsDir, 'content'),
   getState: () => world.state,
   getProjection: session => audienceStateFor(session),
-  retainedReference: reference => hasRetainedContentReference(STORAGE, reference),
+  retainedReference: async reference => await hasRetainedContentReference(STORAGE, reference) || (MANAGED && await managedWorlds.retainsContent(reference)),
   authenticate(req) {
     if (req.headers.origin && !requestHasSameOrigin(req)) return null;
     const match = /^Bearer ([a-f0-9]{64})$/.exec(String(req.headers.authorization || ''));
@@ -1712,6 +1726,7 @@ const contentStorage = createContentStorage({
     worldCheckpoint.noteActivity();
     const pending = messageChain.then(() => {
       if (storageBlocked) throw new Error('storage_recovery_required');
+      if (worldTransitionPending || shuttingDown) throw Object.assign(new Error('world_transition_pending'), { code: 'world_transition_pending' });
       return task();
     });
     messageChain = pending.catch(() => {});
@@ -1719,9 +1734,151 @@ const contentStorage = createContentStorage({
   },
 });
 
+function managerAuthenticated(req, desktopOnly = false) {
+  if (req.headers.origin && !requestHasSameOrigin(req)) return false;
+  const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+  const cookie = String(req.headers.cookie || '').split(';').map(value => value.trim()).find(value => value.startsWith('rpgmap_manager='));
+  const supplied = String(req.headers['x-rpgmap-manager'] || cookie?.slice('rpgmap_manager='.length) || '');
+  if (local && MANAGER_SECRET && supplied === MANAGER_SECRET) return true;
+  if (desktopOnly) return false;
+  const bearer = /^Bearer ([a-f0-9]{64})$/.exec(String(req.headers.authorization || ''));
+  return Boolean(bearer && [...sessions.values()].some(session => session.contentToken === bearer[1]
+    && session.role === 'gm' && session.identityStatus === 'active'));
+}
+async function requestBody(req, limit = 256 * 1024 * 1024) {
+  if (Number(req.headers['content-length']) > limit) throw Object.assign(new Error('request_too_large'), { code: 'request_too_large' });
+  const chunks = []; let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) throw Object.assign(new Error('request_too_large'), { code: 'request_too_large' });
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+function managementConnection() {
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : PORT;
+  const hash = new URLSearchParams({ 'rpgmap-host': '1', gmSecret: GM_SECRET });
+  const localUrl = `http://127.0.0.1:${port}/#${hash}`;
+  return { localUrl, hostUrl: localUrl, port, lanUrls: listNetworkUrls(port), joinCode: PLAYER_JOIN_CODE,
+    dataDirectory: MANAGEMENT_ROOT, version: packageVersion };
+}
+function managementTransaction(task) {
+  worldCheckpoint.noteActivity();
+  const pending = messageChain.then(() => {
+    if (storageBlocked || shuttingDown) throw Object.assign(new Error('storage_recovery_required'), { code: 'storage_recovery_required' });
+    return task();
+  });
+  messageChain = pending.catch(() => {});
+  return pending;
+}
+async function createRecoveryPoint({ sceneId = null, reason = 'manual' } = {}) {
+  if (!world.state) throw Object.assign(new Error('world_uninitialized'), { code: 'world_uninitialized' });
+  if (sceneId && !world.state.preferences.worldV2.scenes.some(scene => scene.id === sceneId)) throw Object.assign(new Error('scene_not_found'), { code: 'scene_not_found' });
+  return managedWorlds.backup({ worldId: WORLD_ID, snapshot: durableWorld(world), access, sceneId, reason });
+}
+async function handlePackageRequest(req, res, url) {
+  const match = /^\/api\/packages\/(maps|rulesets)(?:\/([^/]+)\/([^/]+)(?:\/files\/(.+))?)?$/.exec(url.pathname);
+  if (!match) return false;
+  if (!['GET', 'HEAD'].includes(req.method)) { sendJson(res, 405, { error: 'method_not_allowed' }); return true; }
+  const store = match[1] === 'maps' ? mapPackages : rulePackages;
+  if (!match[2]) { sendJson(res, 200, { [match[1]]: store.list() }); return true; }
+  const reference = { id: decodeURIComponent(match[2]), version: decodeURIComponent(match[3]) };
+  if (match[4]) await servePublicFile(req, res, store.file(reference, decodeURIComponent(match[4])));
+  else if (match[1] === 'maps') sendJson(res, 200, store.get(reference));
+  else sendJson(res, 200, store.list().find(entry => entry.id === reference.id && entry.version === reference.version));
+  return true;
+}
+async function handleManagementRequest(req, res, url) {
+  if (!url.pathname.startsWith('/api/manage/')) return false;
+  if (!managerAuthenticated(req)) { sendJson(res, 403, { error: 'manager_required' }); return true; }
+  if (url.pathname === '/api/manage/worlds/import-directory' && !managerAuthenticated(req, true)) {
+    sendJson(res, 403, { error: 'desktop_manager_required' }); return true;
+  }
+  const route = url.pathname, method = req.method;
+  if (route === '/api/manage/catalog' && method === 'GET') {
+    const backups = await managedWorlds.backups();
+    const worlds = [];
+    for (const entry of managedWorlds.list()) {
+      const stored = entry.id === WORLD_ID ? world : JSON.parse(await readFile(path.join(managedWorlds.worldDirectory(entry.id), 'world.json'), 'utf8'));
+      worlds.push({ ...entry, sceneCount: stored.state?.preferences?.worldV2?.scenes?.length || 0,
+        backups: backups.filter(item => item.record.worldId === entry.id).map(({ record }) => ({ id: record.id, createdAt: record.createdAt, reason: record.reason })) });
+    }
+    sendJson(res, 200, { maps: mapPackages.list(), rulesets: rulePackages.list(), worlds,
+      activeWorldId: managedWorlds.activeId(), connection: managementConnection() });
+    return true;
+  }
+  const bytes = method === 'POST' ? await requestBody(req) : null;
+  if (method === 'POST' && ['/api/manage/maps/inspect', '/api/manage/rulesets/inspect'].includes(route)) {
+    sendJson(res, 200, inspectContentPackage(route.includes('/maps/') ? 'map' : 'ruleset', bytes));
+    return true;
+  }
+  const input = bytes && !['/api/manage/maps', '/api/manage/rulesets', '/api/manage/maps/inspect', '/api/manage/rulesets/inspect'].includes(route) ? JSON.parse(bytes.toString('utf8')) : null;
+  const output = await managementTransaction(async () => {
+    if (worldTransitionPending) throw Object.assign(new Error('world_transition_pending'), { code: 'world_transition_pending' });
+    if (route === '/api/manage/maps' && method === 'POST') return mapPackages.install(bytes);
+    if (route === '/api/manage/rulesets' && method === 'POST') return rulePackages.install(bytes);
+    if (['/api/manage/maps', '/api/manage/rulesets'].includes(route) && method === 'DELETE') {
+      const ref = { id: url.searchParams.get('id'), version: url.searchParams.get('version') };
+      const references = await managedWorlds.references(ref, { type: route.endsWith('maps') ? 'map' : 'ruleset', activeSnapshot: world });
+      return (route.endsWith('maps') ? mapPackages : rulePackages).remove(ref, { references });
+    }
+    if (route === '/api/manage/worlds' && method === 'POST') return managedWorlds.create(input);
+    if (route === '/api/manage/worlds/import' && method === 'POST') {
+      const incoming = input?.state || input;
+      const content = await prepareContentUpgrade(incoming, path.join(STORAGE.uploadsDir, 'content'));
+      const reference = incoming?.preferences?.worldV2?.ruleset;
+      const rule = await rulePackages.get(reference);
+      const state = migrateWorldSchema3State(migrateLegacySceneFeatureStates(content.state).state, { statusDefinitions: rule.statuses?.definitions }).state;
+      await managedWorlds.validateDependencies(state);
+      // Blobs are immutable; publishing before the World leaves no dangling live reference.
+      await publishManagedContentReplacements(path.join(MANAGEMENT_ROOT, 'uploads', 'content'), content.replacements);
+      return managedWorlds.import(input?.state ? { ...input, state } : state);
+    }
+    if (route === '/api/manage/worlds/import-directory' && method === 'POST') return importLegacyDirectory({ ...input, root: MANAGEMENT_ROOT, worlds: managedWorlds, rulesets: rulePackages });
+    if (route === '/api/manage/worlds/scene-backup' && method === 'POST') return createRecoveryPoint(input);
+    if (route === '/api/manage/worlds/backup' && method === 'POST') {
+      return input.worldId === WORLD_ID ? createRecoveryPoint({ reason: 'manual' }) : managedWorlds.backup({ worldId: input.worldId });
+    }
+    if (route === '/api/manage/worlds/activate' && method === 'POST') {
+      await persistChain; await accessPersistChain;
+      if (world.state) await persistWorld(world);
+      await managedWorlds.activate(input.worldId);
+      worldTransitionPending = true;
+      return { worldId: input.worldId, connection: managementConnection(), restartRequired: true };
+    }
+    if (route === '/api/manage/worlds/restore' && method === 'POST') {
+      await persistChain; await accessPersistChain;
+      if (input.worldId === WORLD_ID) {
+        await persistWorld(world);
+      }
+      const result = await managedWorlds.restore(input);
+      if (input.worldId === WORLD_ID) { explorationClosed = true; worldCheckpoint.close(); worldTransitionPending = true; }
+      return { ...result, restartRequired: input.worldId === WORLD_ID };
+    }
+    if (route === '/api/manage/settings' && method === 'POST') {
+      const port = Number(input.port);
+      if (!Number.isInteger(port) || port < 1024 || port > 65535) throw Object.assign(new Error('invalid_port'), { code: 'invalid_port' });
+      await writeManagedJson(path.join(MANAGEMENT_ROOT, 'config', 'settings.json'), { port });
+      worldTransitionPending = true;
+      return { port, restartRequired: true };
+    }
+    throw Object.assign(new Error('management_route_not_found'), { code: 'management_route_not_found' });
+  });
+  sendJson(res, 200, output);
+  if (output.restartRequired) setTimeout(() => {
+    process.parentPort?.postMessage({ type: 'rpgmap:restart', worldId: output.worldId || WORLD_ID, port: output.port || PORT });
+    shutdown();
+  }, 150);
+  return true;
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (storageBlocked) return sendJson(res, 503, { error: 'storage_recovery_required' });
+    const url = new URL(req.url, 'http://localhost');
+    if (await handlePackageRequest(req, res, url)) return;
+    if (await handleManagementRequest(req, res, url)) return;
     if (await contentStorage.handle(req, res, sendJson)) return;
     if (!['GET', 'HEAD'].includes(req.method || 'GET')) return sendJson(res, 405, { error: 'method_not_allowed' });
     if (req.url === '/api/health') return sendJson(res, 200, {
@@ -1743,7 +1900,8 @@ const server = http.createServer(async (req, res) => {
     }
   } catch (error) {
     console.error('[RPGmap] request failed:', error);
-    if (!res.headersSent) sendJson(res, 500, { error: 'internal_server_error' });
+    if (!res.headersSent) sendJson(res, error.code ? 400 : 500, { error: error.code || 'internal_server_error',
+      ...(error.details ? { details: error.details } : {}) });
     else res.end();
   }
 });
@@ -1752,6 +1910,7 @@ const server = http.createServer(async (req, res) => {
 // every World mutation clones the latest durable revision before it writes.
 let messageChain = Promise.resolve();
 let storageBlocked = false;
+let worldTransitionPending = false;
 let explorationWorker = null;
 let explorationWorkerContextId = null;
 let explorationRequest = null;
@@ -1955,6 +2114,19 @@ server.on('upgrade', (req, socket) => {
     catch { return sendSocket(socket, { type: 'error', code: 'invalid_json', message: 'Invalid JSON' }); }
     try { assertSafeJson(message, 'message'); }
     catch (error) { return sendSocket(socket, { type: 'error', code: error.code || 'invalid_message', message: error.message }); }
+
+    // A restored snapshot is already durable while old sessions still exist.
+    // Gate every writer (including identity claims and full replacements), so
+    // queued work cannot overwrite the restored World or its access directory.
+    if ((worldTransitionPending || shuttingDown)
+      && !['ping', 'access.request', 'world.snapshot.request'].includes(message?.type)) {
+      if (['world.operation', 'document.batch'].includes(message?.type)) {
+        return sendWorldOperationDenied(socket, message, 'world_transition_pending', 'World 正在切换，请等待重新连接');
+      }
+      return sendSocket(socket, { type: message?.type === 'world.push' ? 'world.denied' : 'error',
+        operationId: message?.operationId || null, code: 'world_transition_pending',
+        message: 'World 正在切换，请等待重新连接' });
+    }
 
     if (!joined) {
       if (message?.type !== 'hello') return closeSocket(socket, 1008, 'hello required');
@@ -2311,6 +2483,14 @@ server.on('upgrade', (req, socket) => {
         const authorizedOperations = authorizeOperations(session, envelope.operations);
         await contentStorage.validateReferences(authorizedOperations, session);
         const operations = authorizedOperations;
+        if (operations.some(operation => ['scene.environment.reset', 'scene.clear'].includes(operation.type))) {
+          await createRecoveryPoint({ sceneId: operations.find(operation => ['scene.environment.reset', 'scene.clear'].includes(operation.type)).payload.sceneId,
+            reason: 'authoritative-scene-reset' });
+        }
+        for (const operation of operations.filter(operation => operation.type === 'scene.activate')) {
+          const target = canonicalScene(operation.payload.sceneId);
+          visionMapForScene(target);
+        }
         committedOperations = operations;
         const explorationCapture = createExplorationOperationCapture({
           sourceIds: [...sessions.values()].filter(viewer => viewer.visionSourceTokenId
@@ -2509,7 +2689,8 @@ server.on('upgrade', (req, socket) => {
       catch (error) { return sendSocket(socket, { type: 'error', operationId: worldOperationId,
         code: error.code || 'persist_failed', message: error.message }); }
       try {
-        await commitStorageUpgrade(STORAGE, { ...contentUpgrade.replacements,
+        if (MANAGED) await publishManagedContentReplacements(path.join(STORAGE.uploadsDir, 'content'), contentUpgrade.replacements);
+        await commitStorageUpgrade(STORAGE, { ...(MANAGED ? {} : contentUpgrade.replacements),
           'world.json': Buffer.from(JSON.stringify(durableWorld(nextWorld))), 'users.json': Buffer.from(JSON.stringify(access)),
           'world.operations.ndjson': Buffer.alloc(0),
         });
@@ -2585,10 +2766,11 @@ server.listen(PORT, HOST, () => {
   console.log('============================================================');
   console.log(' Press Ctrl+C to stop the server.');
   console.log('');
+  process.parentPort?.postMessage({ type: 'rpgmap:ready', port: actualPort });
 });
 
 let shuttingDown = false;
-function shutdown() {
+async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   worldCheckpoint.close();
@@ -2596,16 +2778,25 @@ function shutdown() {
   explorationFogSender.clear();
   clearTimeout(explorationRetryTimer);
   explorationWorker?.terminate();
+  await messageChain.catch(() => {});
+  await persistChain.catch(() => {});
+  await accessPersistChain.catch(() => {});
+  // Accepted writes are already durable in the WAL. Draining both queues is
+  // sufficient; projecting a loaded snapshot must not rewrite an untouched save.
   const connections = [...sessions.keys()];
   for (const socket of connections) closeSocket(socket, 1012, 'server restart');
   server.close();
   setTimeout(() => {
     for (const socket of connections) socket.destroy();
     if (process.connected) process.disconnect();
+    if (process.parentPort) process.exit(0);
   }, 250);
 }
 process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
+process.parentPort?.on('message', event => {
+  if (event.data?.type === 'rpgmap:shutdown') void shutdown();
+});
 process.on('message', message => {
   if (message === 'rpgmap.shutdown') shutdown();
   if (process.env.NODE_ENV === 'test' && message === 'rpgmap.test.kill-exploration-worker') {

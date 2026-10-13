@@ -14,10 +14,10 @@ import {
   createInitialState,
   deriveSceneState,
 } from '../src/engine/state.js';
-import { createLanzhouMapPackage } from '../reference/maps/lanzhou/package.js';
-import { cleanMapPackagePresentation } from '../reference/maps/lanzhou/presentation.js';
-import { LANZHOU_LAYER_PLAN } from '../reference/maps/lanzhou/manifest.js';
-import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { createLanzhouMapPackage } from '../maps/lanzhou/package.js';
+import { cleanMapPackagePresentation } from '../maps/lanzhou/presentation.js';
+import { LANZHOU_LAYER_PLAN } from '../maps/lanzhou/manifest.js';
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 import { registerBuiltInMapPackages } from '../src/map-package/builtins.js';
 import { BUILT_IN_LANZHOU_MAP } from '../src/map-package/constants.js';
 import { MapPackageRegistry } from '../src/map-package/registry.js';
@@ -30,7 +30,7 @@ test('Lanzhou is normalized through the generic MapPackage contract', () => {
   const mapPackage = prepareMapPackage(cleanMapPackagePresentation({
     ...createLanzhouMapPackage(),
     layerPlan: LANZHOU_LAYER_PLAN,
-  }), { source: 'reference/maps/lanzhou:test' });
+  }), { source: 'maps/lanzhou:test' });
 
   assert.equal(mapPackage.packageFormat, MAP_PACKAGE_FORMAT);
   assert.equal(mapPackage.mapPackageApiVersion, MAP_PACKAGE_API_VERSION);
@@ -51,7 +51,7 @@ test('Lanzhou is normalized through the generic MapPackage contract', () => {
 
 test('minimal reference map uses the same Core destruction and Scene State logic', () => {
   const mapPackage = prepareMapPackage(createMinimalReferencePackage(), {
-    source: 'reference/maps/minimal:test',
+    source: 'maps/minimal:test',
   });
   const house = mapPackage.features.find((feature) => feature.id === 'demo-house');
   assert.ok(house);
@@ -78,19 +78,24 @@ test('application entry resolves MapPackages through the registry without implem
   const mapRuntimeSource = await readFile(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
   const compatibilityShim = await readFile(new URL('../src/maps/lanzhou.js', import.meta.url), 'utf8');
 
-  assert.match(mainSource, /registerBuiltInMapPackages/);
+  assert.match(mainSource, /registerInstalledMapPackages/);
   assert.match(mainSource, /await import\('\.\/runtime\/map-runtime\.js'\)/);
   assert.match(mapRuntimeSource, /mapPackageRegistry\.load/);
-  assert.doesNotMatch(mainSource, /createDefaultMapPackage/);
+  assert.doesNotMatch(mainSource, /createDefaultMapPackage|registerBuiltInMapPackages/);
+  const catalogAdapter = await readFile(new URL('../src/adapters/installed-packages.js', import.meta.url), 'utf8');
+  assert.match(catalogAdapter, /\/api\/packages\/maps/);
+  assert.match(catalogAdapter, /map\.fingerprint !== entry\.fingerprint/);
+  assert.doesNotMatch(catalogAdapter, /reference\/maps|Lanzhou|lanzhou/);
   assert.doesNotMatch(mainSource, /Lanzhou|lanzhou|assets\/generated/);
-  assert.match(compatibilityShim, /reference\/maps\/lanzhou\/package\.js/);
+  assert.match(compatibilityShim, /\.\.\/\.\.\/maps\/lanzhou\/package\.js/);
+  assert.doesNotMatch(compatibilityShim, /reference\/maps/);
 });
 
 test('built-in Registry lists Lanzhou metadata before loading its Runtime package', () => {
   const registry = registerBuiltInMapPackages(new MapPackageRegistry());
   assert.deepEqual(registry.list(), [{
     ...BUILT_IN_LANZHOU_MAP,
-    source: 'reference/maps/lanzhou',
+    source: 'maps/lanzhou',
     loaded: false,
   }]);
 });

@@ -1,18 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BUILT_IN_LANZHOU_MAP, BUILT_IN_LANZHOU_MAP_BOUNDS } from '../src/map-package/constants.js';
+import lanzhouData from '../maps/lanzhou/runtime.json' with { type: 'json' };
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
+import { verifiedServerMapFixture } from './helpers/server-map-fixture.js';
 import { exploreFogCircle, exploreFogSweep } from '../src/vision/fog.js';
 import { applyWorldOperations as applyServerWorldOperations } from '../src/server/world-operations-entry.js';
 import { assertSafeJson, WORLD_LIMITS } from '../deployment/local-server/world-schema.mjs';
 
+const lanzhou = verifiedServerMapFixture(lanzhouData);
 const LANZHOU_METRICS = {
   metersPerUnit: 1,
-  width: BUILT_IN_LANZHOU_MAP_BOUNDS.width,
-  height: BUILT_IN_LANZHOU_MAP_BOUNDS.height,
+  width: lanzhou.width,
+  height: lanzhou.height,
 };
 
-function worldState() {
+function worldState(map = lanzhou) {
   return {
     preferences: {
       worldV2: {
@@ -27,7 +30,7 @@ function worldState() {
           id: 'scene-lanzhou',
           name: 'Lanzhou',
           // Deliberately omit width/height to emulate existing v2.2.x saves.
-          mapPackage: { id: BUILT_IN_LANZHOU_MAP.id, version: BUILT_IN_LANZHOU_MAP.version },
+          mapPackage: { id: map.id, version: map.version },
           tokens: [],
           markers: [],
           attackAreas: [],
@@ -85,8 +88,8 @@ test('Fog normalization removes rows and columns outside trusted map bounds', ()
   assert.equal(rows['5000'], undefined);
 });
 
-test('packaged server operations infer Lanzhou bounds for old Scene references', () => {
-  const applied = applyServerWorldOperations(worldState(), [{
+function exploreWholeMap(map, mapForScene) {
+  return applyServerWorldOperations(worldState(map), [{
     type: 'scene.fog.explore',
     payload: {
       sceneId: 'scene-lanzhou',
@@ -94,13 +97,48 @@ test('packaged server operations infer Lanzhou bounds for old Scene references',
       x: 3000,
       y: 2500,
       radiusMeters: 1_000_000_000,
+      // A viewpoint above the maps' finite blockers makes the rectangle an
+      // exact expectation while retaining the real height-aware LOS path.
+      elevationMeters: 1000,
     },
   }], {
-    // This is what server.mjs historically supplied: scale only, no bounds.
+    // Existing saves need not contain dimensions: the installed, exact map
+    // supplies them to the server rather than an ID-specific fallback.
     mapMetrics: { metersPerUnit: 1 },
+    mapForScene,
     now: '2026-08-31T00:00:00.000Z',
   });
+}
+
+test('packaged server operations obtain legacy Scene bounds from a verified external Lanzhou map', () => {
+  const applied = exploreWholeMap(lanzhou, scene => {
+    assert.deepEqual(scene.mapPackage, { id: lanzhou.id, version: lanzhou.version });
+    return lanzhou;
+  });
   assertWholeLanzhouMap(applied.state.preferences.worldV2.scenes[0].fog.exploredByParty.default.rows);
+});
+
+test('external map bounds determine Fog clipping for other map identities and versions', () => {
+  const source = createMinimalReferencePackage();
+  for (const version of [source.version, '2.0.0']) {
+    const map = verifiedServerMapFixture({ ...source, version,
+      width: version === source.version ? 1000 : 1200,
+      height: version === source.version ? 800 : 900 });
+    const applied = exploreWholeMap(map, scene => {
+      assert.deepEqual(scene.mapPackage, { id: map.id, version });
+      return map;
+    });
+    const rows = applied.state.preferences.worldV2.scenes[0].fog.exploredByParty.default.rows;
+    const rowCount = map.height / 5, lastColumn = map.width / 5 - 1;
+    assert.equal(Object.keys(rows).length, rowCount);
+    assert.deepEqual(rows['0'], [[0, lastColumn]]);
+    assert.deepEqual(rows[String(rowCount - 1)], [[0, lastColumn]]);
+    assert.equal(rows[String(rowCount)], undefined);
+  }
+});
+
+test('a missing installed map fails Fog operations instead of guessing Lanzhou bounds', () => {
+  assert.throws(() => exploreWholeMap(lanzhou, () => null), { code: 'map_package_not_found' });
 });
 
 test('Fog row persistence allowance is expanded well beyond the previous 4096 rows', () => {

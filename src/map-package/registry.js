@@ -24,6 +24,11 @@ function packageReference(mapPackage) {
   });
 }
 
+const entryKey = ({ id, version }) => JSON.stringify([id, version || null]);
+function registryError(message, code) {
+  const error = new Error(message); error.code = code; return error;
+}
+
 export class MapPackageRegistry {
   constructor() {
     this.entries = new Map();
@@ -32,7 +37,12 @@ export class MapPackageRegistry {
   registerPackage(rawPackage, { source = 'registry' } = {}) {
     const mapPackage = prepareMapPackage(rawPackage, { source });
     const ref = packageReference(mapPackage);
-    this.entries.set(ref.id, {
+    const existing = this.entries.get(entryKey(ref));
+    if (existing?.package && existing.package !== rawPackage
+      && (!existing.package.fingerprint || existing.package.fingerprint !== mapPackage.fingerprint)) {
+      throw registryError(`MapPackage ${ref.id}@${ref.version} is already registered`, 'map_package_version_conflict');
+    }
+    this.entries.set(entryKey(ref), {
       id: ref.id,
       version: ref.version,
       title: String(mapPackage.title || mapPackage.name || ref.id),
@@ -48,7 +58,10 @@ export class MapPackageRegistry {
     if (!mapId || typeof load !== 'function') {
       throw new Error('MapPackage loader requires id and load()');
     }
-    this.entries.set(mapId, {
+    const ref = { id: mapId, version: text(version) || null };
+    const existing = this.entries.get(entryKey(ref));
+    if (existing) return this;
+    this.entries.set(entryKey(ref), {
       id: mapId,
       version: text(version) || null,
       title: text(title, mapId),
@@ -59,8 +72,16 @@ export class MapPackageRegistry {
     return this;
   }
 
-  has(id) {
-    return this.entries.has(String(id || ''));
+  has(id, version = null) {
+    const value = typeof id === 'object' ? id : { id, version };
+    const ref = reference(value);
+    return ref.version ? this.entries.has(entryKey(ref)) : [...this.entries.values()].some(entry => entry.id === ref.id);
+  }
+
+  unregister(rawReference) {
+    const requested = reference(rawReference);
+    if (!requested.version) throw registryError('Removing a package requires an exact version', 'map_package_reference_missing');
+    return this.entries.delete(entryKey(requested));
   }
 
   list() {
@@ -75,23 +96,31 @@ export class MapPackageRegistry {
 
   async load(rawReference) {
     const requested = reference(rawReference);
-    const entry = this.entries.get(requested.id);
+    const matches = [...this.entries.values()].filter(entry => entry.id === requested.id);
+    let entry = requested.version ? this.entries.get(entryKey(requested)) : matches.length === 1 ? matches[0] : null;
+    if (!entry && requested.version) entry = matches.find(candidate => candidate.version === null);
+    if (!requested.version && matches.length > 1) {
+      throw registryError(`MapPackage ${requested.id} has multiple versions; specify a version`, 'map_package_version_required');
+    }
     if (!entry) {
-      const error = new Error(`Unknown MapPackage: ${requested.id}`);
-      error.code = 'map_package_not_found';
+      const error = new Error(`Unknown MapPackage: ${requested.id}${requested.version ? `@${requested.version}` : ''}`);
+      error.code = matches.length ? 'map_package_version_mismatch' : 'map_package_not_found';
       throw error;
     }
     if (!entry.package) {
-      const loaded = await entry.loader();
-      entry.package = prepareMapPackage(loaded, { source: entry.source });
-      const actual = packageReference(entry.package);
-      entry.version = actual.version;
-      entry.title = String(entry.package.title || entry.package.name || actual.id);
-      if (actual.id !== entry.id) {
-        const error = new Error(`MapPackage loader ${entry.id} returned ${actual.id}`);
-        error.code = 'map_package_id_mismatch';
-        throw error;
-      }
+      if (!entry.pending) entry.pending = (async () => {
+        const loaded = await entry.loader();
+        const mapPackage = prepareMapPackage(loaded, { source: entry.source });
+        const actual = packageReference(mapPackage);
+        if (actual.id !== entry.id) throw registryError(`MapPackage loader ${entry.id} returned ${actual.id}`, 'map_package_id_mismatch');
+        if (entry.version && entry.version !== actual.version) throw registryError(`MapPackage loader ${entry.id}@${entry.version} returned v${actual.version}`, 'map_package_version_mismatch');
+        const previousKey = entryKey(entry), actualKey = entryKey(actual), existing = this.entries.get(actualKey);
+        if (existing && existing !== entry) throw registryError(`MapPackage ${actual.id}@${actual.version} is already registered`, 'map_package_version_conflict');
+        entry.package = mapPackage; entry.version = actual.version;
+        entry.title = String(mapPackage.title || mapPackage.name || actual.id);
+        if (previousKey !== actualKey) { this.entries.delete(previousKey); this.entries.set(actualKey, entry); }
+      })();
+      try { await entry.pending; } finally { entry.pending = null; }
     }
     const actual = packageReference(entry.package);
     if (requested.version && requested.version !== actual.version) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import lanzhou from '../reference/maps/lanzhou/runtime.json' with { type: 'json' };
+import lanzhou from '../maps/lanzhou/runtime.json' with { type: 'json' };
 import {
   deriveVisionOccluders,
   deriveSceneLightSources,

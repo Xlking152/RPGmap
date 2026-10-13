@@ -1,15 +1,15 @@
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createLanzhouSvg } from '../reference/maps/lanzhou/package.js';
-import { createLanzhouMapData } from '../reference/maps/lanzhou/package.js';
-import { applyLanzhouCapabilities } from '../reference/maps/lanzhou/capabilities.js';
+import { createLanzhouSvg } from '../maps/lanzhou/package.js';
+import { createLanzhouMapData } from '../maps/lanzhou/package.js';
+import { applyLanzhouCapabilities } from '../maps/lanzhou/capabilities.js';
 import {
   LANZHOU_FEATURE_TAXONOMY,
   LANZHOU_LAYER_PLAN,
   LANZHOU_REFERENCE_META,
-} from '../reference/maps/lanzhou/manifest.js';
-import { cleanMapPackagePresentation } from '../reference/maps/lanzhou/presentation.js';
+} from '../maps/lanzhou/manifest.js';
+import { cleanMapPackagePresentation } from '../maps/lanzhou/presentation.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const token = name => `__RPGMAP_ASSET_${name}__`;
@@ -49,7 +49,7 @@ const artAssets = {
   rubbleAtlas: { url: token('rubbleAtlas.url'), width: 1536, height: 1024, columns: 3, rows: 2 },
 };
 
-const output = path.join(root, 'reference', 'maps', 'lanzhou', 'runtime.svg');
+const output = path.join(root, 'maps', 'lanzhou', 'runtime.svg');
 await writeFile(output, createLanzhouSvg(artAssets), 'utf8');
 console.log(`Generated ${path.relative(root, output)}`);
 
@@ -65,6 +65,6 @@ const runtimeData = cleanMapPackagePresentation({
     note: 'Map-specific data/rendering only; interaction, destruction and Scene state belong to RPGmap Core.',
   },
 });
-const dataOutput = path.join(root, 'reference', 'maps', 'lanzhou', 'runtime.json');
+const dataOutput = path.join(root, 'maps', 'lanzhou', 'runtime.json');
 await writeFile(dataOutput, JSON.stringify(runtimeData), 'utf8');
 console.log(`Generated ${path.relative(root, dataOutput)}`);

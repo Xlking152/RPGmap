@@ -1,4 +1,4 @@
-import { DEFAULT_REFERENCE_MAP_ID } from '../../../src/map-package/constants.js';
+import { DEFAULT_REFERENCE_MAP_ID } from '../../src/map-package/constants.js';
 
 export const LANZHOU_REFERENCE_ID = DEFAULT_REFERENCE_MAP_ID;
 

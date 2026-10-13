@@ -40,6 +40,8 @@ const INTENT_TO_OPERATION = new Map([
   ['scene.delete', 'scene.delete'],
   ['scene.content.replace', 'scene.content.replace'],
   ['scene.reset', 'scene.reset'],
+  ['scene.environment.reset', 'scene.environment.reset'],
+  ['scene.clear', 'scene.clear'],
   ['scene.settings.patch', 'scene.settings.patch'],
   ['scene.door.use', 'scene.door.use'],
   ['scene.featureState.patch', 'scene.featureState.patch'],

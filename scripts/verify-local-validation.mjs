@@ -28,13 +28,13 @@ export async function visionSourceAtCommit(sourceRoot, commit) {
   requireCondition(/^[a-f0-9]{40}$/.test(commit || ''), 'Vision baseline commit invalid');
   const key = `${path.resolve(sourceRoot)}:${commit}`;
   if (!committedVisionSources.has(key)) committedVisionSources.set(key, (async () => {
-    const tree = (await execFileAsync('git', ['ls-tree', '-r', '-z', commit, '--', 'src', 'deployment/local-server',
-      'reference/maps/lanzhou/runtime.json', 'package.json'], { cwd: sourceRoot, maxBuffer: 4 * 1024 * 1024 })).stdout;
+    const tree = (await execFileAsync('git', ['ls-tree', '--full-tree', '-r', '-z', commit, '--', 'src', 'deployment/local-server',
+      'maps/lanzhou/runtime.json', 'reference/maps/lanzhou/runtime.json', 'package.json'], { cwd: sourceRoot, maxBuffer: 4 * 1024 * 1024 })).stdout;
     const entries = tree.split('\0').filter(Boolean).map(record => {
       const match = /^\d+ blob ([a-f0-9]{40})\t(.+)$/.exec(record);
       requireCondition(match, 'Vision baseline source tree invalid');
       return { object: match[1], file: match[2] };
-    }).filter(({ file }) => /\.(js|mjs)$/.test(file) || file === 'reference/maps/lanzhou/runtime.json' || file === 'package.json');
+    }).filter(({ file }) => /\.(js|mjs)$/.test(file) || /^(?:reference\/)?maps\/lanzhou\/runtime\.json$/.test(file) || file === 'package.json');
     requireCondition(entries.some(entry => entry.file === 'package.json')
       && entries.some(entry => entry.file === 'src/spatial/kernel.js'), 'Vision baseline source tree missing');
     const contents = await new Promise((resolve, reject) => {
@@ -739,18 +739,18 @@ async function vision(baseline, candidate, validation, sourceRoot, needsRuinsEvi
   equal(Object.keys(baseline.sourceFileHashes).sort(), Object.keys(committedBaseline.sourceFileHashes).sort(),
     'Vision baseline source fingerprint is incomplete');
   equal(baseline.sourceFileHashes, committedBaseline.sourceFileHashes, 'Vision baseline source fingerprint mismatch');
-  const tracked = (await execFileAsync('git', ['ls-files', '-z', '--', 'src', 'deployment/local-server',
-    'reference/maps/lanzhou/runtime.json'], { cwd: sourceRoot })).stdout.split('\0').filter(file => /\.(js|mjs)$/.test(file)
-      || file === 'reference/maps/lanzhou/runtime.json').sort();
+  const tracked = (await execFileAsync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', 'src', 'deployment/local-server',
+    'maps/lanzhou/runtime.json'], { cwd: sourceRoot })).stdout.split('\0').filter(file => /\.(js|mjs)$/.test(file)
+      || file === 'maps/lanzhou/runtime.json').sort();
   equal(Object.keys(files).sort(), tracked, 'Vision source fingerprint is incomplete');
   for (const [file, hash] of Object.entries(files)) {
-    requireCondition(/^(src\/|deployment\/local-server\/|reference\/maps\/lanzhou\/runtime\.json$)/.test(file)
+    requireCondition(/^(src\/|deployment\/local-server\/|maps\/lanzhou\/runtime\.json$)/.test(file)
       && !file.split('/').includes('..') && digest(hash), 'Vision source fingerprint entry invalid');
     requireCondition(sha256((await readFile(path.join(sourceRoot, file), 'utf8')).replaceAll('\r\n', '\n')) === hash,
       `Vision source fingerprint mismatch: ${file}`);
   }
-  requireCondition(digest(files['reference/maps/lanzhou/runtime.json'])
-    && files['reference/maps/lanzhou/runtime.json'] === baseline.sourceFileHashes['reference/maps/lanzhou/runtime.json'], 'Vision map input differs');
+  requireCondition(digest(files['maps/lanzhou/runtime.json'])
+    && files['maps/lanzhou/runtime.json'] === (baseline.sourceFileHashes['maps/lanzhou/runtime.json'] || baseline.sourceFileHashes['reference/maps/lanzhou/runtime.json']), 'Vision map input differs');
   for (const range of [120, 500, 1000, 10000]) {
     timing(baseline.visibility?.[range], `Baseline ${range}`); timing(candidate.visibility?.[range], `Candidate ${range}`);
     requireCondition(baseline.visibility[range].hash === candidate.visibility[range].hash, `${range} visibility output differs`);

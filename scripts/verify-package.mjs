@@ -125,8 +125,8 @@ const manifestPath = path.join(root, 'app', '.vite', 'manifest.json');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 const htmlEntry = manifest['index.html'];
 const defaultMapEntry = manifest['src/map-package/default-map.js'];
-const lanzhouDataEntry = manifest['reference/maps/lanzhou/runtime.json'];
-const lanzhouSvgEntry = manifest['reference/maps/lanzhou/runtime.svg'];
+const lanzhouDataEntry = manifest['maps/lanzhou/runtime.json'];
+const lanzhouSvgEntry = manifest['maps/lanzhou/runtime.svg'];
 if (!htmlEntry?.isEntry) fail('manifest is missing index.html entry');
 const runtimeKey = (htmlEntry.dynamicImports || []).find(key => key === 'src/runtime/map-runtime.js'
   || manifest[key]?.name === 'map-runtime-core');
@@ -155,7 +155,7 @@ async function verifyManifestRecord(key) {
 await verifyManifestRecord('index.html');
 
 const lanzhouSources = Object.entries(manifest).filter(([key, record]) =>
-  key.startsWith('reference/maps/lanzhou/assets/') && key.endsWith('.webp') && record?.file?.endsWith('.webp'));
+  key.startsWith('maps/lanzhou/assets/') && key.endsWith('.webp') && record?.file?.endsWith('.webp'));
 if (lanzhouSources.length !== 29) fail(`manifest contains ${lanzhouSources.length} Lanzhou WebP assets instead of 29`);
 const defaultAssets = new Set((defaultMapEntry.assets || []).filter(file => file.endsWith('.webp')));
 if (defaultAssets.size !== 29) fail(`default MapPackage references ${defaultAssets.size} WebP assets instead of 29`);

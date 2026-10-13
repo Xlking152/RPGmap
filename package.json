@@ -1,12 +1,20 @@
 {
   "name": "rpgmap",
-  "version": "2.5.5",
+  "version": "3.0.0-rc.1",
+  "description": "RPGmap desktop tactical map application",
+  "author": "Xlking152",
+  "main": "desktop/main.cjs",
   "private": true,
   "type": "module",
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": ">=22.12.0"
   },
   "scripts": {
+    "package:desktop": "node scripts/package-desktop.mjs",
+    "check:desktop": "node scripts/verify-desktop-package.mjs",
+    "export:maps": "node scripts/export-map-packages.mjs",
+    "export:rulesets": "node scripts/export-ruleset-packages.mjs",
+    "test:desktop": "node --test tests/desktop-v3.test.js",
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "check:bundle": "node scripts/check-bundle-budget.mjs",
@@ -27,10 +35,13 @@
     "polygon-clipping": "0.15.7"
   },
   "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3",
     "fake-indexeddb": "6.2.5",
     "vite": "8.2.1"
   },
   "overrides": {
-    "nanoid": "3.3.18"
+    "nanoid": "3.3.18",
+    "@electron/get": "5.1.0"
   }
 }

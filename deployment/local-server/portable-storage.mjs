@@ -13,7 +13,7 @@ async function exists(filePath) {
 export function createPortableStorage({ root, worldId = 'default', env = process.env } = {}) {
   const runtimeRoot = path.resolve(root || '.');
   const packageRoot = path.resolve(env.RPGMAP_PACKAGE_ROOT || runtimeRoot);
-  const appDir = path.resolve(env.RPGMAP_PUBLIC_DIR || path.join(packageRoot, 'app'));
+  const appDir = path.resolve(env.RPGMAP_STATIC_DIR || env.RPGMAP_PUBLIC_DIR || path.join(packageRoot, 'app'));
   const mapDir = path.resolve(env.RPGMAP_MAP_DIR || path.join(packageRoot, 'map'));
   const legacyDataDir = path.resolve(env.RPGMAP_LEGACY_DATA_DIR || env.RPGMAP_DATA_DIR || path.join(packageRoot, 'data'));
   const safeWorldId = String(worldId || 'default').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'default';
@@ -26,7 +26,7 @@ export function createPortableStorage({ root, worldId = 'default', env = process
     worldFile: path.join(mapDir, 'world.json'),
     operationsFile: path.join(mapDir, 'world.operations.ndjson'),
     usersFile: path.join(mapDir, 'users.json'),
-    uploadsDir: path.join(mapDir, 'uploads'),
+    uploadsDir: path.resolve(env.RPGMAP_UPLOAD_DIR || path.join(mapDir, 'uploads')),
     backupsDir: path.join(mapDir, 'backups'),
     legacyDataDir,
     legacyWorldFile: path.join(legacyWorldDir, 'world.json'),

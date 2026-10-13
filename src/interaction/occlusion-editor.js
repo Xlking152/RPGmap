@@ -238,10 +238,12 @@ export function createOcclusionEditor(api) {
   }
 
   async function open() {
+    if (api.world?.isSceneTransitionPending?.()) return;
     if (!editable(api)) throw new Error('只有 GM 可以编辑遮挡配置');
     if (draft) return;
+    const originatingScene = scene()?.id;
     L ||= (await import('leaflet')).default;
-    if (destroyed) return;
+    if (destroyed || api.world?.isSceneTransitionPending?.() || scene()?.id !== originatingScene) return;
     const current = scene();
     if (!current) throw new Error('当前场景不可用');
     draft = createOcclusionDraft(api.mapPackage, current);
@@ -371,7 +373,9 @@ export function createOcclusionEditor(api) {
   off.push(api.on?.('scene:content-change', event => {
     if (event.detail?.types?.includes('OcclusionShape')) void syncDoors();
   }));
-  for (const name of ['scene:activate', 'state:import']) off.push(api.on?.(name, () => { close(); void syncDoors(); }));
+  for (const name of ['scene:activate', 'state:import', 'scene:switch-starting', 'scene:reset-starting']) {
+    off.push(api.on?.(name, () => { close(); void syncDoors(); }));
+  }
   off.push(api.on?.('multiplayer:capabilities', () => { if (draft && !editable(api)) close(); void syncDoors(); }));
   off.push(api.on?.('app:destroy', () => {
     destroyed = true; close(); doorLayer?.remove();

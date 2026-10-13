@@ -129,6 +129,15 @@ export function createRpgMapRuntime({
     storageAdapter,
     getState: () => state,
     getStateRevision: () => stateRevision,
+    async saveSceneRecoveryPoint({ sceneId, reason, state: snapshot, worldId: targetWorldId } = {}) {
+      const id = `${Date.now()}-${crypto.randomUUID()}`;
+      const key = `rpgmap:recovery:${targetWorldId || worldId || 'offline'}:${id}`;
+      const record = { id, sceneId, worldId: targetWorldId || worldId, reason, createdAt: new Date().toISOString(), state: snapshot };
+      const serialized = JSON.stringify(record);
+      storageAdapter.set(key, serialized);
+      if (storageAdapter.get(key) !== serialized) throw new Error('recovery_point_verification_failed');
+      return { id, sceneId, worldId: record.worldId, createdAt: record.createdAt };
+    },
     stringifyTrustedState: current => stringifyTrustedRuntimeState(current, { mapPackage }),
     validationYieldTask: ({ signal } = {}) => yieldRuntimeValidationFrame({ signal, view: documentNode.defaultView }),
     onSaved: () => bus.dispatchEvent(new CustomEvent('state:saved')),

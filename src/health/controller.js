@@ -136,8 +136,8 @@ export function createHealthController() {
           const context = store.actorContext(target.actor);
           const runtimeOperation = {
             type: operationType,
-            amount: payload?.amount,
-            damageType: payload?.type,
+            ...(payload?.amount !== undefined ? { amount: payload.amount } : {}),
+            ...(payload?.type !== undefined ? { damageType: payload.type } : {}),
           };
           const operation = runHealthOperation(target.actor, runtimeOperation, context);
           const result = {

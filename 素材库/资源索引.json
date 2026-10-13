@@ -1,0 +1,506 @@
+{
+  "formatVersion": 1,
+  "resources": [
+    {
+      "id": "lanzhou-barracks-01",
+      "file": "maps/lanzhou/assets/barracks-01.webp",
+      "width": 768,
+      "height": 220,
+      "bytes": 47280,
+      "sha256": "2e2c39f9d94507176c5be6db3723cd7ee49c8cec670d58df43878006885da242",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-barracks-02",
+      "file": "maps/lanzhou/assets/barracks-02.webp",
+      "width": 768,
+      "height": 220,
+      "bytes": 47260,
+      "sha256": "cb1d9f918a7dd60738dc65a0e1c5288a542573aef857e49677caee5da4e08772",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-chenghuang-temple",
+      "file": "maps/lanzhou/assets/chenghuang-temple.webp",
+      "width": 660,
+      "height": 1024,
+      "bytes": 162902,
+      "sha256": "8d7bc03a883a0118054180c3ce1a7785b57d4ff5cc34607887e94b25225cdd6c",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-city-gatehouse",
+      "file": "maps/lanzhou/assets/city-gatehouse.webp",
+      "width": 846,
+      "height": 1024,
+      "bytes": 186346,
+      "sha256": "0e8cdcda7338894955ece44f8ac7bc4c452c7e3a55a02028356efd0516bccc3d",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-city-wall-tower",
+      "file": "maps/lanzhou/assets/city-wall-tower.webp",
+      "width": 1007,
+      "height": 964,
+      "bytes": 230150,
+      "sha256": "d3b141dbbe65e8976a37ed5b08a96634c81729f804fff5aa32f78a9bce143b85",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-granary-01",
+      "file": "maps/lanzhou/assets/granary-01.webp",
+      "width": 768,
+      "height": 308,
+      "bytes": 55500,
+      "sha256": "933e9b8955dc6d812a1d61afe71d82eeffcf08b909347f77139013b305f9b18b",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-granary-02",
+      "file": "maps/lanzhou/assets/granary-02.webp",
+      "width": 768,
+      "height": 308,
+      "bytes": 61382,
+      "sha256": "495f87cadc078b8b2cadf69063ddaff98d5f5cdfdc45054ca0d198bdd34aa832",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-jincheng-gatehouse",
+      "file": "maps/lanzhou/assets/jincheng-gatehouse.webp",
+      "width": 1024,
+      "height": 954,
+      "bytes": 221150,
+      "sha256": "d1bca7fe9cdf14eb1612dadfcefe6de4c8923f860e05ebea33e974b2481026bc",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-loess-terrain",
+      "file": "maps/lanzhou/assets/loess-terrain.webp",
+      "width": 768,
+      "height": 768,
+      "bytes": 65464,
+      "sha256": "fd965f7aa57b595ad73601bce92ed47c88b69394b3ada5dec107a7132368e28b",
+      "purpose": "地面画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": null
+    },
+    {
+      "id": "lanzhou-market-office-hall",
+      "file": "maps/lanzhou/assets/market-office-hall.webp",
+      "width": 1024,
+      "height": 609,
+      "bytes": 117260,
+      "sha256": "e853b91848e4ceee4a810e383c05db4674b87f7b82fe93c50f4e42f77662f9f7",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-market-shop-01",
+      "file": "maps/lanzhou/assets/market-shop-01.webp",
+      "width": 768,
+      "height": 384,
+      "bytes": 74410,
+      "sha256": "5635dc75254cfa176779ecf31751bea9bb103622d695a28d78ae310ea55153f2",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-market-shop-02",
+      "file": "maps/lanzhou/assets/market-shop-02.webp",
+      "width": 768,
+      "height": 384,
+      "bytes": 75824,
+      "sha256": "9d261ad19878ca77fae6230c8f1b1f2dd4f67b4f98755841a348e72a6d787f95",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-market-shop-03",
+      "file": "maps/lanzhou/assets/market-shop-03.webp",
+      "width": 768,
+      "height": 384,
+      "bytes": 68980,
+      "sha256": "0a570e2f27d07375646aeb7bdd8174421f4241102b93171991da7131ab29907e",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-market-storehouse",
+      "file": "maps/lanzhou/assets/market-storehouse.webp",
+      "width": 1024,
+      "height": 366,
+      "bytes": 109488,
+      "sha256": "568022d4cba2697db6bbce4c3e0309e14f79d05f4e8e41d60bf13882a7934a91",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-residence-courtyard-01",
+      "file": "maps/lanzhou/assets/residence-courtyard-01.webp",
+      "width": 768,
+      "height": 384,
+      "bytes": 84708,
+      "sha256": "47e2207c6ac3c057ac630ac96edfd025e11675ef0e5f13f295735cc47bdc4fbf",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-residence-courtyard-02",
+      "file": "maps/lanzhou/assets/residence-courtyard-02.webp",
+      "width": 768,
+      "height": 384,
+      "bytes": 69740,
+      "sha256": "ef5df38a8922f88e886e42afc807fc80614ed641c9420e7d0b39bec18ddac840",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-residence-house-01",
+      "file": "maps/lanzhou/assets/residence-house-01.webp",
+      "width": 768,
+      "height": 384,
+      "bytes": 82730,
+      "sha256": "01852d6622180e505713c241466abe3312635b472b589ce444d3d93abc2b3f29",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-residence-house-02",
+      "file": "maps/lanzhou/assets/residence-house-02.webp",
+      "width": 768,
+      "height": 384,
+      "bytes": 68150,
+      "sha256": "6330ea94facfeb8fe9ede088a4d3d79d3166dec63575992a7eeaf7f2587ce8fc",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-residence-house-03",
+      "file": "maps/lanzhou/assets/residence-house-03.webp",
+      "width": 768,
+      "height": 384,
+      "bytes": 74080,
+      "sha256": "2570255bcdb384387a8ebeffebccccd0b2b6102d3c3c9901fc26606ca2b6a6d7",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-rubble-atlas",
+      "file": "maps/lanzhou/assets/rubble-atlas.webp",
+      "width": 1536,
+      "height": 1024,
+      "bytes": 259804,
+      "sha256": "284fe4ed154febc97e65306d53b0b69d12677b8cfc5040e9dc71dff9fe2134b3",
+      "purpose": "废墟贴图",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "category": "building",
+        "severity": "normal",
+        "style": "tile-timber-earth-rubble",
+        "columns": 3,
+        "rows": 2
+      }
+    },
+    {
+      "id": "lanzhou-stable-01",
+      "file": "maps/lanzhou/assets/stable-01.webp",
+      "width": 768,
+      "height": 238,
+      "bytes": 51552,
+      "sha256": "b1094bef517de5e7a64df867796aae32c5635977fa336d26c0d36e06f03ceca2",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-stable-02",
+      "file": "maps/lanzhou/assets/stable-02.webp",
+      "width": 768,
+      "height": 238,
+      "bytes": 44790,
+      "sha256": "9b1b711deeb86ada47379f31b61793abb4f95c9e8123d7c434a97d72631cb5bd",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-workshop-01",
+      "file": "maps/lanzhou/assets/workshop-01.webp",
+      "width": 768,
+      "height": 314,
+      "bytes": 65318,
+      "sha256": "e5e30d4b96131997a90175957d50e35799eeb97e7588844a0b123b517e9acde0",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-workshop-02",
+      "file": "maps/lanzhou/assets/workshop-02.webp",
+      "width": 768,
+      "height": 314,
+      "bytes": 68888,
+      "sha256": "e6de49c99b91340166745ca8dfb31447e7b4b8ee0781ea44db7727771a1370cb",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-yamen-gate",
+      "file": "maps/lanzhou/assets/yamen-gate.webp",
+      "width": 768,
+      "height": 312,
+      "bytes": 52448,
+      "sha256": "2607fe9cee9cc5f5bf7ac819e63b1407f3ff50a1ed4282f9c10f4b3f465a2ac6",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-yamen-hall",
+      "file": "maps/lanzhou/assets/yamen-hall.webp",
+      "width": 1024,
+      "height": 434,
+      "bytes": 92676,
+      "sha256": "bac43d90e1d35c89e948e3b64aff1918fba808abcc1a807c8e5cde0b33467e1b",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-yamen-side-hall",
+      "file": "maps/lanzhou/assets/yamen-side-hall.webp",
+      "width": 768,
+      "height": 262,
+      "bytes": 43960,
+      "sha256": "0bb1f96239fc8bdf9e6c50683692b3e794b9b7a86f7e035930929ff84cfd6700",
+      "purpose": "建筑或地物画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "resourceId": "lanzhou-rubble-atlas",
+        "style": "tile-timber-earth-rubble"
+      }
+    },
+    {
+      "id": "lanzhou-yellow-river",
+      "file": "maps/lanzhou/assets/yellow-river.webp",
+      "width": 768,
+      "height": 768,
+      "bytes": 39456,
+      "sha256": "325017e66704e19c0d2ab33bc956dee03522afe2884e7582f487cd1fdb1960ab",
+      "purpose": "河流或桥梁画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": null
+    },
+    {
+      "id": "lanzhou-yellow-river-pontoon",
+      "file": "maps/lanzhou/assets/yellow-river-pontoon.webp",
+      "width": 159,
+      "height": 1024,
+      "bytes": 65182,
+      "sha256": "2727fafe044b490746f3520123dbe773452deca4161e175a850d22f7c3bbb835",
+      "purpose": "河流或桥梁画面",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": null
+    },
+    {
+      "id": "ruins-ground",
+      "file": "素材库/废墟/地表/ground-rubble.svg",
+      "width": 256,
+      "height": 256,
+      "bytes": 475,
+      "sha256": "8107c92212b97f2759a4d283afd4757afc2dec45088e7e904bd65a1d30223a65",
+      "purpose": "废墟贴图",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "category": "terrain",
+        "severity": "normal"
+      }
+    },
+    {
+      "id": "ruins-ground-severe",
+      "file": "素材库/废墟/地表/ground-rubble-severe.svg",
+      "width": 256,
+      "height": 256,
+      "bytes": 475,
+      "sha256": "7a0fc5d8db5d355908a96f1849ce372809286098392c56940601e82763b4ae1e",
+      "purpose": "废墟贴图",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "category": "terrain",
+        "severity": "severe"
+      }
+    },
+    {
+      "id": "ruins-house-atlas",
+      "file": "素材库/废墟/房屋/rubble-atlas.webp",
+      "width": 1536,
+      "height": 1024,
+      "bytes": 259804,
+      "sha256": "284fe4ed154febc97e65306d53b0b69d12677b8cfc5040e9dc71dff9fe2134b3",
+      "purpose": "废墟贴图",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "category": "building",
+        "severity": "normal",
+        "style": "tile-timber-earth-rubble",
+        "columns": 3,
+        "rows": 2
+      }
+    },
+    {
+      "id": "ruins-vegetation",
+      "file": "素材库/废墟/植被/vegetation-rubble.svg",
+      "width": 256,
+      "height": 256,
+      "bytes": 484,
+      "sha256": "adecb623a894fe686c6115bd9f96c95bd8494b720073109e314b0a69639bdb75",
+      "purpose": "废墟贴图",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "category": "vegetation",
+        "severity": "normal"
+      }
+    },
+    {
+      "id": "ruins-vegetation-severe",
+      "file": "素材库/废墟/植被/vegetation-rubble-severe.svg",
+      "width": 256,
+      "height": 256,
+      "bytes": 484,
+      "sha256": "e484981354b7acada9e93e95a61b159ea03b0e1e4cb76c6c5fb4724ba405e0b8",
+      "purpose": "废墟贴图",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "category": "vegetation",
+        "severity": "severe"
+      }
+    },
+    {
+      "id": "ruins-wall",
+      "file": "素材库/废墟/城墙/wall-rubble.svg",
+      "width": 256,
+      "height": 128,
+      "bytes": 455,
+      "sha256": "a905f0f6324cddca31724dc710e658d5c93d1aff56e7fe792bd09d931d9d0788",
+      "purpose": "废墟贴图",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "category": "wall",
+        "severity": "normal"
+      }
+    },
+    {
+      "id": "ruins-wall-severe",
+      "file": "素材库/废墟/城墙/wall-rubble-severe.svg",
+      "width": 256,
+      "height": 128,
+      "bytes": 455,
+      "sha256": "92b65233e14f195a62550d956ef35885d3f150ae3ffa1aae17c88a25533cd101",
+      "purpose": "废墟贴图",
+      "source": "项目内既有素材；原始外部来源未登记",
+      "ruinBinding": {
+        "category": "wall",
+        "severity": "severe"
+      }
+    }
+  ]
+}

@@ -8,6 +8,9 @@ export function createSceneRenderer({ baseSvg, mapPackage, getSceneEvents, getDa
   if (!mapPackage) throw new Error('场景渲染器缺少地图包');
   const doc = baseSvg.ownerDocument;
   const featureById = new Map((mapPackage.features || []).map((feature) => [feature.id, feature]));
+  // SVG mask IDs use the package's stable feature order, independently of the
+  // order in which damage events arrive or individual objects are restored.
+  const featureIndexById = new Map([...featureById.keys()].map((id, index) => [id, index]));
   const featureNodes = new Map();
   let featureGeometry = new WeakMap();
   const ruinRecords = new Map();
@@ -28,6 +31,7 @@ export function createSceneRenderer({ baseSvg, mapPackage, getSceneEvents, getDa
   let cachedFeatureGeometry = 0;
   let lastRenderMs = 0;
   let maxRenderMs = 0;
+  let lastDamagedFeatureVisits = 0;
 
   function svgNode(tag, attributes = {}) {
     const node = doc.createElementNS(SVG_NS, tag);
@@ -235,7 +239,11 @@ export function createSceneRenderer({ baseSvg, mapPackage, getSceneEvents, getDa
   }
 
   function updateFloods(scene) {
-    const regions = deriveFloodRegions(scene, mapPackage.liquidBodies || [], mapPackage.features || [],
+    const liquids = mapPackage.liquidBodies || [];
+    // Without a liquid source no feature can flood. Retain the shared
+    // derivation (including scale validation) without its unused feature scan.
+    const floodFeatures = Array.isArray(liquids) && liquids.length === 0 ? [] : mapPackage.features || [];
+    const regions = deriveFloodRegions(scene, liquids, floodFeatures,
       mapPackage.floodRules || {}, mapPackage.metersPerUnit ?? 1);
     const active = new Set(regions.map((region) => region.id));
     for (const [id, record] of floodRecords) if (!active.has(id)) { record.group.remove(); floodRecords.delete(id); }
@@ -271,6 +279,7 @@ export function createSceneRenderer({ baseSvg, mapPackage, getSceneEvents, getDa
   function renderScene() {
     if (destroyed) return;
     renderCount++;
+    lastDamagedFeatureVisits = 0;
     ensureLayers();
     const events = getSceneEvents?.() || [];
     const unchanged = previousAssets === mapPackage.artAssets && (events === previousEvents || (previousEvents && events.length === previousEvents.length
@@ -305,11 +314,11 @@ export function createSceneRenderer({ baseSvg, mapPackage, getSceneEvents, getDa
           severe: feature.severeOnly === true || severity.get(hit.eventId) === true });
       }
       for (const id of ruinRecords.keys()) if (!damage.has(id)) removeRuin(id);
-      let index = 0;
-      for (const feature of featureById.values()) {
-        const record = damage.get(feature.id);
-        if (record) updateRuin(feature, record, index);
-        index++;
+      const affected = [...damage].filter(([id]) => featureById.has(id))
+        .sort(([left], [right]) => featureIndexById.get(left) - featureIndexById.get(right));
+      for (const [id, record] of affected) {
+        lastDamagedFeatureVisits++;
+        updateRuin(featureById.get(id), record, featureIndexById.get(id));
       }
       updateCraters(scene.craterRegions);
       updateFloods(scene);
@@ -343,7 +352,7 @@ export function createSceneRenderer({ baseSvg, mapPackage, getSceneEvents, getDa
   function dispose() { reset(); destroyed = true; }
   return { render, reset, dispose, getDiagnostics: () => ({ renders: renderCount,
     ruinObjects: ruinRecords.size, craterObjects: craterRecord ? 1 : 0, floodObjects: floodRecords.size,
-    maskBuilds: maskBuildCount, reusedObjects: reusedObjectCount, lastRenderMs, maxRenderMs,
+    maskBuilds: maskBuildCount, reusedObjects: reusedObjectCount, lastRenderMs, maxRenderMs, lastDamagedFeatureVisits,
     cachedFeatureGeometry, cachedNodes: featureNodes.size, ruinObjectsLimit: featureById.size,
     inactiveRuins: inactiveRuins.size, inactiveRuinsLimit,
     largestRuinVersions: Math.max(0, ...[...featureById.keys()].map(id => Number(ruinRecords.has(id)) + Number(inactiveRuins.has(id)))),

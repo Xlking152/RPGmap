@@ -6,6 +6,7 @@ const runtimeSource = readFileSync(new URL('../src/engine/runtime.js', import.me
 const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
 const mapRuntimeSource = readFileSync(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
 const builtinsSource = readFileSync(new URL('../src/map-package/builtins.js', import.meta.url), 'utf8');
+const installedPackagesSource = readFileSync(new URL('../src/adapters/installed-packages.js', import.meta.url), 'utf8');
 const rulesetBuiltinsSource = readFileSync(new URL('../src/ruleset/builtins.js', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const appShellSource = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
@@ -43,8 +44,14 @@ test('application chrome keeps the restrained neutral, river and brick palette',
   assert.match(indexSource, new RegExp(`RPGmap ${packageJson.version.replaceAll('.', '\\.')}<`));
 });
 
-test('production registry splits the built-in map and large vendors without suppressing chunk warnings', () => {
-  assert.match(mainSource, /registerBuiltInMapPackages/);
+test('production registry loads the installed map catalogue and keeps the runtime lazy without suppressing chunk warnings', () => {
+  assert.match(mainSource, /await registerInstalledMapPackages\(mapPackageRegistry\)/);
+  assert.doesNotMatch(mainSource, /registerBuiltInMapPackages|map-package\/builtins|reference\/maps|maps\/lanzhou/);
+  assert.match(installedPackagesSource, /\/api\/packages\/maps/);
+  assert.match(installedPackagesSource, /registry\.registerLoader/);
+  assert.match(installedPackagesSource, /map\.fingerprint !== entry\.fingerprint/);
+  assert.match(mainSource, /import\('\.\/world\/manager\.js'\)/);
+  assert.match(mainSource, /import\('\.\/world\/setup\.js'\)/);
   assert.match(mainSource, /listBuiltInRulesets/);
   assert.match(mainSource, /await import\('\.\/runtime\/map-runtime\.js'\)/);
   assert.match(mapRuntimeSource, /mapPackageRegistry\.load/);

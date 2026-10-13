@@ -304,6 +304,7 @@ export function createSceneAreaSystem() {
       function render() { renderLayers(); renderPanel(); }
 
       async function beginPlacement(shape = 'circle') {
+        if (destroyed || api.world?.isSceneTransitionPending?.()) return false;
         placingShape = ['circle', 'sector', 'rectangle'].includes(shape) ? shape : 'circle';
         preview = null;
         api.setTool?.('aoe');
@@ -314,6 +315,7 @@ export function createSceneAreaSystem() {
       }
 
       async function previewArea(areaId = selectedAreaId) {
+        if (destroyed || api.world?.isSceneTransitionPending?.()) return null;
         refreshAreas();
         const area = areas().find(item => String(item.id) === String(areaId));
         if (!area) return null;
@@ -453,6 +455,13 @@ export function createSceneAreaSystem() {
 
       for (const name of ['state:commit', 'state:import', 'scene:activate']) {
         off.push(api.on?.(name, event => { refreshAreas(event); render(); }));
+      }
+      for (const name of ['scene:switch-starting', 'scene:reset-starting']) {
+        off.push(api.on?.(name, () => {
+          placingShape = null; preview = null; selectedAreaId = null;
+          if (api.getTool?.() === 'aoe') api.setTool?.('pan');
+          render();
+        }));
       }
       for (const name of ['token:move', 'token:delete', 'marker:move', 'marker:delete']) {
         const kind = name.startsWith('token') ? 'token' : 'marker';

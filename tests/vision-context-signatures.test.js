@@ -159,7 +159,7 @@ test('default JSON loader owns immutable geometry while public adapters leave ca
     .replace(/^import \{ createLanzhouGeneratedArtAssets \} .*;$/m, 'const createLanzhouGeneratedArtAssets = () => ({});')
     .replace("'./contract.js'", JSON.stringify(new URL('../src/map-package/contract.js', import.meta.url).href));
   const { createDefaultMapPackage } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-  const data = JSON.parse(await readFile(new URL('../reference/maps/lanzhou/runtime.json', import.meta.url), 'utf8'));
+  const data = JSON.parse(await readFile(new URL('../maps/lanzhou/runtime.json', import.meta.url), 'utf8'));
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async url => ({ ok: true, status: 200,
     text: async () => '<svg></svg>', json: async () => { assert.equal(url, '/runtime.json'); return data; } });

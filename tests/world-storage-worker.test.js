@@ -235,13 +235,47 @@ test('Worker infrastructure failure falls back from the same owned input without
 
 test('a changed MapPackage alias cannot publish a Worker export validated against the previous context', async t => {
   const f = fixture(t), { saving, request } = await f.start();
-  options.mapPackage.mapVersion = 'new-runtime-alias';
+  // An alias can change the captured validation context while still naming the
+  // Scene's exact installed version. Changing the effective version requires a
+  // separate, explicit update of the World reference (covered below).
+  options.mapPackage.mapVersion = copyMap.version;
   t.after(() => { delete options.mapPackage.mapVersion; });
   f.transport.complete(request);
   assert.equal(await f.turns.finish(saving), true);
-  assert.equal(f.writes[0].mapVersion, 'new-runtime-alias');
+  assert.equal(f.writes[0].mapVersion, copyMap.version);
   assert.equal(JSON.stringify(f.writes[0]), JSON.stringify(exportRuntimeState(f.state, options)));
   assert.equal(f.transport.requests.length, 1, 'the obsolete context uses main-thread full validation fallback');
+  assert.equal(f.errors.length, 0);
+});
+
+test('a changed effective MapPackage version rejects persistence until the fixed Scene reference matches', async t => {
+  const f = fixture(t), { saving, request } = await f.start();
+  options.mapPackage.mapVersion = '2';
+  t.after(() => { delete options.mapPackage.mapVersion; });
+  f.transport.complete(request);
+  assert.equal(await f.turns.finish(saving), false);
+  assert.equal(f.writes.length, 0);
+  assert.equal(f.persistence.blocked, true);
+  assert.equal(f.errors[0].code, 'world_scene_map_reload_required');
+});
+
+test('discarding an old version Worker result retries the explicitly updated World reference before publication', async t => {
+  const f = fixture(t), { saving, request } = await f.start();
+  options.mapPackage.mapVersion = '2';
+  t.after(() => { delete options.mapPackage.mapVersion; });
+  const next = structuredClone(f.state);
+  for (const scene of next.preferences.worldV2.scenes) scene.mapPackage.version = '2';
+  f.state = next;
+  f.transport.complete(request);
+  const currentRequest = await f.transport.request(1);
+  assert.equal(f.writes.length, 0, 'old version output never reaches storage');
+  assert.equal(request.message.prepared.source.preferences.worldV2.scenes[0].mapPackage.version, copyMap.version);
+  assert.equal(currentRequest.message.prepared.source.preferences.worldV2.scenes[0].mapPackage.version, '2');
+  f.transport.complete(currentRequest);
+  assert.equal(await saving, true);
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0].mapVersion, '2');
+  assert.equal(JSON.stringify(f.writes[0]), JSON.stringify(exportRuntimeState(f.state, options)));
   assert.equal(f.errors.length, 0);
 });
 
