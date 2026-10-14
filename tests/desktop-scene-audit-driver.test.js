@@ -13,6 +13,8 @@ function functionFromDriver(name) {
 }
 const capture = functionFromDriver('sceneAuditContent');
 const explorationSettled = functionFromDriver('sceneAuditExplorationSettled');
+const keyboardDiagnostic = functionFromDriver('desktopKeyboardDiagnostic');
+const walMovements = functionFromDriver('desktopMovementWalResults');
 const nextMessage = functionFromDriver('socketMessage');
 const scene = () => ({ id: 'a', name: 'A', mapPackage: { id: 'lanzhou', version: '1.1.0', fingerprint: 'same-content' },
   tokens: [{ id: 't', x: 730.5, y: 450.5 }], markers: [], attackAreas: [],
@@ -104,4 +106,34 @@ test('Scene audit uses authenticated vision requests and never submits the serve
   assert.match(source, /await api\.multiplayer\.setVisionSource\(null\)/);
   assert.match(source, /vision:\{\.\.\.token\.vision,enabled:false\}/);
   assert.match(source, /wal\.replay\(snapshot, \{ repairTail: false \}\)/);
+});
+
+test('Desktop input diagnostics observe movement keys without intercepting events or capturing arbitrary text', () => {
+  let prevented = false;
+  const input = { type: 'keydown', key: 'W', code: 'KeyW', repeat: true, isTrusted: true, target: { tagName: 'DIV' },
+    preventDefault() { prevented = true; }, stopPropagation() { prevented = true; } };
+  const result = keyboardDiagnostic(input, { x: 730.5, y: 450.5 });
+  assert.equal(result.key, 'W'); assert.equal(result.code, 'KeyW'); assert.equal(result.repeat, true); assert.equal(result.isTrusted, true);
+  assert.equal(result.targetTag, 'DIV'); assert.equal(result.tokenPosition.x, 730.5); assert.equal(result.tokenPosition.y, 450.5);
+  assert.equal(prevented, false);
+  assert.equal(keyboardDiagnostic({ ...input, key: 'x', code: 'KeyX', target: { tagName: 'INPUT' } }, null), null);
+  assert.equal(keyboardDiagnostic({ ...input, key: 'ArrowUp', code: 'ArrowUp', type: 'keyup' }, null).type, 'keyup');
+  assert.equal(keyboardDiagnostic({ ...input, key: 'Shift', code: 'ShiftLeft' }, null).key, 'Shift');
+  assert.match(source, /for\(const type of \['keydown','keyup'\]\)/);
+  assert.match(source, /\{capture:true,passive:true\}/);
+  assert.doesNotMatch(keyboardDiagnostic.toString(), /preventDefault|stopPropagation|dispatchKeyEvent/);
+  assert.match(source, /movementKeyEventCount:window\.__desktopSmokeKeyboardTrace\.length/);
+});
+
+test('Desktop WAL diagnostics report each actual movement method once instead of copied operation history', () => {
+  const drag = { operationId: 'drag', revision: 16, results: [{ motion: [{ tokenId: 't', method: 'drag', from: { x: 1, y: 2 }, to: { x: 3, y: 2 } }] }] };
+  const keyboard = { operationId: 'key', revision: 17, results: [{ motion: [{ tokenId: 't', method: 'keyboard', from: { x: 3, y: 2 }, to: { x: 3, y: 1 } }] }] };
+  const records = [
+    { operationId: 'drag', revision: 16, results: [drag] },
+    { operationId: 'key', revision: 17, results: [drag, keyboard] },
+  ];
+  const movements = walMovements(records, 't', 15);
+  assert.equal(movements.length, 2); assert.equal(movements[0].method, 'drag'); assert.equal(movements[1].method, 'keyboard');
+  assert.equal(walMovements(records, 't', 16).length, 1);
+  assert.equal(walMovements(records, 'other', 15).length, 0);
 });

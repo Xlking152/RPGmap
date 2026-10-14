@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { benchmarkBuildInfo, benchmarkPackagePaths, installBrowserBenchmarkMap } from './lan-benchmark-support.mjs';
-import { browserBenchmarkMovementTarget, browserBenchmarkPhaseOperations } from './browser-benchmark-movement.mjs';
+import { browserBenchmarkMovementTarget, browserBenchmarkMoveToken, browserBenchmarkPhaseOperations } from './browser-benchmark-movement.mjs';
 import { withinMillisecondsBudget } from './performance-budget.mjs';
 import { closeOwnedBrowser, rejectPendingCdp } from './owned-browser-close.mjs';
 import { runIncrementalEnvironmentAudit } from './v3-incremental-environment-audit.mjs';
@@ -293,25 +293,11 @@ class BrowserSession {
       return true;
     })()`);
   }
-  async moveToken(tokenIndex, phaseName) {
-    const tokenId = `browser-token-${tokenIndex}`;
+  async moveToken(tokenIndex) {
     return this.evaluate(`(async () => {
       const api = document.querySelector('#app').rpgMapApp;
-      const before = api.tokens.get('${tokenId}');
-      const target = (${browserBenchmarkMovementTarget.toString()})(before, ${tokenIndex});
-      if (Number(before.x) === target.x && Number(before.y) === target.y) {
-        throw new Error('Benchmark target must differ from the current Token position');
-      }
-      await api.world.performOperations([{
-        type: 'token.move', payload: { sceneId: 'scene-northern-song-lanzhou-1104', tokenId: '${tokenId}',
-          placement: 'map', x: target.x, y: target.y, movementMode: 'walk' }
-      }], { source: 'benchmark:${phaseName}' });
-      const after = api.tokens.get('${tokenId}');
-      if (!after || Number(after.x) !== target.x || Number(after.y) !== target.y) {
-        throw new Error('Benchmark Token did not reach the committed target');
-      }
-      return { tokenId: '${tokenId}', from: { x: Number(before.x), y: Number(before.y) },
-        to: target, sourceTokenId: api.vision.getSource() };
+      return (${browserBenchmarkMoveToken.toString()})(api, ${tokenIndex},
+        ${browserBenchmarkMovementTarget.toString()});
     })()`);
   }
   async visionSnapshot(tokenIndex) {
@@ -476,11 +462,28 @@ try {
     const movesBySession = new Map(sessions.map(session => [session.index, 0]));
     const sourceMismatchBySession = new Map(sessions.map(session => [session.index, 0]));
     const inputStimuliBySession = new Map(sessions.map(session => [session.index, 0]));
+    const movementSamples = [];
     while (performance.now() - started < phaseSeconds * 1000) {
       const cycleStarted = performance.now();
       const session = sessions.length > 1 ? sessions[1 + (step % (sessions.length - 1))] : sessions[0];
       const tokenIndex = Math.max(0, session.index - 1);
-      const moved = await session.moveToken(tokenIndex, name);
+      let moved;
+      try { moved = await session.moveToken(tokenIndex); }
+      catch (error) {
+        // A rejected move ends the run. Keep its whole elapsed time and partial
+        // diagnostics; never retry or discard a denied attempt to obtain a pass.
+        const failure = { status: 'failed', completed: false, name, seconds: phaseSeconds,
+          phaseElapsedMs: performance.now() - started, operations: step, actualMoves, movementSamples,
+          failedMove: { session: session.name, tokenId: `browser-token-${tokenIndex}`,
+            elapsedMs: performance.now() - cycleStarted, error: error.message },
+          sessions: await Promise.all(sessions.map(async value => ({ name: value.name,
+            diagnostics: await value.snapshot().catch(cause => ({ error: cause.message })),
+            failures: value.failures, exceptions: value.exceptions }))),
+        };
+        await writeFile(path.join(outputRoot, `${name}-failure.json`), `${JSON.stringify(failure, null, 2)}\n`, 'utf8');
+        throw error;
+      }
+      movementSamples.push({ session: session.name, ...moved });
       if (moved.from.x !== moved.to.x || moved.from.y !== moved.to.y) actualMoves += 1;
       movesBySession.set(session.index, movesBySession.get(session.index) + 1);
       if (session.role === 'player' && moved.sourceTokenId !== moved.tokenId) {
@@ -515,7 +518,7 @@ try {
       vision: session.role === 'player' ? await session.visionSnapshot(session.index - 1) : null,
       failures: session.failures, exceptions: session.exceptions,
     })));
-    const phase = { name, seconds: phaseSeconds, operations: step, actualMoves, scene: sceneMetrics, sessions: measurements };
+    const phase = { name, seconds: phaseSeconds, operations: step, actualMoves, movementSamples, scene: sceneMetrics, sessions: measurements };
     await writeFile(path.join(outputRoot, `${name}.json`), `${JSON.stringify(phase, null, 2)}\n`, 'utf8');
     console.error(`[browser-benchmark] ${name} phase completed`);
     return phase;

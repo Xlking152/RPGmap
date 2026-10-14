@@ -11,7 +11,7 @@ import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js'
 import { movementMetersPerPixel, recommendedMovementStep, snapMovementPoint } from '../src/movement/snap.js';
 import { applyDocumentChanges } from '../src/documents/changes.js';
 import { OriginWebSocket } from './desktop-origin-websocket.mjs';
-import { createWorldWal } from '../deployment/local-server/world-wal.mjs';
+import { createWorldWal, worldWalChecksum } from '../deployment/local-server/world-wal.mjs';
 import { applyWorldOperationPatch } from '../src/world/operations.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -224,6 +224,36 @@ async function establishMapToken(actorId, tokenId, name) {
   })()`);
 }
 
+function desktopKeyboardDiagnostic(event, token) {
+  const key = String(event.key || '').toLowerCase(), code = String(event.code || '');
+  if (!['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift', 'control', 'alt', 'meta'].includes(key)
+    && !['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code)) return null;
+  return { type: event.type, key: event.key, code: event.code, repeat: event.repeat === true, isTrusted: event.isTrusted === true,
+    targetTag: event.target?.tagName || null, at: Date.now(), tokenPosition: token ? { x: token.x, y: token.y } : null };
+}
+
+function desktopMovementWalResults(records, tokenId, afterRevision) {
+  const movements = [];
+  for (const record of records) {
+    if (record.revision <= afterRevision) continue;
+    const current = record.results?.find(result => result.operationId === record.operationId && result.revision === record.revision);
+    const results = current?.results || record.results || [];
+    for (const result of results) for (const motion of result.motion || []) {
+      if (motion.tokenId === tokenId) movements.push({ revision: record.revision, operationId: record.operationId,
+        tokenId, method: motion.method, from: motion.from, to: motion.to });
+    }
+  }
+  return movements;
+}
+
+async function desktopMovementWalDiagnostics(worldId, tokenId, afterRevision) {
+  const text = await readFile(path.join(dataRoot, 'worlds', worldId, 'world.operations.ndjson'), 'utf8');
+  const complete = text.endsWith('\n') ? text : text.slice(0, text.lastIndexOf('\n') + 1);
+  const records = complete.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+  for (const record of records) assert.equal(record.checksum, worldWalChecksum(record), 'Movement diagnostic WAL records must retain valid checksums');
+  return { afterRevision, records: desktopMovementWalResults(records, tokenId, afterRevision) };
+}
+
 async function checkMapInput(worldId) {
   const tokenId = 'desktop-smoke-token';
   const start = await establishMapToken('desktop-smoke-actor', tokenId, '桌面拖动验收');
@@ -273,9 +303,16 @@ async function checkMapInput(worldId) {
   })()`);
   assert.equal(hit.tokenId, tokenId, 'CDP drag must start on the actual Token hit target');
   assert.notEqual(hit.access?.valid, false, 'the standard fixture must be movable through the regular permission and rule checks');
+  const dragBaseRevision = (await sceneAuditDurableWorld(worldId)).revision;
   await debuggerClient.evaluate(`(() => {
     const api=document.querySelector('#app').rpgMapApp;
     window.__desktopSmokePointerTrace=[];
+    window.__desktopSmokeKeyboardTrace=[];
+    const keyboardDiagnostic=(${desktopKeyboardDiagnostic.toString()});
+    for(const type of ['keydown','keyup']) window.addEventListener(type,event=>{
+      const item=keyboardDiagnostic(event,api.tokens.get('${tokenId}'));
+      if(item)window.__desktopSmokeKeyboardTrace.push(item);
+    },{capture:true,passive:true});
     window.__desktopSmokeGeometry=()=>{
       const box=api.map.getContainer().getBoundingClientRect(),size=api.map.getSize(),origin=api.map.getPixelOrigin();
       return {box:{x:box.x,y:box.y,width:box.width,height:box.height},size:{x:size.x,y:size.y},origin:{x:origin.x,y:origin.y},center:api.map.getCenter()};
@@ -314,7 +351,8 @@ async function checkMapInput(worldId) {
   try {
     await eventually(() => debuggerClient.evaluate(`(() => {const token=document.querySelector('#app').rpgMapApp.tokens.get('${tokenId}');return token?.x===${expectedDestination.x} && token?.y===${expectedDestination.y};})()`));
   } catch (error) {
-    const diagnostic = await debuggerClient.evaluate(`(() => {const api=document.querySelector('#app').rpgMapApp,token=api.tokens.get('${tokenId}'),node=document.querySelector('[data-token-id="${tokenId}"]');return {before:window.__desktopSmokeDragBefore,events:window.__desktopSmokePointerTrace,token:{x:token?.x,y:token?.y,movement:token?.movement},movement:api.movementUi?.getState?.(),selection:api.selection?.getSelectedTokenIds?.(),status:document.querySelector('[data-role="map-status"]')?.textContent,zoom:api.map.getZoom(),animatingZoom:Boolean(api.map._animatingZoom),hasFocus:document.hasFocus(),marker:node?{x:node.getBoundingClientRect().x,y:node.getBoundingClientRect().y,width:node.getBoundingClientRect().width,height:node.getBoundingClientRect().height}:null};})()`);
+    const diagnostic = await debuggerClient.evaluate(`(() => {const api=document.querySelector('#app').rpgMapApp,token=api.tokens.get('${tokenId}'),node=document.querySelector('[data-token-id="${tokenId}"]');return {before:window.__desktopSmokeDragBefore,events:window.__desktopSmokePointerTrace,movementKeyEvents:window.__desktopSmokeKeyboardTrace,movementKeyEventCount:window.__desktopSmokeKeyboardTrace.length,token:{x:token?.x,y:token?.y,movement:token?.movement},movement:api.movementUi?.getState?.(),selection:api.selection?.getSelectedTokenIds?.(),status:document.querySelector('[data-role="map-status"]')?.textContent,zoom:api.map.getZoom(),animatingZoom:Boolean(api.map._animatingZoom),hasFocus:document.hasFocus(),marker:node?{x:node.getBoundingClientRect().x,y:node.getBoundingClientRect().y,width:node.getBoundingClientRect().width,height:node.getBoundingClientRect().height}:null};})()`);
+    diagnostic.movementWal = await desktopMovementWalDiagnostics(worldId, tokenId, dragBaseRevision).catch(failure => ({ error: failure.message }));
     findings.push({ test: 'strict CDP Token drag diagnostics', passed: false, drag, finalPointer, destination, expectedDestination, movementStep, fixture, diagnostic, browserExceptions });
     throw error;
   }
@@ -327,7 +365,10 @@ async function checkMapInput(worldId) {
   const saved = JSON.parse(await readFile(path.join(dataRoot, 'backups', `${backup.id}.json`), 'utf8')).record.snapshot.state.preferences.worldV2;
   const persisted = saved.scenes.find(scene => scene.id === saved.activeSceneId).tokens.find(token => token.id === tokenId);
   assert.equal(persisted.x, expectedDestination.x); assert.equal(persisted.y, expectedDestination.y);
-  findings.push({ test: 'production Leaflet zoom, permanent Tooltip, CDP Token drag and server-persisted map position', passed: true, tokenId, from: start, pointerDestination: destination, to: expectedDestination, finalPointer, movementStep });
+  const keyboardDiagnostic = await debuggerClient.evaluate(`({movementKeyEvents:window.__desktopSmokeKeyboardTrace,movementKeyEventCount:window.__desktopSmokeKeyboardTrace.length})`);
+  const movementWal = await desktopMovementWalDiagnostics(worldId, tokenId, dragBaseRevision);
+  findings.push({ test: 'production Leaflet zoom, permanent Tooltip, CDP Token drag and server-persisted map position', passed: true, tokenId, from: start, pointerDestination: destination, to: expectedDestination, finalPointer, movementStep,
+    ...keyboardDiagnostic, movementWal });
 }
 
 // Compare all persisted Scene content, excluding World timestamps and unrelated
