@@ -12,6 +12,7 @@ function functionFromDriver(name) {
   return runInNewContext(`(${source.slice(start, end)})`, { structuredClone, JSON, setTimeout, clearTimeout, Error });
 }
 const capture = functionFromDriver('sceneAuditContent');
+const explorationSettled = functionFromDriver('sceneAuditExplorationSettled');
 const nextMessage = functionFromDriver('socketMessage');
 const scene = () => ({ id: 'a', name: 'A', mapPackage: { id: 'lanzhou', version: '1.1.0', fingerprint: 'same-content' },
   tokens: [{ id: 't', x: 730.5, y: 450.5 }], markers: [], attackAreas: [],
@@ -78,4 +79,29 @@ test('Both successful and failed desktop audit evidence record the observer tran
     const record = source.split('\n').find(line => line.includes('writeFile(recordFile,') && line.includes(`outcome: '${outcome}'`));
     assert.ok(record?.includes('driverSha256, observerTransportSha256,'), `${outcome} evidence must identify both driver modules`);
   }
+});
+
+test('Scene audit waits for its Actor party Fog and an empty durable background queue', () => {
+  const snapshot = { state: { preferences: { worldV2: { scenes: [scene()] } } }, exploration: { jobs: {} } };
+  assert.equal(explorationSettled(snapshot, 'a', 'party'), true);
+  assert.equal(explorationSettled(snapshot, 'a', 'desktop-audit'), false);
+  assert.equal(explorationSettled(snapshot, 'other-scene', 'party'), false);
+  snapshot.exploration.jobs.source = { sceneId: 'a', partyId: 'party' };
+  assert.equal(explorationSettled(snapshot, 'a', 'party'), false, 'Visible rows alone do not prove that all durable work has finished');
+  snapshot.exploration.jobs = {};
+  snapshot.state.preferences.worldV2.scenes[0].fog.exploredByParty.party.rows = {};
+  assert.equal(explorationSettled(snapshot, 'a', 'party'), false);
+  delete snapshot.exploration;
+  assert.equal(explorationSettled(snapshot, 'a', 'party'), false, 'A projected snapshot without private queue metadata cannot prove completion');
+});
+
+test('Scene audit uses authenticated vision requests and never submits the server-only explore intent', () => {
+  assert.doesNotMatch(source, /scene\.fog\.explore/);
+  assert.match(source, /actor\.partyId/);
+  assert.match(source, /type:'token\.upsert'[\s\S]*vision:\{\.\.\.token\.vision,enabled:true/);
+  assert.match(source, /type:'scene\.settings\.patch',payload:\{sceneId,patch:\{lineOfSightEnabled:true\}\}/);
+  assert.match(source, /await api\.multiplayer\.setVisionSource\(token\.id\)/);
+  assert.match(source, /await api\.multiplayer\.setVisionSource\(null\)/);
+  assert.match(source, /vision:\{\.\.\.token\.vision,enabled:false\}/);
+  assert.match(source, /wal\.replay\(snapshot, \{ repairTail: false \}\)/);
 });

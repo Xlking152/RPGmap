@@ -11,6 +11,8 @@ import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js'
 import { movementMetersPerPixel, recommendedMovementStep, snapMovementPoint } from '../src/movement/snap.js';
 import { applyDocumentChanges } from '../src/documents/changes.js';
 import { OriginWebSocket } from './desktop-origin-websocket.mjs';
+import { createWorldWal } from '../deployment/local-server/world-wal.mjs';
+import { applyWorldOperationPatch } from '../src/world/operations.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const argumentsByName = new Map(process.argv.slice(2).map(argument => {
@@ -339,6 +341,21 @@ function sceneAuditContent(scene) {
   });
 }
 
+function sceneAuditExplorationSettled(snapshot, sceneId, partyId) {
+  const scene = snapshot?.state?.preferences?.worldV2?.scenes?.find(item => item.id === sceneId);
+  return Boolean(partyId && snapshot?.exploration?.jobs
+    && !Object.keys(snapshot.exploration.jobs).length
+    && Object.keys(scene?.fog?.exploredByParty?.[partyId]?.rows || {}).length);
+}
+
+async function sceneAuditDurableWorld(worldId) {
+  const directory = path.join(dataRoot, 'worlds', worldId);
+  const snapshot = JSON.parse(await readFile(path.join(directory, 'world.json'), 'utf8'));
+  const wal = createWorldWal({ filePath: path.join(directory, 'world.operations.ndjson'),
+    applyPatch: (state, patch) => applyWorldOperationPatch(state, patch, { project: false }) });
+  return wal.replay(snapshot, { repairTail: false });
+}
+
 function socketMessage(socket, type) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { cleanup(); reject(new Error(`Scene observer timeout: ${type}`)); }, 10000);
@@ -451,17 +468,48 @@ async function checkScenes(worldId, minimalMap) {
       const damaged=await api.interaction.damage(building.id);
       if(!damaged.ok)throw new Error(damaged.reason||'Feature was not damaged');
       const token=api.tokens.get('desktop-smoke-token');
-      await api.world.performOperations([{type:'scene.fog.explore',payload:{sceneId:api.world.getActiveScene().id,partyId:'desktop-audit',x:token.x,y:token.y,radiusMeters:15,elevationMeters:0}}],{source:'desktop-scene-audit'});
-      return {doorId:door.id,buildingId:building.id,doorState:api.interaction.stateForFeature(door.id),buildingState:api.interaction.stateForFeature(building.id)};
+      const sceneId=api.world.getActiveScene().id;
+      const actor=api.world.get().actors.find(item=>item.id===token.actorId);
+      if(!actor?.partyId)throw new Error('Scene audit vision Token requires its real Actor party');
+      await api.world.performOperations([
+        {type:'token.upsert',payload:{sceneId,token:{...token,vision:{...token.vision,enabled:true,preciseRangeOverrideMeters:15,vagueRangeOverrideMeters:15}}}},
+        {type:'scene.settings.patch',payload:{sceneId,patch:{lineOfSightEnabled:true}}},
+      ],{source:'desktop-scene-audit-vision'});
+      await api.multiplayer.setVisionSource(token.id);
+      return {doorId:door.id,buildingId:building.id,tokenId:token.id,partyId:actor.partyId,
+        doorState:api.interaction.stateForFeature(door.id),buildingState:api.interaction.stateForFeature(building.id)};
     })()`);
-    const changed = await readWorld(), aChanged = sceneAuditContent(changed.scenes.find(scene => scene.id === sceneA.id));
+    await eventually(async () => sceneAuditExplorationSettled(await sceneAuditDurableWorld(worldId), sceneA.id, mutation.partyId),
+      { timeoutMs: 20000, intervalMs: 100 });
+    await debuggerClient.evaluate(`(async () => {
+      const api=document.querySelector('#app').rpgMapApp;
+      await api.multiplayer.setVisionSource(null);
+      const token=api.tokens.get(${JSON.stringify(mutation.tokenId)});
+      await api.world.performOperations([{type:'token.upsert',payload:{sceneId:api.world.getActiveScene().id,
+        token:{...token,vision:{...token.vision,enabled:false}}}}],{source:'desktop-scene-audit-vision-stop'});
+      await api.multiplayer.setVisionSource(null);
+    })()`);
+    const settled = await eventually(async () => {
+      const durable = await sceneAuditDurableWorld(worldId);
+      if (!sceneAuditExplorationSettled(durable, sceneA.id, mutation.partyId)) return false;
+      const current = await readWorld();
+      assert.deepEqual(sceneAuditContent(current.scenes.find(scene => scene.id === sceneA.id)),
+        sceneAuditContent(durable.state.preferences.worldV2.scenes.find(scene => scene.id === sceneA.id)),
+        'Scene A must display the same completed exploration as its read-only durable WAL prefix');
+      return { world: current, durableRevision: durable.revision };
+    }, { timeoutMs: 20000, intervalMs: 100 });
+    const changed = settled.world, aChanged = sceneAuditContent(changed.scenes.find(scene => scene.id === sceneA.id));
     assert.equal(mutation.doorState.open, true);
     assert.notEqual(aChanged.sceneEvents.length, sceneA.sceneEvents.length);
-    assert.ok(Object.keys(aChanged.fog?.exploredByParty?.['desktop-audit']?.rows || {}).length, 'Scene A must contain genuine server-computed exploration');
+    assert.ok(Object.keys(aChanged.fog?.exploredByParty?.[mutation.partyId]?.rows || {}).length, 'Scene A must contain genuine server-computed exploration for its Actor party');
+    assert.notDeepEqual(aChanged.fog, sceneA.fog, 'Selecting a real vision source must produce new server-computed Fog');
+    assert.equal(aChanged.tokens.find(token => token.id === mutation.tokenId).vision.enabled, false);
     assert.deepEqual(sceneAuditContent(changed.scenes.find(scene => scene.id === created.b.id)), bInitial);
     assert.deepEqual(sceneAuditContent(changed.scenes.find(scene => scene.id === created.c.id)), cInitial);
     findings.push({ test: 'formal Scene creation and A door/destruction/Fog changes keep same-map B and other-map C independent', passed: true,
-      sceneIds: [sceneA.id, created.b.id, created.c.id], mapPackages: [sceneA.mapPackage, minimalMap], doorId: mutation.doorId, buildingId: mutation.buildingId });
+      sceneIds: [sceneA.id, created.b.id, created.c.id], mapPackages: [sceneA.mapPackage, minimalMap], doorId: mutation.doorId, buildingId: mutation.buildingId,
+      exploration: { partyId: mutation.partyId, sourceTokenId: mutation.tokenId, durableRevision: settled.durableRevision,
+        pendingJobs: 0, sourceClearedAndDisabledBeforeSwitch: true, trigger: 'official Token vision and vision.source.set' } });
     await activate(created.b.id, created.b.mapPackage);
     assert.deepEqual(sceneAuditContent((await readWorld()).scenes.find(scene => scene.id === created.b.id)), bInitial);
     await activate(created.c.id, created.c.mapPackage);
