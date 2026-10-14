@@ -7,7 +7,7 @@ const elevationModelSource = await readFile(new URL('../src/elevation/model.js',
 const elevationIndexSource = await readFile(new URL('../src/elevation/index.js', import.meta.url), 'utf8');
 const appShellSource = await readFile(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
 const mainSource = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
-const mapRuntimeSource = await readFile(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
+const mapRuntimeSource = await readFile(new URL('../src/runtime/map-runtime-base.js', import.meta.url), 'utf8');
 
 test('Elevation V2 writes only through canonical Token Runtime', () => {
   assert.match(elevationSource, /setTokenElevationMeters\(api, token\.id, elevationMeters/);

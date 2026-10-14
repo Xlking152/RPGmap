@@ -24,6 +24,42 @@ test('one-call whole-data eligibility preserves nested/shared snapshots and comp
   }
 });
 
+test('accepted fully frozen subgraphs reuse the complete descriptor proof on their first read', () => {
+  const originalDescriptors = Object.getOwnPropertyDescriptors;
+  for (const compactMetadata of [false, true]) {
+    const spans = Object.freeze([Object.freeze([1, 2])]);
+    const fog = Object.freeze({ rows: Object.freeze({ 1: spans }) });
+    const initiallyMutableChild = { value: 1 };
+    const shallowFrozen = Object.freeze({ child: initiallyMutableChild });
+    const value = { payload: fog, shallowFrozen }, validate = createCanonicalWorldValidator({ compactMetadata });
+    validate(value);
+    let descriptorReads = 0;
+    try {
+      Object.getOwnPropertyDescriptors = current => { descriptorReads++; return originalDescriptors(current); };
+      assert.equal(validate.isImmutableData(fog), true);
+      assert.equal(validate.isImmutableData(spans), true);
+      assert.equal(descriptorReads, 0, 'the accepted frozen graph must not be scanned twice');
+      assert.equal(validate.isImmutableData(shallowFrozen), true);
+      assert.ok(descriptorReads > 0, 'a branch with a previously mutable child still needs its later proof');
+    } finally { Object.getOwnPropertyDescriptors = originalDescriptors; }
+  }
+});
+
+test('a rejected candidate cannot publish a proof for a previously unaccepted frozen subgraph', () => {
+  for (const compactMetadata of [false, true]) {
+    const frozen = Object.freeze({ rows: Object.freeze({ 1: Object.freeze([Object.freeze([1, 2])]) }) });
+    const value = { payload: frozen, markers: [{ id: 'same' }, { id: 'same' }] };
+    const validate = createCanonicalWorldValidator({ compactMetadata });
+    assert.throws(() => validate(value), { code: 'duplicate_id' });
+    for (const branch of [value, frozen, frozen.rows, frozen.rows[1], frozen.rows[1][0]]) {
+      assert.equal(validate.isImmutableData(branch), false);
+    }
+    value.markers = [];
+    assert.equal(validate(value), value);
+    assert.equal(validate.isImmutableData(frozen), true);
+  }
+});
+
 test('static traversal hooks cannot establish a whole proof before changing later data and restoring native hooks', () => {
   const originalMap = Object.getOwnPropertyDescriptor(Array.prototype, 'map');
   const originalIterator = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);

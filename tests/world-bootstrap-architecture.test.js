@@ -9,7 +9,7 @@ const source = file => readFileSync(path.join(ROOT, file), 'utf8');
 
 test('application startup selects World before loading its MapPackage Runtime', () => {
   const main = source('src/main.js');
-  const mapRuntime = source('src/runtime/map-runtime.js');
+  const mapRuntime = source('src/runtime/map-runtime-base.js');
   assert.match(main, /chooseWorldBeforeMap/);
   assert.match(main, /readWorldBootstrap/);
   assert.match(main, /worldBootstrap\.mapPackage/);

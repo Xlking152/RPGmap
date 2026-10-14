@@ -214,9 +214,13 @@ export function createChatController({ selection } = {}) {
           if (result === false || result == null) status('聊天未发送：服务器连接不可用');
           return result ?? false;
         }
-        const item = store.append({ type, text, data });
-        renderLog();
-        return item;
+        try {
+          const item = store.append({ type, text, data });
+          if (item && typeof item.then === 'function') return item.then(value => { renderLog(); return value; })
+            .catch(error => { renderLog(); status(`聊天未发送：${error.message}`); return false; });
+          renderLog();
+          return item;
+        } catch (error) { status(`聊天未发送：${error.message}`); return false; }
       }
 
       api.chat = {
@@ -245,7 +249,11 @@ export function createChatController({ selection } = {}) {
             if (!api.multiplayer?.getCapabilities?.().canClearChat) { status('只有 GM 可以清空共享聊天记录'); return; }
             api.multiplayer.clearChat();
           } else {
-            store.clear(); renderLog(); status('聊天记录已清空');
+            try {
+              const result = store.clear();
+              if (result && typeof result.then === 'function') result.then(() => { renderLog(); status('聊天记录已清空'); }).catch(error => status(`聊天操作失败：${error.message}`));
+              else { renderLog(); status('聊天记录已清空'); }
+            } catch (error) { renderLog(); status(`聊天操作失败：${error.message}`); }
           }
         }
       });

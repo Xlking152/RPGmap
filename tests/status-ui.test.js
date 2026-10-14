@@ -120,7 +120,7 @@ test('status UI is wired into live Actor cards, Token inspector and app startup'
   const entityUi = readFileSync(new URL('../src/entities/ui-live.js', import.meta.url), 'utf8');
   const appShell = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
   const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
-  const mapRuntime = readFileSync(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
+  const mapRuntime = readFileSync(new URL('../src/runtime/map-runtime-base.js', import.meta.url), 'utf8');
   const statusUi = readFileSync(new URL('../src/status/ui.js', import.meta.url), 'utf8');
   const lazyTools = readFileSync(new URL('../src/ui/lazy-runtime-tools.js', import.meta.url), 'utf8');
   const quickHud = readFileSync(new URL('../src/status/quick-hud.js', import.meta.url), 'utf8');

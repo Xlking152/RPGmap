@@ -4,7 +4,7 @@ import test from 'node:test';
 
 const runtimeSource = readFileSync(new URL('../src/engine/runtime.js', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
-const mapRuntimeSource = readFileSync(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
+const mapRuntimeSource = readFileSync(new URL('../src/runtime/map-runtime-base.js', import.meta.url), 'utf8');
 const builtinsSource = readFileSync(new URL('../src/map-package/builtins.js', import.meta.url), 'utf8');
 const installedPackagesSource = readFileSync(new URL('../src/adapters/installed-packages.js', import.meta.url), 'utf8');
 const rulesetBuiltinsSource = readFileSync(new URL('../src/ruleset/builtins.js', import.meta.url), 'utf8');

@@ -1,6 +1,7 @@
 import { createEmptyEntityState, normalizeEntityState } from './model.js';
 import { STATUS_SCHEMA_VERSION, resolveActorEffects } from '../status/model.js';
 import { applyDocumentValue } from '../documents/changes.js';
+import { commitStoreProjection } from '../adapters/store-commit.js';
 
 const PREFERENCE_KEY = 'entitySystem';
 
@@ -117,15 +118,7 @@ export class EntityStore {
     const nextApp = appState || this.api.getState();
     nextApp.preferences ||= {};
     nextApp.preferences[PREFERENCE_KEY] = this.materializeState();
-    this.saving = true;
-    try {
-      if (typeof this.api.commitState === 'function') this.api.commitState(nextApp, { source, render });
-      else this.api.importState(nextApp);
-      if (immediate) this.api.persistNow?.();
-    } finally {
-      queueMicrotask(() => { this.saving = false; });
-    }
-    return true;
+    return commitStoreProjection(this, nextApp, { source, render }, { immediate });
   }
 
   actor(id) { return this.state.actors.find(actor => String(actor.id) === String(id)) || null; }

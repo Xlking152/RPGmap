@@ -8,7 +8,8 @@ import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const option = process.argv.indexOf('--out');
 if (option >= 0 && !process.argv[option + 1]) throw new Error('--out requires a directory');
-const output = path.resolve(option >= 0 ? process.argv[option + 1] : path.join(root, 'release', 'RPGmap-v3.0.0-rc.1-验收'));
+const { version: applicationVersion } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+const output = path.resolve(option >= 0 ? process.argv[option + 1] : path.join(root, 'release', `RPGmap-v${applicationVersion}-验收`));
 await mkdir(output, { recursive: true });
 let sourceCommit = 'uncommitted';
 try { sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(); } catch {}

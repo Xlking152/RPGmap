@@ -36,7 +36,7 @@ function receive(worker, message = undefined) {
   });
 }
 
-test('production Workers share pure modules, execute without DOM, and retain export/vision behavior', async t => {
+test('hosted and standalone Workers share pure modules, execute without DOM, and retain export/vision behavior', async t => {
   const output = await mkdtemp(path.join(tmpdir(), 'rpgmap-worker-bundle-'));
   assert.equal(path.dirname(output), path.resolve(tmpdir()));
   assert.ok(path.basename(output).startsWith('rpgmap-worker-bundle-'));
@@ -45,16 +45,17 @@ test('production Workers share pure modules, execute without DOM, and retain exp
   const manifest = JSON.parse(await readFile(path.join(output, '.vite/manifest.json'), 'utf8'));
   const common = Object.entries(manifest).find(([, entry]) => entry.name === 'worker-runtime-core');
   assert.ok(common, 'both realms must refer to one emitted pure runtime file');
-  const staticRecords = key => {
+  const staticRecords = (key, recordsManifest = manifest) => {
     const records = new Map();
     function visit(next) {
       if (records.has(next)) return;
-      const record = manifest[next]; assert.ok(record, `Missing dependency ${next}`);
+      const record = recordsManifest[next]; assert.ok(record, `Missing dependency ${next}`);
       records.set(next, record); for (const imported of record.imports || []) visit(imported);
     }
     visit(key); return records;
   };
-  for (const key of ['src/app/world-validation-worker.js', 'src/vision/worker.js']) {
+  assert.equal(manifest['src/app/world-validation-worker.js'], undefined, 'server-hosted persistence must not carry the offline save Worker');
+  for (const key of ['src/vision/worker.js']) {
     const records = staticRecords(key);
     assert.ok(records.has(common[0]), 'each Worker must use the same pure runtime');
     for (const [dependency, record] of records) {
@@ -76,8 +77,24 @@ test('production Workers share pure modules, execute without DOM, and retain exp
   }
   assert.ok(!css.includes('.leaflet-popup-content'), 'unused Leaflet popup CSS must not ship');
 
-  async function start(key) {
-    const worker = new Worker(bridge, { eval: true, workerData: { url: pathToFileURL(path.join(output, manifest[key].file)).href,
+  const standaloneOutput = path.join(output, 'standalone');
+  await build({ root, configFile: path.join(root, 'vite.config.js'), logLevel: 'silent',
+    build: { outDir: standaloneOutput, rollupOptions: { input: path.join(root, 'standalone.html') } } });
+  const standaloneManifest = JSON.parse(await readFile(path.join(standaloneOutput, '.vite/manifest.json'), 'utf8'));
+  const standaloneCommon = Object.entries(standaloneManifest).find(([, entry]) => entry.name === 'worker-runtime-core');
+  assert.ok(standaloneCommon, 'standalone validation and vision retain a shared pure runtime');
+  for (const key of ['src/app/world-validation-worker.js', 'src/vision/worker.js']) {
+    const records = staticRecords(key, standaloneManifest);
+    assert.ok(records.has(standaloneCommon[0]));
+    for (const [, record] of records) {
+      assert.notEqual(record.name, 'map-runtime-core');
+      assert.notEqual(record.name, 'desktop-setup');
+      assert.equal((record.css || []).length, 0);
+    }
+  }
+
+  async function start(key, directory = output, recordsManifest = manifest) {
+    const worker = new Worker(bridge, { eval: true, workerData: { url: pathToFileURL(path.join(directory, recordsManifest[key].file)).href,
       recipeSource: new URL('../src/app/world-validation-context.js', import.meta.url).href } });
     t.after(() => worker.terminate());
     const ready = await receive(worker); assert.equal(ready.ready, true);
@@ -87,7 +104,7 @@ test('production Workers share pure modules, execute without DOM, and retain exp
     // Use the unmodified realm's source recipe to compare compiled behavior.
     return { worker, recipe: ready.recipe };
   }
-  const { worker: validation, recipe } = await start('src/app/world-validation-worker.js');
+  const { worker: validation, recipe } = await start('src/app/world-validation-worker.js', standaloneOutput, standaloneManifest);
   const options = { mapPackage: copyMap, ruleset: copyRuleset };
   for (const schemaVersion of [2, 3, 4]) {
     const state = worldCopyInput().state;

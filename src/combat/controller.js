@@ -116,13 +116,14 @@ export function createCombatController({ selection } = {}) {
       }
 
       function requireCombatManager() {
+        if (store.commitPending) { status('请等待当前战斗操作确认'); return false; }
         if (canManageCombat()) return true;
         status('战斗流程由 GM 管理：Player 只能查看先攻与当前回合');
         return false;
       }
 
       function applyPermissionUi() {
-        const readonly = !canManageCombat();
+        const readonly = store.commitPending || !canManageCombat();
         tracker.classList.toggle('combat-player-readonly', readonly);
         top.querySelectorAll('[data-combat-action]').forEach(node => { node.disabled = readonly; });
         tracker.querySelectorAll('[data-combat-initiative],[data-combat-remove]').forEach(node => { node.disabled = readonly; });
@@ -168,10 +169,22 @@ export function createCombatController({ selection } = {}) {
         applyPermissionUi();
       }
 
-      function persist(message = '') {
-        store.persist();
-        render();
-        if (message) status(message);
+      function persist(message = '', confirmed = null, { clear = false } = {}) {
+        const complete = () => {
+          render();
+          if (message) status(message);
+          confirmed?.();
+          return true;
+        };
+        const failed = error => { render(); status(`战斗操作失败：${error.message}`); return false; };
+        try {
+          const result = clear ? store.clear() : store.persist();
+          if (result && typeof result.then === 'function') {
+            render();
+            return result.then(complete).catch(failed);
+          }
+          return complete();
+        } catch (error) { return failed(error); }
       }
 
       function enterCombat() {
@@ -187,9 +200,8 @@ export function createCombatController({ selection } = {}) {
           return false;
         }
         store.state.combat = createCombat(refs);
-        persist(`已建立战斗 · ${refs.length} 个 Token · 请填写先攻`);
-        combatLog(`进入战斗：${refs.map(ref => tokenName(ref.tokenId)).join('、')}`, { event: 'enter', tokenIds: refs.map(ref => ref.tokenId) });
-        return true;
+        return persist(`已建立战斗 · ${refs.length} 个 Token · 请填写先攻`, () =>
+          combatLog(`进入战斗：${refs.map(ref => tokenName(ref.tokenId)).join('、')}`, { event: 'enter', tokenIds: refs.map(ref => ref.tokenId) }));
       }
 
       function addSelected() {
@@ -205,10 +217,9 @@ export function createCombatController({ selection } = {}) {
           render();
           return false;
         }
-        persist(`已加入 ${added} 个 Token · 新角色不会自动加入战斗`);
         const addedIds = newRefs.map(ref => ref.tokenId);
-        combatLog(`加入战斗：${addedIds.map(tokenName).join('、')}`, { event: 'add', tokenIds: addedIds });
-        return true;
+        return persist(`已加入 ${added} 个 Token · 新角色不会自动加入战斗`, () =>
+          combatLog(`加入战斗：${addedIds.map(tokenName).join('、')}`, { event: 'add', tokenIds: addedIds }));
       }
 
       function beginCombat() {
@@ -221,10 +232,10 @@ export function createCombatController({ selection } = {}) {
         if (!startCombat(combat)) return false;
         const current = currentCombatant(combat);
         captureCurrentTurnOrigin(api, combat);
-        persist(`战斗开始 · 第 1 轮${current ? ` · 当前 ${current.tokenId}` : ''}`);
-        combatLog(`战斗开始 · 第 1 轮${current ? ` · ${tokenName(current.tokenId)} 的回合` : ''}`, { event: 'start', round: 1, tokenId: current?.tokenId || null });
-        focusCurrent(false);
-        return true;
+        return persist(`战斗开始 · 第 1 轮${current ? ` · 当前 ${current.tokenId}` : ''}`, () => {
+          combatLog(`战斗开始 · 第 1 轮${current ? ` · ${tokenName(current.tokenId)} 的回合` : ''}`, { event: 'start', round: 1, tokenId: current?.tokenId || null });
+          focusCurrent(false);
+        });
       }
 
       function advanceTurn() {
@@ -233,10 +244,10 @@ export function createCombatController({ selection } = {}) {
         const current = nextTurn(combat);
         if (!current) return false;
         captureCurrentTurnOrigin(api, combat);
-        persist(`第 ${combat.round} 轮 · 下一回合`);
-        combatLog(`第 ${combat.round} 轮 · ${tokenName(current.tokenId)} 的回合`, { event: 'turn', round: combat.round, tokenId: current.tokenId });
-        focusCurrent(false);
-        return true;
+        return persist(`第 ${combat.round} 轮 · 下一回合`, () => {
+          combatLog(`第 ${combat.round} 轮 · ${tokenName(current.tokenId)} 的回合`, { event: 'turn', round: combat.round, tokenId: current.tokenId });
+          focusCurrent(false);
+        });
       }
 
       function endCombat() {
@@ -247,11 +258,7 @@ export function createCombatController({ selection } = {}) {
         // In LAN mode the World commit must be sent before its matching chat
         // event. Sending the event first increments the server revision, so
         // the following clear request is rejected as stale.
-        store.clear();
-        render();
-        combatLog('战斗结束', { event: 'end', combatId });
-        status('战斗已结束');
-        return true;
+        return persist('战斗已结束', () => combatLog('战斗结束', { event: 'end', combatId }), { clear: true });
       }
 
       function focusToken(tokenId, { center = true } = {}) {
@@ -272,6 +279,7 @@ export function createCombatController({ selection } = {}) {
       }
 
       function pruneMissingTokens() {
+        if (store.commitPending) return false;
         const combat = store.state.combat;
         if (!combat?.combatants?.length || !api.tokens?.get) return false;
         let changed = false;
@@ -281,10 +289,10 @@ export function createCombatController({ selection } = {}) {
           changed = true;
         }
         if (!changed) return false;
-        if (!combat.combatants.length) store.clear();
+        if (!combat.combatants.length) persist('', null, { clear: true });
         else {
           if (combat.state === 'active' && !combat.turnOrigin) captureCurrentTurnOrigin(api, combat);
-          store.persist();
+          persist();
         }
         return true;
       }
@@ -310,14 +318,15 @@ export function createCombatController({ selection } = {}) {
           const removed = combat.combatants.find(item => item.id === id);
           if (removeCombatant(combat, id)) {
             if (!combat.combatants.length) {
-              store.clear();
-              render();
-              status('先攻表已清空');
+              persist('先攻表已清空', () => {
+                if (removed) combatLog(`移出战斗：${tokenName(removed.tokenId)}`, { event: 'remove', tokenId: removed.tokenId });
+              }, { clear: true });
             } else {
               if (combat.state === 'active' && !combat.turnOrigin) captureCurrentTurnOrigin(api, combat);
-              persist('已将 Token 移出战斗');
+              persist('已将 Token 移出战斗', () => {
+                if (removed) combatLog(`移出战斗：${tokenName(removed.tokenId)}`, { event: 'remove', tokenId: removed.tokenId });
+              });
             }
-            if (removed) combatLog(`移出战斗：${tokenName(removed.tokenId)}`, { event: 'remove', tokenId: removed.tokenId });
           }
           return;
         }
@@ -384,15 +393,16 @@ export function createCombatController({ selection } = {}) {
         if (current && String(current.tokenId) === String(event.detail?.tokenId || event.detail?.id || '')) renderTurn();
       });
       api.on('token:delete', event => {
+        if (store.commitPending) return;
         const combat = store.state.combat;
         const tokenId = event.detail?.tokenId || event.detail?.id;
         const item = combat?.combatants?.find(entry => String(entry.tokenId) === String(tokenId));
         if (!item) return;
         removeCombatant(combat, item.id);
-        if (!combat.combatants.length) store.clear();
+        if (!combat.combatants.length) persist('', null, { clear: true });
         else {
           if (combat.state === 'active' && !combat.turnOrigin) captureCurrentTurnOrigin(api, combat);
-          store.persist();
+          persist();
         }
         render();
       });

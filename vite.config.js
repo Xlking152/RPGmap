@@ -39,8 +39,8 @@ function sharedRuntimeWorkers() {
           collection.add(id);
           for (const dependency of this.getModuleInfo(id)?.importedIds || []) visit(dependency, collection);
         };
-        visit(modulePath('./src/main.js'), bootDependencies);
-        bootDependencies.delete(modulePath('./src/main.js'));
+        visit(modulePath('./src/hosted-main.js'), bootDependencies);
+        bootDependencies.delete(modulePath('./src/hosted-main.js'));
         for (const entry of workerEntries) visit(entry, workerDependencies);
         for (const entry of workerEntries) workerDependencies.delete(entry);
         for (const dependency of bootDependencies) workerDependencies.delete(dependency);
@@ -121,11 +121,12 @@ export function stripUnusedLeafletRasterCss({ sourceDirectory = modulePath('./sr
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   base: './',
   resolve: {
     alias: [
-      { find: /^leaflet$/, replacement: modulePath('./src/adapters/leaflet-browser.js') },
+      { find: /^leaflet$/, replacement: modulePath(command === 'build'
+        ? './src/adapters/leaflet-hosted-browser.js' : './src/adapters/leaflet-browser.js') },
       { find: /^polygon-clipping$/, replacement: modulePath('./node_modules/polygon-clipping/dist/polygon-clipping.esm.js') },
     ],
   },
@@ -146,7 +147,8 @@ export default defineConfig({
       treeshake: {
         moduleSideEffects(id) {
           const moduleId = id.replaceAll('\\', '/');
-          return moduleId.endsWith('.css') || moduleId.includes('/node_modules/leaflet/');
+          return moduleId.endsWith('.css') || moduleId.includes('/node_modules/leaflet/')
+            || /\/src\/adapters\/leaflet-(?:hosted-browser|svg-renderer)\.js$/.test(moduleId);
         },
       },
       output: {
@@ -192,7 +194,7 @@ export default defineConfig({
                   || /\/src\/status\/(?:definition-editor|quick-hud)\.js$/.test(moduleId)) return false;
                 // Registry validation also runs on the management page. Keeping its pure
                 // helpers outside this lazy group avoids a static edge into the game runtime.
-                return !/\/src\/(?:main|app\/storage-adapter|ruleset\/metadata|world\/(?:manager|setup)|vision\/occlusion-model|map-package\/(?:constants|contract|registry|builtins|ruins-assets))\.js$/.test(moduleId);
+                return !/\/src\/(?:main|hosted-main|app\/storage-adapter|ruleset\/metadata|world\/(?:manager|setup)|vision\/occlusion-model|map-package\/(?:constants|contract|registry|builtins|ruins-assets))\.js$/.test(moduleId);
               },
               includeDependenciesRecursively: false,
             },
@@ -201,4 +203,4 @@ export default defineConfig({
       }
     }
   }
-});
+}));

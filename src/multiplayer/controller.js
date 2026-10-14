@@ -3,7 +3,7 @@ import { canControlActor, validateLocalPlayerChange } from './permissions.js';
 import {
   deriveWorldOperations,
   WORLD_OPERATION_SCHEMA_VERSION,
-} from '../world/operations.js';
+} from '../world/operation-intents.js';
 import { applyDocumentChanges } from '../documents/changes.js';
 import { worldOperationsToDocumentWrites } from '../documents/protocol.js';
 import { STATUS_SCHEMA_VERSION } from '../status/model.js';
@@ -13,6 +13,7 @@ import { createMultiplayerSessionStorage } from './session.js';
 import { createOperationId, parseTransportMessage, sendTransportMessage } from './transport.js';
 import { hasWorldOperationRevisionGap, shouldApplyOwnServerSnapshot } from './revision.js';
 import { readRuntimeState } from '../engine/state-access.js';
+import { sourceAudienceSnapshotChanges } from './audience-snapshot.js';
 
 const STYLE_ID = 'rpgmap-multiplayer-style';
 const REVISION_CONFLICT_RETRY_LIMIT = 3;
@@ -358,7 +359,7 @@ export function createMultiplayerController() {
 
       function socketUrl() { return multiplayerSocketUrl(documentNode.defaultView?.location); }
 
-      function applyRemoteState(state, nextRevision, reason = 'remote', { serverState = state } = {}) {
+      function applyRemoteState(state, nextRevision, reason = 'remote', { serverState = state, sourceAudienceSnapshot = false } = {}) {
         if (!state || typeof state !== 'object') return Promise.resolve(false);
         const epoch = remoteEpoch;
         const requestedState = structuredClone(state);
@@ -385,7 +386,17 @@ export function createMultiplayerController() {
               queueMicrotask(() => documentNode.defaultView?.location?.reload?.());
               return true;
             }
-            await api.importState(requestedState, false);
+            const sourceChanges = sourceAudienceSnapshot && typeof api.applyAuthoritativePatchState === 'function'
+              ? sourceAudienceSnapshotChanges(readRuntimeState(api), requestedState, {
+                reason, loadedMap: api.mapPackage, loadedRuleset: api.ruleset, currentRevision: revision,
+                nextRevision: requestedRevision, sceneTransitionPending: api.world?.isSceneTransitionPending?.() === true,
+              }) : null;
+            if (sourceChanges) {
+              api.applyAuthoritativePatchState(requestedState, {
+                source: 'audience.snapshot', revision: requestedRevision, changeSet: sourceChanges.changeSet,
+                documentChanges: sourceChanges.changes,
+              });
+            } else await api.importState(requestedState, false);
             if (epoch !== remoteEpoch) return false;
             if (api.world?.isSceneTransitionPending?.()) api.emit?.('scene:switch-complete', { sceneId: requestedScene?.id, mapPackage: requestedScene?.mapPackage });
             revision = requestedRevision;
@@ -1084,7 +1095,9 @@ export function createMultiplayerController() {
           if (!Number.isSafeInteger(incomingAudienceRevision) || incomingAudienceRevision <= audienceRevision) return;
           audienceRevision = incomingAudienceRevision;
           audienceFingerprint = String(message.audienceFingerprint || audienceFingerprint);
-          applyRemoteState(message.state, Number(message.revision) || revision, message.reason || 'audience.snapshot')
+          applyRemoteState(message.state, Number(message.revision) || revision, message.reason || 'audience.snapshot', {
+            sourceAudienceSnapshot: message.reason === 'vision.source.set',
+          })
             .then(flushPendingNetworkWork);
           return;
         }

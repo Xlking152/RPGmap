@@ -1,17 +1,19 @@
 # RPGmap v3 开发与制图说明
 
-应用当前为 `3.0.0-rc.1`；正式版必须另行构建并验收。存档仍使用 World schema 4，无限规则 1.1.0、兰州地图 1.1.0 分别固定版本。
+应用当前开发版本为 `3.0.0-rc.2`；RC.1 的失败验收凭据保留，RC.2 和正式版必须分别构建并验收。存档仍使用 World schema 4，无限规则 1.1.0、兰州地图 1.1.0 分别固定版本。
 
 ## 依赖与职责
 
 | 主层 | 实现入口 |
 | --- | --- |
-| 整体 | `desktop/` 桌面生命周期；`src/app/` 启动与管理 UI；现有 `src/ui/` 游戏界面；`src/main.js` 装配 |
-| 运行 | `src/runtime/core/session.js` 无 DOM 命令、查询、订阅、销毁；`src/runtime/map-runtime.js` 浏览器装配；`engine/movement/vision/render/world/documents` 中的各专用核心与适配实现 |
+| 整体 | `desktop/` 桌面生命周期；`src/app/` 启动与管理 UI；现有 `src/ui/` 游戏界面；`src/hosted-main.js` 生产启动 |
+| 运行 | `src/runtime/core/session-base.js` 无 DOM 命令、查询、订阅、销毁；`src/runtime/map-runtime-base.js` 共享浏览器装配；`src/runtime/hosted-map-runtime.js` 服务器运行装配；`engine/movement/vision/render/world/documents` 中的各专用核心与适配实现 |
 | 规则 | `src/rulesets/` 与 `src/ruleset/` 版本注册；受信任的 `.rpgrules` 包 |
 | 地图 | `maps/` 制作项目；`src/map-package/` 契约；`.rpgmap` 导出；UserData 版本目录 |
 
 `src/contracts/` 给出稳定支持契约；`src/adapters/` 负责浏览器读取包目录；`deployment/local-server/` 负责网络、WAL、磁盘、内容注册和管理接口。它们不是额外业务层。旧导入路径按职责逐步转发，不维护第二份 World 或地图几何。运行核心通过权威 Document 操作提交，不允许 UI 直接改写 World。
+
+生产 `index.html` 只装配服务器运行环境，服务未就绪时显示错误；管理入口不需要地图。服务器负责持久化、碰撞和探索写入，客户端保留路径预览、画面与视野 Worker，断线期间禁止 World 编辑。`standalone.html`、`src/main.js` 与离线适配保留旧离线语义，供源码兼容与回归使用，不进入桌面生产载荷。纯 Runtime 会话必须显式注入权威适配；旧 `session.js` 通过离线适配保留兼容接口。
 
 规则是 World 的实例依赖，Scene 固定地图 ID 与版本。运行时、服务器都读取安装包的同一内容指纹。跨地图或同 ID 不同版本会重建浏览器 Runtime；同地图切换 Scene 保留独立状态，并先取消输入和 Worker。首版所有玩家共享活动 Scene，不搬运 Token。
 
@@ -35,9 +37,9 @@ npm test
 npm run build
 npm run check:bundle -- . --strict-budget
 npm run package:desktop
-npm run export:maps -- --out artifact/RPGmap-v3.0.0-rc.1-验收
-npm run export:rulesets -- --out artifact/RPGmap-v3.0.0-rc.1-验收
-node scripts/desktop-browser-smoke.mjs --map=artifact/RPGmap-v3.0.0-rc.1-验收/北宋兰州城-1.1.0.rpgmap
+npm run export:maps -- --out artifact/RPGmap-v3.0.0-rc.2-验收
+npm run export:rulesets -- --out artifact/RPGmap-v3.0.0-rc.2-验收
+node scripts/desktop-browser-smoke.mjs --map=artifact/RPGmap-v3.0.0-rc.2-验收/北宋兰州城-1.1.0.rpgmap
 ```
 
 桌面产物白名单与 SHA 在 `INSTALL-MANIFEST.json`，构建元数据包含源提交及 dirty 状态。最终候选应从可审查提交构建；报告必须对应实际文件 SHA。发行只采用下载新版安装器覆盖，不自动在线更新。数据默认位于 `%LOCALAPPDATA%/RPGmap/UserData`，安装目录仅有程序文件。

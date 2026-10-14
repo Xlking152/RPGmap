@@ -75,7 +75,7 @@ test('minimal reference map uses the same Core destruction and Scene State logic
 
 test('application entry resolves MapPackages through the registry without implementation coupling', async () => {
   const mainSource = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
-  const mapRuntimeSource = await readFile(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
+  const mapRuntimeSource = await readFile(new URL('../src/runtime/map-runtime-base.js', import.meta.url), 'utf8');
   const compatibilityShim = await readFile(new URL('../src/maps/lanzhou.js', import.meta.url), 'utf8');
 
   assert.match(mainSource, /registerInstalledMapPackages/);

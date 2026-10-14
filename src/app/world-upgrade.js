@@ -1,13 +1,8 @@
-import { prepareRuntimeState, exportRuntimeState } from '../engine/runtime-state.js';
+import { exportRuntimeState } from '../engine/runtime-state.js';
 import { prepareStoredWorldState, worldStateStorageKey } from './world-storage.js';
-import { prepareInlineImageMigration } from '../content/migration.js';
+import { prepareWorldContentState } from '../adapters/world-import.js';
+export { prepareWorldContentState } from '../adapters/world-import.js';
 import { createIndexedWorldUpgrade } from '../content/indexed-upgrade.js';
-
-export async function prepareWorldContentState(raw, context) {
-  const content = await prepareInlineImageMigration(raw);
-  const prepared = prepareRuntimeState(content.state, context);
-  return { ...prepared, migrated: prepared.migrated || content.migrated, records: content.records };
-}
 
 export async function persistPreparedWorldContent({ state, records = [], inputRaw, beforeRaw, ...options }) {
   const storageKey = worldStateStorageKey(options.worldId ? { worldId: options.worldId } : options.mapPackage);

@@ -1,4 +1,5 @@
 import { appendMessage, clearMessages, createEmptyChatState, normalizeChatState } from './model.js';
+import { commitStoreProjection } from '../adapters/store-commit.js';
 
 const PREFERENCE_KEY = 'chatSystem';
 
@@ -18,25 +19,17 @@ export class ChatStore {
     const appState = this.api.getState();
     appState.preferences ||= {};
     appState.preferences[PREFERENCE_KEY] = structuredClone(this.state);
-    this.saving = true;
-    try {
-      // Chat is a small World mutation, not a save-file import. Keeping it on
-      // the commit path also prevents it from reverting a fresh combat setup.
-      if (typeof this.api.commitState === 'function') this.api.commitState(appState, { source: 'chat', render: false });
-      else this.api.importState(appState);
-    }
-    finally { queueMicrotask(() => { this.saving = false; }); }
-    return true;
+    return commitStoreProjection(this, appState, { source: 'chat', render: false });
   }
 
   append(message) {
     const item = appendMessage(this.state, message);
-    this.persist();
-    return item;
+    const committed = this.persist();
+    return committed && typeof committed.then === 'function' ? committed.then(() => item) : item;
   }
 
   clear() {
     clearMessages(this.state);
-    this.persist();
+    return this.persist();
   }
 }

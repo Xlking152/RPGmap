@@ -1,6 +1,6 @@
 {
   "name": "rpgmap",
-  "version": "3.0.0-rc.1",
+  "version": "3.0.0-rc.2",
   "description": "RPGmap desktop tactical map application",
   "author": "Xlking152",
   "main": "desktop/main.cjs",
