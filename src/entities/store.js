@@ -2,6 +2,7 @@ import { createEmptyEntityState, normalizeEntityState } from './model.js';
 import { STATUS_SCHEMA_VERSION, resolveActorEffects } from '../status/model.js';
 import { applyDocumentValue } from '../documents/changes.js';
 import { commitStoreProjection } from '../adapters/store-commit.js';
+import { readConnectionState } from '../multiplayer/connection-state.js';
 
 const PREFERENCE_KEY = 'entitySystem';
 
@@ -67,11 +68,11 @@ export class EntityStore {
     const raw = appState.preferences?.[PREFERENCE_KEY];
     const normalized = normalizeEntityState(raw, { ruleset: this.api.ruleset });
 
-    // Normalization always produces a safe read view, but only an explicit
-    // migration/repair load may write that normalized projection back. Modern
-    // runtime reloads pass migrateLegacy:false and are therefore strictly
-    // read-only even if they encounter stale or malformed projection data.
-    let changed = migrateLegacy === true && (
+    // Audience projections can omit private fields. Filling defaults is a
+    // display operation, never a migration of the server's canonical World.
+    const mayMigrate = migrateLegacy === true && this.api.isLocalWorldActive?.() !== false
+      && !readConnectionState(this.api)?.connected;
+    let changed = mayMigrate && (
       entityContentChanged(raw, normalized)
       || Number(raw?.schemaVersion) !== STATUS_SCHEMA_VERSION
     );
@@ -83,7 +84,7 @@ export class EntityStore {
     }
 
     let droppedMarkers = 0;
-    if (dropMarkers && Array.isArray(appState.markers) && appState.markers.length) {
+    if (mayMigrate && dropMarkers && Array.isArray(appState.markers) && appState.markers.length) {
       droppedMarkers = appState.markers.length;
       appState.markers = [];
       for (const area of appState.attackAreas || []) {

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createDefaultActor } from '../src/actor/model.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { movementMetersPerPixel, recommendedMovementStep, snapMovementPoint } from '../src/movement/snap.js';
+import { applyDocumentChanges } from '../src/documents/changes.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const argumentsByName = new Map(process.argv.slice(2).map(argument => {
@@ -24,9 +25,13 @@ const captureScreenshots = argumentsByName.has('--screenshots');
 const legacyDirectory = argumentsByName.get('--legacy-directory') ? path.resolve(argumentsByName.get('--legacy-directory')) : null;
 const prepareUpgradeFixture = argumentsByName.has('--prepare-upgrade-fixture');
 const exerciseExistingInput = argumentsByName.has('--exercise-input');
+const sceneAudit = argumentsByName.has('--scene-audit');
+const minimalMapFile = argumentsByName.get('--minimal-map') ? path.resolve(argumentsByName.get('--minimal-map')) : null;
 const expectedSource = argumentsByName.get('--expected-source') || process.env.RPGMAP_SMOKE_EXPECTED_SOURCE_COMMIT;
 if (installer && !reuseData && !mapFile) throw new Error('A running-application installer smoke requires --map to exercise a persisted World.');
 if (prepareUpgradeFixture && (reuseData || installer || legacyDirectory)) throw new Error('Upgrade preparation is a separate, normally closed fixture run.');
+if (sceneAudit && (!mapFile || !minimalMapFile || reuseData || prepareUpgradeFixture)) throw new Error('--scene-audit requires --map and --minimal-map in a new disposable World.');
+if (minimalMapFile && !sceneAudit) throw new Error('--minimal-map requires --scene-audit; it cannot be silently ignored.');
 if (!dataRoot.startsWith(`${path.join(root, 'artifact')}${path.sep}`)) throw new Error('Unsafe test data directory');
 async function resolvedDestination(file) {
   try { return await realpath(file); }
@@ -62,11 +67,12 @@ assert.equal(buildSource.sourceDirty, false, 'Desktop acceptance requires a clea
 const manifestSha256 = createHash('sha256').update(installationManifest).digest('hex');
 const executableSha256 = await sha256(executable);
 const mapSha256 = mapFile ? await sha256(mapFile) : null;
+const minimalMapSha256 = minimalMapFile ? await sha256(minimalMapFile) : null;
 const installerSha256 = installer ? await sha256(installer) : null;
 const driverSha256 = await sha256(fileURLToPath(import.meta.url));
 if (!reuseData) await rm(dataRoot, { recursive: true, force: true });
 await mkdir(evidenceRoot, { recursive: true });
-const mode = prepareUpgradeFixture ? 'desktop-upgrade-fixture' : exerciseExistingInput ? 'desktop-upgraded-smoke' : legacyDirectory ? 'desktop-legacy-smoke' : reuseData ? 'desktop-reuse-smoke' : 'desktop-smoke';
+const mode = sceneAudit ? 'desktop-scene-audit' : prepareUpgradeFixture ? 'desktop-upgrade-fixture' : exerciseExistingInput ? 'desktop-upgraded-smoke' : legacyDirectory ? 'desktop-legacy-smoke' : reuseData ? 'desktop-reuse-smoke' : 'desktop-smoke';
 const recordFile = path.join(evidenceRoot, `${mode}.json`);
 await rm(recordFile, { force: true });
 const findings = [];
@@ -161,6 +167,23 @@ async function catalogue() {
   return debuggerClient.evaluate(`fetch('/api/manage/catalog').then(async response => { if(!response.ok) throw new Error(await response.text()); return response.json(); })`);
 }
 
+async function importAuditMap(file, expectedHash) {
+  const transport = path.join(dataRoot, `transport-${path.basename(file)}`);
+  assert.notEqual(path.resolve(file).toLowerCase(), transport.toLowerCase(), 'The removable transport copy cannot be the delivered archive');
+  await writeFile(transport, await readFile(file));
+  assert.equal(await sha256(transport), expectedHash);
+  try {
+    const archive = (await readFile(transport)).toString('base64');
+    const installed = await debuggerClient.evaluate(`fetch('/api/manage/maps',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:Uint8Array.from(atob(${JSON.stringify(archive)}),c=>c.charCodeAt(0))}).then(async response=>{if(!response.ok)throw new Error(await response.text());return response.json();})`);
+    assert.ok(installed.id || installed.map?.id);
+    return installed;
+  } finally {
+    await rm(transport, { force: true });
+    await assert.rejects(readFile(transport), { code: 'ENOENT' });
+    assert.equal(await sha256(file), expectedHash, 'The delivered map bytes must remain untouched');
+  }
+}
+
 async function sourceInventory(directory, prefix = '') {
   const files = [];
   for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
@@ -249,9 +272,18 @@ async function checkMapInput(worldId) {
   await debuggerClient.evaluate(`(() => {
     const api=document.querySelector('#app').rpgMapApp;
     window.__desktopSmokePointerTrace=[];
+    window.__desktopSmokeGeometry=()=>{
+      const box=api.map.getContainer().getBoundingClientRect(),size=api.map.getSize(),origin=api.map.getPixelOrigin();
+      return {box:{x:box.x,y:box.y,width:box.width,height:box.height},size:{x:size.x,y:size.y},origin:{x:origin.x,y:origin.y},center:api.map.getCenter()};
+    };
     window.__desktopSmokeDragBefore={zoom:api.map.getZoom(),animatingZoom:Boolean(api.map._animatingZoom),hasFocus:document.hasFocus(),visibility:document.visibilityState,tool:api.getTool?.(),movement:api.movementUi?.getState?.(),selection:api.selection?.getSelectedTokenIds?.()};
     for(const type of ['pointerdown','pointermove','pointerup','pointercancel','blur']) window.addEventListener(type,event=>{
       const item={type,x:event.clientX,y:event.clientY,button:event.button,buttons:event.buttons,pointerId:event.pointerId,targetTokenId:event.target?.closest?.('[data-token-id]')?.dataset.tokenId};
+      item.geometry=window.__desktopSmokeGeometry();
+      if(Number.isFinite(event.clientX)&&Number.isFinite(event.clientY)){
+        const point=api.map.containerPointToLatLng([event.clientX-item.geometry.box.x,event.clientY-item.geometry.box.y]);
+        item.pointerWorld={x:point.lng,y:api.mapPackage.height-point.lat};
+      }
       queueMicrotask(()=>{item.defaultPrevented=event.defaultPrevented;item.movement=api.movementUi?.getState?.();item.status=document.querySelector('[data-role="map-status"]')?.textContent;item.dragging=api.map.getContainer().classList.contains('fvtt-token-dragging');});
       if(window.__desktopSmokePointerTrace.length<60)window.__desktopSmokePointerTrace.push(item);
     },true);
@@ -262,12 +294,24 @@ async function checkMapInput(worldId) {
     await debuggerClient.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: drag.from.x + (drag.to.x - drag.from.x) * step / 8, y: drag.from.y + (drag.to.y - drag.from.y) * step / 8, button: 'left', buttons: 1 });
     await delay(30);
   }
-  await debuggerClient.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...drag.to, button: 'left', buttons: 0, clickCount: 1 });
+  // First selection updates the HUD/header and can move the map container.
+  // Target the same prevalidated World position through the current transform,
+  // retaining a real pointer drag and the original strict coordinate assertion.
+  const finalPointer = await debuggerClient.evaluate(`(() => {
+    const api=document.querySelector('#app').rpgMapApp,box=api.map.getContainer().getBoundingClientRect();
+    const point=api.map.latLngToContainerPoint({lat:api.mapPackage.height-${expectedDestination.y},lng:${expectedDestination.x}});
+    const world=api.map.containerPointToLatLng([point.x,point.y]);
+    return {x:box.x+point.x,y:box.y+point.y,world:{x:world.lng,y:api.mapPackage.height-world.lat},geometry:window.__desktopSmokeGeometry()};
+  })()`);
+  assert.deepEqual(snapMovementPoint(finalPointer.world, movementStep), expectedDestination, 'the final pointer must map to the independently prevalidated World target');
+  await debuggerClient.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: finalPointer.x, y: finalPointer.y, button: 'left', buttons: 1 });
+  await delay(80);
+  await debuggerClient.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: finalPointer.x, y: finalPointer.y, button: 'left', buttons: 0, clickCount: 1 });
   try {
     await eventually(() => debuggerClient.evaluate(`(() => {const token=document.querySelector('#app').rpgMapApp.tokens.get('${tokenId}');return token?.x===${expectedDestination.x} && token?.y===${expectedDestination.y};})()`));
   } catch (error) {
     const diagnostic = await debuggerClient.evaluate(`(() => {const api=document.querySelector('#app').rpgMapApp,token=api.tokens.get('${tokenId}'),node=document.querySelector('[data-token-id="${tokenId}"]');return {before:window.__desktopSmokeDragBefore,events:window.__desktopSmokePointerTrace,token:{x:token?.x,y:token?.y,movement:token?.movement},movement:api.movementUi?.getState?.(),selection:api.selection?.getSelectedTokenIds?.(),status:document.querySelector('[data-role="map-status"]')?.textContent,zoom:api.map.getZoom(),animatingZoom:Boolean(api.map._animatingZoom),hasFocus:document.hasFocus(),marker:node?{x:node.getBoundingClientRect().x,y:node.getBoundingClientRect().y,width:node.getBoundingClientRect().width,height:node.getBoundingClientRect().height}:null};})()`);
-    findings.push({ test: 'strict CDP Token drag diagnostics', passed: false, drag, destination, expectedDestination, movementStep, fixture, diagnostic, browserExceptions });
+    findings.push({ test: 'strict CDP Token drag diagnostics', passed: false, drag, finalPointer, destination, expectedDestination, movementStep, fixture, diagnostic, browserExceptions });
     throw error;
   }
   await eventually(() => debuggerClient.evaluate(`(() => {
@@ -279,7 +323,186 @@ async function checkMapInput(worldId) {
   const saved = JSON.parse(await readFile(path.join(dataRoot, 'backups', `${backup.id}.json`), 'utf8')).record.snapshot.state.preferences.worldV2;
   const persisted = saved.scenes.find(scene => scene.id === saved.activeSceneId).tokens.find(token => token.id === tokenId);
   assert.equal(persisted.x, expectedDestination.x); assert.equal(persisted.y, expectedDestination.y);
-  findings.push({ test: 'production Leaflet zoom, permanent Tooltip, CDP Token drag and server-persisted map position', passed: true, tokenId, from: start, pointerDestination: destination, to: expectedDestination, movementStep });
+  findings.push({ test: 'production Leaflet zoom, permanent Tooltip, CDP Token drag and server-persisted map position', passed: true, tokenId, from: start, pointerDestination: destination, to: expectedDestination, finalPointer, movementStep });
+}
+
+// Compare all persisted Scene content, excluding World timestamps and unrelated
+// projection metadata. Matching only a Scene ID would miss state leaking across maps.
+function sceneAuditContent(scene) {
+  return structuredClone({
+    id: scene.id, name: scene.name, mapPackage: scene.mapPackage,
+    tokens: scene.tokens, markers: scene.markers, attackAreas: scene.attackAreas,
+    sceneEvents: scene.sceneEvents, featureStates: scene.featureStates,
+    occlusionShapes: scene.occlusionShapes, fog: scene.fog, settings: scene.settings,
+  });
+}
+
+function socketMessage(socket, type) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { cleanup(); reject(new Error(`Scene observer timeout: ${type}`)); }, 10000);
+    const listener = event => {
+      const message = JSON.parse(String(event.data));
+      if (message.type !== type && message.type !== 'error') return;
+      cleanup();
+      if (message.type === 'error') reject(new Error(message.code || 'scene_observer_error'));
+      else resolve(message);
+    };
+    const cleanup = () => { clearTimeout(timeout); socket.removeEventListener('message', listener); };
+    socket.addEventListener('message', listener);
+  });
+}
+
+async function createSceneObserver() {
+  const origin = await debuggerClient.evaluate('location.origin');
+  const { health, catalog } = await debuggerClient.evaluate(`Promise.all([fetch('/api/health').then(r=>r.json()),fetch('/api/manage/catalog').then(r=>r.json())]).then(([health,catalog])=>({health,catalog}))`);
+  const sockets = [], events = [];
+  let latest = null, failure = null;
+  async function connect(requestedRole, identity, observe = false) {
+    const socket = new WebSocket(`${origin.replace('http:', 'ws:')}/ws`);
+    sockets.push(socket);
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Scene observer socket open timeout')), 10000);
+      socket.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
+      socket.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Scene observer socket error')); }, { once: true });
+    });
+    if (observe) socket.addEventListener('message', event => {
+      try {
+        const message = JSON.parse(String(event.data));
+        if (message.type === 'welcome') latest = message.world?.state || null;
+        else if (['world.snapshot', 'audience.snapshot'].includes(message.type)) latest = message.state;
+        else if (['world.operation.committed', 'document.batch.committed'].includes(message.type)) {
+          if (!latest) throw new Error('Player received a patch without its initial snapshot');
+          latest = applyDocumentChanges(latest, message.changes, { updatedAt: message.updatedAt });
+        }
+        if (latest && ['welcome', 'world.snapshot', 'audience.snapshot', 'world.operation.committed', 'document.batch.committed'].includes(message.type)) {
+          const world = latest.preferences?.worldV2;
+          const scene = world?.scenes?.find(item => item.id === world.activeSceneId);
+          events.push({ type: message.type, revision: message.revision ?? message.world?.revision,
+            activeSceneId: world?.activeSceneId, mapPackage: scene?.mapPackage });
+        }
+      } catch (error) { failure = error; }
+    });
+    const welcome = socketMessage(socket, 'welcome');
+    socket.send(JSON.stringify({ type: 'hello', requestedRole, name: 'Desktop Scene audit', capabilities: { occlusion: 1 },
+      operationSchema: health.operationSchema, statusSchema: health.statusSchema, accessSchema: health.accessSchema, ...identity }));
+    return { socket, welcome: await welcome };
+  }
+  try {
+    const gmSecret = new URL(catalog.connection.localUrl).hash.slice(1);
+    const gm = await connect('gm', { gmSecret: new URLSearchParams(gmSecret).get('gmSecret') });
+    const claim = socketMessage(gm.socket, 'access.claim');
+    gm.socket.send(JSON.stringify({ type: 'access.user.create', name: 'Desktop Scene audit Player' }));
+    const created = await claim;
+    const player = await connect('player', { claimCode: created.claimCode, joinCode: catalog.connection.joinCode }, true);
+    assert.equal(player.welcome.identity?.status, 'active');
+    assert.equal(player.welcome.session?.role, 'player');
+    return { userId: created.user.id, events,
+      async expectScene(sceneId, mapPackage) {
+        await eventually(() => {
+          if (failure) throw failure;
+          const world = latest?.preferences?.worldV2;
+          const active = world?.scenes?.find(scene => scene.id === world.activeSceneId);
+          return world?.activeSceneId === sceneId && active?.mapPackage?.id === mapPackage.id
+            && active.mapPackage.version === mapPackage.version;
+        }, { timeoutMs: 15000, intervalMs: 100 });
+      }, close() { sockets.forEach(socket => socket.close()); } };
+  } catch (error) { sockets.forEach(socket => socket.close()); throw error; }
+}
+
+async function checkScenes(worldId, minimalMap) {
+  const observer = await createSceneObserver();
+  const readWorld = () => debuggerClient.evaluate(`document.querySelector('#app').rpgMapApp.world.get()`);
+  const waitActive = (sceneId, mapPackage) => eventually(() => debuggerClient.evaluate(`(() => {
+    const api=document.querySelector('#app')?.rpgMapApp;
+    return api?.multiplayer?.getStatus()?.connected && api.world.getActiveScene()?.id===${JSON.stringify(sceneId)}
+      && api.mapPackage.id===${JSON.stringify(mapPackage.id)} && api.mapPackage.version===${JSON.stringify(mapPackage.version)}
+      && Boolean(document.querySelector('.leaflet-pane svg'));
+  })()`));
+  const activate = async (sceneId, mapPackage) => {
+    await debuggerClient.evaluate(`document.querySelector('#app').rpgMapApp.scenes.activate(${JSON.stringify(sceneId)})`)
+      .catch(error => { if (!/context|disconnected|navigated|closed/i.test(error.message)) throw error; });
+    await waitActive(sceneId, mapPackage);
+    await observer.expectScene(sceneId, mapPackage);
+  };
+  try {
+    const before = await readWorld(), sceneA = before.scenes.find(scene => scene.id === before.activeSceneId);
+    assert.equal(before.id, worldId);
+    const created = await debuggerClient.evaluate(`(async () => {
+      const api=document.querySelector('#app').rpgMapApp;
+      const b=await api.scenes.create({name:'兰州独立场景 B',mapPackage:${JSON.stringify(sceneA.mapPackage)}});
+      const c=await api.scenes.create({name:'最小地图场景 C',mapPackage:${JSON.stringify(minimalMap)}});
+      return {b,c,activeSceneId:api.world.getActiveScene().id};
+    })()`);
+    assert.equal(created.activeSceneId, sceneA.id);
+    const bInitial = sceneAuditContent(created.b), cInitial = sceneAuditContent(created.c);
+    assert.equal(bInitial.tokens.length, 0); assert.equal(cInitial.tokens.length, 0);
+    const mutation = await debuggerClient.evaluate(`(async () => {
+      const api=document.querySelector('#app').rpgMapApp;
+      const door=api.mapPackage.features.find(feature=>api.interaction.actionsForFeature(feature.id).some(action=>action.id==='open'&&action.enabled));
+      const building=api.mapPackage.features.find(feature=>feature.id!==door?.id&&api.interaction.actionsForFeature(feature.id).some(action=>action.id==='damage'&&action.enabled));
+      if(!door||!building)throw new Error('Lanzhou Scene audit needs a real openable door and destructible feature');
+      const opened=await api.interaction.open(door.id);
+      if(!opened.ok)throw new Error(opened.reason||'Door did not open');
+      const damaged=await api.interaction.damage(building.id);
+      if(!damaged.ok)throw new Error(damaged.reason||'Feature was not damaged');
+      const token=api.tokens.get('desktop-smoke-token');
+      await api.world.performOperations([{type:'scene.fog.explore',payload:{sceneId:api.world.getActiveScene().id,partyId:'desktop-audit',x:token.x,y:token.y,radiusMeters:15,elevationMeters:0}}],{source:'desktop-scene-audit'});
+      return {doorId:door.id,buildingId:building.id,doorState:api.interaction.stateForFeature(door.id),buildingState:api.interaction.stateForFeature(building.id)};
+    })()`);
+    const changed = await readWorld(), aChanged = sceneAuditContent(changed.scenes.find(scene => scene.id === sceneA.id));
+    assert.equal(mutation.doorState.open, true);
+    assert.notEqual(aChanged.sceneEvents.length, sceneA.sceneEvents.length);
+    assert.ok(Object.keys(aChanged.fog?.exploredByParty?.['desktop-audit']?.rows || {}).length, 'Scene A must contain genuine server-computed exploration');
+    assert.deepEqual(sceneAuditContent(changed.scenes.find(scene => scene.id === created.b.id)), bInitial);
+    assert.deepEqual(sceneAuditContent(changed.scenes.find(scene => scene.id === created.c.id)), cInitial);
+    findings.push({ test: 'formal Scene creation and A door/destruction/Fog changes keep same-map B and other-map C independent', passed: true,
+      sceneIds: [sceneA.id, created.b.id, created.c.id], mapPackages: [sceneA.mapPackage, minimalMap], doorId: mutation.doorId, buildingId: mutation.buildingId });
+    await activate(created.b.id, created.b.mapPackage);
+    assert.deepEqual(sceneAuditContent((await readWorld()).scenes.find(scene => scene.id === created.b.id)), bInitial);
+    await activate(created.c.id, created.c.mapPackage);
+    assert.deepEqual(sceneAuditContent((await readWorld()).scenes.find(scene => scene.id === created.c.id)), cInitial);
+    if (captureScreenshots) {
+      const screenshot = await debuggerClient.call('Page.captureScreenshot', { format: 'png' });
+      await writeFile(path.join(evidenceRoot, `${mode}-scene-c.png`), Buffer.from(screenshot.data, 'base64'));
+    }
+    await activate(sceneA.id, sceneA.mapPackage);
+    const returned = await readWorld();
+    assert.deepEqual(sceneAuditContent(returned.scenes.find(scene => scene.id === sceneA.id)), aChanged);
+    assert.deepEqual(returned.actors, changed.actors, 'Shared World Actors must survive cross-map Runtime reconstruction');
+    if (captureScreenshots) {
+      const screenshot = await debuggerClient.call('Page.captureScreenshot', { format: 'png' });
+      await writeFile(path.join(evidenceRoot, `${mode}-scene-a-returned.png`), Buffer.from(screenshot.data, 'base64'));
+    }
+    findings.push({ test: 'GM switches same-map B to external C and returns to A through actual Runtime reloads with exact package versions and preserved content', passed: true });
+    findings.push({ test: 'approved Player WebSocket receives the same active Scene and map versions across GM switches', passed: true,
+      userId: observer.userId, transport: 'Node WebSocket observer; not a Player browser', events: observer.events });
+    const refused = await debuggerClient.evaluate(`fetch('/api/manage/maps?id='+encodeURIComponent(${JSON.stringify(minimalMap.id)})+'&version='+encodeURIComponent(${JSON.stringify(minimalMap.version)}),{method:'DELETE'}).then(async response=>({ok:response.ok,status:response.status,body:await response.json()}))`);
+    assert.equal(refused.ok, false); assert.equal(refused.body.error, 'map_package_in_use');
+    assert.ok((await catalogue()).maps.some(map => map.id === minimalMap.id && map.version === minimalMap.version));
+    findings.push({ test: 'formal uninstall refuses an installed map still referenced by a Scene', passed: true, mapPackage: minimalMap, status: refused.status });
+    await checkMapInput(worldId);
+    findings.push({ test: 'a real Token drag remains usable immediately after cross-map return', passed: true });
+    return { activeSceneId: sceneA.id, mapPackage: sceneA.mapPackage, sceneIds: [sceneA.id, created.b.id, created.c.id],
+      expectedScene: sceneAuditContent((await readWorld()).scenes.find(scene => scene.id === sceneA.id)) };
+  } finally { observer.close(); }
+}
+
+async function verifyRestartedScenes(worldId, expected) {
+  await closeDesktop();
+  await launch();
+  const recovered = await catalogue();
+  assert.equal(recovered.maps.length, 2);
+  assert.equal(recovered.activeWorldId, worldId);
+  await debuggerClient.evaluate(`window.rpgmapDesktop.launchWorld(${JSON.stringify(worldId)})`).catch(error => { if (!/context|disconnected|navigated|closed/i.test(error.message)) throw error; });
+  await eventually(() => debuggerClient.evaluate(`(() => {
+    const api=document.querySelector('#app')?.rpgMapApp;
+    return api?.multiplayer?.getStatus()?.connected && api.world.getActiveScene()?.id===${JSON.stringify(expected.activeSceneId)}
+      && api.mapPackage.id===${JSON.stringify(expected.mapPackage.id)} && api.mapPackage.version===${JSON.stringify(expected.mapPackage.version)};
+  })()`));
+  const world = await debuggerClient.evaluate(`document.querySelector('#app').rpgMapApp.world.get()`);
+  assert.deepEqual(sceneAuditContent(world.scenes.find(scene => scene.id === expected.activeSceneId)), expected.expectedScene);
+  assert.deepEqual(world.scenes.map(scene => scene.id), expected.sceneIds);
+  findings.push({ test: 'normal process restart restores the common active Scene and all three independently persisted Scenes without transport archives', passed: true });
 }
 
 async function closeDesktop(upgradeInstaller) {
@@ -321,7 +544,7 @@ try {
   const initial = await catalogue();
   if (captureScreenshots) {
     const setupScreenshot = await debuggerClient.call('Page.captureScreenshot', { format: 'png' });
-    await writeFile(path.join(evidenceRoot, reuseData ? 'desktop-setup-restored.png' : 'desktop-setup.png'), Buffer.from(setupScreenshot.data, 'base64'));
+    await writeFile(path.join(evidenceRoot, sceneAudit ? `${mode}-setup.png` : reuseData ? 'desktop-setup-restored.png' : 'desktop-setup.png'), Buffer.from(setupScreenshot.data, 'base64'));
   }
   if (!reuseData) {
     assert.equal(initial.maps.length, 0);
@@ -332,10 +555,15 @@ try {
   }
   findings.push({ test: reuseData ? 'desktop reads the existing package and World catalogue' : 'real desktop opens /setup without any map installed', passed: true });
   let worldId = reuseData ? initial.activeWorldId : null;
+  let minimalReference = null, sceneAuditResult = null;
   if (mapFile && !reuseData) {
-    const archive = (await readFile(mapFile)).toString('base64');
     const importStartedAt = performance.now();
-    const installed = await debuggerClient.evaluate(`fetch('/api/manage/maps', {method:'POST',headers:{'Content-Type':'application/octet-stream'},body:Uint8Array.from(atob(${JSON.stringify(archive)}), c => c.charCodeAt(0))}).then(async response => { if(!response.ok) throw new Error(await response.text()); return response.json(); })`);
+    let installed;
+    if (sceneAudit) installed = await importAuditMap(mapFile, mapSha256);
+    else {
+      const archive = (await readFile(mapFile)).toString('base64');
+      installed = await debuggerClient.evaluate(`fetch('/api/manage/maps', {method:'POST',headers:{'Content-Type':'application/octet-stream'},body:Uint8Array.from(atob(${JSON.stringify(archive)}), c => c.charCodeAt(0))}).then(async response => { if(!response.ok) throw new Error(await response.text()); return response.json(); })`);
+    }
     assert.ok(installed.id || installed.map?.id);
     findings.push({ test: 'measured formal map import request through completed installation', passed: true, milliseconds: Math.round(performance.now() - importStartedAt) });
     const updated = await catalogue();
@@ -344,6 +572,16 @@ try {
     worldId = created.id || created.world?.id || created.worldId;
     assert.ok(worldId);
     findings.push({ test: 'official map import and World creation', passed: true, worldId, map: `${map.id}@${map.version}` });
+    if (sceneAudit) {
+      await importAuditMap(minimalMapFile, minimalMapSha256);
+      const installedMaps = (await catalogue()).maps;
+      assert.equal(installedMaps.length, 2, 'Two separate map identities must be installed for the multi-map audit');
+      const other = installedMaps.find(item => item.id !== map.id);
+      assert.ok(other, 'The minimal map must be a different map identity');
+      minimalReference = { id: other.id, version: other.version };
+      findings.push({ test: 'formal independent Lanzhou and minimal-map import removes only disposable transport copies before Runtime loads', passed: true,
+        mapSha256, minimalMapSha256, mapPackages: [{ id: map.id, version: map.version }, minimalReference] });
+    }
   }
   if (worldId) {
     const firstMapStartedAt = performance.now();
@@ -353,7 +591,7 @@ try {
     findings.push({ test: 'measured World launch request to first map SVG', passed: true, milliseconds: Math.round(performance.now() - firstMapStartedAt) });
     if (captureScreenshots) {
       const gameScreenshot = await debuggerClient.call('Page.captureScreenshot', { format: 'png' });
-      await writeFile(path.join(evidenceRoot, reuseData ? 'desktop-game-restored.png' : 'desktop-game.png'), Buffer.from(gameScreenshot.data, 'base64'));
+      await writeFile(path.join(evidenceRoot, sceneAudit ? `${mode}-game.png` : reuseData ? 'desktop-game-restored.png' : 'desktop-game.png'), Buffer.from(gameScreenshot.data, 'base64'));
     }
     findings.push({ test: 'supervised World launch into map UI', passed: true, worldId });
     if (!reuseData || exerciseExistingInput) {
@@ -396,6 +634,10 @@ try {
       assert.equal(identity.role, 'player');
       findings.push({ test: 'GM creates an approved Player and persists its identity before upgrade', passed: true, userId: identity.userId });
     }
+    if (sceneAudit) {
+      sceneAuditResult = await checkScenes(worldId, minimalReference);
+      await verifyRestartedScenes(worldId, sceneAuditResult);
+    }
   }
   if (legacyDirectory) {
     const original = await sourceInventory(legacyDirectory);
@@ -412,12 +654,12 @@ try {
   findings.push({ test: 'normal exit closes main process and server HTTP listener', passed: true });
   await launch();
   const recovered = await catalogue();
-  assert.equal(recovered.maps.length, reuseData ? initial.maps.length : mapFile ? 1 : 0);
+  assert.equal(recovered.maps.length, reuseData ? initial.maps.length : sceneAudit ? 2 : mapFile ? 1 : 0);
   if (worldId) assert.equal(recovered.activeWorldId, worldId);
   findings.push({ test: 'process restart preserves imported package and active World', passed: true });
   await closeDesktop();
   assert.equal(browserExceptions.length, 0, 'Packaged map interaction must not emit unhandled Runtime exceptions');
-  await writeFile(recordFile, `${JSON.stringify({ outcome: 'passed', mode, executable, executableSha256, mapFile, mapSha256, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, at: new Date().toISOString(), findings, limitations: ['This tests the packaged executable on the development Windows host, not a clean Windows VM.', 'Map import uses the official management API; native file chooser selection is not automated.', ...(prepareUpgradeFixture ? ['This run prepares historical upgrade data; no Token drag or game-input acceptance is claimed.'] : [])] }, null, 2)}\n`);
+  await writeFile(recordFile, `${JSON.stringify({ outcome: 'passed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, at: new Date().toISOString(), findings, limitations: ['This tests the packaged executable on the development Windows host, not a clean Windows VM.', 'Map import uses the official management API; native file chooser selection is not automated.', ...(sceneAudit ? ['Player synchronization is observed through an approved Node WebSocket, not a separate Player browser or VPN machine.', 'The two reset scopes and same-map ID with different package versions are not executed by this Scene audit.'] : []), ...(prepareUpgradeFixture ? ['This run prepares historical upgrade data; no Token drag or game-input acceptance is claimed.'] : [])] }, null, 2)}\n`);
   console.log(JSON.stringify(findings, null, 2));
 } catch (error) {
   runFailure = error;
@@ -429,6 +671,6 @@ try {
   }
   debuggerClient?.close();
   child?.kill();
-  if (runFailure) await writeFile(recordFile, `${JSON.stringify({ outcome: 'failed', mode, executable, executableSha256, mapFile, mapSha256, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, at: new Date().toISOString(), findings, error: runFailure.message.slice(0, 1000) }, null, 2)}\n`);
+  if (runFailure) await writeFile(recordFile, `${JSON.stringify({ outcome: 'failed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, at: new Date().toISOString(), findings, error: runFailure.message.slice(0, 1000) }, null, 2)}\n`);
   await writeFile(path.join(evidenceRoot, `${mode}-process.log`), logs);
 }

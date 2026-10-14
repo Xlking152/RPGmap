@@ -1,6 +1,6 @@
 # RPGmap v3 开发与制图说明
 
-应用当前开发版本为 `3.0.0-rc.2`；RC.1 的失败验收凭据保留，RC.2 和正式版必须分别构建并验收。存档仍使用 World schema 4，无限规则 1.1.0、兰州地图 1.1.0 分别固定版本。
+应用当前开发版本为 `3.0.0-rc.3`；RC.1、RC.2 的失败验收凭据保留，RC.3 和正式版必须分别构建并验收。存档仍使用 World schema 4，无限规则 1.1.0、兰州地图 1.1.0 分别固定版本。
 
 ## 依赖与职责
 
@@ -37,9 +37,9 @@ npm test
 npm run build
 npm run check:bundle -- . --strict-budget
 npm run package:desktop
-npm run export:maps -- --out artifact/RPGmap-v3.0.0-rc.2-验收
-npm run export:rulesets -- --out artifact/RPGmap-v3.0.0-rc.2-验收
-node scripts/desktop-browser-smoke.mjs --map=artifact/RPGmap-v3.0.0-rc.2-验收/北宋兰州城-1.1.0.rpgmap
+npm run export:maps -- --out artifact/RPGmap-v3.0.0-rc.3-验收
+npm run export:rulesets -- --out artifact/RPGmap-v3.0.0-rc.3-验收
+node scripts/desktop-browser-smoke.mjs --map=artifact/RPGmap-v3.0.0-rc.3-验收/北宋兰州城-1.1.0.rpgmap
 ```
 
 桌面产物白名单与 SHA 在 `INSTALL-MANIFEST.json`，构建元数据包含源提交及 dirty 状态。最终候选应从可审查提交构建；报告必须对应实际文件 SHA。发行只采用下载新版安装器覆盖，不自动在线更新。数据默认位于 `%LOCALAPPDATA%/RPGmap/UserData`，安装目录仅有程序文件。

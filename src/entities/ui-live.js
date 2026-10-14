@@ -58,7 +58,7 @@ export function createEntityUiTool(options = {}) {
 
       const store = new EntityStore(api, { canonicalTokenReads: true });
       const migration = store.load({
-        migrateLegacy: true,
+        migrateLegacy: api.isLocalWorldActive?.() !== false,
         dropMarkers: options.dropLegacyMarkers !== false,
       });
       const describeActorSheet = actor => describeActorSheetDocument(actor, store.actorContext(actor));

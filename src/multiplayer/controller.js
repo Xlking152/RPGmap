@@ -9,7 +9,7 @@ import { worldOperationsToDocumentWrites } from '../documents/protocol.js';
 import { STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { ACCESS_SCHEMA_VERSION, canPlaceActorTemplate } from '../permissions/model.js';
 import { escapeMultiplayerHtml as escapeHtml } from './access-ui.js';
-import { createMultiplayerSessionStorage } from './session.js';
+import { createMultiplayerSessionStorage, stageSceneReloadConnection, clearSceneReloadConnection } from './session.js';
 import { createOperationId, parseTransportMessage, sendTransportMessage } from './transport.js';
 import { hasWorldOperationRevisionGap, shouldApplyOwnServerSnapshot } from './revision.js';
 import { readRuntimeState } from '../engine/state-access.js';
@@ -144,6 +144,13 @@ export function createMultiplayerController() {
       let reconnectCountdown = 0;
       let lastConnectionOptions = null;
       let resuming = false;
+
+      function prepareSceneReload() {
+        if (!connected || session?.identityStatus !== 'active' || !lastConnectionOptions) return;
+        stageSceneReloadConnection(windowNode.sessionStorage,
+          readRuntimeState(api)?.preferences?.worldV2?.id, lastConnectionOptions);
+      }
+      api.on?.('scene:reload-required', prepareSceneReload);
 
       const operationId = createOperationId;
 
@@ -383,6 +390,7 @@ export function createMultiplayerController() {
               lastServerState = structuredClone(serverState);
               lastObservedLocalState = structuredClone(requestedState);
               setMapStatus(`Scene 已切换到 ${requestedMapId}，正在重新载入地图…`);
+              prepareSceneReload();
               queueMicrotask(() => documentNode.defaultView?.location?.reload?.());
               return true;
             }
@@ -1444,6 +1452,7 @@ export function createMultiplayerController() {
 
       function disconnect() {
         intentionalClose = true;
+        clearSceneReloadConnection(windowNode.sessionStorage);
         clearReconnectTimer();
         stopHeartbeat();
         remoteEpoch += 1;

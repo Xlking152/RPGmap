@@ -25,6 +25,8 @@ $findings = [Collections.Generic.List[object]]::new()
 $previousExpectedSource = $env:RPGMAP_SMOKE_EXPECTED_SOURCE_COMMIT
 $testInstallationStarted = $false
 $completed = $false
+$currentApplicationVersion = (Get-Content -LiteralPath (Join-Path $taskRoot 'package.json') -Raw | ConvertFrom-Json).version
+$previousApplicationVersion = $null
 
 function Assert-Acceptance([bool]$Condition, [string]$Description) {
   if (-not $Condition) { throw $Description }
@@ -55,8 +57,15 @@ function Remove-OwnedInstallation {
   Assert-OwnedDirectory
   if (Test-Path -LiteralPath $uninstallKey) {
     $registration = Get-ItemProperty -LiteralPath $uninstallKey
-    if (-not $registration.InstallLocation -or [IO.Path]::GetFullPath($registration.InstallLocation).TrimEnd('\') -ne $installDirectory.TrimEnd('\')) {
+    if ($registration.InstallLocation -and [IO.Path]::GetFullPath($registration.InstallLocation).TrimEnd('\') -ne $installDirectory.TrimEnd('\')) {
       throw 'Refusing cleanup: the current registry entry belongs to another installation.'
+    }
+    $registeredUninstaller = $null
+    $uninstallCommand = [string]$registration.UninstallString
+    if ($uninstallCommand -match '^"([^"]+)"(?:\s|$)') { $registeredUninstaller = $Matches[1] }
+    elseif ($uninstallCommand -match '^(.+?\.exe)(?:\s|$)') { $registeredUninstaller = $Matches[1] }
+    if (-not $registeredUninstaller -or [IO.Path]::GetFullPath($registeredUninstaller) -ne $uninstaller) {
+      throw 'Refusing cleanup: the registered uninstaller does not belong to the verified test directory.'
     }
   }
   if (Test-Path -LiteralPath $uninstaller) {
@@ -109,6 +118,7 @@ try {
   New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
 
   Install-IntoTestDirectory $PreviousInstaller
+  $previousApplicationVersion = (Get-Content -LiteralPath (Join-Path $installDirectory 'resources/INSTALL-MANIFEST.json') -Raw | ConvertFrom-Json).version
   Invoke-BrowserAcceptance $program $PreviousSourceCommit @(('--map=' + $Map), '--prepare-upgrade-fixture')
   $fixtureHashes = Get-FixtureHashes
   $catalog = Get-Content -LiteralPath (Join-Path $dataDirectory 'config/catalog.json') -Raw | ConvertFrom-Json
@@ -117,22 +127,22 @@ try {
   if (-not $fixtureUsers.Count) { throw 'The historical fixture must contain an approved Player identity.' }
   Install-IntoTestDirectory $Installer
   Assert-FixtureHashes $fixtureHashes
-  Assert-Acceptance $true 'Actual RC.1 to RC.2 installer upgrade preserves World, WAL, Player permissions, packages and catalogue bytes before the new runtime opens'
+  Assert-Acceptance $true "Actual $previousApplicationVersion to $currentApplicationVersion installer upgrade preserves World, WAL, Player permissions, packages and catalogue bytes before the new runtime opens"
   Invoke-BrowserAcceptance $program $ExpectedSourceCommit @('--reuse-data', '--exercise-input', '--screenshots')
   $recoveredUsers = (Get-Content -LiteralPath $fixtureUsersFile -Raw | ConvertFrom-Json).users
   foreach ($user in $fixtureUsers) {
     $recovered = @($recoveredUsers | Where-Object { $_.id -eq $user.id })
     if ($recovered.Count -ne 1 -or ($recovered[0] | ConvertTo-Json -Depth 32 -Compress) -ne ($user | ConvertTo-Json -Depth 32 -Compress)) { throw 'An existing approved Player identity changed after RC.2 restart and first drag.' }
   }
-  Assert-Acceptance $true 'RC.2 performs a real first Token drag and normal restart after cross-version upgrade while retaining the existing Player identity'
+  Assert-Acceptance $true "$currentApplicationVersion performs a real first Token drag and normal restart after cross-version upgrade while retaining the existing Player identity"
   Remove-OwnedInstallation
 
   $env:RPGMAP_SMOKE_EXPECTED_SOURCE_COMMIT = $ExpectedSourceCommit
   & (Join-Path $PSScriptRoot 'desktop-installer-smoke.ps1') -Installer $Installer -Map $Map
-  Assert-Acceptance $true 'RC.2 clean installation, active update with normal shutdown, program cleanup, UserData preservation and uninstall/reinstall complete'
+  Assert-Acceptance $true "$currentApplicationVersion clean installation, active update with normal shutdown, program cleanup, UserData preservation and uninstall/reinstall complete"
   if ($LegacyDirectory) {
     $legacyArguments = @(('--map=' + $Map), ('--legacy-directory=' + $LegacyDirectory), '--screenshots')
-    if ($MinimalMap) { $legacyArguments += ('--minimal-map=' + $MinimalMap) }
+    if ($MinimalMap) { $legacyArguments += '--scene-audit'; $legacyArguments += ('--minimal-map=' + $MinimalMap) }
     Invoke-BrowserAcceptance $UnpackedExecutable $ExpectedSourceCommit $legacyArguments
     Assert-Acceptance $true 'Actual old data is copied through the formal import API into temporary UserData and the source inventory remains unchanged'
   }
@@ -150,7 +160,7 @@ try {
   }
   if (Test-Path -LiteralPath $evidenceDirectory) {
     @{ outcome = $(if ($completed) { 'passed' } else { 'failed' }); at = [DateTime]::UtcNow.ToString('o');
-      expectedSourceCommit = $ExpectedSourceCommit; installer = $Installer; installerSha256 = $ExpectedInstallerSha256.ToLowerInvariant();
+      expectedSourceCommit = $ExpectedSourceCommit; version = $currentApplicationVersion; previousVersion = $previousApplicationVersion; installer = $Installer; installerSha256 = $ExpectedInstallerSha256.ToLowerInvariant();
       previousSourceCommit = $PreviousSourceCommit; previousInstallerSha256 = $PreviousInstallerSha256.ToLowerInvariant();
       findings = $findings; limitations = @('Executed on a development Windows host, not a clean Windows VM.', 'NSIS extraction interruption and rollback were not executed.', 'Native file chooser selection is not automated.', 'Private legacy UserData is stored only in temporary artifact/desktop-smoke/UserData and must not be distributed.')
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'desktop-release-acceptance.json') -Encoding utf8

@@ -5,7 +5,7 @@
 地图项目只负责地图声明和资源。人物、Token、开门与破坏的当前状态、Fog 和进度保存在用户 Scene 中。导出不会把游玩存档写进地图包。
 
 ```powershell
-npm run export:maps -- --out artifact/RPGmap-v3.0.0-rc.2-验收
+npm run export:maps -- --out artifact/RPGmap-v3.0.0-rc.3-验收
 ```
 
 兰州导出使用固定的 `runtime.json`、`runtime.svg` 和 `assets.js` 依赖清单，仅读取实际引用的资源。公共制图素材见 `../素材库/资源索引.json`，只将所需素材复制到各地图项目的 `assets/`。安装器构建不读取制图项目或整个素材库。

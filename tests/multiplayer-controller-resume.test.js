@@ -8,6 +8,7 @@ import { ACCESS_SCHEMA_VERSION } from '../src/permissions/model.js';
 import { registerRuntimeStateReader } from '../src/engine/state-access.js';
 import { readConnectionState } from '../src/multiplayer/connection-state.js';
 import { createDocumentBackendSystem } from '../src/documents/index.js';
+import { consumeSceneReloadConnection } from '../src/multiplayer/session.js';
 
 const settle = async () => { for (let index = 0; index < 12; index++) await Promise.resolve(); };
 
@@ -61,10 +62,11 @@ async function runtime(t, { internalReader = false } = {}) {
   const originalWebSocket = globalThis.WebSocket;
   globalThis.WebSocket = FakeWebSocket; FakeWebSocket.instances = [];
   let state = projectedState(), timerId = 0;
-  const timers = new Map(), storage = new Map([['rpgmap:multiplayer:visionSourceTokenId', 'scout']]);
+  const timers = new Map(), storage = new Map([['rpgmap:multiplayer:visionSourceTokenId', 'scout']]), tabStorage = new Map();
   const view = { location: { protocol: 'http:', host: '127.0.0.1:30000', hostname: '127.0.0.1' },
     performance: globalThis.performance,
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
+    sessionStorage: { getItem: key => tabStorage.get(key) ?? null, setItem: (key, value) => tabStorage.set(key, value), removeItem: key => tabStorage.delete(key) },
     setTimeout(callback) { const id = ++timerId; timers.set(id, callback); return id; },
     clearTimeout: id => timers.delete(id), setInterval: () => ++timerId, clearInterval() {},
   };
@@ -99,7 +101,7 @@ async function runtime(t, { internalReader = false } = {}) {
   api.multiplayer.connect({ name: 'Player', requestedRole: 'player', playerKey: 'claim', joinCode: 'join' });
   const first = FakeWebSocket.instances.at(-1); first.open(); await first.receive(welcome(state, 4));
   events.length = 0;
-  return { api, imports, documentCommits, patchCommits, events, snapshots, get state() { return state; },
+  return { api, imports, documentCommits, patchCommits, events, snapshots, view, get state() { return state; },
     reconnect() {
       FakeWebSocket.instances.at(-1).close();
       assert.equal(api.multiplayer.getStatus().connected, false);
@@ -107,6 +109,23 @@ async function runtime(t, { internalReader = false } = {}) {
       const socket = FakeWebSocket.instances.at(-1); socket.open(); return socket;
     } };
 }
+
+test('cross-map server snapshots preserve one-tab identity without importing into the old Runtime', async t => {
+  const client = await runtime(t), socket = FakeWebSocket.instances.at(-1);
+  let reloads = 0;
+  client.view.location.reload = () => { reloads++; };
+  const next = structuredClone(client.state);
+  next.preferences.worldV2.scenes[0].mapPackage = { id: 'other-map', version: '2' };
+  await socket.receive({ type: 'world.snapshot', revision: 5, state: next });
+  assert.equal(reloads, 1);
+  assert.equal(client.imports.length, 1, 'wrong-map snapshot must not replace the current Runtime');
+  assert.deepEqual(consumeSceneReloadConnection(client.view.sessionStorage, 'world', false), {
+    name: 'Player', requestedRole: 'player', playerKey: 'claim', joinCode: 'join', gmSecret: '',
+  });
+  client.api.emit('scene:reload-required', {});
+  client.api.multiplayer.disconnect();
+  assert.equal(consumeSceneReloadConnection(client.view.sessionStorage, 'world', false), null);
+});
 
 test('light connection reads stay current and detached without copying private access tables', async t => {
   const client = await runtime(t, { internalReader: true });

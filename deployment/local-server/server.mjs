@@ -30,6 +30,7 @@ import {
   verifyUserCredential,
 } from './access-control.mjs';
 import { createPortableStorage, ensurePortableStorage, migrateLegacyStorage } from './portable-storage.mjs';
+import { hasCompletePreciseTokenProjection } from './movement-projection.mjs';
 import { assertSafeJson, assertWorldState, createCanonicalWorldValidator, createWorldSnapshotSizeValidator, isSameChat } from './world-schema.mjs';
 import {
   STATUS_OPERATION_CACHE_LIMIT,
@@ -1053,12 +1054,7 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
     if (sourceMoved) {
       const projectedScene = canonicalWorldScene(beforeProjection, activeSceneId);
       const canonicalScene = canonicalWorldScene(afterState, activeSceneId);
-      const projectedTokens = new Map((projectedScene?.tokens || []).map(token => [String(token?.id || ''), token]));
-      const allTokensPrivate = (canonicalScene?.tokens || []).every(token => {
-        const projected = projectedTokens.get(String(token?.id || ''));
-        return projected && projected.audienceRestricted !== true && projected.audienceVisibility !== 'vague';
-      });
-      if (!allTokensPrivate) return null;
+      if (!hasCompletePreciseTokenProjection(projectedScene?.tokens || [], canonicalScene?.tokens || [])) return null;
     }
     const pending = new Set([...movementTargets].flatMap(([sceneId, ids]) =>
       [...ids].map(tokenId => `${sceneId}:${tokenId}`)));
