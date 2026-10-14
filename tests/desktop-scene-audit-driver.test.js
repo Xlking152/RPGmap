@@ -43,14 +43,17 @@ test('Scene audit ignores unrelated projection metadata without weakening persis
 });
 
 function socket() {
-  const listeners = new Set();
-  return { addEventListener(_type, callback) { listeners.add(callback); }, removeEventListener(_type, callback) { listeners.delete(callback); },
-    sendMessage(value) { for (const callback of [...listeners]) callback({ data: JSON.stringify(value) }); }, count: () => listeners.size };
+  const listeners = new Map();
+  const emit = (type, event) => { for (const callback of [...(listeners.get(type) || [])]) callback(event); };
+  return { addEventListener(type, callback) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(callback); },
+    removeEventListener(type, callback) { listeners.get(type)?.delete(callback); },
+    sendMessage(value) { emit('message', { data: JSON.stringify(value) }); }, fail(error) { emit('error', { error }); }, close() { emit('close', {}); },
+    count: () => [...listeners.values()].reduce((total, values) => total + values.size, 0) };
 }
 
 test('Scene observer waits for its exact protocol response and removes the listener on success', async () => {
   const ws = socket(), pending = nextMessage(ws, 'welcome');
-  ws.sendMessage({ type: 'presence', clients: [] }); assert.equal(ws.count(), 1);
+  ws.sendMessage({ type: 'presence', clients: [] }); assert.equal(ws.count(), 3);
   ws.sendMessage({ type: 'welcome', identity: { status: 'active' } });
   assert.equal((await pending).identity.status, 'active'); assert.equal(ws.count(), 0);
 });
@@ -59,4 +62,20 @@ test('Scene observer surfaces protocol errors instead of treating a failed ident
   const ws = socket(), pending = nextMessage(ws, 'welcome');
   ws.sendMessage({ type: 'error', code: 'identity_required' });
   await assert.rejects(pending, /identity_required/); assert.equal(ws.count(), 0);
+});
+
+test('Scene observer rejects transport failures and premature close without leaving listeners', async () => {
+  const failed = socket(), rejected = nextMessage(failed, 'welcome');
+  failed.fail(new Error('handshake refused'));
+  await assert.rejects(rejected, /handshake refused/); assert.equal(failed.count(), 0);
+  const closed = socket(), interrupted = nextMessage(closed, 'welcome');
+  closed.close();
+  await assert.rejects(interrupted, /closed while waiting for welcome/); assert.equal(closed.count(), 0);
+});
+
+test('Both successful and failed desktop audit evidence record the observer transport hash', () => {
+  for (const outcome of ['passed', 'failed']) {
+    const record = source.split('\n').find(line => line.includes('writeFile(recordFile,') && line.includes(`outcome: '${outcome}'`));
+    assert.ok(record?.includes('driverSha256, observerTransportSha256,'), `${outcome} evidence must identify both driver modules`);
+  }
 });

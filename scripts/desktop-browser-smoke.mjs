@@ -10,6 +10,7 @@ import { createDefaultActor } from '../src/actor/model.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 import { movementMetersPerPixel, recommendedMovementStep, snapMovementPoint } from '../src/movement/snap.js';
 import { applyDocumentChanges } from '../src/documents/changes.js';
+import { OriginWebSocket } from './desktop-origin-websocket.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const argumentsByName = new Map(process.argv.slice(2).map(argument => {
@@ -70,6 +71,7 @@ const mapSha256 = mapFile ? await sha256(mapFile) : null;
 const minimalMapSha256 = minimalMapFile ? await sha256(minimalMapFile) : null;
 const installerSha256 = installer ? await sha256(installer) : null;
 const driverSha256 = await sha256(fileURLToPath(import.meta.url));
+const observerTransportSha256 = sceneAudit ? await sha256(fileURLToPath(new URL('./desktop-origin-websocket.mjs', import.meta.url))) : null;
 if (!reuseData) await rm(dataRoot, { recursive: true, force: true });
 await mkdir(evidenceRoot, { recursive: true });
 const mode = sceneAudit ? 'desktop-scene-audit' : prepareUpgradeFixture ? 'desktop-upgrade-fixture' : exerciseExistingInput ? 'desktop-upgraded-smoke' : legacyDirectory ? 'desktop-legacy-smoke' : reuseData ? 'desktop-reuse-smoke' : 'desktop-smoke';
@@ -347,8 +349,14 @@ function socketMessage(socket, type) {
       if (message.type === 'error') reject(new Error(message.code || 'scene_observer_error'));
       else resolve(message);
     };
-    const cleanup = () => { clearTimeout(timeout); socket.removeEventListener('message', listener); };
+    const failed = event => { cleanup(); reject(event.error || new Error('Scene observer transport failed')); };
+    const closed = () => { cleanup(); reject(new Error(`Scene observer closed while waiting for ${type}`)); };
+    const cleanup = () => {
+      clearTimeout(timeout); socket.removeEventListener('message', listener);
+      socket.removeEventListener('error', failed); socket.removeEventListener('close', closed);
+    };
     socket.addEventListener('message', listener);
+    socket.addEventListener('error', failed); socket.addEventListener('close', closed);
   });
 }
 
@@ -358,13 +366,10 @@ async function createSceneObserver() {
   const sockets = [], events = [];
   let latest = null, failure = null;
   async function connect(requestedRole, identity, observe = false) {
-    const socket = new WebSocket(`${origin.replace('http:', 'ws:')}/ws`);
+    const socket = new OriginWebSocket(`${origin.replace('http:', 'ws:')}/ws`, origin);
     sockets.push(socket);
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Scene observer socket open timeout')), 10000);
-      socket.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
-      socket.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Scene observer socket error')); }, { once: true });
-    });
+    socket.addEventListener('error', event => { failure = event.error || new Error('Scene observer transport failed'); });
+    await socket.open();
     if (observe) socket.addEventListener('message', event => {
       try {
         const message = JSON.parse(String(event.data));
@@ -659,7 +664,7 @@ try {
   findings.push({ test: 'process restart preserves imported package and active World', passed: true });
   await closeDesktop();
   assert.equal(browserExceptions.length, 0, 'Packaged map interaction must not emit unhandled Runtime exceptions');
-  await writeFile(recordFile, `${JSON.stringify({ outcome: 'passed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, at: new Date().toISOString(), findings, limitations: ['This tests the packaged executable on the development Windows host, not a clean Windows VM.', 'Map import uses the official management API; native file chooser selection is not automated.', ...(sceneAudit ? ['Player synchronization is observed through an approved Node WebSocket, not a separate Player browser or VPN machine.', 'The two reset scopes and same-map ID with different package versions are not executed by this Scene audit.'] : []), ...(prepareUpgradeFixture ? ['This run prepares historical upgrade data; no Token drag or game-input acceptance is claimed.'] : [])] }, null, 2)}\n`);
+  await writeFile(recordFile, `${JSON.stringify({ outcome: 'passed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, observerTransportSha256, at: new Date().toISOString(), findings, limitations: ['This tests the packaged executable on the development Windows host, not a clean Windows VM.', 'Map import uses the official management API; native file chooser selection is not automated.', ...(sceneAudit ? ['Player synchronization is observed through an approved Node WebSocket, not a separate Player browser or VPN machine.', 'The two reset scopes and same-map ID with different package versions are not executed by this Scene audit.'] : []), ...(prepareUpgradeFixture ? ['This run prepares historical upgrade data; no Token drag or game-input acceptance is claimed.'] : [])] }, null, 2)}\n`);
   console.log(JSON.stringify(findings, null, 2));
 } catch (error) {
   runFailure = error;
@@ -671,6 +676,6 @@ try {
   }
   debuggerClient?.close();
   child?.kill();
-  if (runFailure) await writeFile(recordFile, `${JSON.stringify({ outcome: 'failed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, at: new Date().toISOString(), findings, error: runFailure.message.slice(0, 1000) }, null, 2)}\n`);
+  if (runFailure) await writeFile(recordFile, `${JSON.stringify({ outcome: 'failed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, observerTransportSha256, at: new Date().toISOString(), findings, error: runFailure.message.slice(0, 1000) }, null, 2)}\n`);
   await writeFile(path.join(evidenceRoot, `${mode}-process.log`), logs);
 }
