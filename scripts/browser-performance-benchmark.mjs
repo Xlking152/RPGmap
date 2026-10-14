@@ -11,6 +11,7 @@ import { browserBenchmarkMovementTarget, browserBenchmarkMoveToken, browserBench
 import { withinMillisecondsBudget } from './performance-budget.mjs';
 import { closeOwnedBrowser, rejectPendingCdp } from './owned-browser-close.mjs';
 import { runIncrementalEnvironmentAudit } from './v3-incremental-environment-audit.mjs';
+import { completeBrowserBenchmarkReport, finishBrowserBenchmarkReport } from './browser-benchmark-report.mjs';
 
 if (process.platform !== 'win32') throw new Error('Browser performance benchmark requires Windows');
 
@@ -387,6 +388,7 @@ let server = null;
 let setupSocket = null;
 const sessions = [];
 let benchmarkFailure = null;
+let completedMeasurements = null;
 const buildInfo = await benchmarkBuildInfo(root, packageRoot);
 
 try {
@@ -568,17 +570,15 @@ try {
   });
   const recovery = { outageDelayMs: 3000, recoveredMs, ...shutdown, startupMs: server.startupMs,
     reconnectedAt, revisionsBefore, revisionsAfter, synchronizationComplete: true, projectionMatches, projectionDifferences };
-  const incrementalEnvironment = process.env.RPGMAP_BROWSER_BENCHMARK_ENVIRONMENT_AUDIT === '1'
-    ? await runIncrementalEnvironmentAudit((expression, timeout) => sessions[0].evaluate(expression, timeout)) : null;
-  const report = {
+  const report = await completeBrowserBenchmarkReport(outputRoot, {
     version: packageJson.version, browser: browserName, headless, browserExecutable: browserExecutable(),
     packageRoot, build: buildInfo, mapPackage: server.mapPackage,
     fixture: { sessions: SESSION_COUNT, actors: ACTOR_COUNT, tokens: TOKEN_COUNT, viewport: '1920x1080' },
     diagnosticProfileSession: profileSessionIndex,
-    phases, recovery, incrementalEnvironment, generatedAt: new Date().toISOString(),
-  };
-  await writeFile(path.join(outputRoot, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  console.log(JSON.stringify(report, null, 2));
+    phases, recovery, generatedAt: new Date().toISOString(),
+  }, { runAudit: process.env.RPGMAP_BROWSER_BENCHMARK_ENVIRONMENT_AUDIT === '1'
+    ? () => runIncrementalEnvironmentAudit((expression, timeout) => sessions[0].evaluate(expression, timeout)) : null });
+  completedMeasurements = report;
   if (JSON.stringify(await benchmarkBuildInfo(root, packageRoot)) !== JSON.stringify(buildInfo)) {
     throw new Error('Browser benchmark candidate changed during measurement');
   }
@@ -595,8 +595,11 @@ try {
       throw new Error(`${session.name} browser errors: ${JSON.stringify({ failures: session.failures, exceptions: session.exceptions })}`);
     }
   }
+  const finalReport = await finishBrowserBenchmarkReport(outputRoot, report, { asserted: shouldAssert });
+  console.log(JSON.stringify(finalReport, null, 2));
 } catch (error) {
   benchmarkFailure = error;
+  if (completedMeasurements) await finishBrowserBenchmarkReport(outputRoot, completedMeasurements, { error });
   throw error;
 } finally {
   setupSocket?.close();
@@ -604,6 +607,11 @@ try {
   await stopServer(server);
   await rm(mapDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => {});
   const failures = shutdown.filter(result => result.status === 'rejected').map(result => result.reason);
-  if (failures.length) throw new AggregateError(benchmarkFailure ? [benchmarkFailure, ...failures] : failures,
-    'Browser benchmark shutdown failed');
+  if (failures.length) {
+    const error = new AggregateError(benchmarkFailure ? [benchmarkFailure, ...failures] : failures,
+      'Browser benchmark shutdown failed');
+    if (completedMeasurements) await finishBrowserBenchmarkReport(outputRoot, completedMeasurements,
+      { error, stage: 'browser-shutdown' });
+    throw error;
+  }
 }

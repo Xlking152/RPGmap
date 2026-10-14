@@ -2,10 +2,22 @@ import { captureCommittedVisionRevision, matchesCommittedRuinsFeedback } from '.
 
 /** Supplementary real UI measurements; ordinary browser gates remain unchanged. */
 export async function runIncrementalEnvironmentAudit(evaluate) {
-  return evaluate(`(${environmentAudit.toString()})((${captureCommittedVisionRevision.toString()}),(${matchesCommittedRuinsFeedback.toString()}))`, 180_000);
+  return evaluate(`(${environmentAudit.toString()})((${captureCommittedVisionRevision.toString()}),(${matchesCommittedRuinsFeedback.toString()}),(${incrementalEnvironmentRestoreOperations.toString()}))`, 180_000);
 }
 
-async function environmentAudit(captureRevision, matchesFeedback) {
+export function incrementalEnvironmentRestoreOperations(original, scene) {
+  const sceneId = original.scene.id, patches = [];
+  for (const featureId of new Set([...Object.keys(scene.featureStates || {}), ...Object.keys(original.scene.featureStates || {})])) {
+    patches.push({ type: 'scene.featureState.patch', payload: { sceneId, featureId, patch: original.scene.featureStates?.[featureId] || null } });
+  }
+  return [
+    { type: 'scene.content.replace', payload: { sceneId, sceneEvents: original.scene.sceneEvents,
+      settings: original.scene.settings } }, ...patches,
+    { type: 'token.upsert', payload: { sceneId, token: original.token } },
+  ];
+}
+
+async function environmentAudit(captureRevision, matchesFeedback, restoreOperations) {
   const api = document.querySelector('#app').rpgMapApp;
   const check = (condition, message) => { if (!condition) throw new Error(message); };
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -89,15 +101,8 @@ async function environmentAudit(captureRevision, matchesFeedback) {
       })), scope: 'Real Document commits and matching 1000 m displayed masks. Renderer/geometry snapshots and opt-in navigation/Vision calculation counters are cumulative; before/after are provided for exact deltas. No new performance threshold replaces existing browser gates.' };
     return report;
   } finally {
-    const scene = api.world.getActiveScene(), patches = [];
-    for (const featureId of new Set([...Object.keys(scene.featureStates || {}), ...Object.keys(original.scene.featureStates || {})])) {
-      patches.push({ type: 'scene.featureState.patch', payload: { sceneId, featureId, patch: original.scene.featureStates?.[featureId] || null } });
-    }
-    await api.world.performOperations([
-      { type: 'scene.content.replace', payload: { sceneId, sceneEvents: original.scene.sceneEvents } }, ...patches,
-      { type: 'scene.settings.patch', payload: { sceneId, patch: original.scene.settings } },
-      { type: 'token.upsert', payload: { sceneId, token: original.token } },
-    ], { source: 'v3-audit:cleanup' });
+    await api.world.performOperations(restoreOperations(original, api.world.getActiveScene()),
+      { source: 'v3-audit:cleanup' });
     await api.vision.setSource(original.sourceId); api.map.setView(original.center, original.zoom, { animate: false });
     api.diagnostics.setEnabled(original.diagnosticsEnabled);
   }
