@@ -577,7 +577,8 @@ try {
     diagnosticProfileSession: profileSessionIndex,
     phases, recovery, generatedAt: new Date().toISOString(),
   }, { runAudit: process.env.RPGMAP_BROWSER_BENCHMARK_ENVIRONMENT_AUDIT === '1'
-    ? () => runIncrementalEnvironmentAudit((expression, timeout) => sessions[0].evaluate(expression, timeout)) : null });
+    ? () => runIncrementalEnvironmentAudit((expression, timeout) => sessions[0].evaluate(expression, timeout),
+      { mapDir, expectedMap: server.mapPackage, progressPath: path.join(outputRoot, 'incremental-environment-progress.json') }) : null });
   completedMeasurements = report;
   if (JSON.stringify(await benchmarkBuildInfo(root, packageRoot)) !== JSON.stringify(buildInfo)) {
     throw new Error('Browser benchmark candidate changed during measurement');

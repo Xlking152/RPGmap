@@ -38,6 +38,14 @@ export async function captureHostedCommittedVisionRevision(api, label, operation
     if (!valid) throw Object.assign(new Error(`No acknowledged authoritative Document commit observed for ${label}`),
       { code: 'audit_commit_unproven' });
     return { value, operationId: id, serverRevision: commit.serverRevision, revision: commit.revision };
+  } catch (error) {
+    error.auditCommit = { label, pendingOperationIds: [...pending],
+      completions: [...completed.values()].map(detail => ({ operationId: detail.operationId,
+        ok: detail.ok, revision: detail.revision, error: detail.error })),
+      documents: [...documents].map(([operationId, records]) => ({ operationId,
+        records: records.map(record => ({ serverRevision: record.serverRevision, revision: record.revision })) })),
+      patches };
+    throw error;
   } finally { for (const dispose of off) if (typeof dispose === 'function') dispose(); }
 }
 
@@ -57,6 +65,8 @@ export async function preserveAuditFailureDuringCleanup(operation, cleanup) {
 
 export function serializeAuditError(error, depth = 0) {
   return { message: error?.message || String(error), code: error?.code || null, stack: error?.stack || null,
+    ...Object.fromEntries(['auditStage', 'auditLabel', 'auditRound', 'auditCommit', 'readiness', 'partialAudit']
+      .filter(key => error?.[key] !== undefined).map(key => [key, error[key]])),
     ...(Array.isArray(error?.errors) && depth < 4
       ? { errors: error.errors.map(child => serializeAuditError(child, depth + 1)) } : {}) };
 }
@@ -66,5 +76,8 @@ export function restoreAuditError(detail) {
     ? new AggregateError(detail.errors.map(restoreAuditError), detail.message) : new Error(detail.message);
   if (detail.code) error.code = detail.code;
   if (detail.stack) error.stack = detail.stack;
+  for (const key of ['auditStage', 'auditLabel', 'auditRound', 'auditCommit', 'readiness', 'partialAudit']) {
+    if (detail[key] !== undefined) error[key] = detail[key];
+  }
   return error;
 }

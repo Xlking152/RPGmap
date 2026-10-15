@@ -93,6 +93,30 @@ test('create and delete Document events prove separate exact acknowledged host r
   }
 });
 
+test('a real controller structural CAS refusal is preserved and submitted exactly once', async t => {
+  const { api, socket, request, settle } = await hostedBrowserRuntime(t);
+  let calls = 0;
+  const pending = captureHostedCommittedVisionRevision(api, 'v3-audit:setup', () => {
+    calls++;
+    return api.world.performOperations([{ type: 'scene.content.replace', payload: {
+      sceneId: api.world.get().activeSceneId, sceneEvents: [],
+    } }]);
+  });
+  const rejected = assert.rejects(pending, error => {
+    assert.equal(error.code, 'revision_conflict');
+    assert.equal(error.auditCommit.label, 'v3-audit:setup');
+    assert.deepEqual(error.auditCommit.pendingOperationIds, [own.operationId]);
+    return true;
+  });
+  const own = request();
+  await socket.receive({ type: 'document.batch.denied', operationId: own.operationId,
+    code: 'revision_conflict', revision: 41, message: 'Authoritative state advanced before the structural write' });
+  await rejected; await settle();
+  assert.equal(calls, 1);
+  assert.equal(socket.messages.filter(message => message.type === 'document.batch').length, 1,
+    'the audit must not retry or rebase a refused structural command');
+});
+
 for (const corruption of ['wrong-ack-id', 'no-document-change', 'map-fingerprint']) {
   test(`hosted audit refuses ${corruption} instead of using the latest state as commit proof`, async t => {
     const { api, socket, request, commit } = await hostedBrowserRuntime(t);
@@ -133,7 +157,8 @@ test('both audit and cleanup error details survive the browser evaluation JSON b
     const result = await new Function('document', `return ${expression};`)(
       { querySelector() { throw aggregate; } });
     return JSON.parse(JSON.stringify(result));
-  }), error => {
+  }, { readAuthority: async () => ({ revision: 1, exploration: {
+    jobs: {}, contexts: {}, partyEpochs: {}, worldEpoch: 'test-epoch' } }) }), error => {
     assert(error instanceof AggregateError);
     assert.deepEqual(error.errors.map(child => [child.message, child.code]),
       [[primary.message, primary.code], [cleanup.message, cleanup.code]]);

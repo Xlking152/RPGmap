@@ -3,6 +3,8 @@ import path from 'node:path';
 
 const failureDetails = (error, stage, depth = 0) => ({ stage, message: error?.message || String(error),
   code: error?.code || null, stack: error?.stack || null, failedAt: new Date().toISOString(),
+  ...Object.fromEntries(['auditStage', 'auditLabel', 'auditRound', 'auditCommit', 'readiness']
+    .filter(key => error?.[key] !== undefined).map(key => [key, error[key]])),
   ...(Array.isArray(error?.errors) && depth < 4
     ? { errors: error.errors.map(child => failureDetails(child, stage, depth + 1)) } : {}) });
 
@@ -17,6 +19,7 @@ export async function completeBrowserBenchmarkReport(outputRoot, measurements, {
   try { incrementalEnvironment = runAudit ? await runAudit() : null; }
   catch (error) {
     await save('report.json', { ...checkpoint, measurementStatus: 'failed',
+      ...(error.partialAudit ? { partialIncrementalEnvironment: error.partialAudit } : {}),
       failure: failureDetails(error, 'incremental-environment-audit') });
     throw error;
   }

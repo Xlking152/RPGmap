@@ -80,3 +80,30 @@ test('audit and cleanup errors both survive serialization without replacing comp
   assert.deepEqual(report.phases, measured.phases);
   assert.deepEqual(report.recovery, measured.recovery);
 });
+
+test('a failed audit retains completed and awaiting-feedback samples plus precise stage/round/label separately from performance gates', async t => {
+  const directory = await output(t), measured = measurements();
+  const primary = Object.assign(new Error('Exact mask did not finish'), {
+    code: 'audit_feedback_timeout', auditStage: 'measure', auditLabel: 'v3-audit:restore', auditRound: 3,
+  });
+  const cleanup = Object.assign(new Error('Structural CAS refused'), {
+    code: 'revision_conflict', auditStage: 'cleanupState', auditLabel: 'v3-audit:cleanup-state', auditRound: null,
+  });
+  const failure = new AggregateError([primary, cleanup], 'Audit and cleanup failed');
+  failure.partialAudit = { passed: false, measurementStatus: 'failed', completedRounds: 3,
+    samples: [{ kind: 'damage', status: 'complete', revision: 51, serverRevision: 104 },
+      { kind: 'restore', status: 'awaiting-feedback', revision: 52, serverRevision: 105 }],
+    readiness: [{ label: 'v3-audit:restore', round: 3, elapsedMs: 1450, serverRevision: 104 }] };
+  let calls = 0;
+  await assert.rejects(completeBrowserBenchmarkReport(directory, measured, { runAudit: async () => {
+    calls++; throw failure;
+  } }), error => error === failure);
+  const report = await json(directory, 'report.json');
+  assert.equal(calls, 1);
+  assert.equal(report.measurementStatus, 'failed');
+  assert.deepEqual(report.partialIncrementalEnvironment, failure.partialAudit);
+  assert.deepEqual(report.failure.errors.map(error => [error.code, error.auditStage, error.auditLabel, error.auditRound]),
+    [['audit_feedback_timeout', 'measure', 'v3-audit:restore', 3], ['revision_conflict', 'cleanupState', 'v3-audit:cleanup-state', null]]);
+  assert.deepEqual(report.phases, measured.phases);
+  assert.deepEqual(report.recovery, measured.recovery);
+});
