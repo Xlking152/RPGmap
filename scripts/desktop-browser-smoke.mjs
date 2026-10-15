@@ -14,6 +14,7 @@ import { OriginWebSocket } from './desktop-origin-websocket.mjs';
 import { createWorldWal, worldWalChecksum } from '../deployment/local-server/world-wal.mjs';
 import { applyWorldOperationPatch } from '../src/world/operations.js';
 import { runDesktopSceneLifecycleAudit, validateSceneLifecycleOptions } from './desktop-scene-lifecycle-audit.mjs';
+import { createDesktopPlayerBrowserAudit, validatePlayerBrowserOptions } from './desktop-player-browser-audit.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const argumentsByName = new Map(process.argv.slice(2).map(argument => {
@@ -31,6 +32,7 @@ const prepareUpgradeFixture = argumentsByName.has('--prepare-upgrade-fixture');
 const exerciseExistingInput = argumentsByName.has('--exercise-input');
 const sceneAudit = argumentsByName.has('--scene-audit');
 const sceneLifecycleAudit = argumentsByName.has('--scene-lifecycle-audit');
+const playerBrowserAudit = argumentsByName.has('--player-browser-audit');
 const minimalMapFile = argumentsByName.get('--minimal-map') ? path.resolve(argumentsByName.get('--minimal-map')) : null;
 const expectedSource = argumentsByName.get('--expected-source') || process.env.RPGMAP_SMOKE_EXPECTED_SOURCE_COMMIT;
 if (installer && !reuseData && !mapFile) throw new Error('A running-application installer smoke requires --map to exercise a persisted World.');
@@ -38,6 +40,8 @@ if (prepareUpgradeFixture && (reuseData || installer || legacyDirectory)) throw 
 if (sceneAudit && (!mapFile || !minimalMapFile || reuseData || prepareUpgradeFixture)) throw new Error('--scene-audit requires --map and --minimal-map in a new disposable World.');
 if (minimalMapFile && !sceneAudit) throw new Error('--minimal-map requires --scene-audit; it cannot be silently ignored.');
 validateSceneLifecycleOptions({ enabled: sceneLifecycleAudit, sceneAudit, reuseData, installer, legacyDirectory, prepareUpgradeFixture });
+validatePlayerBrowserOptions({ enabled: playerBrowserAudit, sceneAudit, reuseData, installer, legacyDirectory, prepareUpgradeFixture });
+if (argumentsByName.has('--player-browser-exe')&&!playerBrowserAudit) throw new Error('--player-browser-exe requires --player-browser-audit');
 if (!dataRoot.startsWith(`${path.join(root, 'artifact')}${path.sep}`)) throw new Error('Unsafe test data directory');
 async function resolvedDestination(file) {
   try { return await realpath(file); }
@@ -78,9 +82,10 @@ const installerSha256 = installer ? await sha256(installer) : null;
 const driverSha256 = await sha256(fileURLToPath(import.meta.url));
 const observerTransportSha256 = sceneAudit ? await sha256(fileURLToPath(new URL('./desktop-origin-websocket.mjs', import.meta.url))) : null;
 const lifecycleDriverSha256 = sceneLifecycleAudit ? await sha256(fileURLToPath(new URL('./desktop-scene-lifecycle-audit.mjs', import.meta.url))) : null;
+const playerBrowserDriverSha256 = playerBrowserAudit ? await sha256(fileURLToPath(new URL('./desktop-player-browser-audit.mjs', import.meta.url))) : null;
 if (!reuseData) await rm(dataRoot, { recursive: true, force: true });
 await mkdir(evidenceRoot, { recursive: true });
-const mode = sceneLifecycleAudit ? 'desktop-scene-lifecycle-audit' : sceneAudit ? 'desktop-scene-audit' : prepareUpgradeFixture ? 'desktop-upgrade-fixture' : exerciseExistingInput ? 'desktop-upgraded-smoke' : legacyDirectory ? 'desktop-legacy-smoke' : reuseData ? 'desktop-reuse-smoke' : 'desktop-smoke';
+const mode = playerBrowserAudit ? sceneLifecycleAudit ? 'desktop-scene-lifecycle-player-browser-audit' : 'desktop-scene-player-browser-audit' : sceneLifecycleAudit ? 'desktop-scene-lifecycle-audit' : sceneAudit ? 'desktop-scene-audit' : prepareUpgradeFixture ? 'desktop-upgrade-fixture' : exerciseExistingInput ? 'desktop-upgraded-smoke' : legacyDirectory ? 'desktop-legacy-smoke' : reuseData ? 'desktop-reuse-smoke' : 'desktop-smoke';
 const recordFile = path.join(evidenceRoot, `${mode}.json`);
 await rm(recordFile, { force: true });
 const findings = [];
@@ -90,6 +95,7 @@ let logs = '';
 let runFailure = null;
 const browserExceptions = [];
 let lifecycleResult = null;
+let playerBrowser = null, playerBrowserResult = null;
 
 async function delay(ms) { await new Promise(resolve => setTimeout(resolve, ms)); }
 async function eventually(work, { timeoutMs = 60000, intervalMs = 250 } = {}) {
@@ -487,10 +493,16 @@ async function checkScenes(worldId, minimalMap) {
       && Boolean(document.querySelector('.leaflet-pane svg'));
   })()`));
   const activate = async (sceneId, mapPackage) => {
+    const previousMap=await debuggerClient.evaluate(`({id:document.querySelector('#app').rpgMapApp.mapPackage.id,version:document.querySelector('#app').rpgMapApp.mapPackage.version})`);
+    const startedAt=performance.now();
     await debuggerClient.evaluate(`document.querySelector('#app').rpgMapApp.scenes.activate(${JSON.stringify(sceneId)})`)
       .catch(error => { if (!/context|disconnected|navigated|closed/i.test(error.message)) throw error; });
     await waitActive(sceneId, mapPackage);
     await observer.expectScene(sceneId, mapPackage);
+    const gmElapsedMs=performance.now()-startedAt;
+    const playerResult=await playerBrowser?.afterSceneActivated({startedAt,expectReload:previousMap.id!==mapPackage.id||previousMap.version!==mapPackage.version});
+    findings.push({test:'measured actual GM Scene switch and optional real Player Runtime readiness',passed:true,sceneId,mapPackage,gmElapsedMs,
+      ...(playerResult?{playerReadyElapsedMs:playerResult.playerReadyElapsedMs}: {})});
   };
   try {
     const before = await readWorld(), sceneA = before.scenes.find(scene => scene.id === before.activeSceneId);
@@ -601,6 +613,7 @@ async function verifyRestartedScenes(worldId, expected) {
   const world = await debuggerClient.evaluate(`document.querySelector('#app').rpgMapApp.world.get()`);
   assert.deepEqual(sceneAuditContent(world.scenes.find(scene => scene.id === expected.activeSceneId)), expected.expectedScene);
   assert.deepEqual(world.scenes.map(scene => scene.id), expected.sceneIds);
+  await playerBrowser?.afterDesktopReady({reason:'all three Scenes restored after normal desktop process restart'});
   findings.push({ test: 'normal process restart restores the common active Scene and all three independently persisted Scenes without transport archives', passed: true });
 }
 
@@ -625,6 +638,7 @@ async function closeDesktop(upgradeInstaller) {
   finally { clearTimeout(timeout); }
   debuggerClient.close(); debuggerClient = null; child = null;
   await assert.rejects(fetch(`${origin}/api/health`));
+  await playerBrowser?.desktopStopped(origin);
   if (installerEnded) {
     let installerTimeout;
     try { await Promise.race([installerEnded, new Promise((_resolve, reject) => { installerTimeout = setTimeout(() => reject(new Error('Running-application upgrade did not complete')), 90000); })]); }
@@ -734,6 +748,15 @@ try {
       findings.push({ test: 'GM creates an approved Player and persists its identity before upgrade', passed: true, userId: identity.userId });
     }
     if (sceneAudit) {
+      if (playerBrowserAudit) {
+        playerBrowser=await createDesktopPlayerBrowserAudit({
+          evaluate:expression=>debuggerClient.evaluate(expression),call:(method,parameters)=>debuggerClient.call(method,parameters),
+          eventually,freePort,catalogue,durableWorld:sceneAuditDurableWorld,sceneContent:sceneAuditContent,
+          worldId,evidenceRoot,captureScreenshots,getDesktopPid:()=>child.pid,
+          browserExecutable:argumentsByName.get('--player-browser-exe')||null,
+        });
+        await playerBrowser.afterSceneActivated({reason:'initial real Player browser joins approved World'});
+      }
       sceneAuditResult = await checkScenes(worldId, minimalReference);
       await verifyRestartedScenes(worldId, sceneAuditResult);
       if (sceneLifecycleAudit) lifecycleResult = await runDesktopSceneLifecycleAudit({
@@ -743,7 +766,7 @@ try {
         eventually, catalogue, durableWorld: sceneAuditDurableWorld, sceneContent: sceneAuditContent,
         importMap: importAuditMap, closeDesktop, launch, createSceneObserver,
         worldId, minimalMapFile, minimalMapSha256, sourceCommit: buildSource.commit,
-        evidenceRoot, dataRoot, findings, captureScreenshots, screenshotPrefix: mode,
+        evidenceRoot, dataRoot, findings, captureScreenshots, screenshotPrefix: mode, playerBrowser,
       });
     }
   }
@@ -766,11 +789,17 @@ try {
   if (worldId) assert.equal(recovered.activeWorldId, worldId);
   findings.push({ test: 'process restart preserves imported package and active World', passed: true });
   await closeDesktop();
+  if (playerBrowser) {
+    playerBrowserResult=await playerBrowser.finish({expectedSceneIds:sceneAuditResult.sceneIds,requireVersions:sceneLifecycleAudit?['1.2.0','1.3.0']:[]});
+    findings.push({test:'actual approved Edge Player follows Scene/version Runtime reloads, submits durable authorized movement and recovers after desktop process restart',passed:true,
+      observations:playerBrowserResult.observations.length,identityUserId:playerBrowserResult.userId});
+  }
   assert.equal(browserExceptions.length, 0, 'Packaged map interaction must not emit unhandled Runtime exceptions');
-  await writeFile(recordFile, `${JSON.stringify({ outcome: 'passed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, sceneLifecycleAudit, lifecycleResult, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, observerTransportSha256, lifecycleDriverSha256, at: new Date().toISOString(), findings, limitations: ['This tests the packaged executable on the development Windows host, not a clean Windows VM.', 'Map import uses the official management API; native file chooser selection is not automated.', ...(sceneAudit ? ['Player synchronization is observed through an approved Node WebSocket, not a separate Player browser or VPN machine.', ...(!sceneLifecycleAudit ? ['The two reset scopes and same-map ID with different package versions are not executed by this Scene audit.'] : lifecycleResult.limitations)] : []), ...(prepareUpgradeFixture ? ['This run prepares historical upgrade data; no Token drag or game-input acceptance is claimed.'] : [])] }, null, 2)}\n`);
+  await writeFile(recordFile, `${JSON.stringify({ outcome: 'passed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, sceneLifecycleAudit, lifecycleResult, playerBrowserAudit, playerBrowserResult, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, observerTransportSha256, lifecycleDriverSha256, playerBrowserDriverSha256, at: new Date().toISOString(), findings, limitations: ['This tests the packaged executable on the development Windows host, not a clean Windows VM.', 'Map import uses the official management API; native file chooser selection is not automated.', ...(sceneAudit ? [playerBrowserAudit?'Scene synchronization is additionally exercised in a real local Edge Player browser; this is not VPN multi-machine evidence.':'Player synchronization is observed through an approved Node WebSocket, not a separate Player browser or VPN machine.', ...(!sceneLifecycleAudit ? ['The two reset scopes and same-map ID with different package versions are not executed by this Scene audit.'] : lifecycleResult.limitations)] : []), ...(playerBrowserResult?.limitations||[]), ...(prepareUpgradeFixture ? ['This run prepares historical upgrade data; no Token drag or game-input acceptance is claimed.'] : [])] }, null, 2)}\n`);
   console.log(JSON.stringify(findings, null, 2));
 } catch (error) {
   runFailure = error;
+  if(playerBrowser&&!playerBrowserResult)playerBrowserResult=playerBrowser.snapshot();
   throw error;
 } finally {
   if (runFailure && debuggerClient && child?.exitCode === null) {
@@ -778,7 +807,13 @@ try {
     catch (shutdownError) { findings.push({ test: 'failed acceptance normal shutdown', passed: false, error: shutdownError.message }); }
   }
   debuggerClient?.close();
+  let playerCleanupFailure=null;
+  try {await playerBrowser?.close();} catch(error) {
+    playerCleanupFailure=error;
+    runFailure=runFailure?new AggregateError([runFailure,error],'Desktop acceptance and Player browser cleanup both failed'):error;
+  }
   child?.kill();
-  if (runFailure) await writeFile(recordFile, `${JSON.stringify({ outcome: 'failed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, sceneLifecycleAudit, lifecycleResult, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, observerTransportSha256, lifecycleDriverSha256, at: new Date().toISOString(), findings, error: runFailure.message.slice(0, 1000) }, null, 2)}\n`);
+  if (runFailure) await writeFile(recordFile, `${JSON.stringify({ outcome: 'failed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, sceneLifecycleAudit, lifecycleResult, playerBrowserAudit, playerBrowserResult, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, observerTransportSha256, lifecycleDriverSha256, playerBrowserDriverSha256, at: new Date().toISOString(), findings, error: runFailure.message.slice(0, 1000), ...(runFailure instanceof AggregateError?{errors:runFailure.errors.map(error=>error.message.slice(0,1000))}:{}) }, null, 2)}\n`);
   await writeFile(path.join(evidenceRoot, `${mode}-process.log`), logs);
+  if(playerCleanupFailure)throw runFailure;
 }

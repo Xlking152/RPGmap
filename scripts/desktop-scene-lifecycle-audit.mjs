@@ -136,7 +136,7 @@ export async function clickDesktopConfirmation({ evaluate, call, getSocket }, lo
 export async function runDesktopSceneLifecycleAudit(context) {
   const { evaluate, call, getSocket, eventually, catalogue, durableWorld, sceneContent, importMap, closeDesktop, launch,
     createSceneObserver, worldId, minimalMapFile, minimalMapSha256, sourceCommit, evidenceRoot, dataRoot, findings,
-    captureScreenshots, screenshotPrefix } = context;
+    captureScreenshots, screenshotPrefix, playerBrowser } = context;
   assert.equal((await catalogue()).maps.length, 2, 'The optional lifecycle audit starts only after the unchanged two-map audit');
   const game = (fn, ...args) => evaluate(`(${fn.toString()})(document.querySelector('#app').rpgMapApp,${args.map(value => JSON.stringify(value)).join(',')})`);
   const content = () => game(api => api.getState());
@@ -310,12 +310,16 @@ export async function runDesktopSceneLifecycleAudit(context) {
   assert.deepEqual(lifecyclePersistentContent(restored.state), lifecyclePersistentContent(beforeReset.state), 'The selected recovery point restores the entire World, not just one Scene');
   const access = JSON.parse(await readFile(path.join(dataRoot, 'worlds', worldId, 'users.json'), 'utf8'));
   assert.deepEqual(access, recoveryEnvelope.record.access, 'Recovery restores the corresponding permissions and approved identities');
+  // Preserve the exact access-restore assertion above before a legitimate
+  // Player Key binding can rotate credentials in that restored access table.
+  await playerBrowser?.afterDesktopReady({reason:'complete World/access restore verified before Player rejoin',restoredAccess:true});
   assert.ok((await catalogue()).worlds.find(world => world.id === worldId).backups.some(point => point.reason === 'before-restore'));
   findings.push({ test: 'real management recovery UI restores complete World content and access after clear and service restart', passed: true,
     confirmation: restoredConfirmation, recoveryPointId: recovery.id, scope: 'complete World and access', accessSha256: createHash('sha256').update(JSON.stringify(access)).digest('hex') });
   await screenshot('world-restored');
   await closeDesktop(); await launch(); await enterWorld(); await waitConnected();
   assert.deepEqual(lifecyclePersistentContent((await settle()).state), lifecyclePersistentContent(restored.state));
+  await playerBrowser?.afterDesktopReady({reason:'restored complete World verified after normal process restart'});
   findings.push({ test: 'recovered complete World survives another normal desktop process restart', passed: true });
 
   await game(async (api, tokenId) => {
@@ -348,6 +352,7 @@ export async function runDesktopSceneLifecycleAudit(context) {
   await evaluate('window.rpgmapDesktop.showSetup()').catch(error => { if (!/context|disconnected|navigated|closed/i.test(error.message)) throw error; });
   await eventually(() => evaluate(`Boolean(document.querySelector('.setup-content')?.children.length)`));
   await enterWorld(); await waitConnected();
+  await playerBrowser?.afterDesktopReady({reason:'management map import returns to the same World'});
   const newer = fixtures[0].receipt, unused = fixtures[1].receipt;
   const beforeVersions = (await settle()).state;
   const originalScene = beforeVersions.preferences.worldV2.scenes.find(scene => scene.mapPackage.id === newer.id && scene.mapPackage.version === '1.2.0');
@@ -381,16 +386,19 @@ export async function runDesktopSceneLifecycleAudit(context) {
   };
   const activate = async (sceneId, reference) => {
     const beforeTimeOrigin = await evaluate('performance.timeOrigin');
+    const startedAt=performance.now();
     await game((api, id) => api.scenes.activate(id), sceneId).catch(error => { if (!/context|disconnected|navigated|closed/i.test(error.message)) throw error; });
     await eventually(() => game((api, id, map) => api.multiplayer.getStatus().connected && api.world.getActiveScene().id === id
       && api.mapPackage.id === map.id && api.mapPackage.version === map.version, sceneId, reference));
     await observer.expectScene(sceneId, reference);
+    const gmElapsedMs=performance.now()-startedAt;
+    const playerResult=await playerBrowser?.afterSceneActivated({startedAt,expectReload:true,reason:'same map ID exact-version lifecycle Scene activation'});
     const runtime = await game(api => ({ timeOrigin:performance.timeOrigin,id:api.mapPackage.id,version:api.mapPackage.version,fingerprint:api.mapPackage.fingerprint,
       doorOpen:api.mapPackage.features.some(feature=>feature.id==='demo-door')?api.interaction.stateForFeature('demo-door').open:null }));
     assert.notEqual(runtime.timeOrigin, beforeTimeOrigin, 'Different exact package versions must rebuild the actual map Runtime');
     const served = await request(`/api/packages/maps/${encodeURIComponent(reference.id)}/${encodeURIComponent(reference.version)}`);
     assert.equal(served.ok, true); assert.equal(runtime.fingerprint, served.body.fingerprint);
-    switches.push({ sceneId, ...runtime }); return runtime;
+    switches.push({ sceneId, ...runtime, gmElapsedMs, ...(playerResult?{playerReadyElapsedMs:playerResult.playerReadyElapsedMs}:{}) }); return runtime;
   };
   try {
     const oldRuntime = await activate(originalScene.id, originalScene.mapPackage);
@@ -444,6 +452,7 @@ export async function runDesktopSceneLifecycleAudit(context) {
   const final=await settle();assert.equal(final.state.preferences.worldV2.scenes.length,4);assert.equal(final.state.preferences.worldV2.activeSceneId,sceneAId);
   assert.deepEqual(lifecyclePersistentContent(final.state), beforeUninstallRestart,
     'The final normal restart must preserve complete World, every exact-version Scene, Token, door, Fog, chat and combat content');
+  await playerBrowser?.afterDesktopReady({reason:'final complete four-Scene World verified after normal process restart'});
   assert.equal(mapFileHash(await readFile(minimalMapFile)),minimalMapSha256,'The original minimal archive must remain unchanged');
   findings.push({test:'normal restart retains complete World content and all four exact-version Scenes, and does not reinstall the unreferenced removed map version',passed:true,
     persistentContentSha256:createHash('sha256').update(JSON.stringify(beforeUninstallRestart)).digest('hex')});
