@@ -126,12 +126,12 @@ export async function preparePlayerBrowserProbe(api, actorId, tokenId) {
   throw new Error('No physically valid short Player movement route could be prepared');
 }
 
-function edgeExecutable(override) {
-  if (override) { assert.ok(existsSync(override),'Configured Edge executable does not exist'); return path.resolve(override); }
+function chromeExecutable(override) {
+  if (override) { assert.ok(existsSync(override),'Configured Chrome executable does not exist'); return path.resolve(override); }
   for(const base of [process.env['ProgramFiles(x86)'],process.env.ProgramFiles,process.env.LOCALAPPDATA].filter(Boolean)) {
-    const file=path.join(base,'Microsoft','Edge','Application','msedge.exe'); if(existsSync(file))return file;
+    const file=path.join(base,'Google','Chrome','Application','chrome.exe'); if(existsSync(file))return file;
   }
-  throw new Error('Microsoft Edge was not found for the explicit Player browser audit');
+  throw new Error('Google Chrome was not found for the explicit Player browser audit');
 }
 
 function waitSocket(socket,type) {
@@ -154,7 +154,7 @@ async function approvedIdentity({origin,catalog,health,actorId}) {
       gmSecret:new URLSearchParams(new URL(catalog.connection.localUrl).hash.slice(1)).get('gmSecret')}));
     assert.equal((await ready).session.role,'gm');
     const claim=waitSocket(socket,'access.claim');
-    socket.send(JSON.stringify({type:'access.user.create',name:'Desktop real Edge Player',defaultActorId:actorId,ownership:{[actorId]:'owner'}}));
+    socket.send(JSON.stringify({type:'access.user.create',name:'Desktop real Chrome Player',defaultActorId:actorId,ownership:{[actorId]:'owner'}}));
     const result=await claim; assert.ok(result.user?.id);assert.ok(result.claimCode);
     return {userId:result.user.id,playerKey:result.claimCode};
   } finally {socket.close();}
@@ -168,7 +168,7 @@ export async function sampleOwnedProcessMemory(pids) {
   const parsed=JSON.parse(String(stdout)||'[]');return {available:true,scope:'owned root processes and their descendants only',roots:pids,processes:Array.isArray(parsed)?parsed:[parsed]};
 }
 
-class EdgePlayer {
+class ChromePlayer {
   constructor({eventually,freePort,executable}) {this.eventually=eventually;this.executable=executable;this.freePort=freePort;this.pending=new Map();this.next=0;this.exceptions=[];}
   async launch(url) {
     this.profile=await mkdtemp(path.join(os.tmpdir(),'rpgmap-desktop-player-audit-'));
@@ -177,31 +177,31 @@ class EdgePlayer {
       '--disable-backgrounding-occluded-windows','--disable-features=CalculateNativeWinOcclusion','--window-size=1440,900',
       `--remote-debugging-port=${this.port}`,`--user-data-dir=${this.profile}`,url],{windowsHide:false,stdio:['ignore','ignore','ignore']});
     this.process.on('error',error=>{this.launchError=error;});
-    const target=await this.eventually(async()=>{if(this.launchError)throw this.launchError;if(this.process.exitCode!==null)throw new Error('Owned Edge process exited before CDP was ready');
+    const target=await this.eventually(async()=>{if(this.launchError)throw this.launchError;if(this.process.exitCode!==null)throw new Error('Owned Chrome process exited before CDP was ready');
       const response=await fetch(`http://127.0.0.1:${this.port}/json/list`);return(await response.json()).find(item=>item.type==='page'&&item.webSocketDebuggerUrl&&item.url.startsWith(new URL(url).origin+'/'));});
     this.socket=new WebSocket(target.webSocketDebuggerUrl);
-    await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Owned Edge CDP connection timed out')),10000);
-      this.socket.addEventListener('open',()=>{clearTimeout(timer);resolve();},{once:true});this.socket.addEventListener('error',()=>{clearTimeout(timer);reject(new Error('Owned Edge CDP failed'));},{once:true});});
-    this.socket.addEventListener('close',()=>rejectPendingCdp(this.pending,'Owned Edge CDP closed'));
+    await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Owned Chrome CDP connection timed out')),10000);
+      this.socket.addEventListener('open',()=>{clearTimeout(timer);resolve();},{once:true});this.socket.addEventListener('error',()=>{clearTimeout(timer);reject(new Error('Owned Chrome CDP failed'));},{once:true});});
+    this.socket.addEventListener('close',()=>rejectPendingCdp(this.pending,'Owned Chrome CDP closed'));
     this.socket.addEventListener('message',event=>{const packet=JSON.parse(String(event.data));
       if(packet.method==='Runtime.exceptionThrown')this.exceptions.push(packet.params.exceptionDetails.exception?.description||packet.params.exceptionDetails.text);
       const task=this.pending.get(packet.id);if(!task)return;this.pending.delete(packet.id);clearTimeout(task.timer);packet.error?task.reject(new Error(packet.error.message)):task.resolve(packet.result);});
     await this.call('Runtime.enable');await this.call('Page.enable');
   }
-  call(method,params={}) {const id=++this.next;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error(`Owned Edge CDP timeout: ${method}`));},30000);
+  call(method,params={}) {const id=++this.next;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error(`Owned Chrome CDP timeout: ${method}`));},30000);
     this.pending.set(id,{resolve,reject,timer});try{this.socket.send(JSON.stringify({id,method,params}));}catch(error){clearTimeout(timer);this.pending.delete(id);reject(error);}});}
   async evaluate(expression) {const result=await this.call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});
     if(result.exceptionDetails)throw new Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text);return result.result?.value;}
   async close() {
     const errors=[];
-    try {if(this.process)await closeOwnedBrowser({process:this.process,send:method=>this.call(method),pending:this.pending,label:'Owned Edge Player',timeoutMs:10000});}
+    try {if(this.process)await closeOwnedBrowser({process:this.process,send:method=>this.call(method),pending:this.pending,label:'Owned Chrome Player',timeoutMs:10000});}
     catch(error){errors.push(error);}
     try {this.socket?.close();if(this.process?.exitCode===null&&this.process.signalCode===null)this.process.kill('SIGTERM');}
     catch(error){errors.push(error);}
     try {if(this.profile){const resolved=await realpath(this.profile);assert.equal(path.dirname(resolved).toLowerCase(),(await realpath(os.tmpdir())).toLowerCase());
       assert.ok(path.basename(resolved).startsWith('rpgmap-desktop-player-audit-'));await rm(resolved,{recursive:true,force:true,maxRetries:20,retryDelay:100});}}
     catch(error){errors.push(error);}
-    if(errors.length)throw errors.length===1?errors[0]:new AggregateError(errors,'Owned Edge shutdown and cleanup failed');
+    if(errors.length)throw errors.length===1?errors[0]:new AggregateError(errors,'Owned Chrome shutdown and cleanup failed');
   }
 }
 
@@ -211,7 +211,7 @@ export async function createDesktopPlayerBrowserAudit(context) {
   const catalog=await catalogue(),health=await evaluate("fetch('/api/health').then(response=>response.json())");
   const actorId='desktop-smoke-actor',tokenId='desktop-player-browser-probe';
   const identity=await approvedIdentity({origin,catalog,health,actorId});
-  const browser=new EdgePlayer({eventually,freePort,executable:edgeExecutable(context.browserExecutable)});
+  const browser=new ChromePlayer({eventually,freePort,executable:chromeExecutable(context.browserExecutable)});
   const browserExecutableSha256=createHash('sha256').update(await readFile(browser.executable)).digest('hex');
   const observations=[],outages=[],recovery=[];
   let currentOrigin=origin,lastState=null,closed=false,browserVersion;
@@ -221,7 +221,7 @@ export async function createDesktopPlayerBrowserAudit(context) {
     await eventually(()=>browser.evaluate(`location.origin===${JSON.stringify(originToJoin)}&&Boolean(document.querySelector('#app')?.rpgMapApp?.multiplayer)`));
     // Only the official Player connection is submitted to this separate browser.
     // No desktop cookies, GM secret, host flag or storage identity is injected.
-    await browser.evaluate(`document.querySelector('#app').rpgMapApp.multiplayer.connect(${JSON.stringify({name:'Desktop real Edge Player',requestedRole:'player',joinCode,playerKey:identity.playerKey})})`);
+    await browser.evaluate(`document.querySelector('#app').rpgMapApp.multiplayer.connect(${JSON.stringify({name:'Desktop real Chrome Player',requestedRole:'player',joinCode,playerKey:identity.playerKey})})`);
     await eventually(()=>player((api,userId)=>{const status=api?.multiplayer?.getStatus();return status?.connected&&status.session?.role==='player'&&status.session.identityStatus==='active'&&status.session.userId===userId;},identity.userId));
     currentOrigin=originToJoin;
   };
@@ -238,7 +238,7 @@ export async function createDesktopPlayerBrowserAudit(context) {
     return true;
   };
   try {await browser.launch(origin+'/');browserVersion=await browser.call('Browser.getVersion');
-    assert.match(browserVersion.userAgent,/Edg\//,'The selected executable must actually be Microsoft Edge');await connect(origin,catalog.connection.joinCode);}
+    assert.match(browserVersion.product,/^Chrome\//,'The selected executable must actually be Google Chrome');await connect(origin,catalog.connection.joinCode);}
   catch(error){await browser.close().catch(()=>{});throw error;}
   async function observe({reason,startedAt=performance.now(),expectReload=false}) {
     const current=await gm(api=>({worldId:api.world.get().id,sceneId:api.world.getActiveScene().id,mapPackage:{id:api.mapPackage.id,version:api.mapPackage.version},fingerprint:api.mapPackage.fingerprint}));
@@ -291,7 +291,7 @@ export async function createDesktopPlayerBrowserAudit(context) {
   }
   return {
     userId:identity.userId,
-    snapshot(){return {outcome:'in_progress',browser:'Microsoft Edge',browserExecutable:browser.executable,browserExecutableSha256,browserVersion,headless:false,userId:identity.userId,observations,outages,recovery,exceptions:[...browser.exceptions]};},
+    snapshot(){return {outcome:'in_progress',browser:'Google Chrome',browserExecutable:browser.executable,browserExecutableSha256,browserVersion,headless:false,userId:identity.userId,observations,outages,recovery,exceptions:[...browser.exceptions]};},
     async afterSceneActivated({startedAt,expectReload=false,reason='GM Scene activation'}={}) {return observe({startedAt,expectReload,reason});},
     async afterDesktopReady({reason='normal desktop process restart',restoredAccess=false}={}) {
       const nextOrigin=await evaluate('location.origin'),startedAt=performance.now();
@@ -318,8 +318,8 @@ export async function createDesktopPlayerBrowserAudit(context) {
     async finish({expectedSceneIds,requireVersions=[]}) {
       assertPlayerBrowserCoverage({observations,outages,recovery,exceptions:browser.exceptions},{expectedSceneIds,requireVersions});
       await this.close();
-      assert.equal(createHash('sha256').update(await readFile(browser.executable)).digest('hex'),browserExecutableSha256,'The Edge executable must remain unchanged during this audit');
-      return {outcome:'passed',browser:'Microsoft Edge',browserExecutable:browser.executable,browserExecutableSha256,browserVersion,headless:false,userId:identity.userId,observations,outages,recovery,
+      assert.equal(createHash('sha256').update(await readFile(browser.executable)).digest('hex'),browserExecutableSha256,'The Chrome executable must remain unchanged during this audit');
+      return {outcome:'passed',browser:'Google Chrome',browserExecutable:browser.executable,browserExecutableSha256,browserVersion,headless:false,userId:identity.userId,observations,outages,recovery,
         limitations:['Local real Player browser, not a VPN machine.','Movement uses the production public moveTokenPath command and authoritative ACK; this supplement does not claim a native Player pointer drag.',
           'A new random desktop server port is a new browser origin; process-restart recovery explicitly reuses the original approved key through the normal Player connection. Exact-map reloads at the same origin must reconnect automatically.']};
     },

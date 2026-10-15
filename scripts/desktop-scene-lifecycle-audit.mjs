@@ -17,6 +17,14 @@ export function validateSceneLifecycleOptions({ enabled, sceneAudit, reuseData, 
   }
 }
 
+export function lifecycleFixtureDirectory(evidenceRoot, { sourceCommit, sourceArchiveSha256 }) {
+  assert.match(sourceCommit, /^[a-f0-9]{40}$/);
+  assert.match(sourceArchiveSha256, /^[a-f0-9]{64}$/);
+  // Keep receipts from earlier builds intact when validating a new installer.
+  // The full archive hash remains in each receipt and the byte-reuse assertion.
+  return path.join(evidenceRoot, 'lifecycle-fixtures', sourceCommit, sourceArchiveSha256.slice(0, 16));
+}
+
 export function lifecyclePersistentContent(state) {
   const world = structuredClone(state.preferences.worldV2);
   delete world.updatedAt;
@@ -332,7 +340,8 @@ export async function runDesktopSceneLifecycleAudit(context) {
   const baseBytes = await readFile(minimalMapFile);
   assert.equal(mapFileHash(baseBytes), minimalMapSha256);
   const fixtures = createLifecycleMapFixtures(inspectMapArchive(baseBytes), { sourceCommit, sourceArchiveSha256: minimalMapSha256 });
-  const fixtureDirectory = path.join(evidenceRoot, 'lifecycle-fixtures'); await mkdir(fixtureDirectory, { recursive: true });
+  const fixtureDirectory = lifecycleFixtureDirectory(evidenceRoot, { sourceCommit, sourceArchiveSha256: minimalMapSha256 });
+  await mkdir(fixtureDirectory, { recursive: true });
   for (const fixture of fixtures) {
     fixture.receipt.file = path.join(fixtureDirectory, fixture.receipt.filename);
     await writeFile(fixture.receipt.file, fixture.bytes, { flag: 'wx' }).catch(async error => {

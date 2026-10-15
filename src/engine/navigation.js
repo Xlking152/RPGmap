@@ -36,12 +36,14 @@ function pointTuple(point) {
   return Array.isArray(point) ? [Number(point[0]), Number(point[1])] : [Number(point.x), Number(point.y)];
 }
 
-function pointInPolygon(point, polygon) {
-  const [x, y] = pointTuple(point);
+// Painting prepares numeric vertices once, rather than allocating coordinate
+// tuples for every edge of every visited cell. Keep the original crossing
+// arithmetic and edge order so boundary cells retain their exact semantics.
+function pointInPolygon(x, y, polygon) {
   let inside = false;
   for (let current = 0, previous = polygon.length - 1; current < polygon.length; previous = current, current += 1) {
-    const [cx, cy] = pointTuple(polygon[current]);
-    const [px, py] = pointTuple(polygon[previous]);
+    const [cx, cy] = polygon[current];
+    const [px, py] = polygon[previous];
     const crosses = cy > y !== py > y;
     if (crosses && x < ((px - cx) * (y - cy)) / (py - cy) + cx) inside = !inside;
   }
@@ -155,6 +157,9 @@ function paintPolygon(chunk, polygon, apply, predicate = null) {
   if (!Array.isArray(polygon) || polygon.length < 3) return;
   const bounds = polygonBounds(polygon);
   if (!boundsIntersect(bounds, chunk.bounds)) return;
+  // This copy belongs only to this paint. Mutable map/Scene polygons must be
+  // read again when another navigation snapshot is built.
+  const vertices = polygon.map(pointTuple);
   const minColumn = Math.max(0, Math.floor((bounds.minX - chunk.bounds.minX) / chunk.cellSize));
   const maxColumn = Math.min(NAVIGATION_CHUNK_SIZE_METERS - 1, Math.floor((Math.max(bounds.minX, bounds.maxX - Number.EPSILON) - chunk.bounds.minX) / chunk.cellSize));
   const minRow = Math.max(0, Math.floor((bounds.minY - chunk.bounds.minY) / chunk.cellSize));
@@ -165,8 +170,8 @@ function paintPolygon(chunk, polygon, apply, predicate = null) {
     for (let column = minColumn; column <= maxColumn; column += 1) {
       const worldX = chunk.bounds.minX + (column + 0.5) * chunk.cellSize;
       if (worldX < 0 || worldX >= chunk.width) continue;
-      const point = [worldX, worldY];
-      if (pointInPolygon(point, polygon) && (!predicate || predicate(point))) apply(row * NAVIGATION_CHUNK_SIZE_METERS + column);
+      if (pointInPolygon(worldX, worldY, vertices)
+        && (!predicate || predicate([worldX, worldY]))) apply(row * NAVIGATION_CHUNK_SIZE_METERS + column);
     }
   }
 }
@@ -199,8 +204,8 @@ function makeChunk(base, scene, appState, moverContext, chunkColumn, chunkRow, f
     if (descriptor.kind !== 'bridge') continue;
     const state = featureRuntimeState(descriptor.feature, appState);
     if (featureIsDestroyed(descriptor.feature, scene, state)) continue;
-    const damages = clipDamageForFeature(scene, descriptor.feature.id);
-    paintPolygon(chunk, descriptor.polygon, index => { flags[index] = CELL_ROAD; }, point => !damages.some(polygon => pointInPolygon(point, polygon)));
+    const damages = clipDamageForFeature(scene, descriptor.feature.id).map(polygon => polygon.map(pointTuple));
+    paintPolygon(chunk, descriptor.polygon, index => { flags[index] = CELL_ROAD; }, point => !damages.some(polygon => pointInPolygon(point[0], point[1], polygon)));
   }
   // Resolve each source's own exemptions before OR-ing its remaining cells.
   // Never clear an aggregate cell to implement an opening or wall breach.
@@ -216,11 +221,13 @@ function makeChunk(base, scene, appState, moverContext, chunkColumn, chunkRow, f
       || (!moverContext?.elevationAtPoint && !featureBlocksMover(feature, state, moverContext))) continue;
     const blockFlags = CELL_BLOCKED
       | ((navigation.passableWhenDestroyed || navigation.damageCreatesPassage) ? CELL_DESTRUCTIBLE : 0);
-    const damages = navigation.damageCreatesPassage ? clipDamageForFeature(scene, feature.id) : [];
+    const damages = navigation.damageCreatesPassage
+      ? clipDamageForFeature(scene, feature.id).map(polygon => polygon.map(pointTuple)) : [];
+    const footprint = damages.length ? descriptor.polygon.map(pointTuple) : null;
     const blockingHeight = featureBlockingHeightMeters(feature, state);
     paintPolygon(chunk, navigation.blockingPolygon || descriptor.polygon, index => { flags[index] |= blockFlags; }, point => {
-      if (damages.length && pointInPolygon(point, descriptor.polygon)
-        && damages.some(polygon => pointInPolygon(point, polygon))) return false;
+      if (damages.length && pointInPolygon(point[0], point[1], footprint)
+        && damages.some(polygon => pointInPolygon(point[0], point[1], polygon))) return false;
       if (blockingHeight !== null && moverContext?.elevationAtPoint) {
         const elevation = Number(moverContext.elevationAtPoint({ x: point[0], y: point[1] }));
         if (Number.isFinite(elevation) && elevation > blockingHeight) return false;

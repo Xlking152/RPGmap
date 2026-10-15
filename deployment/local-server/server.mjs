@@ -62,6 +62,7 @@ import {
   advancePublicChatProjectionMetadata,
   matchesSourceFreeProjectionScope,
   projectionCollectionChanges,
+  hasCanonicalPrivateMovementPredecessor,
   serverRuleset,
   configureServerRuleset,
   sphereGroundRadiusMeters,
@@ -1079,6 +1080,12 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
       sceneMoves.push({ sceneIndex, scene, canonical, movedIds, tokens });
     }
     if (pending.size) return null;
+    if (!sourceMoved && hasCanonicalPrivateMovementPredecessor(beforeProjection, beforeState, afterState, {
+      role: session.role, userId: session.userId, user: session.userId ? findUser(session.userId) : null,
+      visionSourceTokenId: session.visionSourceTokenId, trustedProjection: true,
+      isCanonicalData: assertCanonicalWorldState.isImmutableData,
+    })) return audienceStateFor(session, afterState, { movementCache: { beforeState, previousProjection: beforeProjection,
+      tokenIds: new Set([...movementTargets.values()].flatMap(ids => [...ids])) } });
     const source = sourceMoved ? describeVisionForToken(afterState, sourceId) : null;
     if (sourceMoved && !source) return null;
     // Perception-only or missing targets must use the full audience projection.

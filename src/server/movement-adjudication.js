@@ -2,6 +2,8 @@ import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
 import { INFINITE_HORROR_ACTOR_SYSTEM_VERSION } from '../rulesets/infinite-horror/actor.js';
 
 const movementDescribe = infiniteHorrorRuleset.movement.describe;
+const actorContract = infiniteHorrorRuleset.actor;
+const validateSystem = actorContract.validateSystem;
 const legacyActorFields = ['forms', 'currentFormId', 'runtime'];
 const plain = value => Boolean(value && typeof value === 'object' && !Array.isArray(value)
   && [Object.prototype, null].includes(Object.getPrototypeOf(value)));
@@ -11,8 +13,10 @@ const plain = value => Boolean(value && typeof value === 'object' && !Array.isAr
 // Reuse an already accepted immutable linked Actor for that descriptor alone;
 // effects, permissions, vision and final World validation keep their own paths.
 export function createServerMovementAdjudicationActorResolver({ isCanonicalData } = {}) {
+  const acceptedSystems = new WeakSet();
   return ({ world, token, ruleset } = {}) => {
     if (ruleset !== infiniteHorrorRuleset || ruleset.movement.describe !== movementDescribe
+      || ruleset.actor !== actorContract || ruleset.actor.validateSystem !== validateSystem
       || typeof isCanonicalData !== 'function' || world?.schemaVersion !== 4
       || world.ruleset?.id !== ruleset.id || world.ruleset?.version !== ruleset.version
       || token?.actorLink !== true || !Array.isArray(world.actors)) return null;
@@ -25,8 +29,14 @@ export function createServerMovementAdjudicationActorResolver({ isCanonicalData 
       const system = actor.system;
       if (!plain(system) || system.schemaVersion !== INFINITE_HORROR_ACTOR_SYSTEM_VERSION
         || !plain(system.runtime) || !Array.isArray(system.forms)
-        || system.runtime.movementCapabilities != null && !plain(system.runtime.movementCapabilities)
-        || ruleset.actor.validateSystem(system).length) return null;
+        || system.runtime.movementCapabilities != null && !plain(system.runtime.movementCapabilities)) return null;
+      // The canonical proof covers the complete system graph. Reuse only a
+      // successful validation of that exact immutable system and fixed contract;
+      // imports and Actor edits with a new system still validate normally.
+      if (!acceptedSystems.has(system)) {
+        if (ruleset.actor.validateSystem(system).length) return null;
+        acceptedSystems.add(system);
+      }
       return actor;
     } catch {
       // Qualification cannot suppress the original resolution/error behavior.

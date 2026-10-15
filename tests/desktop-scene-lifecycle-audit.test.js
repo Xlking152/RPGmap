@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import { validateSceneLifecycleOptions, lifecyclePersistentContent, assertLifecycleResetContent,
-  createLifecycleMapFixtures, clickDesktopConfirmation, desktopButtonPoint, assertLifecycleVersionPhysics } from '../scripts/desktop-scene-lifecycle-audit.mjs';
+  createLifecycleMapFixtures, lifecycleFixtureDirectory, clickDesktopConfirmation, desktopButtonPoint, assertLifecycleVersionPhysics } from '../scripts/desktop-scene-lifecycle-audit.mjs';
 import { createDefaultSceneSettings } from '../src/world/scene-defaults.js';
 import { normalizeFogState } from '../src/vision/fog.js';
 import { buildMapArchive, inspectMapArchive, mapFileHash } from '../src/packages/map-archive.js';
@@ -14,6 +14,15 @@ import { normalizeStatusDefinition } from '../src/status/model.js';
 const driver = await readFile(new URL('../scripts/desktop-browser-smoke.mjs',import.meta.url),'utf8');
 const helper = await readFile(new URL('../scripts/desktop-scene-lifecycle-audit.mjs',import.meta.url),'utf8');
 const options = {enabled:true,sceneAudit:true,reuseData:false,installer:null,legacyDirectory:null,prepareUpgradeFixture:false};
+
+test('supplemental fixture receipts stay isolated across source commits and input archives', () => {
+  const reference = { sourceCommit: 'a'.repeat(40), sourceArchiveSha256: 'b'.repeat(64) };
+  const first = lifecycleFixtureDirectory('evidence', reference);
+  assert.equal(lifecycleFixtureDirectory('evidence', reference), first);
+  assert.notEqual(lifecycleFixtureDirectory('evidence', { ...reference, sourceCommit: 'c'.repeat(40) }), first);
+  assert.notEqual(lifecycleFixtureDirectory('evidence', { ...reference, sourceArchiveSha256: 'd'.repeat(64) }), first);
+  assert.throws(() => lifecycleFixtureDirectory('evidence', { ...reference, sourceCommit: '../outside' }));
+});
 
 test('Lifecycle extension is explicit and cannot operate on reused, historical or upgrade data',()=>{
   assert.doesNotThrow(()=>validateSceneLifecycleOptions(options));
