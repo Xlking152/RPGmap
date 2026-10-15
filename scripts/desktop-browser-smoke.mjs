@@ -13,6 +13,7 @@ import { applyDocumentChanges } from '../src/documents/changes.js';
 import { OriginWebSocket } from './desktop-origin-websocket.mjs';
 import { createWorldWal, worldWalChecksum } from '../deployment/local-server/world-wal.mjs';
 import { applyWorldOperationPatch } from '../src/world/operations.js';
+import { runDesktopSceneLifecycleAudit, validateSceneLifecycleOptions } from './desktop-scene-lifecycle-audit.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const argumentsByName = new Map(process.argv.slice(2).map(argument => {
@@ -29,12 +30,14 @@ const legacyDirectory = argumentsByName.get('--legacy-directory') ? path.resolve
 const prepareUpgradeFixture = argumentsByName.has('--prepare-upgrade-fixture');
 const exerciseExistingInput = argumentsByName.has('--exercise-input');
 const sceneAudit = argumentsByName.has('--scene-audit');
+const sceneLifecycleAudit = argumentsByName.has('--scene-lifecycle-audit');
 const minimalMapFile = argumentsByName.get('--minimal-map') ? path.resolve(argumentsByName.get('--minimal-map')) : null;
 const expectedSource = argumentsByName.get('--expected-source') || process.env.RPGMAP_SMOKE_EXPECTED_SOURCE_COMMIT;
 if (installer && !reuseData && !mapFile) throw new Error('A running-application installer smoke requires --map to exercise a persisted World.');
 if (prepareUpgradeFixture && (reuseData || installer || legacyDirectory)) throw new Error('Upgrade preparation is a separate, normally closed fixture run.');
 if (sceneAudit && (!mapFile || !minimalMapFile || reuseData || prepareUpgradeFixture)) throw new Error('--scene-audit requires --map and --minimal-map in a new disposable World.');
 if (minimalMapFile && !sceneAudit) throw new Error('--minimal-map requires --scene-audit; it cannot be silently ignored.');
+validateSceneLifecycleOptions({ enabled: sceneLifecycleAudit, sceneAudit, reuseData, installer, legacyDirectory, prepareUpgradeFixture });
 if (!dataRoot.startsWith(`${path.join(root, 'artifact')}${path.sep}`)) throw new Error('Unsafe test data directory');
 async function resolvedDestination(file) {
   try { return await realpath(file); }
@@ -74,9 +77,10 @@ const minimalMapSha256 = minimalMapFile ? await sha256(minimalMapFile) : null;
 const installerSha256 = installer ? await sha256(installer) : null;
 const driverSha256 = await sha256(fileURLToPath(import.meta.url));
 const observerTransportSha256 = sceneAudit ? await sha256(fileURLToPath(new URL('./desktop-origin-websocket.mjs', import.meta.url))) : null;
+const lifecycleDriverSha256 = sceneLifecycleAudit ? await sha256(fileURLToPath(new URL('./desktop-scene-lifecycle-audit.mjs', import.meta.url))) : null;
 if (!reuseData) await rm(dataRoot, { recursive: true, force: true });
 await mkdir(evidenceRoot, { recursive: true });
-const mode = sceneAudit ? 'desktop-scene-audit' : prepareUpgradeFixture ? 'desktop-upgrade-fixture' : exerciseExistingInput ? 'desktop-upgraded-smoke' : legacyDirectory ? 'desktop-legacy-smoke' : reuseData ? 'desktop-reuse-smoke' : 'desktop-smoke';
+const mode = sceneLifecycleAudit ? 'desktop-scene-lifecycle-audit' : sceneAudit ? 'desktop-scene-audit' : prepareUpgradeFixture ? 'desktop-upgrade-fixture' : exerciseExistingInput ? 'desktop-upgraded-smoke' : legacyDirectory ? 'desktop-legacy-smoke' : reuseData ? 'desktop-reuse-smoke' : 'desktop-smoke';
 const recordFile = path.join(evidenceRoot, `${mode}.json`);
 await rm(recordFile, { force: true });
 const findings = [];
@@ -85,6 +89,7 @@ let debuggerClient;
 let logs = '';
 let runFailure = null;
 const browserExceptions = [];
+let lifecycleResult = null;
 
 async function delay(ms) { await new Promise(resolve => setTimeout(resolve, ms)); }
 async function eventually(work, { timeoutMs = 60000, intervalMs = 250 } = {}) {
@@ -731,6 +736,15 @@ try {
     if (sceneAudit) {
       sceneAuditResult = await checkScenes(worldId, minimalReference);
       await verifyRestartedScenes(worldId, sceneAuditResult);
+      if (sceneLifecycleAudit) lifecycleResult = await runDesktopSceneLifecycleAudit({
+        evaluate: expression => debuggerClient.evaluate(expression),
+        call: (method, parameters) => debuggerClient.call(method, parameters),
+        getSocket: () => debuggerClient.socket,
+        eventually, catalogue, durableWorld: sceneAuditDurableWorld, sceneContent: sceneAuditContent,
+        importMap: importAuditMap, closeDesktop, launch, createSceneObserver,
+        worldId, minimalMapFile, minimalMapSha256, sourceCommit: buildSource.commit,
+        evidenceRoot, dataRoot, findings, captureScreenshots, screenshotPrefix: mode,
+      });
     }
   }
   if (legacyDirectory) {
@@ -748,12 +762,12 @@ try {
   findings.push({ test: 'normal exit closes main process and server HTTP listener', passed: true });
   await launch();
   const recovered = await catalogue();
-  assert.equal(recovered.maps.length, reuseData ? initial.maps.length : sceneAudit ? 2 : mapFile ? 1 : 0);
+  assert.equal(recovered.maps.length, sceneLifecycleAudit ? lifecycleResult.expectedMapCount : reuseData ? initial.maps.length : sceneAudit ? 2 : mapFile ? 1 : 0);
   if (worldId) assert.equal(recovered.activeWorldId, worldId);
   findings.push({ test: 'process restart preserves imported package and active World', passed: true });
   await closeDesktop();
   assert.equal(browserExceptions.length, 0, 'Packaged map interaction must not emit unhandled Runtime exceptions');
-  await writeFile(recordFile, `${JSON.stringify({ outcome: 'passed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, observerTransportSha256, at: new Date().toISOString(), findings, limitations: ['This tests the packaged executable on the development Windows host, not a clean Windows VM.', 'Map import uses the official management API; native file chooser selection is not automated.', ...(sceneAudit ? ['Player synchronization is observed through an approved Node WebSocket, not a separate Player browser or VPN machine.', 'The two reset scopes and same-map ID with different package versions are not executed by this Scene audit.'] : []), ...(prepareUpgradeFixture ? ['This run prepares historical upgrade data; no Token drag or game-input acceptance is claimed.'] : [])] }, null, 2)}\n`);
+  await writeFile(recordFile, `${JSON.stringify({ outcome: 'passed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, sceneLifecycleAudit, lifecycleResult, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, observerTransportSha256, lifecycleDriverSha256, at: new Date().toISOString(), findings, limitations: ['This tests the packaged executable on the development Windows host, not a clean Windows VM.', 'Map import uses the official management API; native file chooser selection is not automated.', ...(sceneAudit ? ['Player synchronization is observed through an approved Node WebSocket, not a separate Player browser or VPN machine.', ...(!sceneLifecycleAudit ? ['The two reset scopes and same-map ID with different package versions are not executed by this Scene audit.'] : lifecycleResult.limitations)] : []), ...(prepareUpgradeFixture ? ['This run prepares historical upgrade data; no Token drag or game-input acceptance is claimed.'] : [])] }, null, 2)}\n`);
   console.log(JSON.stringify(findings, null, 2));
 } catch (error) {
   runFailure = error;
@@ -765,6 +779,6 @@ try {
   }
   debuggerClient?.close();
   child?.kill();
-  if (runFailure) await writeFile(recordFile, `${JSON.stringify({ outcome: 'failed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, observerTransportSha256, at: new Date().toISOString(), findings, error: runFailure.message.slice(0, 1000) }, null, 2)}\n`);
+  if (runFailure) await writeFile(recordFile, `${JSON.stringify({ outcome: 'failed', mode, executable, executableSha256, mapFile, mapSha256, minimalMapFile, minimalMapSha256, sceneAudit, sceneLifecycleAudit, lifecycleResult, reuseData, installer, installerSha256, buildSource, manifestSha256, driverSha256, observerTransportSha256, lifecycleDriverSha256, at: new Date().toISOString(), findings, error: runFailure.message.slice(0, 1000) }, null, 2)}\n`);
   await writeFile(path.join(evidenceRoot, `${mode}-process.log`), logs);
 }
