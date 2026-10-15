@@ -15,6 +15,7 @@ import { completeBrowserBenchmarkReport, finishBrowserBenchmarkReport } from './
 import { createBrowserBenchmarkFixture, BROWSER_BENCHMARK_ACTOR_COUNT as ACTOR_COUNT,
   BROWSER_BENCHMARK_TIMESTAMP } from './browser-benchmark-fixture.mjs';
 import { MapPackageStore } from '../deployment/local-server/package-store.mjs';
+import { browserBenchmarkLongTaskRecorder, startBrowserDiagnosticTrace, finishBrowserDiagnosticTraces } from './browser-benchmark-profile.mjs';
 
 if (process.platform !== 'win32') throw new Error('Browser performance benchmark requires Windows');
 
@@ -345,8 +346,11 @@ function validatePhase(phase) {
 
 const port = await reservePort();
 const mapDir = await mkdtemp(path.join(os.tmpdir(), 'rpgmap-browser-performance-world-'));
-const outputRoot = path.join(root, 'output', 'playwright', `v${packageJson.version}-seven-session`);
+const outputRoot = path.join(root, 'output', 'playwright', profileSessionIndex === null
+  ? `v${packageJson.version}-seven-session`
+  : `v${packageJson.version}-diagnostic-profile-${profileSessionIndex}-${Date.now()}`);
 await mkdir(outputRoot, { recursive: true });
+console.error(`[browser-benchmark] output: ${outputRoot}`);
 let server = null;
 let setupSocket = null;
 const sessions = [];
@@ -424,7 +428,13 @@ try {
     await new Promise(resolve => setTimeout(resolve, 1000));
     await Promise.all(sessions.map(session => session.resetDiagnostics()));
     const profiledSession = profileSessionIndex === null ? null : sessions[profileSessionIndex];
+    let diagnosticTraces = null;
     if (profiledSession) {
+      diagnosticTraces = await Promise.all(sessions.map(async session => ({
+        index: session.index, stop: await startBrowserDiagnosticTrace(session),
+      })));
+      await Promise.all(sessions.map(session => session.evaluate(
+        `(${browserBenchmarkLongTaskRecorder.toString()})('start', '${name}')`)));
       await profiledSession.send('Profiler.enable');
       await profiledSession.send('Profiler.setSamplingInterval', { interval: 1000 });
       await profiledSession.send('Profiler.start');
@@ -472,10 +482,17 @@ try {
     }
     await new Promise(resolve => setTimeout(resolve, 1000));
     if (profiledSession) {
+      const longTasks = await Promise.all(sessions.map(async session => ({ name: session.name,
+        ...(await session.evaluate(`(${browserBenchmarkLongTaskRecorder.toString()})('stop', '${name}')`)) })));
       const { profile } = await profiledSession.send('Profiler.stop');
       await writeFile(path.join(outputRoot, `${name}-browser-profile-${profileSessionIndex}.cpuprofile`),
         `${JSON.stringify(profile)}\n`, 'utf8');
       await profiledSession.send('Profiler.disable');
+      // The owning process waits for every stream before it can close windows.
+      await finishBrowserDiagnosticTraces(diagnosticTraces,
+        index => path.join(outputRoot, `${name}-browser-trace-${index}.trace.json`));
+      await writeFile(path.join(outputRoot, `${name}-native-long-tasks.json`),
+        `${JSON.stringify(longTasks, null, 2)}\n`, 'utf8');
     }
     const sceneMetrics = await gm.evaluate(`(() => {
       const world = document.querySelector('#app').rpgMapApp.world.get();
