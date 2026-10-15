@@ -6,7 +6,7 @@ RPGmap 是面向桌面跑团的自托管战术地图工具。当前开发版本�
 
 ## 快速开始
 
-Windows 候选交付目录按实际版本位于 `artifact/RPGmap-v<版本>-验收/`。RC.1、RC.2 的验收问题与证据已归档，RC.3 继续修正玩家角色面板读取及移动投影开销；是否通过全部验收，以实际产物及其报告为准，源码版本号不表示候选包已经生成。
+Windows 候选交付目录按实际版本位于 `artifact/RPGmap-v<版本>-验收/`。RC.3 安装器和独立地图已生成，1890 项自动测试与本机安装、多场景、重置及实际玩家切图通过。浏览器长任务超标项按用户要求暂缓，干净 Windows 和真实 VPN 多机尚未执行，因此仍是候选版本。各项结果见 [RC.3 验收记录](文档/验收记录/v3.0.0-rc.3.md) 及实际交付目录报告；RC.1、RC.2 的失败证据继续保留。
 
 1. 运行交付目录中的 `RPGmap-Setup-<版本>.exe` 安装，然后打开桌面 RPGmap 图标。无需系统 Node.js。
 2. 在管理首页导入随附的 `北宋兰州城-1.1.0.rpgmap`。
@@ -96,7 +96,7 @@ v2.1.5 增加 FVTT 风格的 Combat Turn Origin Ghost：每个回合开始时在
 
 v2.1.6 增加 Group Token Movement：多选 Token 只作为一次临时移动上下文，不创建 `TokenGroup` 或 Formation 文档。拖动已选 Token 时由该 Token 作为 leader，其他成员保持固定 `dx/dy`；路线只显示 leader，但每个成员沿平移后的同一 waypoint 路径独立校验，全部通过后才以一次 World commit 原子写入最终位置。Renderer 使用预置的只读视觉 waypoint 队列同步播放每个 Token 的平滑移动，并在规划阶段显示整组终点幻影。详细说明见 [v2.1.6 Group Token Movement](reference/V2.1.6-GROUP-TOKEN-MOVEMENT.md)。
 
-启动入口 `src/main.js` 只包含 World Manager bootstrap。选择 World/Scene 后才动态导入 `src/runtime/map-runtime.js`、Leaflet、地图 CSS、兰州逻辑与资源。
+生产入口 `src/hosted-main.js` 装配服务器管理与运行环境，进入 Scene 后按固定地图版本加载 Runtime 与资源。旧离线入口 `src/main.js` 保留源码兼容，不进入桌面生产载荷。
 
 ## 本地开发
 
