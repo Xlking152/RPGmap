@@ -13,6 +13,8 @@
 
 构建器读取根 `package.json` 的应用版本及精确 Electron/electron-builder 版本。`INSTALL-MANIFEST.json` 记录源提交、是否有工作区改动、工具版本和应用载荷校验；完整程序清单 `PROGRAM-FILES.txt` 用于卸载及更新清理。地图由独立导出脚本产生，不进入安装器。
 
+Electron 44 的 npm 包不自动下载运行库。`package:desktop` 会调用其内置安装入口，按锁定版本与校验信息准备运行库，干净检出后无需手工补文件；首次构建需要网络或已有运行库缓存。
+
 ## 服务进程接口
 
 主进程通过 Electron `utilityProcess.fork` 启动 ESM 服务，提供以下环境变量：

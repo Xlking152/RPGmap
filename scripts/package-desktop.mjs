@@ -21,6 +21,9 @@ await verifyDesktopStage(stage.stageRoot);
 if (stageOnly) {
   console.log(`桌面程序载荷已验证：${stage.stageRoot}`);
 } else {
+  // Electron 44 separates the npm package from its runtime download. Prepare
+  // that package's exact, checksum-verified runtime after a fresh npm ci.
+  execFileSync(process.execPath, [require.resolve('electron/install.js')], { cwd: root, stdio: 'inherit', windowsHide: true });
   const { build, Platform, Arch } = await import('electron-builder');
   const directoryOnly = process.argv.includes('--dir');
   const built = await build({
