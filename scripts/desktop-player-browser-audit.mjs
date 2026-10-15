@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { OriginWebSocket } from './desktop-origin-websocket.mjs';
 import { closeOwnedBrowser, rejectPendingCdp } from './owned-browser-close.mjs';
+import { preserveAuditFailureDuringCleanup } from './hosted-vision-commit.mjs';
 
 export function validatePlayerBrowserOptions({ enabled, sceneAudit, reuseData, installer, legacyDirectory, prepareUpgradeFixture }) {
   if (enabled && (!sceneAudit || reuseData || installer || legacyDirectory || prepareUpgradeFixture)) {
@@ -254,7 +255,7 @@ export async function createDesktopPlayerBrowserAudit(context) {
     const before=sceneContent(diskBefore.state.preferences.worldV2.scenes.find(scene=>scene.id===current.sceneId));
     const combatScope=playerProbeCombatScope(diskBefore.state,current.sceneId);
     let probe,move={outcome:'not_executed',reason:combatScope.reason,combatScope};
-    if(combatScope.allowed)try {
+    if(combatScope.allowed)await preserveAuditFailureDuringCleanup(async () => {
       probe=await gm(preparePlayerBrowserProbe,actorId,tokenId);
       await eventually(()=>player((api,id)=>Boolean(api?.tokens?.get(id)&&api.multiplayer.canControlToken(id)),tokenId));
       move=await player(movePlayerBrowserProbe,tokenId,probe.target);
@@ -263,9 +264,9 @@ export async function createDesktopPlayerBrowserAudit(context) {
       await eventually(async()=>{const disk=await durableWorld(worldId);const token=disk.state.preferences.worldV2.scenes.find(scene=>scene.id===probe.sceneId)?.tokens.find(token=>token.id===tokenId);
         assert.deepEqual(token&&{x:token.x,y:token.y},probe.target,'The actual Player command must be durable on the server');
         const gmToken=await gm((api,id)=>api.tokens.get(id),tokenId);assert.deepEqual({x:gmToken.x,y:gmToken.y},probe.target);return true;});
-    } finally {
+    }, async () => {
       await gm(async(api,id)=>{const sceneId=api.world.getActiveScene().id;if(api.tokens.get(id))await api.world.performOperations([{type:'token.delete',payload:{sceneId,tokenId:id}}],{source:'desktop-player-browser-probe-cleanup'});},tokenId);
-    }
+    });
     if(combatScope.allowed)await eventually(()=>player((api,id)=>{const status=api?.multiplayer?.getStatus();return status?.connected&&!status.resuming&&!status.applyingRemote&&status.pendingOperationCount===0&&!api.tokens.get(id);},tokenId));
     await eventually(async()=>{const disk=await durableWorld(worldId);if(Object.keys(disk.exploration?.jobs||{}).length)return false;
       assert.deepEqual(sceneContent(disk.state.preferences.worldV2.scenes.find(scene=>scene.id===current.sceneId)),before,'The disabled-vision probe must leave no persistent Scene changes');return true;});
