@@ -1,8 +1,10 @@
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-const failureDetails = (error, stage) => ({ stage, message: error?.message || String(error),
-  code: error?.code || null, stack: error?.stack || null, failedAt: new Date().toISOString() });
+const failureDetails = (error, stage, depth = 0) => ({ stage, message: error?.message || String(error),
+  code: error?.code || null, stack: error?.stack || null, failedAt: new Date().toISOString(),
+  ...(Array.isArray(error?.errors) && depth < 4
+    ? { errors: error.errors.map(child => failureDetails(child, stage, depth + 1)) } : {}) });
 
 // Persist completed ordinary measurements before a supplementary audit can
 // throw. A checkpoint records progress, never a passing acceptance result.

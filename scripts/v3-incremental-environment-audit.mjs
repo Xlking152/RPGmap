@@ -1,8 +1,15 @@
-import { captureCommittedVisionRevision, matchesCommittedRuinsFeedback } from './ruins-browser-smoke.mjs';
+import { matchesCommittedRuinsFeedback } from './ruins-browser-smoke.mjs';
+import { captureHostedCommittedVisionRevision, preserveAuditFailureDuringCleanup,
+  serializeAuditError, restoreAuditError } from './hosted-vision-commit.mjs';
 
 /** Supplementary real UI measurements; ordinary browser gates remain unchanged. */
 export async function runIncrementalEnvironmentAudit(evaluate) {
-  return evaluate(`(${environmentAudit.toString()})((${captureCommittedVisionRevision.toString()}),(${matchesCommittedRuinsFeedback.toString()}),(${incrementalEnvironmentRestoreOperations.toString()}))`, 180_000);
+  const result = await evaluate(`(async () => {
+    try { return { ok: true, value: await (${environmentAudit.toString()})((${captureHostedCommittedVisionRevision.toString()}),(${matchesCommittedRuinsFeedback.toString()}),(${incrementalEnvironmentRestoreOperations.toString()}),(${preserveAuditFailureDuringCleanup.toString()})) }; }
+    catch (error) { return { ok: false, error: (${serializeAuditError.toString()})(error) }; }
+  })()`, 180_000);
+  if (result?.ok !== true) throw restoreAuditError(result?.error || { message: 'Environment audit returned no result' });
+  return result.value;
 }
 
 export function incrementalEnvironmentRestoreOperations(original, scene) {
@@ -17,7 +24,7 @@ export function incrementalEnvironmentRestoreOperations(original, scene) {
   ];
 }
 
-async function environmentAudit(captureRevision, matchesFeedback, restoreOperations) {
+async function environmentAudit(captureRevision, matchesFeedback, restoreOperations, withCleanup) {
   const api = document.querySelector('#app').rpgMapApp;
   const check = (condition, message) => { if (!condition) throw new Error(message); };
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -26,6 +33,12 @@ async function environmentAudit(captureRevision, matchesFeedback, restoreOperati
   const sourceId = original.sourceId || original.scene.tokens.find(token => token.placement === 'map')?.id;
   original.token = api.tokens.get(sourceId); check(original.token, 'Incremental audit requires an existing Token');
   const sceneId = original.scene.id;
+  const contextIdentity = () => {
+    const world = api.world.get();
+    return JSON.stringify([world.id, world.activeSceneId, api.mapPackage.id, api.mapPackage.version,
+      api.mapPackage.fingerprint, api.ruleset.id, api.ruleset.version]);
+  };
+  const expectedContext = contextIdentity();
   const door = api.mapPackage.features.find(feature => feature.interaction?.openable || feature.capabilities?.openable
     || feature.interaction?.actions?.includes?.('open') || feature.type === 'door' || feature.subtype === 'gate');
   check(door, 'Incremental audit requires a map-declared door');
@@ -46,8 +59,12 @@ async function environmentAudit(captureRevision, matchesFeedback, restoreOperati
   const feedback = async (revision, started) => {
     const deadline = performance.now() + 15_000;
     while (performance.now() < deadline) {
+      check(contextIdentity() === expectedContext && api.vision.getSource() === sourceId,
+        'Incremental audit World/Scene/map/rules/source context changed');
       const frame = api.vision.getFeedbackState();
-      if (matchesFeedback(frame, revision, started, observation)) return frame;
+      if (matchesFeedback(frame, revision, started, observation) && frame.source?.tokenId === sourceId
+        && frame.source?.lineOfSightEnabled === true && frame.source?.preciseRangeMeters === 1000
+        && frame.source?.vagueRangeMeters === 1000) return frame;
       await wait(8);
     }
     throw new Error('Incremental environment mask did not follow its authority revision');
@@ -56,7 +73,7 @@ async function environmentAudit(captureRevision, matchesFeedback, restoreOperati
     const sorted = [...values].sort((a, b) => a - b);
     return { count: sorted.length, p50Ms: sorted[Math.ceil(sorted.length * .5) - 1], p95Ms: sorted[Math.ceil(sorted.length * .95) - 1] };
   };
-  try {
+  return withCleanup(async () => {
     const started = performance.now();
     const setup = await captureRevision(api, 'v3-audit:setup', () => api.world.performOperations([
       { type: 'token.upsert', payload: { sceneId, token: { ...original.token, ...observation,
@@ -73,7 +90,8 @@ async function environmentAudit(captureRevision, matchesFeedback, restoreOperati
       check(committed.value?.ok !== false, `${kind} operation was rejected`);
       const frame = await feedback(committed.revision, start), feedbackMs = performance.now() - start;
       const placement = api.inspectTokenPlacement(sourceId, observation);
-      samples.push({ kind, commitMs, feedbackMs, revision: committed.revision, renderedRevision: frame.stateRevision,
+      samples.push({ kind, commitMs, feedbackMs, operationId: committed.operationId,
+        serverRevision: committed.serverRevision, revision: committed.revision, renderedRevision: frame.stateRevision,
         requestedAt: frame.requestedAt, observationCollisionValid: placement.valid, before,
         after: { renderer: api.getSceneRenderDiagnostics(), geometry: api.getOcclusionGeometryCacheDiagnostics(), pipeline: api.diagnostics.snapshot() } });
     };
@@ -100,10 +118,10 @@ async function environmentAudit(captureRevision, matchesFeedback, restoreOperati
           pipeline: records.at(-1).after.pipeline.metrics }];
       })), scope: 'Real Document commits and matching 1000 m displayed masks. Renderer/geometry snapshots and opt-in navigation/Vision calculation counters are cumulative; before/after are provided for exact deltas. No new performance threshold replaces existing browser gates.' };
     return report;
-  } finally {
+  }, async () => {
     await api.world.performOperations(restoreOperations(original, api.world.getActiveScene()),
       { source: 'v3-audit:cleanup' });
     await api.vision.setSource(original.sourceId); api.map.setView(original.center, original.zoom, { animate: false });
     api.diagnostics.setEnabled(original.diagnosticsEnabled);
-  }
+  });
 }

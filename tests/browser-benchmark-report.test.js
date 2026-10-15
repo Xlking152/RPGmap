@@ -65,3 +65,18 @@ test('final acceptance and session failures overwrite only report status while p
   const unchecked = await finishBrowserBenchmarkReport(directory, measured);
   assert.equal(unchecked.measurementStatus, 'measurements-complete');
 });
+
+test('audit and cleanup errors both survive serialization without replacing completed browser measurements', async t => {
+  const directory = await output(t), measured = measurements();
+  const primary = Object.assign(new Error('No acknowledged Document commit'), { code: 'audit_commit_unproven' });
+  const cleanup = Object.assign(new Error('Cleanup refused'), { code: 'revision_conflict' });
+  const error = new AggregateError([primary, cleanup], 'Audit and cleanup both failed');
+  await assert.rejects(completeBrowserBenchmarkReport(directory, measured,
+    { runAudit: async () => { throw error; } }), value => value === error);
+  const report = await json(directory, 'report.json');
+  assert.equal(report.measurementStatus, 'failed');
+  assert.deepEqual(report.failure.errors.map(child => [child.message, child.code]),
+    [[primary.message, primary.code], [cleanup.message, cleanup.code]]);
+  assert.deepEqual(report.phases, measured.phases);
+  assert.deepEqual(report.recovery, measured.recovery);
+});
