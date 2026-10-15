@@ -20,6 +20,14 @@ export function validateSceneLifecycleOptions({ enabled, sceneAudit, reuseData, 
 export function lifecyclePersistentContent(state) {
   const world = structuredClone(state.preferences.worldV2);
   delete world.updatedAt;
+  // normalizeStatusDefinition defines an omitted defaultDuration and null as
+  // the same absent duration. Hosted projections may omit this optional null.
+  // Canonicalize only that missing field on the detached comparison value;
+  // retain numeric durations, invalid values and every other field verbatim.
+  if (Array.isArray(world.statusDefinitions)) for (const definition of world.statusDefinitions) {
+    if (definition && typeof definition === 'object' && !Array.isArray(definition)
+      && !Object.hasOwn(definition, 'defaultDuration')) definition.defaultDuration = null;
+  }
   return { world, chatSystem: structuredClone(state.preferences.chatSystem), combatSystem: structuredClone(state.preferences.combatSystem) };
 }
 

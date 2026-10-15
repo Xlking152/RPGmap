@@ -9,6 +9,7 @@ import { normalizeFogState } from '../src/vision/fog.js';
 import { buildMapArchive, inspectMapArchive, mapFileHash } from '../src/packages/map-archive.js';
 import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 import { inspectContentPackage } from '../deployment/local-server/package-inspection.mjs';
+import { normalizeStatusDefinition } from '../src/status/model.js';
 
 const driver = await readFile(new URL('../scripts/desktop-browser-smoke.mjs',import.meta.url),'utf8');
 const helper = await readFile(new URL('../scripts/desktop-scene-lifecycle-audit.mjs',import.meta.url),'utf8');
@@ -77,6 +78,38 @@ test('Full recovery comparison includes every Scene, Actor, Journal, chat and co
   const detached=lifecyclePersistentContent(before);detached.world.actors[0].privateState.hp=99;
   assert.equal(before.preferences.worldV2.actors[0].privateState.hp,7);
   assert.match(helper,/assert\.deepEqual\(lifecyclePersistentContent\(final\.state\), beforeUninstallRestart/);
+});
+
+test('Lifecycle comparison equates only omitted status-definition defaultDuration with the contractual null duration',()=>{
+  const definition={id:'status-native-audit',name:'验收状态',scopes:['actor'],description:'preserve all fields',customMetadata:{version:1}};
+  const normalizedMissing=normalizeStatusDefinition(definition);
+  const normalizedNull=normalizeStatusDefinition({...definition,defaultDuration:null});
+  assert.equal(normalizedMissing.defaultDuration,null);
+  assert.deepEqual(normalizedMissing,normalizedNull,'The official status contract gives omitted and null duration the same meaning');
+  const duration={unit:'turns',value:3};
+  assert.deepEqual(normalizeStatusDefinition({...definition,defaultDuration:duration}).defaultDuration,duration);
+  const omitted=state();omitted.preferences.worldV2.statusDefinitions=[structuredClone(definition)];
+  const explicit=structuredClone(omitted);explicit.preferences.worldV2.statusDefinitions[0].defaultDuration=null;
+  const untouched=structuredClone(omitted);
+  assert.deepEqual(lifecyclePersistentContent(omitted),lifecyclePersistentContent(explicit));
+  assert.deepEqual(omitted,untouched,'Comparison canonicalization must not mutate source state');
+  assert.equal(Object.hasOwn(omitted.preferences.worldV2.statusDefinitions[0],'defaultDuration'),false);
+  for(const value of [duration,{unit:'turns',value:4},{unit:'rounds',value:3},0,'',{},undefined]){
+    const changed=structuredClone(explicit);changed.preferences.worldV2.statusDefinitions[0].defaultDuration=value;
+    assert.notDeepEqual(lifecyclePersistentContent(changed),lifecyclePersistentContent(explicit),'Numeric, structured or invalid explicit durations must remain distinguishable');
+  }
+  for(const mutate of [
+    value=>{value.preferences.worldV2.statusDefinitions[0].description='changed';},
+    value=>{value.preferences.worldV2.statusDefinitions[0].customMetadata.version=2;},
+    value=>{value.preferences.worldV2.statusDefinitions[0].optionalOtherField=null;},
+    value=>{value.preferences.worldV2.actors[0].defaultDuration=null;},
+    value=>{value.preferences.worldV2.scenes[0].defaultDuration=null;},
+    value=>{value.preferences.chatSystem.defaultDuration=null;},
+    value=>{value.preferences.combatSystem.defaultDuration=null;},
+  ]){
+    const changed=structuredClone(explicit);mutate(changed);
+    assert.notDeepEqual(lifecyclePersistentContent(changed),lifecyclePersistentContent(explicit),'Every field outside this single optional status-definition duration must stay strict');
+  }
 });
 
 test('Supplemental same-ID map fixtures retain the original archive and record distinct content, exact versions and frozen source provenance',()=>{
