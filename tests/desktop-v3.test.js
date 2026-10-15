@@ -222,6 +222,52 @@ test('desktop stage checksum catches modified program payloads', async () => {
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test('desktop stage binds server VERSION, desktop version and every persistence contract to its manifest', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rpgmap-desktop-contract-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = { app: 'RPGmap', version: '3.0.0', releaseTag: 'v3.0.0', commit: 'a'.repeat(40),
+    worldSchema: 4, operationSchema: 4, statusSchema: 4, accessSchema: 4, occlusionSchema: 1, mapArchiveFormat: 1 };
+  const writeStage = async ({ declared = source, server = declared, appVersion = '3.0.0' } = {}) => {
+    const payload = {
+      'application/package.json': JSON.stringify({ version: appVersion, main: 'desktop/main.cjs' }),
+      'application/desktop/main.cjs': 'module.exports = {};',
+      'application/desktop/preload.cjs': 'module.exports = {};',
+      'resources/app/index.html': '<!doctype html><title>RPGmap</title>',
+      'resources/server/server.mjs': 'export const server = true;',
+      'resources/server/exploration-worker.mjs': 'export const worker = true;',
+      'resources/server/VERSION.json': JSON.stringify(server),
+    };
+    const files = {};
+    for (const [file, text] of Object.entries(payload)) {
+      const bytes = Buffer.from(text), target = path.join(directory, ...file.split('/'));
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, bytes);
+      files[file] = { bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+    }
+    await writeFile(path.join(directory, 'INSTALL-MANIFEST.json'), JSON.stringify({
+      format: 1, appId: 'org.rpgmap.desktop', version: '3.0.0', source: declared, files,
+    }));
+  };
+  await writeStage();
+  assert.equal((await verifyDesktopStage(directory)).version, '3.0.0');
+  await writeStage({ server: { ...source, commit: 'b'.repeat(40) } });
+  await assert.rejects(verifyDesktopStage(directory), /VERSION.*源身份不一致/);
+  for (const schema of ['worldSchema', 'operationSchema', 'statusSchema', 'accessSchema']) {
+    await writeStage({ declared: { ...source, [schema]: 3 } });
+    await assert.rejects(verifyDesktopStage(directory), new RegExp(`${schema} 必须为 4`));
+  }
+  for (const format of ['occlusionSchema', 'mapArchiveFormat']) {
+    await writeStage({ declared: { ...source, [format]: 2 } });
+    await assert.rejects(verifyDesktopStage(directory), /契约格式错误/);
+  }
+  await writeStage({ declared: { ...source, version: '3.0.1' } });
+  await assert.rejects(verifyDesktopStage(directory), /版本或标签/);
+  await writeStage({ declared: { ...source, releaseTag: 'v3.0.0-rc.3' } });
+  await assert.rejects(verifyDesktopStage(directory), /版本或标签/);
+  await writeStage({ appVersion: '3.0.0-rc.3' });
+  await assert.rejects(verifyDesktopStage(directory), /桌面应用版本/);
+});
+
 test('installer retains user data and uses a stable per-user identity', () => {
   const configuration = require('../desktop/builder.config.cjs');
   assert.equal(configuration.appId, 'org.rpgmap.desktop');

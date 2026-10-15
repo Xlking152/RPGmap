@@ -3,17 +3,18 @@ import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { inflateRawSync } from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { worldWalChecksum } from '../deployment/local-server/world-wal.mjs';
 import { withinMillisecondsBudget } from './performance-budget.mjs';
+import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const execFileAsync = promisify(execFile);
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const requiredChecks = ['tests', 'build', 'bundle', 'package', 'benchmark', 'lanBenchmark', 'chrome'];
 const v254Commit = 'ed7e13baab0f116222333c20431e19ab63b60e37';
+const v255Commit = '9fdcbc09e0ae1bd992ce02e0aad1b79dbd544dd5';
 const committedVisionSources = new Map();
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -72,53 +73,9 @@ export async function visionSourceAtCommit(sourceRoot, commit) {
   return structuredClone(await committedVisionSources.get(key));
 }
 
-// Read the candidate itself rather than trusting a second manually supplied
-// fingerprint. Local packages are ordinary, single-disk ZIP32 archives.
-function archiveBuild(archive, version) {
-  let end = archive.length - 22;
-  for (; end >= Math.max(0, archive.length - 65_557); end--) {
-    if (archive.readUInt32LE(end) === 0x06054b50 && end + 22 + archive.readUInt16LE(end + 20) === archive.length) break;
-  }
-  requireCondition(end >= 0 && archive.readUInt32LE(end) === 0x06054b50, 'Candidate ZIP directory missing');
-  const entries = archive.readUInt16LE(end + 10), offset = archive.readUInt32LE(end + 16);
-  requireCondition(archive.readUInt32LE(end + 4) === 0 && archive.readUInt16LE(end + 8) === entries
-    && entries !== 0xffff && offset !== 0xffffffff, 'Candidate ZIP must be a single-disk ZIP32 archive');
-  const prefix = `RPGmap-v${version}/`, files = new Map();
-  let cursor = offset, totalBytes = 0;
-  for (let index = 0; index < entries; index++) {
-    requireCondition(cursor + 46 <= end && archive.readUInt32LE(cursor) === 0x02014b50, 'Candidate ZIP directory invalid');
-    const flags = archive.readUInt16LE(cursor + 8), method = archive.readUInt16LE(cursor + 10);
-    const compressed = archive.readUInt32LE(cursor + 20), size = archive.readUInt32LE(cursor + 24);
-    const nameLength = archive.readUInt16LE(cursor + 28), extraLength = archive.readUInt16LE(cursor + 30);
-    const commentLength = archive.readUInt16LE(cursor + 32), local = archive.readUInt32LE(cursor + 42);
-    requireCondition(cursor + 46 + nameLength + extraLength + commentLength <= end, 'Candidate ZIP directory truncated');
-    const name = archive.subarray(cursor + 46, cursor + 46 + nameLength).toString('utf8');
-    cursor += 46 + nameLength + extraLength + commentLength;
-    requireCondition(name.startsWith(prefix) && !name.includes('\\') && !name.split('/').includes('..'), 'Candidate ZIP entry outside package');
-    if (name.endsWith('/')) continue;
-    const relative = name.slice(prefix.length);
-    requireCondition(!relative.startsWith('素材库/'), 'Release must not contain the complete ruins authoring library');
-    requireCondition(!files.has(relative), 'Candidate ZIP contains duplicate entries');
-    requireCondition(!(flags & 1) && [0, 8].includes(method) && size <= 32 * 1024 * 1024
-      && (totalBytes += size) <= 128 * 1024 * 1024, 'Candidate ZIP entry is unsupported or too large');
-    requireCondition(local + 30 <= offset && archive.readUInt32LE(local) === 0x04034b50, 'Candidate ZIP entry header invalid');
-    const start = local + 30 + archive.readUInt16LE(local + 26) + archive.readUInt16LE(local + 28);
-    requireCondition(start + compressed <= offset, 'Candidate ZIP entry truncated');
-    const content = method === 8 ? inflateRawSync(archive.subarray(start, start + compressed), { maxOutputLength: size + 1 })
-      : archive.subarray(start, start + compressed);
-    requireCondition(content.length === size, 'Candidate ZIP entry size mismatch');
-    files.set(relative, content);
-  }
-  requireCondition(files.has('VERSION.json') && files.has('server.mjs') && files.has('app/index.html'), 'Candidate ZIP build files missing');
-  const metadata = JSON.parse(files.get('VERSION.json').toString('utf8'));
-  const fileHashes = Object.fromEntries([...files.keys()].filter(file => (file.endsWith('.mjs') && !file.includes('/'))
-    || file.startsWith('app/')).sort().map(file => [file, sha256(files.get(file))]));
-  return { metadata, fileHashes };
-}
-
 function requireBuild(report, build, version, name) {
   requireCondition(report.version === version, `${name} report version mismatch`);
-  equal(report.build, build, `${name} report build fingerprint does not match the ZIP`);
+  equal(report.build, build, `${name} report build fingerprint does not match the measured runtime`);
 }
 function requireRasterSource(report, candidate, validation, name) {
   requireCondition(report?.version === validation.version && report.sourceCommit === validation.commit
@@ -732,8 +689,12 @@ async function vision(baseline, candidate, validation, sourceRoot, needsRuinsEvi
     'Vision source fingerprint missing');
   requireCondition(candidate.sourceHashEncoding === 'utf8-lf' && baseline.sourceHashEncoding === 'utf8-lf',
     'Vision source fingerprint encoding missing');
-  if (needsRuinsEvidence) requireCondition(validation.baselineCommit === v254Commit && baseline.version === '2.5.4',
-    'Vision ruins baseline must be the released v2.5.4 commit');
+  if (needsRuinsEvidence) {
+    const desktop = Number(validation.version.split('.')[0]) >= 3;
+    const expected = desktop ? { commit: v255Commit, version: '2.5.5' } : { commit: v254Commit, version: '2.5.4' };
+    requireCondition(validation.baselineCommit === expected.commit && baseline.version === expected.version,
+      `Vision ruins baseline must be the released v${expected.version} commit`);
+  }
   const committedBaseline = await visionSourceAtCommit(sourceRoot, validation.baselineCommit);
   requireCondition(baseline.version === committedBaseline.version, 'Vision baseline version mismatch');
   equal(Object.keys(baseline.sourceFileHashes).sort(), Object.keys(committedBaseline.sourceFileHashes).sort(),
@@ -764,12 +725,12 @@ async function vision(baseline, candidate, validation, sourceRoot, needsRuinsEvi
   requireCondition(candidate.sweep.medianMs <= baseline.sweep.medianMs, '425 metre historical exploration regressed');
 }
 
-export async function verifyLocalValidation({ directory, version, commit, sourceRoot = projectRoot }) {
+export async function verifyPerformanceEvidence({ directory, version, commit, packageRoot, sourceRoot = projectRoot }) {
   if (!/^\d+\.\d+\.\d+$/.test(version || '') || !/^[a-f0-9]{40}$/.test(commit || '')) {
-    throw new Error('Expected candidate directory, version and full commit');
+    throw new Error('Expected evidence directory, version and full commit');
   }
-  const validation = JSON.parse(await readFile(path.join(directory, 'local-validation.json'), 'utf8'));
-  if (validation.version !== version || validation.commit !== commit) throw new Error('Local validation source mismatch');
+  const validation = JSON.parse(await readFile(path.join(directory, 'performance-evidence.json'), 'utf8'));
+  if (validation.version !== version || validation.commit !== commit) throw new Error('Performance evidence source mismatch');
   const [major, minor, patch] = version.split('.').map(Number);
   const needsEvidence = major > 2 || (major === 2 && (minor > 5 || (minor === 5 && patch >= 4)));
   const needsRuinsEvidence = major > 2 || (major === 2 && (minor > 5 || (minor === 5 && patch >= 5)));
@@ -785,14 +746,16 @@ export async function verifyLocalValidation({ directory, version, commit, source
       requireCondition(validation.checks?.[check] === 'deferred', `Deferred multiplayer check mislabeled: ${check}`);
   }
   for (const check of checks) {
-    if (validation.checks?.[check] !== 'passed') throw new Error(`Local check missing: ${check}`);
+    if (validation.checks?.[check] !== 'passed') throw new Error(`Performance check missing: ${check}`);
   }
-  const archive = await readFile(path.join(directory, `RPGmap-v${version}.zip`));
-  if (sha256(archive) !== validation.sha256) throw new Error('Validated ZIP checksum mismatch');
-  if (!needsEvidence) return;
-  const build = archiveBuild(archive, version);
+  requireCondition(typeof packageRoot === 'string' && packageRoot.length > 0, 'Measured runtime directory missing');
+  // Read the actual backend and browser payload used by the benchmarks. The
+  // installer and content archives have their own desktop/package validators;
+  // performance reports must bind to these complete measured runtime bytes.
+  const build = await benchmarkBuildInfo(sourceRoot, path.resolve(packageRoot));
   requireCondition(build.metadata.version === version && build.metadata.releaseTag === `v${version}`
-    && build.metadata.commit === commit, 'Candidate ZIP source mismatch');
+    && build.metadata.commit === commit, 'Measured runtime source mismatch');
+  if (!needsEvidence) return;
   const readEvidence = async (file, name) => {
     requireCondition(typeof file === 'string' && file.length > 0 && !path.isAbsolute(file) && !/^[a-z]:/i.test(file)
       && !file.split(/[\\/]/).includes('..'), `${name} evidence file missing or outside candidate`);
@@ -804,7 +767,7 @@ export async function verifyLocalValidation({ directory, version, commit, source
   }
   const smoke = await readEvidence(validation.evidence?.chromeSmoke, 'Chrome smoke');
   // Older v2.5.4 release evidence predates this package binding. New ruins
-  // releases must prove that their complete feature smoke used this exact ZIP.
+  // releases must prove that their complete feature smoke used this exact measured runtime.
   if (needsRuinsEvidence || smoke.build || smoke.version) requireBuild(smoke, build, version, 'Chrome smoke');
   chromeSmoke(smoke);
   const evidence = validation.evidence?.visionBenchmark;
@@ -833,10 +796,4 @@ export async function verifyLocalValidation({ directory, version, commit, source
   dependencyAudit(await readEvidence(auditEvidence?.production, 'production dependency audit'), 'Production');
   await vision(await readEvidence(evidence?.baseline, 'vision baseline'), candidateVision || await readEvidence(evidence?.candidate, 'vision candidate'),
     validation, sourceRoot, needsRuinsEvidence);
-}
-
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [directory, version, commit] = process.argv.slice(2);
-  await verifyLocalValidation({ directory, version, commit });
-  console.log('Local validation source, checks, raw performance evidence and ZIP fingerprint verified');
 }

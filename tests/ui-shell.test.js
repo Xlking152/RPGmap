@@ -18,8 +18,8 @@ const sceneRenderer = readFileSync(new URL('../src/render/scene-renderer.js', im
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const indexSource = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const viteSource = readFileSync(new URL('../vite.config.js', import.meta.url), 'utf8');
-const packageSource = readFileSync(new URL('../scripts/package-local-server.mjs', import.meta.url), 'utf8');
-const packageVerifierSource = readFileSync(new URL('../scripts/verify-package.mjs', import.meta.url), 'utf8');
+const packageSource = readFileSync(new URL('../scripts/build-desktop-runtime.mjs', import.meta.url), 'utf8');
+const packageVerifierSource = readFileSync(new URL('../scripts/verify-desktop-package.mjs', import.meta.url), 'utf8');
 const browserSmokeSource = readFileSync(new URL('../scripts/browser-smoke.mjs', import.meta.url), 'utf8');
 
 test('application entry boots the Character-free World/Scene Token runtime', () => {
@@ -67,8 +67,8 @@ test('production registry loads the installed map catalogue and keeps the runtim
   assert.doesNotMatch(viteSource, /chunkSizeWarningLimit/);
   assert.match(viteSource, /manifest: true/);
   assert.match(packageSource, /worldSchema: 4/);
-  assert.match(packageVerifierSource, /version\.worldSchema !== 4/);
-  assert.match(packageVerifierSource, /manifest\[key\]\?\.name === 'map-runtime-core'/);
+  assert.match(packageVerifierSource, /JSON\.stringify\(present\) !== JSON\.stringify\(Object\.keys\(manifest\.files\)\.sort\(\)\)/);
+  assert.match(packageVerifierSource, /sha256\(bytes\) !== record\.sha256/);
   assert.match(browserSmokeSource, /value\.rulesetId === 'infinite-horror'/);
   assert.match(browserSmokeSource, /manifest\[key\]\?\.name === 'map-runtime-core'/);
   assert.doesNotMatch(browserSmokeSource, /assets\\\/ruleset-/);

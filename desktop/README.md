@@ -6,7 +6,7 @@
 
 - `node scripts/package-desktop.mjs --stage-only`：构建并校验桌面程序载荷。
 - `node scripts/package-desktop.mjs --dir`：生成可运行的桌面程序目录。
-- `node scripts/package-desktop.mjs`：构建 Windows x64 NSIS 安装器，放入版本化验收目录。
+- `node scripts/package-desktop.mjs`：构建 Windows x64 NSIS 安装器，放入 artifact/desktop/；独立地图导出到 artifact/content-packages/。
 - `node scripts/verify-desktop-package.mjs --installed=artifact/desktop/win-unpacked`：核对静态载荷、ASAR、资源白名单与全部哈希。
 - `powershell -NoProfile -File scripts/desktop-installer-smoke.ps1`：在隔离的 `artifact/` 目录实际执行安装、同版本升级、卸载和重装，记录证据。检测到其他安装位置时拒绝运行。
 - `node scripts/desktop-browser-smoke.mjs --reuse-data --screenshots`：显示测试窗口并保存管理首页、游戏截图；默认测试使用隐藏窗口，不依赖截图接口。
@@ -42,4 +42,10 @@ NSIS 更新仅按旧程序的 `PROGRAM-FILES.txt` 删除程序文件，并先完
 
 每次启动先根据安装清单校验前端、服务端与桌面壳的 SHA-256；不完整的程序不会启动服务或写入游戏状态。窗口和管理 API 就绪后才更新 `UserData/config/last-successful-program.json`。更新中断后可使用完整的旧程序恢复目录或重新运行安装器；首版尚不自动回滚 NSIS 文件替换，也没有将同版本覆盖测试作为跨版本或中断测试的证据。
 
-正式验收还需要在独立 Windows 环境运行安装器、升级、中断、卸载重装和 LAN 场景。目录构建和单元测试不等于这些安装行为已经通过。
+本机安装、覆盖升级、卸载重装与独立浏览器玩家主流程已有候选基线验证；干净 Windows、真实安装中断和 VPN 多机未执行。正式构建须针对实际产物另行检查，不能用目录构建或单元测试替代安装行为。当前验证边界见 [CHANGELOG](../CHANGELOG.md)。
+
+## 正式发布
+
+Release 仅提供安装器、独立兰州地图、SHA256SUMS.txt 和使用说明.md。node scripts/desktop-release.mjs assemble 汇总正式文件并写冻结凭据，verify 校验清单、源提交和载荷；构建记录保留在 artifact/，不作为下载资产。完整参数见[开发与制图说明](../文档/RPGmap-v3.0.0-开发与制图说明.md)。
+
+程序包不复制 maps/、素材库、测试、候选报告或用户存档。正式发布使用验收后的相同字节，不能在上传前重新构建或改名复用 RC 安装器。

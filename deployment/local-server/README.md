@@ -1,12 +1,11 @@
-# RPGmap Windows 本机 / 局域网运行时
+# RPGmap 后台服务
 
-这是 Windows 发布包的唯一启动入口。双击 `start-rpgmap.bat`；启动器会启动服务器、使用系统默认浏览器打开 GM 页面，并显示 Local URL、LAN URL、Join Code 与 GM Secret。
+本目录提供桌面启动器复用的 HTTP/WebSocket 服务、World/WAL 持久化、权限投影、内容包注册、管理接口和旧数据迁移。正式用户从桌面 RPGmap 图标启动，不使用旧服务器 ZIP 或 BAT。
 
-- 把 LAN URL 与 Join Code 发给 Player；GM Secret 只由 GM 保留。
-- 数据保存在 `map/world.json` 与 `map/users.json`；写入前会生成滚动备份到 `map/backups/`。
-- JSON 损坏时服务会隔离文件并停止，避免空状态覆盖原存档。
-- 不支持 Internet/Public、Quick Tunnel 或 cloudflared。
+桌面壳通过 Electron utilityProcess 管理服务生命周期，并提供独立 UserData 路径、前端资源路径与受限管理凭据。服务和浏览器按已安装地图的精确 ID、版本和指纹加载同一物理地图；没有内置兰州或仅边界降级图。
 
-完整操作、权限与故障排查请打开 `docs/OPERATION-GUIDE.md`。
+World、权限、WAL、地图/规则、上传和备份属于用户数据，不进入程序包或源码。启动器退出先停止新写入、完成持久化再停服；网页无任意文件系统权限。
 
-源码仓库中的 `reference/` 不会复制进发布 ZIP；默认兰州地图已经编译到 `app/` 的动态 chunk 与 assets 中。运行时根目录由 package verifier 严格限制，除 `map/uploads/`、`map/backups/` 外不应增加临时或开发文件。
+- [桌面与服务契约](../../desktop/README.md)
+- [用户操作](../../文档/操作指南.md)
+- [架构与构建](../../文档/RPGmap-v3.0.0-开发与制图说明.md)

@@ -8,8 +8,7 @@ import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const option = process.argv.indexOf('--out');
 if (option >= 0 && !process.argv[option + 1]) throw new Error('--out requires a directory');
-const { version: applicationVersion } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
-const output = path.resolve(option >= 0 ? process.argv[option + 1] : path.join(root, 'release', `RPGmap-v${applicationVersion}-验收`));
+const output = path.resolve(option >= 0 ? process.argv[option + 1] : path.join(root, 'artifact', 'content-packages'));
 await mkdir(output, { recursive: true });
 let sourceCommit = 'uncommitted';
 try { sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(); } catch {}
@@ -52,7 +51,9 @@ assets.set('README.md', Buffer.from('北宋兰州城：v2.5.5 的 1.1.0 地图�
 
 const packages = [
   { filename: `北宋兰州城-${data.version}.rpgmap`, data, svg, assets },
-  { filename: '验收附件/最小测试地图-1.2.0.rpgmap', data: createMinimalReferencePackage(), assets: new Map() },
+  ...(process.argv.includes('--fixtures') ? [
+    { filename: 'fixtures/最小测试地图-1.2.0.rpgmap', data: createMinimalReferencePackage(), assets: new Map() },
+  ] : []),
 ];
 const receipts = [];
 for (const candidate of packages) {

@@ -3,9 +3,9 @@ param(
   [Parameter(Mandatory)][string]$Map,
   [Parameter(Mandatory)][string]$ExpectedInstallerSha256,
   [Parameter(Mandatory)][string]$ExpectedSourceCommit,
-  [string]$PreviousInstaller = '',
-  [string]$PreviousInstallerSha256 = '643547b5a0dcfe56497c53ce405bafd4a048a3b86f2b2d0d56296e58306723bd',
-  [string]$PreviousSourceCommit = 'a474abcd605e61b8ea026cf0250cf82b79b39478',
+  [Parameter(Mandatory)][string]$PreviousInstaller,
+  [Parameter(Mandatory)][string]$PreviousInstallerSha256,
+  [Parameter(Mandatory)][string]$PreviousSourceCommit,
   [string]$UnpackedExecutable = '',
   [string]$LegacyDirectory = '',
   [string]$MinimalMap = ''
@@ -108,7 +108,6 @@ try {
   Assert-NoOtherDesktop
   $Installer = (Resolve-Path -LiteralPath $Installer).Path
   $Map = (Resolve-Path -LiteralPath $Map).Path
-  if (-not $PreviousInstaller) { $PreviousInstaller = Join-Path $artifactRoot 'RPGmap-v3.0.0-rc.1-验收/RPGmap-Setup-3.0.0-rc.1.exe' }
   $PreviousInstaller = (Resolve-Path -LiteralPath $PreviousInstaller).Path
   if (-not $UnpackedExecutable) { $UnpackedExecutable = Join-Path $artifactRoot 'desktop/win-unpacked/RPGmap.exe' }
   $UnpackedExecutable = (Resolve-Path -LiteralPath $UnpackedExecutable).Path

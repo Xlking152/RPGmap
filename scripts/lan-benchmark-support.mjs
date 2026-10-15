@@ -34,6 +34,8 @@ export function benchmarkPackagePaths(packageRoot) {
 export async function installBrowserBenchmarkMap(root, mapDir, { archivePath = process.env.RPGMAP_BENCHMARK_MAP_PACKAGE } = {}) {
   const version = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
   const candidates = archivePath ? [path.resolve(archivePath)] : [
+    path.join(root, 'artifact', 'content-packages', '北宋兰州城-1.1.0.rpgmap'),
+    path.join(root, 'release', `RPGmap-v${version}`, '北宋兰州城-1.1.0.rpgmap'),
     path.join(root, 'artifact', `RPGmap-v${version}-验收`, '北宋兰州城-1.1.0.rpgmap'),
     path.join(root, 'release', `RPGmap-v${version}-验收`, '北宋兰州城-1.1.0.rpgmap'),
   ];

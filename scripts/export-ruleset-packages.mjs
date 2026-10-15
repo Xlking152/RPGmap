@@ -11,15 +11,16 @@ import { minimalRuleset } from '../src/rulesets/minimal/index.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const option = process.argv.indexOf('--out');
 if (option >= 0 && !process.argv[option + 1]) throw new Error('--out requires a directory');
-const { version: applicationVersion } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
-const output = path.resolve(option >= 0 ? process.argv[option + 1] : path.join(root, 'release', `RPGmap-v${applicationVersion}-验收`));
+const output = path.resolve(option >= 0 ? process.argv[option + 1] : path.join(root, 'artifact', 'content-packages'));
 await mkdir(output, { recursive: true });
 let sourceCommit = 'uncommitted';
 try { sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(); } catch {}
 const receipts = [];
 for (const candidate of [
   { source: 'src/rulesets/infinite-horror/index.js', ruleset: infiniteHorrorRuleset, filename: `无限规则-${infiniteHorrorRuleset.version}.rpgrules` },
-  { source: 'src/rulesets/minimal/index.js', ruleset: minimalRuleset, filename: `验收附件/最小测试规则-${minimalRuleset.version}.rpgrules` },
+  ...(process.argv.includes('--fixtures') ? [
+    { source: 'src/rulesets/minimal/index.js', ruleset: minimalRuleset, filename: `fixtures/最小测试规则-${minimalRuleset.version}.rpgrules` },
+  ] : []),
 ]) {
   const result = await build({
     configFile: false, root, logLevel: 'warn',

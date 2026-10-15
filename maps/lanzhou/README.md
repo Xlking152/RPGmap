@@ -43,4 +43,4 @@ pass-gate → 关楼
 
 兰州包可以描述“什么对象能破坏、能进入、能开关、如何影响 Navigation”，但 **不能拥有自己的 InteractionSystem、DamageSystem、NavigationSystem 或 MovementSystem**。
 
-Damage、Restore、Undo、Feature State、Scene State、Interaction、Movement、Navigation 执行逻辑都来自 `src/` Core。兰州专属的 category → Capability 转换只允许留在 `reference/maps/lanzhou/capabilities.js`，不能反向进入 Core。
+Damage、Restore、Undo、Feature State、Scene State、Interaction、Movement、Navigation 执行逻辑都来自 `src/` Core。兰州专属的 category → Capability 转换只允许留在 `maps/lanzhou/capabilities.js`，不能反向进入 Core。

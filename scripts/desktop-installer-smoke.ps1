@@ -10,7 +10,8 @@ $installDirectory = [IO.Path]::GetFullPath((Join-Path $artifactRoot 'desktop-ins
 if (-not $installDirectory.StartsWith($artifactRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe test installation directory.' }
 if (-not $Installer) { $Installer = Join-Path $artifactRoot ('desktop/RPGmap-Setup-' + $applicationVersion + '.exe') }
 if (-not $Map) {
-  $Map = Get-ChildItem -LiteralPath (Join-Path $taskRoot 'release') -Directory | Where-Object { $_.Name -like ('RPGmap-v' + $applicationVersion + '-*') } | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter '*.rpgmap' -File } | Select-Object -First 1 -ExpandProperty FullName
+  $mapCandidates = @((Join-Path $artifactRoot 'content-packages/北宋兰州城-1.1.0.rpgmap'), (Join-Path $taskRoot ('release/RPGmap-v' + $applicationVersion + '/北宋兰州城-1.1.0.rpgmap')))
+  $Map = $mapCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
   if (-not $Map) { throw 'No release map package found. Supply -Map explicitly.' }
 }
 $Installer = (Resolve-Path -LiteralPath $Installer).Path
@@ -87,7 +88,7 @@ try {
   Assert-Test ((Get-FileHash -LiteralPath $usersFile -Algorithm SHA256).Hash -eq $usersHash) 'Reinstalled desktop preserves the same approved Player identities'
   Invoke-TestUninstaller
   Assert-Test $true 'Final test uninstall clears the temporary application registration'
-  $record = @{ outcome = 'passed'; at = [DateTime]::UtcNow.ToString('o'); installer = $Installer; installerSha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant(); installDirectory = $installDirectory; dataDirectory = $dataDirectory; findings = $findings; limitations = @('Executed on the development Windows host, not a clean Windows VM.', 'Update uses the same RC installer; this is not a cross-version upgrade test.', 'An interrupted NSIS extraction and automatic program rollback were not tested.', 'System Node.js is used only to drive the test; the installed application runs its bundled Electron runtime.') }
+  $record = @{ outcome = 'passed'; at = [DateTime]::UtcNow.ToString('o'); installer = $Installer; installerSha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant(); installDirectory = $installDirectory; dataDirectory = $dataDirectory; findings = $findings; limitations = @('Executed on the development Windows host, not a clean Windows VM.', 'Update uses the same application version; this is not a cross-version upgrade test.', 'An interrupted NSIS extraction and automatic program rollback were not tested.', 'System Node.js is used only to drive the test; the installed application runs its bundled Electron runtime.') }
   $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'installer-smoke.json') -Encoding utf8
   $findings | ConvertTo-Json -Depth 5
 } catch {

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { isDeepStrictEqual } from 'node:util';
 import { listPayloadFiles } from './build-desktop-runtime.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -35,8 +36,17 @@ export async function verifyDesktopStage(stageRoot = path.join(root, 'artifact',
   for (const required of ['application/desktop/main.cjs', 'application/desktop/preload.cjs', 'resources/app/index.html', 'resources/server/server.mjs', 'resources/server/exploration-worker.mjs', 'resources/server/VERSION.json']) {
     if (!manifest.files[required]) fail(`缺少 ${required}`);
   }
+  const version = JSON.parse(await readFile(path.join(stage, 'resources', 'server', 'VERSION.json'), 'utf8'));
+  if (!isDeepStrictEqual(version, manifest.source)) fail('服务端 VERSION 与安装清单源身份不一致。');
+  if (version.app !== 'RPGmap' || version.version !== manifest.version
+    || version.releaseTag !== `v${manifest.version}`) fail('服务端版本或标签与安装清单不一致。');
+  for (const schema of ['worldSchema', 'operationSchema', 'statusSchema', 'accessSchema']) {
+    if (version[schema] !== 4) fail(`${schema} 必须为 4。`);
+  }
+  if (version.occlusionSchema !== 1 || version.mapArchiveFormat !== 1) fail('遮挡或地图归档契约格式错误。');
   const pkg = JSON.parse(await readFile(path.join(stage, 'application', 'package.json'), 'utf8'));
   if (pkg.main !== 'desktop/main.cjs' || pkg.dependencies) fail('桌面 ASAR 入口错误或带入多余依赖。');
+  if (pkg.version !== manifest.version) fail('桌面应用版本与安装清单不一致。');
   return { version: manifest.version, files: present.length, source: manifest.source };
 }
 

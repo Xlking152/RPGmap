@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
 import { captureVisionSourceProof, assertVisionSourceProofUnchanged } from './vision-source-proof.mjs';
-import { visionSourceAtCommit } from './verify-local-validation.mjs';
+import { visionSourceAtCommit } from './performance-evidence.mjs';
 
 const root = path.resolve(process.argv.find(v => v.startsWith('--repo='))?.slice(7) || '.');
 const execFileAsync = promisify(execFile);

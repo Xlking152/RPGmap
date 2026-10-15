@@ -22,6 +22,9 @@ export async function listPayloadFiles(directory, prefix = '') {
 }
 
 export async function buildDesktopRuntime({ stageRoot = path.join(root, 'artifact', 'desktop-stage'), buildClient = true } = {}) {
+  const head = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim();
+  const configuredCommit = process.env.RPGMAP_SOURCE_COMMIT || process.env.GITHUB_SHA;
+  if (configuredCommit && configuredCommit.toLowerCase() !== head.toLowerCase()) throw new Error('构建源提交与实际检出的 HEAD 不一致。');
   const stage = path.resolve(stageRoot);
   const permittedRoot = path.join(root, 'artifact');
   if (stage === permittedRoot || !stage.startsWith(`${permittedRoot}${path.sep}`)) throw new Error('桌面暂存目录必须位于仓库 artifact 的子目录。');
@@ -57,8 +60,7 @@ export async function buildDesktopRuntime({ stageRoot = path.join(root, 'artifac
     name: 'rpgmap-desktop', version: pkg.version, private: true,
     description: 'RPGmap desktop launcher', author: 'RPGmap', main: 'desktop/main.cjs',
   }, null, 2)}\n`);
-  const configuredCommit = process.env.RPGMAP_SOURCE_COMMIT || process.env.GITHUB_SHA;
-  const commit = configuredCommit || (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim();
+  const commit = head;
   if (!/^[a-f0-9]{40}$/i.test(commit)) throw new Error('发布清单需要完整的源提交。');
   const status = (await execFileAsync('git', ['status', '--porcelain'], { cwd: root })).stdout;
   const version = {

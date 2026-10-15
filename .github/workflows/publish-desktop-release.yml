@@ -1,0 +1,101 @@
+name: Publish frozen RPGmap Desktop Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact stable tag, for example v3.0.0
+        required: true
+      commit:
+        description: Full validated commit at current main HEAD
+        required: true
+      run_id:
+        description: Successful main Desktop Candidate run containing the frozen files
+        required: true
+      source:
+        description: Promote the frozen artifact or verify an existing four-file draft
+        required: true
+        default: artifact
+        type: choice
+        options: [artifact, draft]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: rpgmap-desktop-release
+  cancel-in-progress: false
+
+jobs:
+  verify-and-publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      CANDIDATE_RUN: ${{ inputs.run_id }}
+      CANDIDATE_SOURCE: ${{ inputs.source }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.19.0'
+          cache: npm
+      - name: Pin npm and install verification dependencies
+        run: |
+          npm install --global npm@11.17.0 --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify main identity and candidate provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$CANDIDATE_RUN" =~ ^[1-9][0-9]*$ ]]
+          VERSION=$(node -p "require('./package.json').version")
+          [[ "$VERSION" =~ ^3\.[0-9]+\.[0-9]+$ ]]
+          test "$RELEASE_TAG" = "v$VERSION"
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+          test -z "$(git status --porcelain)"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN" > "$RUNNER_TEMP/candidate-run.json"
+          node --input-type=module -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/candidate-run.json")); if(r.head_sha!==process.env.RELEASE_COMMIT || r.head_branch!=="main" || r.event!=="push" || r.status!=="completed" || r.conclusion!=="success" || r.path!==".github/workflows/desktop-candidate.yml") throw new Error("Candidate must be the successful main desktop workflow for this exact commit");'
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name "RPGmap-desktop-$RELEASE_COMMIT" --dir candidate
+          node scripts/desktop-release.mjs verify "--version=$VERSION" "--commit=$RELEASE_COMMIT" --directory=candidate/frozen/delivery --receipt=candidate/frozen/evidence/desktop-release-receipt.json --stage=candidate/desktop-stage
+          echo "RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: Prepare or verify the frozen draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+          fi
+          if [[ "$CANDIDATE_SOURCE" == artifact ]]; then
+            if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo 'Release already exists. Use source=draft to verify and promote it.' >&2
+              exit 1
+            fi
+            node --input-type=module -e 'import fs from "node:fs"; const v=process.env.RELEASE_VERSION; const explicit=`RELEASE-NOTES-v${v}.md`; let notes; if(fs.existsSync(explicit)) notes=fs.readFileSync(explicit,"utf8"); else {const text=fs.readFileSync("CHANGELOG.md","utf8"); const heading=`## v${v}`; const start=text.split(/\r?\n/).findIndex(l=>l===heading); if(start<0) throw new Error("Missing release notes"); const tail=text.split(/\r?\n/).slice(start+1); const end=tail.findIndex(l=>/^## /.test(l)); notes=tail.slice(0,end<0?undefined:end).join("\n");} if(!notes.trim()) throw new Error("Empty release notes"); fs.writeFileSync(process.env.RUNNER_TEMP+"/release-notes.md",`${notes}\n\nSource Commit: \x60${process.env.RELEASE_COMMIT}\x60\n`);'
+            gh release create "$RELEASE_TAG" candidate/frozen/delivery/* --repo "$GITHUB_REPOSITORY" --target "$RELEASE_COMMIT" --title "RPGmap $RELEASE_VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" --draft
+          elif [[ "$CANDIDATE_SOURCE" != draft ]]; then
+            echo 'Unknown candidate source.' >&2
+            exit 1
+          fi
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,targetCommitish,assets > "$RUNNER_TEMP/draft.json"
+          node --input-type=module -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/draft.json"));const wanted=[`RPGmap-Setup-${process.env.RELEASE_VERSION}.exe`,"北宋兰州城-1.1.0.rpgmap","SHA256SUMS.txt","使用说明.md"].sort();if(!r.isDraft||r.isPrerelease||r.targetCommitish!==process.env.RELEASE_COMMIT||JSON.stringify(r.assets.map(a=>a.name).sort())!==JSON.stringify(wanted))throw new Error("Draft identity or four-file asset allowlist mismatch");'
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir downloaded-draft
+          node scripts/desktop-release.mjs verify "--version=$RELEASE_VERSION" "--commit=$RELEASE_COMMIT" --directory=downloaded-draft --receipt=candidate/frozen/evidence/desktop-release-receipt.json --stage=candidate/desktop-stage
+      - name: Publish without rebuilding and verify the downloaded release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$RELEASE_COMMIT"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          git fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir downloaded-release
+          node scripts/desktop-release.mjs verify "--version=$RELEASE_VERSION" "--commit=$RELEASE_COMMIT" --directory=downloaded-release --receipt=candidate/frozen/evidence/desktop-release-receipt.json --stage=candidate/desktop-stage

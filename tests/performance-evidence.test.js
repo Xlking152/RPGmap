@@ -1,14 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { deflateRawSync } from 'node:zlib';
-import { verifyLocalValidation, visionSourceAtCommit } from '../scripts/verify-local-validation.mjs';
+import { verifyPerformanceEvidence, visionSourceAtCommit } from '../scripts/performance-evidence.mjs';
 import { worldWalChecksum } from '../deployment/local-server/world-wal.mjs';
 import { deriveSceneState } from '../src/engine/state.js';
 import { sceneEventsHash } from '../scripts/ruins-lan-smoke.mjs';
@@ -27,37 +26,6 @@ const files = (await execFileAsync('git', ['ls-files', '--cached', '--others', '
     || file === 'maps/lanzhou/runtime.json').sort();
 const sourceFileHashes = Object.fromEntries(await Promise.all(files.map(async file => [file,
   hash((await readFile(path.join(root, file), 'utf8')).replaceAll('\r\n', '\n'))])));
-
-// A small independent ZIP producer exercises the same stored and deflated
-// archive formats used by Windows bsdtar and Linux release packaging.
-function zip(entries, compressed = false, version = '2.5.4') {
-  const crc32 = buffer => {
-    let crc = 0xffffffff;
-    for (const byte of buffer) {
-      crc ^= byte;
-      for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-    return (crc ^ 0xffffffff) >>> 0;
-  };
-  const local = [], central = []; let offset = 0;
-  for (const [file, text] of Object.entries(entries)) {
-    const name = Buffer.from(`RPGmap-v${version}/${file}`), raw = Buffer.from(text);
-    const payload = compressed ? deflateRawSync(raw) : raw, crc = crc32(raw);
-    const header = Buffer.alloc(30), directory = Buffer.alloc(46);
-    header.writeUInt32LE(0x04034b50); header.writeUInt16LE(20, 4); header.writeUInt16LE(compressed ? 8 : 0, 8);
-    header.writeUInt32LE(crc, 14); header.writeUInt32LE(payload.length, 18); header.writeUInt32LE(raw.length, 22);
-    header.writeUInt16LE(name.length, 26);
-    directory.writeUInt32LE(0x02014b50); directory.writeUInt16LE(20, 4); directory.writeUInt16LE(20, 6);
-    directory.writeUInt16LE(compressed ? 8 : 0, 10); directory.writeUInt32LE(crc, 16);
-    directory.writeUInt32LE(payload.length, 20); directory.writeUInt32LE(raw.length, 24);
-    directory.writeUInt16LE(name.length, 28); directory.writeUInt32LE(offset, 42);
-    local.push(header, name, payload); central.push(directory, name); offset += header.length + name.length + payload.length;
-  }
-  const directory = Buffer.concat(central), end = Buffer.alloc(22), count = Object.keys(entries).length;
-  end.writeUInt32LE(0x06054b50); end.writeUInt16LE(count, 8); end.writeUInt16LE(count, 10);
-  end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16);
-  return Buffer.concat([...local, directory, end]);
-}
 
 function latencies(values) {
   const sorted = [...values].sort((a, b) => a - b), at = q => sorted[Math.ceil(sorted.length * q) - 1];
@@ -122,7 +90,7 @@ function ruinsRenderer() {
 }
 
 test('v2.5.5 formal large-range LAN evidence rejects diagnostic profiling', async t => {
-  const candidate = await fixture(t, false, '2.5.5');
+  const candidate = await fixture(t, '2.5.5');
   candidate.reports['large-lan.json'].diagnosticProfiling = true;
   await candidate.save();
   await assert.rejects(candidate.verify(), /LAN diagnostic profiling cannot be formal/);
@@ -233,19 +201,26 @@ function ruinsLanFixture(common) {
       restoration: { singleObjectOnly: true, tagsAndDoorStateRetained: true, independentCraterRetained: true } } };
 }
 
-async function fixture(t, compressed = false, version = '2.5.4') {
+async function fixture(t, version = '2.5.4') {
   const directory = await mkdtemp(path.join(tmpdir(), 'rpgmap-release-evidence-'));
   t.after(async () => {
     if (path.dirname(path.resolve(directory)) !== path.resolve(tmpdir())
       || !path.basename(directory).startsWith('rpgmap-release-evidence-')) throw new Error('Unexpected fixture directory');
     await rm(directory, { recursive: true, force: true });
   });
+  const desktop = Number(version.split('.')[0]) >= 3;
+  const evidenceBaselineCommit = desktop ? '9fdcbc09e0ae1bd992ce02e0aad1b79dbd544dd5' : baselineCommit;
+  const evidenceBaseline = desktop ? await visionSourceAtCommit(root, evidenceBaselineCommit) : baselineSource;
   const metadata = { app: 'RPGmap', version, releaseTag: `v${version}`, commit };
   const entries = { 'VERSION.json': JSON.stringify(metadata), 'server.mjs': 'export const server = true;\n',
     'exploration-worker.mjs': 'export const worker = true;\n', 'app/index.html': '<script src="/assets/main.js"></script>',
     'app/.vite/manifest.json': '{"index.html":{"file":"assets/main.js"}}', 'app/assets/main.js': 'const fog = "continuous";\n' };
-  const archive = zip(entries, compressed, version);
-  const build = { metadata, fileHashes: Object.fromEntries(Object.keys(entries).filter(file => file !== 'VERSION.json')
+  if (desktop) {
+    for (const file of Object.keys(entries).filter(file => !file.startsWith('app/'))) {
+      entries[`server/${file}`] = entries[file]; delete entries[file];
+    }
+  }
+  const build = { metadata, fileHashes: Object.fromEntries(Object.keys(entries).filter(file => !file.endsWith('VERSION.json'))
     .sort().map(file => [file, hash(entries[file])])) };
   const common = { version, build };
   const summary = Object.fromEntries([['move', 100], ['status', 50], ['chat', 50], ['aggregate', 200]]
@@ -260,8 +235,8 @@ async function fixture(t, compressed = false, version = '2.5.4') {
     phases: [phase('normal', 'normal'), phase('los-light', 'dark')],
     recovery: { outageDelayMs: 3000, recoveredMs: 4500, revisionsBefore: Array(7).fill(100), revisionsAfter: Array(7).fill(100),
       synchronizationComplete: true, projectionMatches: Array(7).fill(true) } };
-  const base = { sourceCommit: baselineCommit, version: baselineSource.version, sourceHashEncoding: 'utf8-lf',
-    sourceFileHashes: baselineSource.sourceFileHashes, occluders: 81,
+  const base = { sourceCommit: evidenceBaselineCommit, version: evidenceBaseline.version, sourceHashEncoding: 'utf8-lf',
+    sourceFileHashes: evidenceBaseline.sourceFileHashes, occluders: 81,
     visibility: Object.fromEntries([120, 500, 1000, 10000].map(range => [range, timing()])), multiLight500: timing(), sweep: timing(10) };
   const candidate = { ...structuredClone(base), version, sourceCommit: commit, sourceFileHashes, sweep: timing(9),
     continuous: { ...Object.fromEntries([120, 500, 1000, 10000].map(range => [range, timing()])), multiLight1000: timing() } };
@@ -279,7 +254,7 @@ async function fixture(t, compressed = false, version = '2.5.4') {
   const raster = { cases: 2304, framesPerCase: 2, differingPixels: 0,
     maxChannelError: 0, maxAlphaError: 0, maxPremultipliedError: 0 };
   const audit = { metadata: { vulnerabilities: { total: 0 } } };
-  const validation = { version, commit, baselineCommit, sha256: hash(archive),
+  const validation = { version, commit, baselineCommit: evidenceBaselineCommit,
     checks: Object.fromEntries(['tests', 'build', 'bundle', 'package', 'benchmark', 'lanBenchmark', 'chrome',
       'visionBenchmark', 'occlusionLanBenchmark', 'browserBenchmark'].map(check => [check, 'passed'])),
     evidence: { lanBenchmark: 'lan.json', occlusionLanBenchmark: 'large-lan.json', browserBenchmark: 'browser.json',
@@ -289,7 +264,7 @@ async function fixture(t, compressed = false, version = '2.5.4') {
   const reports = { 'lan.json': lan, 'large-lan.json': large, 'browser.json': browser,
     'vision-v253.json': base, 'vision-v254.json': candidate, 'chrome-smoke.json': smoke, 'raster.json': raster,
     'audit.json': audit, 'audit-production.json': structuredClone(audit) };
-  if (version === '2.5.5') {
+  if (version === '2.5.5' || desktop) {
     const sourceProof = { version, sourceCommit: candidate.sourceCommit, sourceHashEncoding: candidate.sourceHashEncoding,
       sourceFileHashes: candidate.sourceFileHashes };
     Object.assign(raster, structuredClone(sourceProof));
@@ -300,11 +275,18 @@ async function fixture(t, compressed = false, version = '2.5.4') {
     validation.evidence.ruinsLan = 'lan-vision.json';
   }
   const save = async () => {
-    await writeFile(path.join(directory, 'local-validation.json'), JSON.stringify(validation));
+    await writeFile(path.join(directory, 'performance-evidence.json'), JSON.stringify(validation));
     await Promise.all(Object.entries(reports).map(([file, report]) => writeFile(path.join(directory, file), JSON.stringify(report))));
   };
-  await writeFile(path.join(directory, `RPGmap-v${version}.zip`), archive); await save();
-  return { directory, entries, reports, validation, save, verify: () => verifyLocalValidation({ directory, version, commit }) };
+  const packageRoot = path.join(directory, 'runtime');
+  for (const [file, content] of Object.entries(entries)) {
+    const target = path.join(packageRoot, ...file.split('/'));
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, content);
+  }
+  await save();
+  return { directory, packageRoot, entries, reports, validation, save,
+    verify: () => verifyPerformanceEvidence({ directory, version, commit, packageRoot }) };
 }
 
 function localPlayFixture() {
@@ -320,7 +302,7 @@ function localPlayFixture() {
 }
 
 test('v2.5.5 explicit local scope defers multiplayer performance and retains local and reliability gates', async t => {
-  const candidate = await fixture(t, false, '2.5.5');
+  const candidate = await fixture(t, '2.5.5');
   candidate.validation.performanceScope = 'local-single-player';
   candidate.validation.checks.localPerformance = 'passed';
   for (const key of ['lanBenchmark', 'occlusionLanBenchmark', 'browserBenchmark']) {
@@ -358,12 +340,10 @@ test('v2.5.5 explicit local scope defers multiplayer performance and retains loc
   }
 });
 
-for (const compressed of [false, true]) {
-  test(`legitimate package-bound reports pass with ${compressed ? 'deflated' : 'stored'} ZIP`, async t => {
-    const candidate = await fixture(t, compressed);
-    await assert.doesNotReject(candidate.verify());
-  });
-}
+test('legitimate reports bind to the complete measured backend and browser runtime', async t => {
+  const candidate = await fixture(t);
+  await assert.doesNotReject(candidate.verify());
+});
 
 test('passing labels without raw evidence cannot promote a package', async t => {
   const candidate = await fixture(t); delete candidate.validation.evidence; await candidate.save();
@@ -380,7 +360,7 @@ test('old candidate and missing complete browser fingerprints are rejected', asy
 });
 
 test('v2.5.5 Chrome and ruins smoke must fingerprint the actual package, including hidden browser assets', async t => {
-  const candidate = await fixture(t, false, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json']);
+  const candidate = await fixture(t, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json']);
   for (const [change, message] of [
     [report => { delete report.version; }, /Chrome smoke report version mismatch/],
     [report => { report.version = '2.5.4'; }, /Chrome smoke report version mismatch/],
@@ -403,12 +383,9 @@ test('v2.5.4 historical smoke remains compatible, while supplied fingerprints re
   await assert.rejects(candidate.verify(), /Chrome smoke report build fingerprint/);
 });
 
-test('a changed frontend in the ZIP is rejected even with updated ZIP checksum', async t => {
+test('changing the actual measured browser payload invalidates its performance reports', async t => {
   const candidate = await fixture(t);
-  candidate.entries['app/assets/main.js'] = 'const fog = "old grid";\n';
-  const changed = zip(candidate.entries);
-  await writeFile(path.join(candidate.directory, 'RPGmap-v2.5.4.zip'), changed);
-  candidate.validation.sha256 = hash(changed); await candidate.save();
+  await writeFile(path.join(candidate.packageRoot, 'app/assets/main.js'), 'const fog = "old grid";\n');
   await assert.rejects(candidate.verify(), /build fingerprint/);
 });
 
@@ -478,7 +455,7 @@ test('raw Chrome timestamp subtraction noise at 16.7 ms preserves the original i
 });
 
 test('v2.5.5 Chrome FPS must match its finite positive observed frame mean', async t => {
-  const candidate = await fixture(t, false, '2.5.5'), original = structuredClone(candidate.reports['browser.json']);
+  const candidate = await fixture(t, '2.5.5'), original = structuredClone(candidate.reports['browser.json']);
   for (const change of [
     session => { delete session.diagnostics.metrics.frame.mean; },
     session => { session.diagnostics.metrics.frame.mean = 0; },
@@ -539,7 +516,7 @@ test('baseline complete fingerprints and version must match the immutable claime
 });
 
 test('v2.5.5 baseline is fixed to the released v2.5.4 source instead of a self-declared SHA', async t => {
-  const candidate = await fixture(t, false, '2.5.5');
+  const candidate = await fixture(t, '2.5.5');
   candidate.validation.baselineCommit = 'b'.repeat(40);
   candidate.reports['vision-v253.json'].sourceCommit = candidate.validation.baselineCommit;
   await candidate.save(); await assert.rejects(candidate.verify(), /released v2.5.4 commit/);
@@ -601,15 +578,13 @@ test('release requires original zero-error raster and both zero-vulnerability au
   await assert.rejects(candidate.verify(), /Chrome smoke evidence file missing/);
 });
 
-for (const compressed of [false, true]) {
-  test(`v2.5.5 requires and accepts full ruins/facade raw evidence with ${compressed ? 'deflated' : 'stored'} ZIP`, async t => {
-    const candidate = await fixture(t, compressed, '2.5.5');
-    await assert.doesNotReject(candidate.verify());
-  });
-}
+test('full ruins and facade evidence remains required for the measured runtime', async t => {
+  const candidate = await fixture(t, '2.5.5');
+  await assert.doesNotReject(candidate.verify());
+});
 
 test('v2.5.5 mask and facade raster must bind their complete source proof to the measured vision candidate', async t => {
-  const candidate = await fixture(t, false, '2.5.5');
+  const candidate = await fixture(t, '2.5.5');
   for (const file of ['raster.json', 'facade-raster.json']) {
     const original = structuredClone(candidate.reports[file]);
     for (const [change, message] of [
@@ -630,7 +605,7 @@ test('v2.5.5 mask and facade raster must bind their complete source proof to the
 });
 
 test('v2.5.5 passing labels without ruins and facade evidence cannot promote a package', async t => {
-  const candidate = await fixture(t, false, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json'].ruins);
+  const candidate = await fixture(t, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json'].ruins);
   delete candidate.reports['chrome-smoke.json'].ruins; await candidate.save();
   await assert.rejects(candidate.verify(), /Ruins SweepEvent reproduction fixture/);
   candidate.reports['chrome-smoke.json'].ruins = original;
@@ -639,7 +614,7 @@ test('v2.5.5 passing labels without ruins and facade evidence cannot promote a p
 });
 
 test('v2.5.5 requires actual package-bound LAN destruction and rejects forged WAL/history/recovery summaries', async t => {
-  const candidate = await fixture(t, false, '2.5.5'), original = structuredClone(candidate.reports['lan-vision.json']);
+  const candidate = await fixture(t, '2.5.5'), original = structuredClone(candidate.reports['lan-vision.json']);
   delete candidate.validation.evidence.ruinsLan; await candidate.save();
   await assert.rejects(candidate.verify(), /Ruins LAN evidence file missing/);
   candidate.validation.evidence.ruinsLan = 'lan-vision.json';
@@ -675,7 +650,7 @@ test('v2.5.5 requires actual package-bound LAN destruction and rejects forged WA
 });
 
 test('v2.5.5 ruins gate rejects fake regression, wrong cut masks, entity tags and shifted textures', async t => {
-  const candidate = await fixture(t, false, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json'].ruins);
+  const candidate = await fixture(t, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json'].ruins);
   for (const [change, message] of [
     [report => { report.reproduction.area.x += 1; }, /attack differs/],
     [report => { report.reproduction.first.feedback.rendered = false; }, /completed-mask/],
@@ -694,7 +669,7 @@ test('v2.5.5 ruins gate rejects fake regression, wrong cut masks, entity tags an
 });
 
 test('v2.5.5 ruins gate requires saved damage, isolated restoration and drained queues', async t => {
-  const candidate = await fixture(t, false, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json'].ruins);
+  const candidate = await fixture(t, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json'].ruins);
   for (const [change, message] of [
     [report => { report.storageMode = 'memory-overlay'; }, /persistence/],
     [report => { delete report.validationWorker; }, /Module Worker/],
@@ -715,7 +690,7 @@ test('v2.5.5 ruins gate requires saved damage, isolated restoration and drained 
 });
 
 test('v2.5.5 ruins stress gate validates twelve actual operations and bounded renderer/geometry caches', async t => {
-  const candidate = await fixture(t, false, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json'].ruins);
+  const candidate = await fixture(t, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json'].ruins);
   for (const [change, message] of [
     [report => { report.stress.samples.pop(); }, /twelve complete rounds/],
     [report => { report.stress.samples[0].restoreOk = false; }, /actual operation/],
@@ -735,7 +710,7 @@ test('v2.5.5 ruins stress gate validates twelve actual operations and bounded re
 });
 
 test('v2.5.5 ruins stress preserves feedback, FPS, frame and long-task gates from raw observations', async t => {
-  const candidate = await fixture(t, false, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json'].ruins);
+  const candidate = await fixture(t, '2.5.5'), original = structuredClone(candidate.reports['chrome-smoke.json'].ruins);
   for (const [change, message] of [
     [report => { report.stress.samples[0].damageFeedbackMs = report.stress.samples[0].damageFeedback.elapsedMs = 100.001;
       report.stress.damageP95Ms = 100.001; }, /damage feedback p95/],
@@ -757,7 +732,7 @@ test('v2.5.5 ruins stress preserves feedback, FPS, frame and long-task gates fro
 });
 
 test('v2.5.5 facade raster gate requires every raw geometry/viewport/DPR case and both frames', async t => {
-  const candidate = await fixture(t, false, '2.5.5'), original = structuredClone(candidate.reports['facade-raster.json']);
+  const candidate = await fixture(t, '2.5.5'), original = structuredClone(candidate.reports['facade-raster.json']);
   for (const [change, message] of [
     [report => { report.passed = false; }, /1152 raw cases/],
     [report => { report.rawCases.pop(); }, /1152 raw cases/],
@@ -781,7 +756,7 @@ test('v2.5.5 facade raster gate requires every raw geometry/viewport/DPR case an
 });
 
 test('v2.5.5 facade raster original SweepEvent fixture must render real visible and hidden interiors', async t => {
-  const candidate = await fixture(t, false, '2.5.5'), original = structuredClone(candidate.reports['facade-raster.json']);
+  const candidate = await fixture(t, '2.5.5'), original = structuredClone(candidate.reports['facade-raster.json']);
   for (const [change, message] of [
     [report => { report.regression.sweepReproduced = false; }, /original SweepEvent/],
     [report => { report.regression.records[3].dpr = 1; }, /SweepEvent DPR/],
@@ -795,11 +770,25 @@ test('v2.5.5 facade raster original SweepEvent fixture must render real visible 
   }
 });
 
-test('release ZIP cannot accidentally bundle the independent ruins authoring library', async t => {
-  const candidate = await fixture(t, false, '2.5.5');
-  candidate.entries['素材库/废墟/unused.webp'] = 'authoring-only texture';
-  const archive = zip(candidate.entries, false, '2.5.5');
-  await writeFile(path.join(candidate.directory, 'RPGmap-v2.5.5.zip'), archive);
-  candidate.validation.sha256 = hash(archive); await candidate.save();
-  await assert.rejects(candidate.verify(), /complete ruins authoring library/);
+
+test('desktop resources performance evidence uses the released v2.5.5 baseline and real payload bytes', async t => {
+  const candidate = await fixture(t, '3.0.0');
+  await assert.doesNotReject(candidate.verify());
+  candidate.validation.baselineCommit = baselineCommit;
+  await candidate.save();
+  await assert.rejects(candidate.verify(), /Vision source commit mismatch/);
+});
+
+test('performance evidence refuses wrong source, failed check labels and an unbound runtime', async t => {
+  const candidate = await fixture(t, '3.0.0');
+  candidate.validation.commit = 'b'.repeat(40); await candidate.save();
+  await assert.rejects(candidate.verify(), /Performance evidence source mismatch/);
+  candidate.validation.commit = commit; candidate.validation.checks.chrome = 'failed'; await candidate.save();
+  await assert.rejects(candidate.verify(), /Performance check missing: chrome/);
+  candidate.validation.checks.chrome = 'passed'; await candidate.save();
+  await assert.rejects(verifyPerformanceEvidence({directory:candidate.directory,version:'3.0.0',commit}), /Measured runtime directory missing/);
+  const versionFile = path.join(candidate.packageRoot, 'server', 'VERSION.json');
+  const metadata = JSON.parse(await readFile(versionFile, 'utf8'));
+  await writeFile(versionFile, JSON.stringify({...metadata,commit:'b'.repeat(40)}));
+  await assert.rejects(candidate.verify(), /Measured runtime source mismatch/);
 });
