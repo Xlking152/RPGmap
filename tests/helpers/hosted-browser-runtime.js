@@ -51,7 +51,7 @@ const dependencies = { readConnectionState, exportRuntimeState, prepareRuntimeSt
   DOMParser: class { parseFromString() { return { querySelector: () => null, documentElement: {} }; } },
 };
 
-export async function hostedBrowserRuntime(t) {
+export async function hostedBrowserRuntime(t, { initialState = null, loadedMapPackage = null } = {}) {
   const originalSocket = globalThis.WebSocket;
   globalThis.WebSocket = Socket; Socket.instances = [];
   t.after(() => { globalThis.WebSocket = originalSocket; });
@@ -74,9 +74,10 @@ export async function hostedBrowserRuntime(t) {
     svgOverlay: () => ({ addTo() {} }), layerGroup: () => ({ addTo() { return this; } }) };
   const createRuntime = new Function(...Object.keys(dependencies), 'L', `${runtimeBody}\nreturn createRpgMapRuntime;`)
     (...Object.values(dependencies), leaflet);
-  const mapPackage = { id: 'audit-map', version: '1', fingerprint: 'frozen-audit-map',
+  const mapPackage = loadedMapPackage || { id: 'audit-map', version: '1', fingerprint: 'frozen-audit-map',
     width: 100, height: 100, metersPerUnit: 1, features: [], createSvg: () => '<svg/>' };
   const initialLoad = hostedRuntimeAdapters.prepare({ worldId: 'audit-world', worldName: 'Initial', mapPackage, ruleset });
+  if (initialState) initialLoad.state = structuredClone(initialState);
   const api = createRuntime({ container, mapPackage, ruleset, storageAdapter: storage(), initialLoad,
     runtimeAdapters: hostedRuntimeAdapters,
     tools: [createHostedWorldSystem(), createDocumentBackendSystem(), createMultiplayerController()] });

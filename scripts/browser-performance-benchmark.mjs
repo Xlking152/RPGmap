@@ -12,6 +12,9 @@ import { withinMillisecondsBudget } from './performance-budget.mjs';
 import { closeOwnedBrowser, rejectPendingCdp } from './owned-browser-close.mjs';
 import { runIncrementalEnvironmentAudit } from './v3-incremental-environment-audit.mjs';
 import { completeBrowserBenchmarkReport, finishBrowserBenchmarkReport } from './browser-benchmark-report.mjs';
+import { createBrowserBenchmarkFixture, BROWSER_BENCHMARK_ACTOR_COUNT as ACTOR_COUNT,
+  BROWSER_BENCHMARK_TIMESTAMP } from './browser-benchmark-fixture.mjs';
+import { MapPackageStore } from '../deployment/local-server/package-store.mjs';
 
 if (process.platform !== 'win32') throw new Error('Browser performance benchmark requires Windows');
 
@@ -28,7 +31,6 @@ const profileSessionIndex = process.env.RPGMAP_BROWSER_BENCHMARK_PROFILE_SESSION
   ? null : Number(process.env.RPGMAP_BROWSER_BENCHMARK_PROFILE_SESSION);
 const GM_SECRET = 'BROWSER-BENCHMARK-GM';
 const JOIN_CODE = '246810';
-const ACTOR_COUNT = 100;
 const TOKEN_COUNT = Math.max(1, Math.min(500, Number(process.env.RPGMAP_BROWSER_BENCHMARK_TOKENS) || 500));
 const SESSION_COUNT = Math.max(1, Math.min(7, Number(process.env.RPGMAP_BROWSER_BENCHMARK_SESSIONS) || 7));
 if (profileSessionIndex !== null && (!Number.isInteger(profileSessionIndex)
@@ -108,45 +110,6 @@ class JsonSocket {
     });
   }
   close() { try { this.socket.close(); } catch {} }
-}
-
-function fixture(definitions) {
-  const actors = Array.from({ length: ACTOR_COUNT }, (_, index) => ({
-    id: `browser-actor-${index}`, name: `Browser Actor ${index}`, type: 'pc', partyId: 'browser-party',
-    system: {}, effects: [], notes: '', ownership: {},
-  }));
-  const tokens = Array.from({ length: TOKEN_COUNT }, (_, index) => ({
-    id: `browser-token-${index}`, actorId: `browser-actor-${index % ACTOR_COUNT}`,
-    actorLink: true, actorDelta: null, placement: 'map',
-    x: 2900 + (index % 25) * 2, y: 2500 + Math.floor(index / 25) * 2,
-    featureId: null, diameterMeters: 1, rotation: 0, elevationMeters: 0,
-    locked: false, showName: true, effects: [], controllerUserIds: [],
-    visibility: { mode: 'party', userIds: [] },
-    vision: { enabled: true, preciseRangeOverrideMeters: 80, vagueRangeOverrideMeters: 120, overrideUserIds: [] },
-    movement: { mode: 'walk', budgetMetersPerTurn: null, spentMeters: 0, adjudicationRequired: false },
-  }));
-  const scene = {
-    id: 'scene-northern-song-lanzhou-1104', name: 'Browser Performance Scene',
-    mapPackage: { id: 'northern-song-lanzhou-1104', version: '1.1.0' },
-    tokens, markers: [], attackAreas: [], sceneEvents: [], featureStates: {},
-    fog: { schemaVersion: 1, cellSizeMeters: 5, exploredByParty: {} },
-    settings: { gridVisible: true, lineOfSightEnabled: false },
-  };
-  const world = {
-    schemaVersion: 4, id: 'browser-performance-world', name: 'Browser Performance World',
-    ruleset: { id: 'infinite-horror', version: '1.1.0' }, activeSceneId: scene.id,
-    actors, statusDefinitions: definitions, scenes: [scene], journals: [], templateLibrary: {},
-    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
-  };
-  return {
-    version: 2, mapId: scene.mapPackage.id, mapVersion: scene.mapPackage.version,
-    markers: [], attackAreas: [], sceneEvents: [], preferences: {
-      worldV2: world,
-      entitySystem: { schemaVersion: 4, actors: structuredClone(actors), tokens: structuredClone(tokens), statusDefinitions: structuredClone(definitions) },
-      combatSystem: { schemaVersion: 2, combat: null },
-      chatSystem: { schemaVersion: 1, messages: [] },
-    },
-  };
 }
 
 async function launchServer({ port, mapDir }) {
@@ -405,8 +368,16 @@ try {
   const { INFINITE_HORROR_STATUS_DEFINITIONS } = await import(pathToFileURL(
     path.join(root, 'src', 'rulesets', 'infinite-horror', 'statuses.js'),
   ).href);
+  const { infiniteHorrorRuleset } = await import(pathToFileURL(
+    path.join(root, 'src', 'rulesets', 'infinite-horror', 'index.js'),
+  ).href);
+  const installedMaps = await new MapPackageStore({ root: path.join(mapDir, 'packages', 'maps') }).initialize();
+  const mapPackage = installedMaps.get(server.mapPackage);
+  if (mapPackage.fingerprint !== server.mapPackage.fingerprint) throw new Error('Fixture map fingerprint differs from the actual imported archive');
+  const initialState = createBrowserBenchmarkFixture({ mapPackage, ruleset: infiniteHorrorRuleset,
+    definitions: INFINITE_HORROR_STATUS_DEFINITIONS, tokenCount: TOKEN_COUNT });
   const imported = setupSocket.wait(message => message.type === 'world.snapshot' && message.revision === 1, 'World import');
-  setupSocket.send({ type: 'world.push', baseRevision: 0, state: fixture(INFINITE_HORROR_STATUS_DEFINITIONS), reason: 'file-import:browser-performance' });
+  setupSocket.send({ type: 'world.push', baseRevision: 0, state: initialState, reason: 'file-import:browser-performance' });
   await imported;
   console.error(`[browser-benchmark] ${TOKEN_COUNT} Token World imported`);
 
@@ -574,6 +545,9 @@ try {
     version: packageJson.version, browser: browserName, headless, browserExecutable: browserExecutable(),
     packageRoot, build: buildInfo, mapPackage: server.mapPackage,
     fixture: { sessions: SESSION_COUNT, actors: ACTOR_COUNT, tokens: TOKEN_COUNT, viewport: '1920x1080' },
+    fixturePreparation: { normalization: 'normalizeWorldV2 + projectWorldV2ToRuntimeState before import',
+      actorCreatedAt: BROWSER_BENCHMARK_TIMESTAMP, actorUpdatedAt: BROWSER_BENCHMARK_TIMESTAMP,
+      mapFingerprint: server.mapPackage.fingerprint, ruleset: { id: infiniteHorrorRuleset.id, version: infiniteHorrorRuleset.version } },
     diagnosticProfileSession: profileSessionIndex,
     phases, recovery, generatedAt: new Date().toISOString(),
   }, { runAudit: process.env.RPGMAP_BROWSER_BENCHMARK_ENVIRONMENT_AUDIT === '1'
