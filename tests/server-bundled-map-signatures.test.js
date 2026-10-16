@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import lanzhou from '../reference/maps/lanzhou/runtime.json' with { type: 'json' };
-import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import lanzhou from '../maps/lanzhou/runtime.json' with { type: 'json' };
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 import { mapForScene } from '../src/server/movement-authority-entry.js';
 import { sceneVisionContext, releaseVisionContexts } from '../src/vision/context.js';
+import { prepareMapPackage } from '../src/map-package/contract.js';
+import { installServerMapFixtures } from './helpers/server-map-fixture.js';
+import { readFile } from 'node:fs/promises';
+
+installServerMapFixtures();
 
 function assertFrozenData(value) {
   if (!value || typeof value !== 'object') return;
@@ -15,13 +20,17 @@ function assertFrozenData(value) {
 }
 
 for (const original of [lanzhou, createMinimalReferencePackage()]) {
-  test(`server owns immutable bundled ${original.id} without changing public package data`, () => {
+  test(`server reuses immutable verified ${original.id} without changing public authoring data`, () => {
     const scene = { id: 'scene', mapPackage: { id: original.id, version: original.version },
       featureStates: {}, sceneEvents: [], occlusionShapes: [], tokens: [] };
     const owned = mapForScene(scene);
     assert.notEqual(owned, original);
-    assert.equal(JSON.stringify(owned), JSON.stringify(original));
-    assert.deepEqual(Object.keys(owned), Object.keys(original));
+    const normalized = prepareMapPackage({ ...original, svg: owned.svg });
+    assert.deepEqual(owned.features, normalized.features);
+    assert.deepEqual(owned.navigation, original.navigation);
+    assert.equal(owned.width, original.width);
+    assert.equal(owned.height, original.height);
+    assert.match(owned.fingerprint, /^[0-9a-f]{64}$/);
     assertFrozenData(owned);
     assert.notEqual(owned.features, original.features);
     assert.notEqual(owned.features[0].geometry.points[0], original.features[0].geometry.points[0]);
@@ -68,3 +77,11 @@ for (const original of [lanzhou, createMinimalReferencePackage()]) {
     } finally { JSON.stringify = stringify; releaseVisionContexts(owned); }
   });
 }
+
+test('server authority imports no bundled map and rejects mismatched installed versions', async () => {
+  const source = await readFile(new URL('../src/server/movement-authority-entry.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /reference\/maps|createMinimalReferencePackage|runtime\.json|BUILT_IN_LANZHOU_MAP/);
+  assert.match(source, /setServerMapResolver/);
+  assert.equal(mapForScene({ mapPackage: { id: 'not-installed', version: '1.0.0' } }), null);
+  assert.equal(mapForScene({ mapPackage: { id: lanzhou.id, version: '9.9.9' } }), null);
+});

@@ -146,7 +146,7 @@ export function createSceneAreaHandleSystem() {
       }
 
       function beginDrag(kind) {
-        if (saving || destroyed) return false;
+        if (saving || destroyed || api.world?.isSceneTransitionPending?.()) return false;
         const selected = api.sceneAreas.getSelected();
         if (!selected) return false;
         const state = api.getState();
@@ -243,6 +243,12 @@ export function createSceneAreaHandleSystem() {
       panel?.addEventListener('click', renderSoon, true);
       for (const name of ['state:commit', 'state:import', 'scene:activate', 'area:create']) {
         off.push(api.on?.(name, renderSoon));
+      }
+      for (const name of ['scene:switch-starting', 'scene:reset-starting']) {
+        off.push(api.on?.(name, () => {
+          clearRenderTimer(); dragging = false; draft = null; dragBase = null; selectedAreaId = null;
+          handleLayer.clearLayers(); previewLayer.clearLayers(); handles.clear();
+        }));
       }
       off.push(api.on?.('scene:content-change', event => {
         if (!event.detail?.types?.some(type => type === 'AttackArea' || type === 'Marker')) return;

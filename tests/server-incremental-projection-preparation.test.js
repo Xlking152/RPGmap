@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { hasCompletePreciseTokenProjection } from '../deployment/local-server/movement-projection.mjs';
 import { createDocumentChanges, createFogDocumentChanges } from '../src/documents/changes.js';
-import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges } from '../src/vision/audience.js';
+import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, hasCanonicalPrivateMovementPredecessor } from '../src/vision/audience.js';
 import { createPreviousProjectionFunctions } from './fixtures/server-incremental-before-preparation.js';
 
 const server = readFileSync(new URL('../deployment/local-server/server.mjs', import.meta.url), 'utf8');
@@ -11,8 +12,8 @@ const functionSource = server.slice(server.indexOf('function lightweightProjecti
 const currentFactory = new Function('dependencies', `
   const { sessions, audienceStateFor, projectMotionForSession, createFogDocumentChanges,
     createDocumentChanges, sendSocket, rememberResumeCommit, committedPatches,
-    describeVisionForToken, describeServerVision, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, visionMapForScene,
-    findUser, assertCanonicalWorldState, structuredClone, metrics } = dependencies;
+    describeVisionForToken, describeServerVision, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, hasCanonicalPrivateMovementPredecessor, visionMapForScene,
+    findUser, assertCanonicalWorldState, hasCompletePreciseTokenProjection, structuredClone, metrics } = dependencies;
   ${functionSource}
   const shell = lightweightProjectionShell;
   lightweightProjectionShell = (...args) => { metrics.shells++; return shell(...args); };
@@ -60,8 +61,8 @@ function harness(previous = false, overrides = {}) {
   const metrics = { shells: 0, clones: 0, targets: 0, preparedTargets: [], caches: [],
     calls: [], responses: [], resumptions: [] };
   const dependencies = {
-    sessions: new Map(), committedPatches: new WeakMap(), metrics,
-    advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges,
+    sessions: new Map(), committedPatches: new WeakMap(), metrics, hasCompletePreciseTokenProjection,
+    advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, hasCanonicalPrivateMovementPredecessor,
     describeServerVision: () => ({}), visionMapForScene: () => null, findUser: () => null,
     assertCanonicalWorldState: { isImmutableData: () => false },
     structuredClone(value) { metrics.clones++; return structuredClone(value); },

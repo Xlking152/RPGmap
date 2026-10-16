@@ -8,9 +8,9 @@ import {
   featureEntranceText,
   featureSubtypeLabel,
 } from '../src/interaction/ui-model.js';
-import { LANZHOU_FEATURE_TAXONOMY, LANZHOU_LAYER_PLAN } from '../reference/maps/lanzhou/manifest.js';
-import { createLanzhouSvg } from '../reference/maps/lanzhou/package.js';
-import { MINIMAL_FEATURE_TAXONOMY, createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { LANZHOU_FEATURE_TAXONOMY, LANZHOU_LAYER_PLAN } from '../maps/lanzhou/manifest.js';
+import { createLanzhouSvg } from '../maps/lanzhou/package.js';
+import { MINIMAL_FEATURE_TAXONOMY, createMinimalReferencePackage } from '../maps/minimal/package.js';
 
 function preparedGenericUiMap() {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><g data-layer="base"></g></svg>';

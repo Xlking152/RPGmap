@@ -1,0 +1,117 @@
+name: Build RPGmap Desktop Candidate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpgmap-desktop-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-candidate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.19.0'
+          cache: npm
+      - name: Pin npm
+        run: npm install --global npm@11.17.0 --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
+      - run: npm audit --registry=https://registry.npmjs.org --audit-level=high
+      - run: npm audit --registry=https://registry.npmjs.org --omit=dev --audit-level=high
+      - run: npm test
+      - name: Verify the vision raster oracle
+        run: node scripts/vision-mask-raster-check.mjs
+      - name: Check tracked JavaScript syntax
+        shell: pwsh
+        run: |
+          git ls-files -- '*.js' '*.mjs' '*.cjs' | ForEach-Object {
+            & node --check $_
+            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax failed: $_" }
+          }
+      - run: npm run build
+      - run: npm run check:bundle
+      - name: Build and verify the Windows installer
+        run: npm run package:desktop -- --skip-client-build
+        env:
+          RPGMAP_SOURCE_COMMIT: ${{ github.sha }}
+      - name: Verify actual installed payload
+        run: npm run check:desktop -- --installed=artifact/desktop/win-unpacked
+      - name: Export the independent preset map
+        run: npm run export:maps -- --out artifact/content-packages
+      - name: Install, update and launch the actual installer
+        shell: pwsh
+        env:
+          RPGMAP_SMOKE_EXPECTED_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          $version = node -p "require('./package.json').version"
+          & ./scripts/desktop-installer-smoke.ps1 -Installer "artifact/desktop/RPGmap-Setup-$version.exe" -Map 'artifact/content-packages/北宋兰州城-1.1.0.rpgmap'
+          if ($LASTEXITCODE -ne 0) { throw 'Actual desktop installer smoke failed.' }
+      - name: Freeze four-file candidate
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          & node scripts/desktop-release.mjs assemble "--version=$version" "--commit=${{ github.sha }}" "--installer=artifact/desktop/RPGmap-Setup-$version.exe" --map=artifact/content-packages/北宋兰州城-1.1.0.rpgmap --instructions=文档/操作指南.md --receipt=artifact/desktop-build-receipt.json --stage=artifact/desktop-stage --output=artifact/frozen/delivery --frozen-receipt=artifact/frozen/evidence/desktop-release-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw 'Four-file candidate assembly failed.' }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: RPGmap-desktop-${{ github.sha }}
+          path: |
+            artifact/frozen/
+            artifact/desktop-stage/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain failed installer diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: RPGmap-installer-failure-${{ github.sha }}
+          path: |
+            artifact/desktop-smoke/evidence/installer-smoke.json
+            artifact/desktop-smoke/evidence/desktop-smoke.json
+            artifact/desktop-smoke/evidence/desktop-smoke-process.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  backend-gates:
+    needs: desktop-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RPGMAP_BENCHMARK_TMPDIR: /dev/shm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.19.0'
+          cache: npm
+      - run: npm install --global npm@11.17.0 --no-audit --no-fund
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@v8
+        with:
+          name: RPGmap-desktop-${{ github.sha }}
+          path: candidate
+      - run: npm run benchmark
+      - name: Assert the LAN performance budget
+        run: npm run benchmark:lan -- --assert
+      - name: Assert large-range performance on the exact desktop payload
+        run: node scripts/occlusion-lan-benchmark.mjs --package=candidate/desktop-stage/resources --map=candidate/frozen/delivery/北宋兰州城-1.1.0.rpgmap --rounds=5 --warmup-rounds=1 --assert
+
+# Seven-browser latency investigation is explicitly deferred for v3.0.0.
+# Existing browser/performance benchmark assertions remain in source; this CI
+# neither marks those measurements passed nor replaces them with hosted data.

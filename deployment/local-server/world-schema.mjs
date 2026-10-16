@@ -31,6 +31,7 @@ const snapshotTraversalHooks = [
   [Object, 'getOwnPropertyDescriptors', Object.getOwnPropertyDescriptors],
   [Object, 'getOwnPropertyNames', Object.getOwnPropertyNames], [Object, 'hasOwn', Object.hasOwn],
   [Object, 'isFrozen', Object.isFrozen], [types, 'isProxy', types.isProxy],
+  [Object, 'freeze', Object.freeze],
   [Reflect, 'ownKeys', Reflect.ownKeys], [Array, 'isArray', Array.isArray],
   [Number, 'isFinite', Number.isFinite], [Math, 'max', Math.max], [JSON, 'stringify', JSON.stringify],
   [globalThis, 'WeakSet', WeakSet],
@@ -92,15 +93,23 @@ function standardArrayIteration() {
 // This proof is local to one snapshot attempt. An accepted immutable document
 // needs no scan; a new graph must contain only ordinary own JSON data, so no
 // child can change iterator hooks while the optimized loop is running.
-function readOnlyJsonGraph(value, immutableData, acceptedNode = null, proven = null, leanDescriptors = false) {
+function readOnlyJsonGraph(value, immutableData, acceptedNode = null, proven = null, leanDescriptors = false, frozenProven = null) {
   const visiting = new WeakSet(), accepted = new WeakSet();
+  // Only branches whose complete graph was already frozen can retain this
+  // proof across later structural validation and freezing hooks. Ordinary
+  // mutable candidates keep their existing post-acceptance lazy proof.
+  const frozenBranches = frozenProven ? new WeakSet() : null;
   let nodes = 0;
   const inspect = (current, depth) => {
     if (++nodes > WORLD_LIMITS.maxNodes || depth > WORLD_LIMITS.maxDepth) return false;
     if (current === null || typeof current === 'string' || typeof current === 'boolean') return true;
     if (typeof current === 'number') return Number.isFinite(current);
     if (!current || typeof current !== 'object' || types.isProxy(current)) return false;
-    if (immutableData.has(current) || accepted.has(current)) return true;
+    if (immutableData.has(current)) {
+      frozenBranches?.add(current);
+      return true;
+    }
+    if (accepted.has(current)) return true;
     if (acceptedNode && !acceptedNode(current)) return false;
     if (visiting.has(current)) return false;
     const arrayValue = Array.isArray(current), prototype = Object.getPrototypeOf(current);
@@ -108,17 +117,26 @@ function readOnlyJsonGraph(value, immutableData, acceptedNode = null, proven = n
     if (arrayValue && current.length > WORLD_LIMITS.maxArrayLength) return false;
     const keys = Reflect.ownKeys(current);
     const descriptors = leanDescriptors ? null : Object.getOwnPropertyDescriptors(current);
+    let frozenBranch = frozenBranches && Object.isFrozen(current);
     if (arrayValue && (keys.length !== current.length + 1 || keys[current.length] !== 'length')) return false;
     visiting.add(current);
     for (let index = 0; index < keys.length; index++) {
       const key = keys[index], descriptor = descriptors ? descriptors[key] : Object.getOwnPropertyDescriptor(current, key);
       if (typeof key !== 'string' || !Object.hasOwn(descriptor, 'value')
         || !(arrayValue && key === 'length') && !descriptor.enumerable) return false;
-      if (!(arrayValue && key === 'length') && !inspect(descriptor.value, depth + 1)) return false;
+      if (!(arrayValue && key === 'length')) {
+        if (!inspect(descriptor.value, depth + 1)) return false;
+        if (frozenBranch && descriptor.value && typeof descriptor.value === 'object'
+          && !frozenBranches.has(descriptor.value)) frozenBranch = false;
+      }
     }
     visiting.delete(current);
     accepted.add(current);
     if (proven) proven.push(current);
+    if (frozenBranch) {
+      frozenBranches.add(current);
+      frozenProven.push(current);
+    }
     return true;
   };
   return inspect(value, 0);
@@ -352,21 +370,7 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
   // The fixed server reducer owns these derived facts. One weak record per
   // accepted JSON object avoids repeatedly resizing separate weak tables during
   // large Fog commits. Public validators keep their original intrinsic calls.
-  // Spread new identities across four smaller weak tables. A large Fog history
-  // should not make a tiny movement pause while one whole table grows. Each
-  // object still owns exactly one record; lookup reads identities only.
-  const metadataTables = compactMetadata ? [new WeakMap(), new WeakMap(), new WeakMap(), new WeakMap()] : null;
-  let nextMetadataTable = 0;
-  const metadata = metadataTables ? {
-    get(value) {
-      return metadataTables[0].get(value) || metadataTables[1].get(value)
-        || metadataTables[2].get(value) || metadataTables[3].get(value);
-    },
-    set(value, record) {
-      metadataTables[nextMetadataTable].set(value, record);
-      nextMetadataTable = (nextMetadataTable + 1) % metadataTables.length;
-    },
-  } : null;
+  const metadata = compactMetadata ? new WeakMap() : null;
   const missingMetadata = metadata ? Symbol('missing canonical metadata') : null;
   const recordFor = value => {
     let record = metadata.get(value);
@@ -429,13 +433,14 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
     // root is ordinary data and traversal intrinsics remain standard. Share
     // that one proof only within this call; a partial or failed proof seeds
     // neither this memo nor the accepted/frozen graph caches.
-    let snapshotData = acceptedDataProof, singleSummaryAllowed = false;
+    let snapshotData = acceptedDataProof, singleSummaryAllowed = false, frozenSnapshotProof = null;
     if (wholeSnapshotProofAllowed()) {
-      const proven = [];
-      if (readOnlyJsonGraph(value, acceptedDataProof, null, proven, true)) {
+      const proven = [], frozenProven = [];
+      if (readOnlyJsonGraph(value, acceptedDataProof, null, proven, true, frozenProven)) {
         const localProof = new WeakSet(proven);
         snapshotData = { has: current => localProof.has(current) || acceptedDataProof.has(current) };
         singleSummaryAllowed = true;
+        frozenSnapshotProof = frozenProven;
       }
     }
     if (times) times.proof = diagnosticNow();
@@ -613,6 +618,12 @@ export function createCanonicalWorldValidator({ diagnostics = false, compactMeta
     for (let index = 0; index < pending.length; index++) {
       if (metadata) pending[index].metadataRecord.accepted = true;
       else acceptedData.add(pending[index].value);
+    }
+    // Publish only after every structural check and every freeze succeeded.
+    // This adds no retained graph: the receipt is stored in existing weak
+    // metadata, and the temporary proof arrays die with this validation call.
+    for (let index = 0; index < (frozenSnapshotProof?.length || 0); index++) {
+      immutableDataProofs.add(frozenSnapshotProof[index]);
     }
     if (times) {
       measurements.push({ objects: pending.length, documents: pendingDocuments.length,

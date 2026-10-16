@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { prepareMapPackage } from '../src/map-package/contract.js';
-import { applyLanzhouCapabilities } from '../reference/maps/lanzhou/capabilities.js';
+import { applyLanzhouCapabilities } from '../maps/lanzhou/capabilities.js';
 import { normalizeOcclusionShape, normalizeOcclusionShapes, resolveEffectiveOcclusionShapes } from '../src/vision/occlusion-model.js';
 import { deriveVisionOccluders, normalizeVisionOccluder, inspectLineOfSight, resolveSourceHostOccluderId,
   visionOccludersForSource, perceptionLevelAtPoint, lightContributionAtPoint } from '../src/spatial/kernel.js';

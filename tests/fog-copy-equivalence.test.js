@@ -103,7 +103,7 @@ test('numeric-row copy optimization preserves the span limit and atomic failure'
 });
 
 test('425 metre Lanzhou sweep retains every v2.5.4 visible cell and JSON order', async () => {
-  const map = JSON.parse(await readFile(new URL('../reference/maps/lanzhou/runtime.json', import.meta.url), 'utf8'));
+  const map = JSON.parse(await readFile(new URL('../maps/lanzhou/runtime.json', import.meta.url), 'utf8'));
   const occluders = deriveVisionOccluders(map, { featureStates: {}, sceneEvents: [], tokens: [] }, deriveSceneState([]));
   const fog = exploreFogVisibleSweep({}, 'party', { x: 2940, y: 2500, elevationMeters: 0 },
     { x: 3365, y: 2500, elevationMeters: 0 }, 1000, map, { occluders });

@@ -67,7 +67,7 @@ export function createMovementAuthority(resolveMapPackage, { prepareActorInputs 
     const capabilityFailure = reposition ? null : movementCapabilityFailure(movement, requestedMode, verticalAction);
     if (capabilityFailure) return failure(capabilityFailure);
     const transition = destination && (destination.placement === 'feature' || token.placement === 'feature');
-    if (!mapPackage) return transition ? failure('movement_map_unavailable') : { valid: true, collisionValidation: 'bounds-only' };
+    if (!mapPackage) return failure('movement_map_unavailable');
     if (!bases.has(mapPackage)) bases.set(mapPackage, createNavigationBase(mapPackage));
     const derived = deriveSceneState(scene.sceneEvents || []);
     const appState = { ...state, sceneEvents: scene.sceneEvents || [], preferences: { ...state?.preferences,

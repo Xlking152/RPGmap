@@ -4,8 +4,9 @@ import test from 'node:test';
 
 const runtimeSource = readFileSync(new URL('../src/engine/runtime.js', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
-const mapRuntimeSource = readFileSync(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
+const mapRuntimeSource = readFileSync(new URL('../src/runtime/map-runtime-base.js', import.meta.url), 'utf8');
 const builtinsSource = readFileSync(new URL('../src/map-package/builtins.js', import.meta.url), 'utf8');
+const installedPackagesSource = readFileSync(new URL('../src/adapters/installed-packages.js', import.meta.url), 'utf8');
 const rulesetBuiltinsSource = readFileSync(new URL('../src/ruleset/builtins.js', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const appShellSource = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
@@ -17,8 +18,8 @@ const sceneRenderer = readFileSync(new URL('../src/render/scene-renderer.js', im
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const indexSource = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const viteSource = readFileSync(new URL('../vite.config.js', import.meta.url), 'utf8');
-const packageSource = readFileSync(new URL('../scripts/package-local-server.mjs', import.meta.url), 'utf8');
-const packageVerifierSource = readFileSync(new URL('../scripts/verify-package.mjs', import.meta.url), 'utf8');
+const packageSource = readFileSync(new URL('../scripts/build-desktop-runtime.mjs', import.meta.url), 'utf8');
+const packageVerifierSource = readFileSync(new URL('../scripts/verify-desktop-package.mjs', import.meta.url), 'utf8');
 const browserSmokeSource = readFileSync(new URL('../scripts/browser-smoke.mjs', import.meta.url), 'utf8');
 
 test('application entry boots the Character-free World/Scene Token runtime', () => {
@@ -43,8 +44,14 @@ test('application chrome keeps the restrained neutral, river and brick palette',
   assert.match(indexSource, new RegExp(`RPGmap ${packageJson.version.replaceAll('.', '\\.')}<`));
 });
 
-test('production registry splits the built-in map and large vendors without suppressing chunk warnings', () => {
-  assert.match(mainSource, /registerBuiltInMapPackages/);
+test('production registry loads the installed map catalogue and keeps the runtime lazy without suppressing chunk warnings', () => {
+  assert.match(mainSource, /await registerInstalledMapPackages\(mapPackageRegistry\)/);
+  assert.doesNotMatch(mainSource, /registerBuiltInMapPackages|map-package\/builtins|reference\/maps|maps\/lanzhou/);
+  assert.match(installedPackagesSource, /\/api\/packages\/maps/);
+  assert.match(installedPackagesSource, /registry\.registerLoader/);
+  assert.match(installedPackagesSource, /map\.fingerprint !== entry\.fingerprint/);
+  assert.match(mainSource, /import\('\.\/world\/manager\.js'\)/);
+  assert.match(mainSource, /import\('\.\/world\/setup\.js'\)/);
   assert.match(mainSource, /listBuiltInRulesets/);
   assert.match(mainSource, /await import\('\.\/runtime\/map-runtime\.js'\)/);
   assert.match(mapRuntimeSource, /mapPackageRegistry\.load/);
@@ -60,8 +67,8 @@ test('production registry splits the built-in map and large vendors without supp
   assert.doesNotMatch(viteSource, /chunkSizeWarningLimit/);
   assert.match(viteSource, /manifest: true/);
   assert.match(packageSource, /worldSchema: 4/);
-  assert.match(packageVerifierSource, /version\.worldSchema !== 4/);
-  assert.match(packageVerifierSource, /manifest\[key\]\?\.name === 'map-runtime-core'/);
+  assert.match(packageVerifierSource, /JSON\.stringify\(present\) !== JSON\.stringify\(Object\.keys\(manifest\.files\)\.sort\(\)\)/);
+  assert.match(packageVerifierSource, /sha256\(bytes\) !== record\.sha256/);
   assert.match(browserSmokeSource, /value\.rulesetId === 'infinite-horror'/);
   assert.match(browserSmokeSource, /manifest\[key\]\?\.name === 'map-runtime-core'/);
   assert.doesNotMatch(browserSmokeSource, /assets\\\/ruleset-/);

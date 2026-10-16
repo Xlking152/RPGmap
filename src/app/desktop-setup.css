@@ -1,0 +1,47 @@
+:root { color-scheme: light; }
+.rpgmap-setup { min-height: 100vh; background: #f2eee6; color: #342c24; font: 15px/1.6 "Microsoft YaHei UI", "Segoe UI", sans-serif; }
+.rpgmap-setup * { box-sizing: border-box; }
+.setup-page { max-width: 1220px; padding: 38px 32px 56px; margin: 0 auto; }
+.setup-page-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 24px; }
+.setup-page-heading h1 { font-size: 32px; line-height: 1.3; margin: 2px 0 8px; }
+.setup-page-heading p { margin: 0; color: #6b6258; }
+.setup-page-heading .setup-eyebrow { color: #776044; font-size: 13px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; }
+.setup-version { color: #80684e; border: 1px solid #cfc5b7; border-radius: 32px; padding: 6px 16px; font-weight: 600; }
+.setup-status { margin: 0 0 22px; min-height: 44px; background: #e7ece5; border: 1px solid #ccd6c7; border-radius: 8px; padding: 9px 14px; overflow-wrap: anywhere; }
+.setup-status[data-error="true"] { color: #942c26; background: #f9e7e3; border-color: #e3bdb6; }
+.setup-content { display: grid; gap: 22px; }
+.setup-section { background: #fffdf8; border: 1px solid #d9d0c4; border-radius: 12px; box-shadow: 0 3px 12px rgb(60 44 32 / 4%); }
+.setup-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 20px 24px; border-bottom: 1px solid #e6ded3; }
+.setup-section-heading h2 { margin: 0 0 3px; font-size: 20px; }
+.setup-section-heading p { color: #776c60; margin: 0; font-size: 13px; }
+.setup-section-body { padding: 12px 24px 20px; }
+.setup-section-body > p { margin: 10px 0; }
+.setup-create-world { display: grid; grid-template-columns: 1.5fr 1fr 1fr auto; gap: 10px; margin: 8px 0 16px; }
+.rpgmap-setup input, .rpgmap-setup select { min-width: 0; padding: 9px 10px; border: 1px solid #cfc5b7; border-radius: 6px; background: #fff; color: #342c24; font: inherit; }
+.rpgmap-setup :focus-visible { outline: 3px solid #b79a65; outline-offset: 2px; }
+.setup-button { cursor: pointer; border: 1px solid #c5b9aa; background: #fffaf1; color: #4c3a29; border-radius: 6px; padding: 9px 13px; font: 600 13px/1.4 "Microsoft YaHei UI", "Segoe UI", sans-serif; white-space: nowrap; }
+.setup-button:hover { background: #f3e9d7; }
+.setup-button.is-primary { color: #fff9ef; background: #55402b; border-color: #55402b; }
+.setup-button.is-primary:hover { background: #725539; }
+.setup-button.is-danger { color: #9a352c; }
+.setup-button:disabled { cursor: default; opacity: .45; }
+.rpgmap-setup[data-busy="true"] .setup-button { pointer-events: none; opacity: .55; }
+.setup-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.setup-row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid #ece6dc; }
+.setup-row:last-child { border-bottom: 0; }
+.setup-row-copy { flex: 1; min-width: 220px; }
+.setup-row h3 { margin: 0 0 2px; font-size: 16px; }
+.setup-row p { margin: 0; color: #776c60; font-size: 13px; overflow-wrap: anywhere; }
+.setup-map-preview { height: 64px; width: 96px; border-radius: 6px; object-fit: cover; border: 1px solid #e6ded3; }
+.setup-empty, .setup-help { color: #776c60; font-size: 13px; }
+.setup-warning { flex-basis: 100%; color: #9a352c !important; }
+.setup-data-path { color: #776c60; overflow-wrap: anywhere; font-size: 13px; }
+.setup-connection { margin: 14px 0; border-left: 3px solid #c8b795; padding-left: 12px; }
+.setup-connection h3 { font-size: 14px; margin: 0 0 5px; }
+.setup-connection code { display: block; overflow-wrap: anywhere; font-size: 13px; }
+@media (max-width: 900px) {
+  .setup-page { padding: 24px 18px; }
+  .setup-section-heading { flex-wrap: wrap; padding: 18px; }
+  .setup-section-body { padding: 10px 18px 18px; }
+  .setup-create-world { grid-template-columns: 1fr 1fr; }
+}

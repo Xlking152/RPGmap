@@ -1,2 +1,2 @@
-// Compatibility shim. The real reference map now lives under reference/maps/lanzhou/.
-export * from '../../reference/maps/lanzhou/package.js';
+// Compatibility shim. The real reference map now lives under maps/lanzhou/.
+export * from '../../maps/lanzhou/package.js';

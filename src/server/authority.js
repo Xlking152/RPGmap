@@ -12,7 +12,7 @@ import {
   visionIgnoresOcclusion,
 } from '../spatial/kernel.js';
 
-export { canUserControlToken, projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges } from '../vision/audience.js';
+export { canUserControlToken, projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, hasCanonicalPrivateMovementPredecessor } from '../vision/audience.js';
 export { sphereGroundRadiusMeters } from '../spatial/kernel.js';
 export { sceneVisionContext, sceneExplorationContext };
 export { mergeExploration } from '../vision/fog.js';
@@ -20,8 +20,14 @@ export { computeExplorationChunk, mergeExplorationChunkFog, createCanonicalExplo
 export { createExplorationOperationCapture } from '../vision/exploration-operations.js';
 export { createServerMovementAdjudicationActorResolver } from './movement-adjudication.js';
 
-export const serverRuleset = infiniteHorrorRuleset;
-const canonicalVisionDescriptions = new WeakMap();
+export let serverRuleset = infiniteHorrorRuleset;
+let canonicalVisionDescriptions = new WeakMap();
+
+export function configureServerRuleset(ruleset) {
+  if (!ruleset?.id || !ruleset?.version || !ruleset?.vision?.describe) throw new TypeError('Invalid server Ruleset');
+  serverRuleset = ruleset;
+  canonicalVisionDescriptions = new WeakMap();
+}
 
 // The bundled ruleset's normal-light detection derives only from Actor data
 // and Actor effects. Permission decisions and Token status precision are still

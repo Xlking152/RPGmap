@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { watch } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { mkdir, open, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -11,6 +12,7 @@ import { GM_SECRET, startBenchmarkServer, stopBenchmarkServer, connectBenchmarkC
 const argument = key => process.argv.find(value => value.startsWith(`--${key}=`))?.slice(key.length + 3);
 const root = path.resolve(argument('repo') || '.');
 const packageRoot = argument('package') ? path.resolve(argument('package')) : null;
+const mapArchive = argument('map') || process.env.RPGMAP_BENCHMARK_MAP_PACKAGE || null;
 const buildInfo = await benchmarkBuildInfo(root, packageRoot);
 const rounds = Number(argument('rounds') || 5);
 assert(Number.isSafeInteger(rounds) && rounds >= 1 && rounds <= 20, '--rounds must be an integer from 1 to 20');
@@ -25,7 +27,7 @@ const [{ createActorFromRulesetImport }, { infiniteHorrorRuleset }, { INFINITE_H
   load('src/token/model.js'), load('src/spatial/kernel.js'), load('src/engine/state.js'), load('src/engine/navigation.js'),
   load('src/vision/fog.js'), load('deployment/local-server/world-wal.mjs'), load('src/world/operations.js'),
 ]);
-const map = JSON.parse(await readFile(path.join(root, 'reference/maps/lanzhou/runtime.json'), 'utf8'));
+const map = JSON.parse(await readFile(path.join(root, existsSync(path.join(root, 'maps/lanzhou/runtime.json')) ? 'maps/lanzhou/runtime.json' : 'reference/maps/lanzhou/runtime.json'), 'utf8'));
 const sceneId = 'occlusion-lan-scene';
 const actorCount = 100, tokenCount = 500, playerCount = 6, distanceMeters = 425, rangeMeters = 1000;
 const emptyScene = { id: sceneId, sceneEvents: [], featureStates: {}, tokens: [] };
@@ -219,6 +221,7 @@ async function scenario(sourceCount) {
   const profileDir = argument('profile') ? path.resolve(argument('profile'), `sources-${sourceCount}`) : null;
   if (profileDir) await mkdir(profileDir, { recursive: true });
   const runtime = await startBenchmarkServer(root, { packageRoot,
+    mapArchive,
     nodeArgs: profileDir ? ['--cpu-prof', `--cpu-prof-dir=${profileDir}`] : [] });
   let observer;
   try {
@@ -369,6 +372,7 @@ async function scenario(sourceCount) {
       if (process.argv.includes('--debug')) console.error(JSON.stringify({ scenario: sourceCount, ...sample }));
     }
     return { sourceCount, parties: sourceCount, lighting: 'dark', lights: 3, rangeMeters, distanceMeters,
+      importedMapArchive: runtime.mapPackageEvidence,
       rounds, warmupRounds, warmupProcessedSamples: warmupRounds * sourceCount * 171,
       cpuProfileDirectory: profileDir, profileProcessId: profileDir ? runtime.child.pid : null,
       movementAck: summarizeLatency(ackTimes), allClientFanout: summarizeLatency(fanoutTimes),
@@ -396,6 +400,7 @@ async function scenario(sourceCount) {
 }
 
 const report = { repo: root, packageRoot, version: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version,
+  mapArchive: mapArchive ? path.resolve(mapArchive) : null,
   build: buildInfo,
   diagnosticProfiling: Boolean(argument('profile') || argument('canonical-diagnostics-dir')
     || process.env.RPGMAP_CANONICAL_DIAGNOSTICS === '1'),

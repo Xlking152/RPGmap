@@ -173,7 +173,7 @@ export function createMovementGhostRenderer() {
       };
       api.map.on('layeradd', handleLayerAdd);
       api.map.on('layerremove', handleLayerRemove);
-      for (const eventName of ['token:delete', 'state:import', 'scene:activate']) {
+      for (const eventName of ['token:delete', 'state:import', 'scene:activate', 'scene:switch-starting', 'scene:reset-starting']) {
         off.push(api.on?.(eventName, hide));
       }
       off.push(api.on?.('app:destroy', () => {

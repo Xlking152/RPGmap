@@ -4,6 +4,9 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { installServerPackageFixtures } from './server-package-fixtures.mjs';
+import { existsSync } from 'node:fs';
+import { MapPackageStore } from '../deployment/local-server/package-store.mjs';
 
 export const WAIT_MS = 60_000;
 export const GM_SECRET = 'BENCHMARK-GM-SECRET';
@@ -22,13 +25,39 @@ export function benchmarkMessage(event) {
   return message;
 }
 
+export function benchmarkPackagePaths(packageRoot) {
+  const runtimeRelative = existsSync(path.join(packageRoot, 'server', 'VERSION.json')) ? 'server' : '';
+  const runtimeDirectory = path.join(packageRoot, runtimeRelative);
+  return { runtimeRelative, runtimeDirectory, serverPath: path.join(runtimeDirectory, 'server.mjs'), appDirectory: path.join(packageRoot, 'app') };
+}
+
+export async function installBrowserBenchmarkMap(root, mapDir, { archivePath = process.env.RPGMAP_BENCHMARK_MAP_PACKAGE } = {}) {
+  const version = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
+  const candidates = archivePath ? [path.resolve(archivePath)] : [
+    path.join(root, 'artifact', 'content-packages', '北宋兰州城-1.1.0.rpgmap'),
+    path.join(root, 'release', `RPGmap-v${version}`, '北宋兰州城-1.1.0.rpgmap'),
+    path.join(root, 'artifact', `RPGmap-v${version}-验收`, '北宋兰州城-1.1.0.rpgmap'),
+    path.join(root, 'release', `RPGmap-v${version}-验收`, '北宋兰州城-1.1.0.rpgmap'),
+  ];
+  const source = candidates.find(candidate => existsSync(candidate));
+  if (!source) throw new Error('浏览器性能基准需要正式导出的兰州 .rpgmap；请先导出地图，或设置 RPGMAP_BENCHMARK_MAP_PACKAGE。');
+  const bytes = await readFile(source);
+  const store = await new MapPackageStore({ root: path.join(mapDir, 'packages', 'maps') }).initialize();
+  const installed = await store.install(bytes);
+  if (installed.id !== 'northern-song-lanzhou-1104' || installed.version !== '1.1.0') throw new Error('浏览器性能基准要求兰州地图 northern-song-lanzhou-1104@1.1.0。');
+  return { path: source, id: installed.id, version: installed.version, fingerprint: installed.fingerprint,
+    sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length };
+}
+
 export async function benchmarkBuildInfo(root, packageRoot) {
   if (!packageRoot) return { sourceVersion: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version };
-  const metadata = JSON.parse(await readFile(path.join(packageRoot, 'VERSION.json'), 'utf8'));
+  const { runtimeDirectory, runtimeRelative } = benchmarkPackagePaths(packageRoot);
+  const metadata = JSON.parse(await readFile(path.join(runtimeDirectory, 'VERSION.json'), 'utf8'));
   const fileHashes = {};
   // Both the server and the delivered browser code belong to the measured
   // build. Exclude map/ because it contains mutable user saves and jobs.
-  const runtimeFiles = (await readdir(packageRoot)).filter(file => file.endsWith('.mjs')).sort();
+  const runtimeFiles = (await readdir(runtimeDirectory)).filter(file => file.endsWith('.mjs'))
+    .map(file => runtimeRelative ? `${runtimeRelative}/${file}` : file).sort();
   const appFiles = [];
   async function collectAppFiles(relative) {
     const entries = await readdir(path.join(packageRoot, relative), { withFileTypes: true });
@@ -95,14 +124,17 @@ export function waitForMessage(socket, predicate, label = 'message', { operation
   });
 }
 
-export async function startBenchmarkServer(root, { packageRoot = null, env = {}, nodeArgs = [] } = {}) {
+export async function startBenchmarkServer(root, { packageRoot = null, env = {}, nodeArgs = [], mapArchive = null } = {}) {
   const mapDir = await mkdtemp(path.join(benchmarkTmpRoot, 'rpgmap-lan-benchmark-'));
-  const serverPath = packageRoot ? path.join(packageRoot, 'server.mjs') : path.join(root, 'deployment', 'local-server', 'server.mjs');
+  const mapPackageEvidence = mapArchive ? await installBrowserBenchmarkMap(root, mapDir, { archivePath: mapArchive }) : null;
+  if (!mapArchive) await installServerPackageFixtures(mapDir);
+  const packagedPaths = packageRoot ? benchmarkPackagePaths(packageRoot) : null;
+  const serverPath = packagedPaths?.serverPath || path.join(root, 'deployment', 'local-server', 'server.mjs');
   const child = spawn(process.execPath, [...nodeArgs, serverPath], {
     cwd: root,
     env: { ...process.env, NODE_ENV: 'test', RPGMAP_TEST_ALLOW_MISSING_ORIGIN: '1',
-      RPGMAP_GM_SECRET: GM_SECRET, RPGMAP_JOIN_CODE: JOIN_CODE, RPGMAP_MAP_DIR: mapDir,
-      RPGMAP_PUBLIC_DIR: packageRoot ? path.join(packageRoot, 'public') : mapDir, PORT: '0', ...env },
+      RPGMAP_GM_SECRET: GM_SECRET, RPGMAP_JOIN_CODE: JOIN_CODE, RPGMAP_DATA_DIR: '', RPGMAP_MAP_DIR: mapDir, RPGMAP_PACKAGE_DATA_DIR: mapDir,
+      RPGMAP_PUBLIC_DIR: packagedPaths?.appDirectory || mapDir, RPGMAP_STATIC_DIR: packagedPaths?.appDirectory || mapDir, PORT: '0', ...env },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   let stderr = '';
@@ -124,7 +156,7 @@ export async function startBenchmarkServer(root, { packageRoot = null, env = {},
       child.once('error', error => { clearTimeout(timer); reject(error); });
       child.once('exit', code => { clearTimeout(timer); reject(new Error(`Server exited ${code}\n${stderr}`)); });
     });
-    return { child, mapDir, sockets: [], serverPath, httpUrl: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws`, stderr: () => stderr };
+    return { child, mapDir, sockets: [], serverPath, mapPackageEvidence, httpUrl: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws`, stderr: () => stderr };
   } catch (error) {
     await stopBenchmarkServer({ child, mapDir });
     throw error;

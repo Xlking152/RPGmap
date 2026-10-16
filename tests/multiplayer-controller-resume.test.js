@@ -7,6 +7,8 @@ import { STATUS_SCHEMA_VERSION } from '../src/status/model.js';
 import { ACCESS_SCHEMA_VERSION } from '../src/permissions/model.js';
 import { registerRuntimeStateReader } from '../src/engine/state-access.js';
 import { readConnectionState } from '../src/multiplayer/connection-state.js';
+import { createDocumentBackendSystem } from '../src/documents/index.js';
+import { consumeSceneReloadConnection } from '../src/multiplayer/session.js';
 
 const settle = async () => { for (let index = 0; index < 12; index++) await Promise.resolve(); };
 
@@ -60,10 +62,11 @@ async function runtime(t, { internalReader = false } = {}) {
   const originalWebSocket = globalThis.WebSocket;
   globalThis.WebSocket = FakeWebSocket; FakeWebSocket.instances = [];
   let state = projectedState(), timerId = 0;
-  const timers = new Map(), storage = new Map([['rpgmap:multiplayer:visionSourceTokenId', 'scout']]);
+  const timers = new Map(), storage = new Map([['rpgmap:multiplayer:visionSourceTokenId', 'scout']]), tabStorage = new Map();
   const view = { location: { protocol: 'http:', host: '127.0.0.1:30000', hostname: '127.0.0.1' },
     performance: globalThis.performance,
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
+    sessionStorage: { getItem: key => tabStorage.get(key) ?? null, setItem: (key, value) => tabStorage.set(key, value), removeItem: key => tabStorage.delete(key) },
     setTimeout(callback) { const id = ++timerId; timers.set(id, callback); return id; },
     clearTimeout: id => timers.delete(id), setInterval: () => ++timerId, clearInterval() {},
   };
@@ -72,14 +75,19 @@ async function runtime(t, { internalReader = false } = {}) {
   const document = { defaultView: view, head: new Element(), body: new Element(), getElementById: () => null,
     createElement() { const element = new Element(); element.queries = { '[data-mp-label]': label }; return element; } };
   const map = new Element(); map.ownerDocument = document; map.closest = () => shell;
-  const listeners = new Map(), events = [], imports = [], documentCommits = [];
+  const listeners = new Map(), events = [], imports = [], documentCommits = [], patchCommits = [];
   const snapshots = { state: 0, world: 0 };
   const api = {
-    map: { getContainer: () => map }, mapPackage: { id: 'map' },
+    map: { getContainer: () => map }, mapPackage: { id: 'map', version: '1' }, ruleset: { id: 'test', version: '1' },
     getState: () => { snapshots.state++; return structuredClone(state); }, exportState: () => structuredClone(state),
-    world: { get: () => { snapshots.world++; return structuredClone(state.preferences.worldV2); } },
+    world: { get: () => { snapshots.world++; return structuredClone(state.preferences.worldV2); },
+      getActiveScene: () => state.preferences.worldV2.scenes.find(scene => scene.id === state.preferences.worldV2.activeSceneId) },
     tokens: { get: id => state.preferences.worldV2.scenes[0].tokens.find(token => token.id === id) || null },
-    async importState(next, persist) { state = structuredClone(next); imports.push({ state, persist }); },
+    async importState(next, persist) { state = structuredClone(next); imports.push({ state, persist }); api.emit('state:import', {}); },
+    applyAuthoritativePatchState(next, options) {
+      state = structuredClone(next); patchCommits.push(options);
+      api.documents?.applyCommitted?.(options.documentChanges, options); api.emit('state:patch', options);
+    },
     applyAuthoritativeDocumentChanges(changes, options) {
       state = applyDocumentChanges(state, changes, { updatedAt: options.updatedAt }); documentCommits.push(options);
     },
@@ -87,12 +95,13 @@ async function runtime(t, { internalReader = false } = {}) {
     emit(type, detail) { events.push({ type, detail }); for (const listener of listeners.get(type) || []) listener(detail); },
   };
   if (internalReader) t.after(registerRuntimeStateReader(api, () => state));
+  createDocumentBackendSystem().register(api);
   createMultiplayerController().register(api);
   t.after(() => { api.emit('app:destroy'); globalThis.WebSocket = originalWebSocket; });
   api.multiplayer.connect({ name: 'Player', requestedRole: 'player', playerKey: 'claim', joinCode: 'join' });
   const first = FakeWebSocket.instances.at(-1); first.open(); await first.receive(welcome(state, 4));
   events.length = 0;
-  return { api, imports, documentCommits, events, snapshots, get state() { return state; },
+  return { api, imports, documentCommits, patchCommits, events, snapshots, view, get state() { return state; },
     reconnect() {
       FakeWebSocket.instances.at(-1).close();
       assert.equal(api.multiplayer.getStatus().connected, false);
@@ -100,6 +109,23 @@ async function runtime(t, { internalReader = false } = {}) {
       const socket = FakeWebSocket.instances.at(-1); socket.open(); return socket;
     } };
 }
+
+test('cross-map server snapshots preserve one-tab identity without importing into the old Runtime', async t => {
+  const client = await runtime(t), socket = FakeWebSocket.instances.at(-1);
+  let reloads = 0;
+  client.view.location.reload = () => { reloads++; };
+  const next = structuredClone(client.state);
+  next.preferences.worldV2.scenes[0].mapPackage = { id: 'other-map', version: '2' };
+  await socket.receive({ type: 'world.snapshot', revision: 5, state: next });
+  assert.equal(reloads, 1);
+  assert.equal(client.imports.length, 1, 'wrong-map snapshot must not replace the current Runtime');
+  assert.deepEqual(consumeSceneReloadConnection(client.view.sessionStorage, 'world', false), {
+    name: 'Player', requestedRole: 'player', playerKey: 'claim', joinCode: 'join', gmSecret: '',
+  });
+  client.api.emit('scene:reload-required', {});
+  client.api.multiplayer.disconnect();
+  assert.equal(consumeSceneReloadConnection(client.view.sessionStorage, 'world', false), null);
+});
 
 test('light connection reads stay current and detached without copying private access tables', async t => {
   const client = await runtime(t, { internalReader: true });
@@ -136,6 +162,77 @@ test('light connection reads stay current and detached without copying private a
   const legacy = { connected: true, session: { role: 'gm' } };
   assert.equal(readConnectionState({ multiplayer: { getStatus: () => legacy } }), legacy);
 });
+
+test('same-Scene vision-source audience refresh preserves input and applies the full filtered projection', async t => {
+  const client = await runtime(t), socket = FakeWebSocket.instances.at(-1);
+  let inputActive = true;
+  for (const event of ['state:import', 'scene:switch-starting']) client.api.on(event, () => { inputActive = false; });
+  const next = structuredClone(client.state);
+  next.preferences.audienceVision.source = { tokenId: 'other', x: 11, y: 20 };
+  next.preferences.worldV2.actors[0].name = 'Limited profile';
+  next.preferences.worldV2.actors[0].system = { permitted: true };
+  next.preferences.worldV2.scenes[0].tokens = next.preferences.worldV2.scenes[0].tokens.slice(0, 1);
+  next.preferences.worldV2.scenes[0].fog.exploredByParty.party.rows[0] = [[0, 8]];
+  next.preferences.entitySystem.tokens = next.preferences.worldV2.scenes[0].tokens;
+  await socket.receive({ type: 'audience.snapshot', audienceRevision: 1, revision: 4, reason: 'vision.source.set', state: next });
+  assert.equal(inputActive, true, 'ordinary source selection cannot cancel a live drag');
+  assert.equal(client.imports.length, 1);
+  assert.deepEqual(client.state, next);
+  assert.equal(client.api.tokens.get('other'), null, 'a filtered-out Token cannot remain in the recipient state');
+  assert.equal(client.api.documents.get({ type: 'Token', id: 'other', parent: { type: 'Scene', id: 'scene' } }), undefined);
+  assert(client.events.some(event => event.type === 'document:delete' && event.detail.document.id === 'other'));
+  assert(client.events.some(event => event.type === 'document:update' && event.detail.document.type === 'Fog'));
+  assert.deepEqual(client.patchCommits[0].changeSet.actors.upsertIds, ['actor']);
+  assert.deepEqual(client.patchCommits[0].changeSet.tokens[0].removeIds, ['other']);
+  assert.equal(client.patchCommits[0].changeSet.fog[0].sceneId, 'scene');
+  await socket.receive({ type: 'permissions.update', permissions: { actorOwnerIds: [], actorObserverIds: [] } });
+  assert.equal(client.api.multiplayer.canControlToken('scout'), false, 'new projection never restores revoked control');
+});
+
+test('a source snapshot removes private fields and entities and introduces newly visible entities', async t => {
+  const client = await runtime(t), socket = FakeWebSocket.instances.at(-1);
+  client.state.preferences.worldV2.actors[0].system = { privateSecret: 'remove me', visible: true };
+  client.state.preferences.worldV2.actors.push({ id: 'hidden-actor', system: { secret: true } });
+  client.api.emit('state:import', {});
+  assert.equal(client.api.documents.get({ type: 'Actor', id: 'actor' }).system.privateSecret, 'remove me');
+  const next = structuredClone(client.state);
+  next.preferences.worldV2.actors = [{ id: 'actor', name: 'Scout', type: 'pc', system: { visible: true }, effects: [] },
+    { id: 'new-actor', name: 'Visible now', system: {} }];
+  next.preferences.worldV2.scenes[0].tokens.push({ id: 'new-token', actorId: 'new-actor', placement: 'map', x: 14, y: 20 });
+  next.preferences.entitySystem.actors = next.preferences.worldV2.actors;
+  next.preferences.entitySystem.tokens = next.preferences.worldV2.scenes[0].tokens;
+  await socket.receive({ type: 'audience.snapshot', audienceRevision: 1, revision: 4, reason: 'vision.source.set', state: next });
+  assert.equal(client.state.preferences.worldV2.actors[0].system.privateSecret, undefined);
+  assert.equal(client.state.preferences.worldV2.actors.some(actor => actor.id === 'hidden-actor'), false);
+  assert.equal(client.api.tokens.get('new-token').actorId, 'new-actor');
+  assert.equal(client.api.documents.get({ type: 'Actor', id: 'actor' }).system.privateSecret, undefined);
+  assert.equal(client.api.documents.get({ type: 'Actor', id: 'hidden-actor' }), undefined);
+  assert.equal(client.api.documents.get({ type: 'Token', id: 'new-token', parent: { type: 'Scene', id: 'scene' } }).actorId, 'new-actor');
+  const changes = client.patchCommits[0].changeSet;
+  assert.deepEqual(changes.actors.removeIds, ['hidden-actor']);
+  assert.deepEqual(changes.actors.upsertIds, ['actor', 'new-actor']);
+  assert.deepEqual(changes.tokens[0].upsertIds, ['new-token']);
+});
+
+for (const change of ['scene', 'map-version', 'world', 'rules-version', 'ordinary-audience']) {
+  test(`a ${change} audience snapshot retains full import and input fencing`, async t => {
+    const client = await runtime(t), socket = FakeWebSocket.instances.at(-1), next = structuredClone(client.state);
+    let inputActive = true;
+    for (const event of ['state:import', 'scene:switch-starting']) client.api.on(event, () => { inputActive = false; });
+    if (change === 'scene') {
+      const target = structuredClone(next.preferences.worldV2.scenes[0]); target.id = 'target';
+      next.preferences.worldV2.scenes.push(target); next.preferences.worldV2.activeSceneId = 'target';
+    } else if (change === 'map-version') next.preferences.worldV2.scenes[0].mapPackage.version = '2';
+    else if (change === 'world') next.preferences.worldV2.id = 'another-world';
+    else if (change === 'rules-version') next.preferences.worldV2.ruleset.version = '2';
+    await socket.receive({ type: 'audience.snapshot', audienceRevision: 1, revision: 4,
+      reason: change === 'ordinary-audience' ? 'permissions.changed' : 'vision.source.set', state: next });
+    assert.equal(inputActive, false);
+    assert.equal(client.patchCommits.length, 0);
+    if (change !== 'map-version') assert.equal(client.imports.length, 2);
+    else assert(client.events.some(event => event.type === 'scene:switch-starting'), 'different map version must reload the Runtime');
+  });
+}
 
 test('accepted resume without a snapshot or missed patches preserves the confirmed source and projection', async t => {
   const client = await runtime(t), before = structuredClone(client.state), socket = client.reconnect();

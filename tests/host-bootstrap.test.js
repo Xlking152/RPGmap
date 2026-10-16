@@ -6,6 +6,12 @@ import {
   createMultiplayerHostBootstrapSystem,
   parseHostBootstrap,
 } from '../src/multiplayer/host-bootstrap.js';
+import { stageSceneReloadConnection, consumeSceneReloadConnection, clearSceneReloadConnection } from '../src/multiplayer/session.js';
+
+function tabStorage() {
+  const data = new Map();
+  return { getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value), removeItem: key => data.delete(key), data };
+}
 
 test('host launch URL keeps GM bootstrap in a localhost hash fragment', () => {
   const url = buildHostLaunchUrl({ port: 30000, gmSecret: 'FEDCBA9876543210' });
@@ -76,4 +82,39 @@ test('host bootstrap never auto-connects from a non-local URL', async () => {
   createMultiplayerHostBootstrapSystem().register(api);
   await Promise.resolve();
   assert.deepEqual(calls, []);
+});
+
+test('Scene reload reconnects the same World once, for localhost GM and remote Player', async () => {
+  for (const role of ['gm', 'player']) {
+    const storage = tabStorage(), calls = [], options = { name: role, requestedRole: role, joinCode: 'join',
+      gmSecret: role === 'gm' ? 'secret' : '', playerKey: role === 'player' ? 'claim' : '' };
+    assert.equal(stageSceneReloadConnection(storage, 'world', options), true);
+    const api = { world: { get: () => ({ id: 'world' }) }, map: { getContainer: () => ({ ownerDocument: { defaultView: {
+      sessionStorage: storage, location: { hostname: role === 'gm' ? '127.0.0.1' : 'game.example', hash: '' },
+      history: { replaceState() { throw new Error('reload must not add credentials to history'); } },
+    } } }) }, multiplayer: { connect: options => calls.push(options) } };
+    createMultiplayerHostBootstrapSystem().register(api);
+    await Promise.resolve();
+    assert.deepEqual(calls, [options]);
+    createMultiplayerHostBootstrapSystem().register(api);
+    await Promise.resolve();
+    assert.equal(calls.length, 1);
+    assert.equal(storage.data.size, 0);
+  }
+});
+
+test('reload credentials cannot cross Worlds, outlive the switch, elevate a remote GM, or survive disconnect', () => {
+  const cases = [ ['other', true, 100], ['world', false, 100], ['world', true, 120101], ['world', true, 99] ];
+  for (const [world, local, now] of cases) {
+    const storage = tabStorage();
+    stageSceneReloadConnection(storage, 'world', { name: 'GM', requestedRole: 'gm', gmSecret: 'secret' }, 100);
+    assert.equal(consumeSceneReloadConnection(storage, world, local, now), null);
+    assert.equal(storage.data.size, 0);
+  }
+  const storage = tabStorage();
+  stageSceneReloadConnection(storage, 'world', { requestedRole: 'player' });
+  clearSceneReloadConnection(storage);
+  assert.equal(consumeSceneReloadConnection(storage, 'world', true), null);
+  assert.equal(stageSceneReloadConnection(null, 'world', { requestedRole: 'player' }), false);
+  assert.equal(consumeSceneReloadConnection(null, 'world', true), null);
 });

@@ -71,6 +71,7 @@ export function createRulerController() {
       }
 
       function activate() {
+        if (api.world?.isSceneTransitionPending?.()) return false;
         if (enabled) return true;
         enabled = true;
         api.setTool?.('ruler');
@@ -98,6 +99,7 @@ export function createRulerController() {
       }
 
       function startFromToken(tokenId) {
+        if (api.world?.isSceneTransitionPending?.()) return false;
         const token = mapToken(tokenId);
         if (!token) {
           status('无法从该 Token 测距：Token 当前不在地图上');
@@ -139,9 +141,13 @@ export function createRulerController() {
       off.push(api.on?.('token:move', syncTokenButton));
       off.push(api.on?.('token:delete', syncTokenButton));
       off.push(api.on?.('state:import', () => { clear(''); syncTokenButton(); }));
+      for (const name of ['scene:switch-starting', 'scene:reset-starting', 'scene:activate']) {
+        off.push(api.on?.(name, () => { deactivate({ clearRuler: true }); clear(''); syncTokenButton(); }));
+      }
       syncTokenButton();
 
       const pointerDown = event => {
+        if (api.world?.isSceneTransitionPending?.()) return;
         if (!enabled || event.button !== 0) return;
         if (event.target.closest?.('.leaflet-control,.ui-primary-tool,.fvtt-move-confirm')) return;
         const point = pointFromEvent(event);
@@ -179,6 +185,7 @@ export function createRulerController() {
         render();
       };
       const keydown = event => {
+        if (api.world?.isSceneTransitionPending?.()) return;
         if (event.defaultPrevented || event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
         const key = event.key.toLowerCase();
         if (key === 'r' && !event.ctrlKey && !event.metaKey && !event.altKey) {

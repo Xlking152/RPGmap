@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { worldToLatLng } from '../src/engine/geometry.js';
 import { prepareMapPackage } from '../src/map-package/contract.js';
 import { featureAtMapLatLng } from '../src/interaction/map-inspector.js';
-import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 
 const movementIndex = await readFile(new URL('../src/movement/index.js', import.meta.url), 'utf8');
 const movementController = await readFile(new URL('../src/movement/controller.js', import.meta.url), 'utf8');

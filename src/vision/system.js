@@ -131,6 +131,7 @@ export function createVisionFogSystem() {
       let visibilitySignature = '';
       let visibilityAbort = null;
       let destroyed = false;
+      let transitionPaused = false;
       let animatedZoom = null;
       const positionCanvases = () => {
         const transform = visionZoomTransform(api.map, api.mapPackage.height, animatedZoom);
@@ -186,7 +187,7 @@ export function createVisionFogSystem() {
         }).finally(() => {
           if (visibilityAbort === controller) visibilityAbort = null;
           visibilityPending = false;
-          if (!destroyed && latestVisibilityRequest && latestVisibilityRequest.signature !== visibilityRowsCache?.signature) {
+          if (!destroyed && !transitionPaused && latestVisibilityRequest && latestVisibilityRequest.signature !== visibilityRowsCache?.signature) {
             requestVisibility(latestVisibilityRequest);
           }
         });
@@ -342,6 +343,7 @@ export function createVisionFogSystem() {
       }
 
       function render(dirtyBounds = null) {
+        if (destroyed || transitionPaused || api.world?.isSceneTransitionPending?.()) return;
         const renderStarted = performance.now();
         const audience = liveVisionState();
         if (!audience) {
@@ -515,6 +517,7 @@ export function createVisionFogSystem() {
       }
 
       function scheduleRender(dirtyBounds = null) {
+        if (destroyed || transitionPaused || api.world?.isSceneTransitionPending?.()) return;
         pendingDirtyBounds = pendingDirtyBounds === undefined
           ? dirtyBounds
           : mergeDirtyBounds(pendingDirtyBounds, dirtyBounds);
@@ -625,8 +628,32 @@ export function createVisionFogSystem() {
         if (changed || invalidation.render) scheduleRender(invalidation.dirtyBounds);
       }
       retain(api.on?.('state:commit', event => observeStateChange(eventDetail(event).changeSet)));
+      for (const eventName of ['scene:switch-starting', 'scene:reset-starting']) {
+        retain(api.on?.(eventName, () => {
+          transitionPaused = true; explorationGeneration++;
+          cancelVisibility(); cachedSubject = null; spatial = null;
+          if (renderFrame) {
+            const cancelFrame = documentNode.defaultView?.cancelAnimationFrame || clearTimeout;
+            cancelFrame(renderFrame); renderFrame = 0;
+          }
+          pendingDirtyBounds = undefined;
+        }));
+      }
+      const resumeSceneVisibility = () => {
+        transitionPaused = false;
+        cachedState = readRuntimeState(api); snapshotRevision = api.getStateRevision?.();
+        cachedSubject = null; spatial = null;
+        observedState = cachedState; observedSourceTokenId = confirmedSourceTokenId();
+        synchronizeLocalVision(); clearUnavailableConnectedSource();
+        exploredDirty = true; explorationDirty = true;
+        scheduleRender();
+      };
+      for (const eventName of ['scene:switch-complete', 'scene:switch-failed', 'scene:environment-reset', 'scene:cleared', 'scene:reset-failed']) {
+        retain(api.on?.(eventName, resumeSceneVisibility));
+      }
       for (const eventName of ['state:import', 'scene:activate']) {
         retain(api.on?.(eventName, () => {
+          transitionPaused = false;
           explorationGeneration += 1;
           cancelVisibility();
           cachedState = readRuntimeState(api); snapshotRevision = api.getStateRevision?.();

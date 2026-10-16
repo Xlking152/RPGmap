@@ -9,9 +9,9 @@ import {
 import {
   LANZHOU_OPENABLE_FEATURE_IDS,
   applyLanzhouCapabilities,
-} from '../reference/maps/lanzhou/capabilities.js';
-import { createLanzhouMapPackage } from '../reference/maps/lanzhou/package.js';
-import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+} from '../maps/lanzhou/capabilities.js';
+import { createLanzhouMapPackage } from '../maps/lanzhou/package.js';
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 
 test('openable Features receive a compact default map toggle without category rules', () => {
   const feature = {

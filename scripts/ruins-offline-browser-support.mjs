@@ -1,12 +1,24 @@
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
+import { benchmarkBuildInfo, installBrowserBenchmarkMap } from './lan-benchmark-support.mjs';
+import { MapPackageStore } from '../deployment/local-server/package-store.mjs';
 
 // Serve the unchanged installed app through its real non-multiplayer bootstrap.
 // A LAN Runtime uses an intentional in-memory local overlay; that overlay is
 // not the browser-persistent offline World that must survive a page reload.
 export async function createPackagedOfflineServer(packageRoot) {
   const root = path.resolve(packageRoot, 'app');
+  const build = await benchmarkBuildInfo(process.cwd(), path.resolve(packageRoot));
+  let packageData = null, maps = null, importedMapArchive = null;
+  if (!String(build.metadata.version).startsWith('2.')) {
+    packageData = await mkdtemp(path.join(tmpdir(), 'rpgmap-offline-ruins-packages-'));
+    try {
+      importedMapArchive = await installBrowserBenchmarkMap(process.cwd(), packageData);
+      maps = await new MapPackageStore({ root: path.join(packageData, 'packages/maps') }).initialize();
+    } catch (error) { await rm(packageData, { recursive: true, force: true }); throw error; }
+  }
   const contentTypes = { '.html':'text/html', '.js':'text/javascript', '.css':'text/css',
     '.json':'application/json', '.svg':'image/svg+xml', '.webp':'image/webp',
     '.png':'image/png', '.woff2':'font/woff2', '.ico':'image/x-icon' };
@@ -18,6 +30,20 @@ export async function createPackagedOfflineServer(packageRoot) {
         response.end(JSON.stringify({status:'ok',app:'RPGmap',multiplayer:{enabled:false}}));
         return;
       }
+      const packageRequest = /^\/api\/packages\/maps(?:\/([^/]+)\/([^/]+)(?:\/files\/(.+))?)?$/.exec(pathname);
+      if (maps && packageRequest) {
+        if (!['GET', 'HEAD'].includes(request.method)) { response.writeHead(405).end(); return; }
+        if (!packageRequest[1]) {
+          response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ maps: maps.list() })); return;
+        }
+        const reference = { id: packageRequest[1], version: packageRequest[2] };
+        if (!packageRequest[3]) {
+          response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(maps.get(reference))); return;
+        }
+        const filename = maps.file(reference, packageRequest[3]);
+        response.setHeader('Content-Type', contentTypes[path.extname(filename)] || 'application/octet-stream');
+        response.end(await readFile(filename)); return;
+      }
       const filename = path.resolve(root, '.' + (pathname === '/' ? '/index.html' : pathname));
       if (!filename.startsWith(root + path.sep)) { response.writeHead(403).end(); return; }
       const bytes = await readFile(filename);
@@ -26,8 +52,17 @@ export async function createPackagedOfflineServer(packageRoot) {
     } catch { response.writeHead(404).end(); }
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  return { url:`http://127.0.0.1:${server.address().port}/`,
-    close:() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }) };
+  return { url:`http://127.0.0.1:${server.address().port}/`, importedMapArchive,
+    async close() {
+      await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
+      if (packageData) {
+        const directory = path.resolve(packageData);
+        if (path.dirname(directory) !== path.resolve(tmpdir()) || !path.basename(directory).startsWith('rpgmap-offline-ruins-packages-')) {
+          throw new Error('Refusing to remove unexpected offline ruins package directory');
+        }
+        await rm(directory, { recursive: true, force: true });
+      }
+    } };
 }
 
 export async function openPersistentOfflineRuntime({ evaluate, navigate, url }) {

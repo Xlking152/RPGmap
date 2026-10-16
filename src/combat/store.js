@@ -1,4 +1,5 @@
 import { createEmptyCombatState, normalizeCombatState } from './model.js';
+import { commitStoreProjection } from '../adapters/store-commit.js';
 
 const PREFERENCE_KEY = 'combatSystem';
 
@@ -19,20 +20,11 @@ export class CombatStore {
     const appState = this.api.getState();
     appState.preferences ||= {};
     appState.preferences[PREFERENCE_KEY] = structuredClone(this.state);
-    this.saving = true;
-    try {
-      // Combat mutations are an ordinary World commit.  Re-importing the
-      // whole state here wakes every runtime's state:import handler and could
-      // make the just-created tracker reload stale data and disappear.
-      if (typeof this.api.commitState === 'function') this.api.commitState(appState, { source: 'combat', render: false });
-      else this.api.importState(appState);
-    } finally {
-      queueMicrotask(() => { this.saving = false; });
-    }
+    return commitStoreProjection(this, appState, { source: 'combat', render: false });
   }
 
   clear() {
     this.state = createEmptyCombatState();
-    this.persist();
+    return this.persist();
   }
 }

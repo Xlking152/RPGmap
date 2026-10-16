@@ -9,19 +9,19 @@ export const rulesetRegistry = new RulesetRegistry([infiniteHorrorRuleset]);
 // can replace a registry entry with another Ruleset using the same ID.
 export const registeredInfiniteHorrorRuleset = rulesetRegistry.require(infiniteHorrorRuleset.id);
 
-let activeRulesetId = infiniteHorrorRuleset.id;
+let activeRulesetReference = { id: infiniteHorrorRuleset.id, version: infiniteHorrorRuleset.version };
 
 export function listRulesets() {
   return rulesetRegistry.list();
 }
 
 export function getActiveRuleset() {
-  return rulesetRegistry.require(activeRulesetId);
+  return rulesetRegistry.resolveReference(activeRulesetReference);
 }
 
-export function setActiveRuleset(id) {
-  const ruleset = rulesetRegistry.require(id);
-  activeRulesetId = ruleset.id;
+export function setActiveRuleset(reference) {
+  const ruleset = typeof reference === 'string' ? rulesetRegistry.require(reference) : rulesetRegistry.resolveReference(reference);
+  activeRulesetReference = { id: ruleset.id, version: ruleset.version };
   return ruleset;
 }
 
@@ -30,5 +30,5 @@ export function resolveRulesetReference(reference) {
 }
 
 export function activeRulesetIdValue() {
-  return activeRulesetId;
+  return activeRulesetReference.id;
 }

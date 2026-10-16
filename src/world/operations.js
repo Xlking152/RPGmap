@@ -1,3 +1,5 @@
+import { deriveWorldOperations } from "./operation-intents.js";
+export { deriveWorldOperations } from "./operation-intents.js";
 import {
   applyFeatureStateMergePatch,
   assertFeatureStatePatch,
@@ -41,6 +43,7 @@ import { normalizeJournalEntry } from '../journal/model.js';
 import { isCurrentRuntimeOperationInput } from '../engine/state-access.js';
 import { infiniteHorrorRuleset } from '../rulesets/infinite-horror/index.js';
 import { registeredInfiniteHorrorRuleset } from '../ruleset/index.js';
+import { createDefaultSceneSettings } from './scene-defaults.js';
 
 export {
   DOCUMENT_BATCH_LIMIT,
@@ -98,6 +101,8 @@ const OPERATION_TYPES = new Set([
   'scene.delete',
   'scene.content.replace',
   'scene.reset',
+  'scene.environment.reset',
+  'scene.clear',
   'scene.settings.patch',
   'scene.door.use',
   'scene.featureState.patch',
@@ -1074,6 +1079,45 @@ function applyCanonicalOperation(state, operation, context = {}) {
     return { action: type, sceneId: String(scene.id), tokenIds };
   }
 
+  if (type === 'scene.environment.reset' || type === 'scene.clear') {
+    if (!['gm', 'offline'].includes(context.source?.role)) {
+      fail('Only the GM can reset the Scene', 'scene_reset_gm_only');
+    }
+    const scene = sceneById(world, payload.sceneId);
+    if (payload.expectedActiveSceneId !== undefined
+      && (String(world.activeSceneId) !== identifier(payload.expectedActiveSceneId, 'expectedActiveSceneId')
+        || String(scene.id) !== String(world.activeSceneId))) {
+      fail('当前场景已切换，请重新操作', 'scene_content_conflict');
+    }
+    scene.sceneEvents = [];
+    scene.featureStates = {};
+    scene.occlusionShapes = [];
+    scene.fog = normalizeFogState();
+    const tokenIds = type === 'scene.clear' ? (scene.tokens || []).map(token => String(token.id)) : [];
+    if (type === 'scene.clear') {
+      scene.tokens = [];
+      scene.markers = [];
+      scene.attackAreas = [];
+      scene.settings = createDefaultSceneSettings();
+    }
+    const positionConflicts = [];
+    if (type === 'scene.environment.reset' && typeof context.validateTokenMovePath === 'function') {
+      for (const token of scene.tokens || []) {
+        if (token.placement !== 'map') continue;
+        const position = { placement: 'map', x: Number(token.x), y: Number(token.y),
+          elevationMeters: Number(token.elevationMeters) || 0 };
+        // Use reposition validation to ignore locks and action restrictions.
+        // This checks the restored geometry without moving or rewriting a Token.
+        const validation = context.validateTokenMovePath({ state, world, scene, token,
+          origin: position, destination: position, waypoints: [position], operationType: 'token.reposition' });
+        if (validation?.valid === false && validation.code === 'path_blocked') positionConflicts.push(String(token.id));
+      }
+    }
+    return { action: type, sceneId: String(scene.id), tokenIds,
+      positionConflicts,
+      resetScope: type === 'scene.clear' ? 'scene' : 'environment' };
+  }
+
   if (type === 'scene.content.replace') {
     const scene = sceneById(world, payload.sceneId);
     if (payload.expectedActiveSceneId !== undefined
@@ -1646,162 +1690,12 @@ function projectPatchedOperationState(state, patch) {
   return state;
 }
 
-function tokenWithout(token, keys) {
-  const value = clone(token);
-  keys.forEach(key => delete value[key]);
-  return value;
-}
 
-function unsupportedProjection(state) {
-  const copy = clone(state);
-  delete copy.markers;
-  delete copy.attackAreas;
-  delete copy.sceneEvents;
-  if (plainObject(copy.preferences)) {
-    delete copy.preferences.worldV2;
-    delete copy.preferences.entitySystem;
-    delete copy.preferences.combatSystem;
-    delete copy.preferences.chatSystem;
-    delete copy.preferences.gridVisible;
-    delete copy.preferences.featureStates;
-    delete copy.preferences.featureInteractions;
-  }
-  return copy;
-}
 
-export function deriveWorldOperations(beforeState, afterState) {
-  const beforeWorld = worldFromState(beforeState);
-  const afterWorld = clone(worldFromState(afterState));
-  const entity = afterState?.preferences?.entitySystem;
-  if (plainObject(entity)) {
-    if (Array.isArray(entity.actors)) afterWorld.actors = clone(entity.actors);
-    const scene = activeScene(afterWorld);
-    const tokens = mapById(entity.tokens || []);
-    scene.tokens = (scene.tokens || []).map(token => mergeRuntimeToken(token, tokens.get(String(token.id))));
-  }
-  const scene = activeScene(afterWorld);
-  if (Array.isArray(afterState?.markers)) scene.markers = clone(afterState.markers);
-  if (Array.isArray(afterState?.attackAreas)) scene.attackAreas = clone(afterState.attackAreas);
-  if (Array.isArray(afterState?.sceneEvents)) scene.sceneEvents = clone(afterState.sceneEvents);
-  if (afterState?.preferences?.gridVisible !== undefined) {
-    scene.settings = { ...clone(scene.settings || {}), gridVisible: afterState.preferences.gridVisible !== false };
-  }
-  const operations = [];
-  const unsupported = [];
-  if (Number(beforeWorld.schemaVersion) !== Number(afterWorld.schemaVersion)
-    || String(beforeWorld.id) !== String(afterWorld.id)
-    || !same(beforeWorld.ruleset, afterWorld.ruleset)) unsupported.push('world_identity');
-  if (!same(beforeState?.preferences?.chatSystem, afterState?.preferences?.chatSystem)) unsupported.push('chat');
-  if (!same(unsupportedProjection(beforeState), unsupportedProjection(afterState))) unsupported.push('runtime_state');
-  if (!same(beforeWorld.statusDefinitions, afterWorld.statusDefinitions)) unsupported.push('status_definitions');
 
-  const journals = diffById(beforeWorld.journals || [], afterWorld.journals || []);
-  journals.upsert.forEach(journal => operations.push({ type: 'journal.upsert', payload: {
-    journal,
-    expected: beforeWorld.journals?.find(entry => String(entry.id) === String(journal.id)) || null,
-  } }));
-  journals.remove.forEach(journalId => operations.push({ type: 'journal.delete', payload: {
-    journalId,
-    expected: beforeWorld.journals?.find(entry => String(entry.id) === String(journalId)) || null,
-  } }));
 
-  if (String(beforeWorld.name ?? '') !== String(afterWorld.name ?? '')) {
-    operations.push({ type: 'world.rename', payload: { name: afterWorld.name } });
-  }
 
-  const actors = diffById(beforeWorld.actors, afterWorld.actors);
-  const removedActorIds = new Set(actors.remove);
-  actors.upsert.forEach(actor => operations.push({ type: 'actor.upsert', payload: { actor } }));
-  actors.remove.forEach(actorId => operations.push({ type: 'actor.delete', payload: { actorId } }));
-
-  const beforeScenes = mapById(beforeWorld.scenes);
-  const afterScenes = mapById(afterWorld.scenes);
-  for (const [sceneId, scene] of afterScenes) {
-    const previous = beforeScenes.get(sceneId);
-    if (!previous) {
-      operations.push({ type: 'scene.upsert', payload: { scene } });
-      continue;
-    }
-    if (!same(sceneMetadata(previous), sceneMetadata(scene))) {
-      operations.push({ type: 'scene.upsert', payload: { scene } });
-      continue;
-    }
-    const beforeTokens = mapById(previous.tokens);
-    const afterTokens = mapById(scene.tokens);
-    for (const [tokenId, token] of afterTokens) {
-      const old = beforeTokens.get(tokenId);
-      if (!old) {
-        operations.push({ type: 'token.upsert', payload: { sceneId, token } });
-        continue;
-      }
-      if (same(old, token)) continue;
-      const placementKeys = ['placement', 'x', 'y', 'featureId'];
-      if (same(tokenWithout(old, placementKeys), tokenWithout(token, placementKeys))) {
-        operations.push({ type: 'token.move', payload: {
-          sceneId, tokenId, placement: token.placement,
-          x: token.x, y: token.y, featureId: token.featureId,
-        } });
-      } else if (same(tokenWithout(old, ['actorDelta']), tokenWithout(token, ['actorDelta']))) {
-        operations.push({ type: 'token.actorDelta.replace', payload: { sceneId, tokenId, actorDelta: token.actorDelta } });
-      } else {
-        operations.push({ type: 'token.upsert', payload: { sceneId, token } });
-      }
-    }
-    for (const [tokenId, token] of beforeTokens) {
-      if (!afterTokens.has(tokenId) && !removedActorIds.has(String(token.actorId))) {
-        operations.push({ type: 'token.delete', payload: { sceneId, tokenId } });
-      }
-    }
-    if (!same(sceneContent(previous), sceneContent(scene))) {
-      operations.push({ type: 'scene.content.replace', payload: { sceneId, ...sceneContent(scene) } });
-    }
-    const shapeDiff = diffById(previous.occlusionShapes || [], scene.occlusionShapes || []);
-    for (const shape of shapeDiff.upsert) operations.push({ type: 'scene.occlusionShape.upsert', payload: { sceneId, shape } });
-    for (const shapeId of shapeDiff.remove) operations.push({ type: 'scene.occlusionShape.delete', payload: { sceneId, shapeId } });
-    const beforeFeatureStates = plainObject(previous.featureStates) ? previous.featureStates : {};
-    const afterFeatureStates = plainObject(scene.featureStates) ? scene.featureStates : {};
-    for (const [featureId, value] of Object.entries(afterFeatureStates)) {
-      if (!same(beforeFeatureStates[featureId], value)) {
-        operations.push({
-          type: 'scene.featureState.patch',
-          payload: { sceneId, featureId, patch: createMergePatch(beforeFeatureStates[featureId], value) },
-        });
-      }
-    }
-    for (const featureId of Object.keys(beforeFeatureStates)) {
-      if (!Object.prototype.hasOwnProperty.call(afterFeatureStates, featureId)) {
-        operations.push({ type: 'scene.featureState.patch', payload: { sceneId, featureId, patch: null } });
-      }
-    }
-    if (!same(previous.fog, scene.fog)) unsupported.push('fog_projection_write');
-  }
-  if (String(beforeWorld.activeSceneId) !== String(afterWorld.activeSceneId)) {
-    operations.push({ type: 'scene.activate', payload: { sceneId: afterWorld.activeSceneId } });
-  }
-  for (const sceneId of beforeScenes.keys()) {
-    if (!afterScenes.has(sceneId)) operations.push({ type: 'scene.delete', payload: { sceneId } });
-  }
-  if (!same(beforeState?.preferences?.combatSystem, afterState?.preferences?.combatSystem)) {
-    operations.push({ type: 'combat.replace', payload: {
-      combatSystem: clone(afterState?.preferences?.combatSystem || { schemaVersion: 1, combat: null }),
-    } });
-  }
-  if (operations.length > WORLD_OPERATION_BATCH_LIMIT) unsupported.push('operation_limit');
-  return { operations: clone(operations), unsupported: [...new Set(unsupported)] };
-}
 
 export function isStatusWorldOperation(operation) {
   return STATUS_TYPES.has(String(operation?.type || ''));
-}
-
-function createMergePatch(before, after) {
-  if (!isFeatureStateObject(before) || !isFeatureStateObject(after)) return clone(after);
-  const patch = {};
-  for (const [key, value] of Object.entries(after)) {
-    if (!same(before[key], value)) patch[key] = createMergePatch(before[key], value);
-  }
-  for (const key of Object.keys(before)) {
-    if (!Object.prototype.hasOwnProperty.call(after, key)) patch[key] = null;
-  }
-  return patch;
 }

@@ -9,7 +9,7 @@ import {
 const runtimeSource = readFileSync(new URL('../src/engine/runtime.js', import.meta.url), 'utf8');
 const controlLayerSource = readFileSync(new URL('../src/interaction/control-layer.js', import.meta.url), 'utf8');
 const browserSmokeSource = readFileSync(new URL('../scripts/browser-smoke.mjs', import.meta.url), 'utf8');
-const windowsSmokeSource = readFileSync(new URL('../scripts/windows-smoke.ps1', import.meta.url), 'utf8');
+const desktopSmokeSource = readFileSync(new URL('../scripts/desktop-browser-smoke.mjs', import.meta.url), 'utf8');
 
 function controlFixture() {
   const button = { style: {} };
@@ -69,10 +69,10 @@ test('Packaged browser smoke requires a rendered ready Lanzhou map', () => {
   assert.match(browserSmokeSource, /mapImages > 0/);
 });
 
-test('Windows smoke defaults to at most two attempts and formal validation can require one', () => {
-  assert.match(windowsSmokeSource, /\$maximumAttempts = if \(\$SingleAttempt\) \{ 1 \} else \{ 2 \}/);
-  assert.match(windowsSmokeSource, /for \(\$attempt = 1; \$attempt -le \$maximumAttempts; \$attempt\+\+\)/);
-  assert.match(windowsSmokeSource, /retrying once with a fresh profile/);
-  assert.match(windowsSmokeSource, /failed after \$maximumAttempts attempts/);
-  assert.doesNotMatch(windowsSmokeSource, /-le 3|while \(\$true\)/);
+test('desktop smoke binds the installed source and requires normal server shutdown', () => {
+  assert.match(desktopSmokeSource, /assert\.equal\(buildSource\.commit, expectedSource/);
+  assert.match(desktopSmokeSource, /assert\.equal\(buildSource\.sourceDirty, false/);
+  assert.match(desktopSmokeSource, /Desktop did not shut down gracefully/);
+  assert.match(desktopSmokeSource, /await assert\.rejects\(fetch\(\x60\$\{origin\}\/api\/health\x60\)\)/);
+  assert.doesNotMatch(desktopSmokeSource, /maximumAttempts|retrying once with a fresh profile/);
 });

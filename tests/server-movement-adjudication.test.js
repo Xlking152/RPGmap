@@ -71,6 +71,45 @@ test('accepted fixed server Actors give the same descriptor as full public resol
   assert.equal(JSON.stringify(state), before);
 });
 
+test('only successful validation of the same accepted immutable system is reused', t => {
+  const { state, validate, resolve } = accepted(1, 1);
+  const world = worldOf(state), scene = world.scenes[0], token = scene.tokens[0], actor = world.actors[0];
+  const renamed = { ...actor, name: 'Renamed', effects: [] };
+  const imported = structuredClone(actor), invalid = structuredClone(actor);
+  imported.system.runtime.movementCapabilities.fly = false;
+  invalid.system.currentFormId = 'missing';
+  validate({ payload: [renamed, imported, invalid] });
+  const calls = new Map([actor, imported, invalid].map(item => [item.system.forms, 0]));
+  const descriptor = Object.getOwnPropertyDescriptor(Array.prototype, 'some'), some = descriptor.value;
+  t.after(() => Object.defineProperty(Array.prototype, 'some', descriptor));
+  // Observe the real fixed validator without changing its immutable contract.
+  Object.defineProperty(Array.prototype, 'some', { ...descriptor, value: function (...args) {
+    if (calls.has(this)) calls.set(this, calls.get(this) + 1);
+    return Reflect.apply(some, this, args);
+  } });
+  const input = candidate => ({ world: { ...world, actors: [candidate] }, scene, token, ruleset });
+  assert.strictEqual(resolve(input(actor)), actor);
+  const initialCalls = calls.get(actor.system.forms);
+  assert.ok(initialCalls > 0);
+  assert.strictEqual(resolve(input(actor)), actor);
+  assert.strictEqual(resolve(input(renamed)), renamed);
+  assert.equal(calls.get(actor.system.forms), initialCalls);
+  assert.strictEqual(resolve(input(imported)), imported);
+  assert.ok(calls.get(imported.system.forms) > 0);
+  assert.equal(resolve(input(invalid)), null);
+  const invalidCalls = calls.get(invalid.system.forms);
+  assert.ok(invalidCalls > 0);
+  assert.equal(resolve(input(invalid)), null);
+  assert.equal(calls.get(invalid.system.forms), invalidCalls * 2);
+  for (const candidate of [structuredClone(actor), Object.freeze(structuredClone(actor))]) {
+    assert.equal(resolve(input(candidate)), null);
+  }
+  assert.equal(resolve({ ...input(actor), ruleset: { ...ruleset } }), null);
+  const fresh = createServerMovementAdjudicationActorResolver({ isCanonicalData: validate.isImmutableData });
+  assert.strictEqual(fresh(input(actor)), actor);
+  assert.equal(calls.get(actor.system.forms), initialCalls * 2);
+});
+
 test('adjudication keeps fresh per-Token grants, elevation, multiple scenes and synthetic Actor deltas', () => {
   const { state, resolve } = accepted();
   const world = worldOf(state), scene = world.scenes[0];

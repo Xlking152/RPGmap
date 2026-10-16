@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import polygonClipping from 'polygon-clipping';
 import { prepareMapPackage } from '../src/map-package/contract.js';
-import { applyLanzhouCapabilities } from '../reference/maps/lanzhou/capabilities.js';
+import { applyLanzhouCapabilities } from '../maps/lanzhou/capabilities.js';
 import { createDamagePreview, deriveSceneState } from '../src/engine/state.js';
 import { pointInPolygon } from '../src/engine/geometry.js';
 import { deriveVisionOccluders, normalizeVisionOccluder, perceptionLevelAtPoint } from '../src/spatial/kernel.js';
@@ -76,7 +76,7 @@ test('the saved destruction edge and projected foreign shadows reproduce the Swe
 });
 
 test('Lanzhou circular destruction updates observer and light contours without a SweepEvent exception', () => {
-  const runtime = JSON.parse(readFileSync(new URL('../reference/maps/lanzhou/runtime.json',import.meta.url),'utf8'));
+  const runtime = JSON.parse(readFileSync(new URL('../maps/lanzhou/runtime.json',import.meta.url),'utf8'));
   const map = prepareMapPackage({...runtime,svg:'<svg></svg>',features:applyLanzhouCapabilities(runtime.features)});
   const area = { id:'repro-area',shape:'circle',center:{x:3581.491689174436,y:1553.9528916589916},radius:206.80454093031585 };
   const preview = createDamagePreview(area,map.features);

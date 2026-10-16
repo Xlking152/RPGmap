@@ -1,125 +1,79 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 
-const workflow = readFileSync(
-  new URL('../.github/workflows/publish-local-server-release.yml', import.meta.url),
-  'utf8',
-);
-const packageSource = readFileSync(new URL('../scripts/package-local-server.mjs', import.meta.url), 'utf8');
-const verifierSource = readFileSync(new URL('../scripts/verify-package.mjs', import.meta.url), 'utf8');
-const lanSmokeSource = readFileSync(new URL('../scripts/lan-vision-smoke.mjs', import.meta.url), 'utf8');
-const lanBenchmarkSource = readFileSync(new URL('../scripts/lan-performance-benchmark.mjs', import.meta.url), 'utf8');
-const lanBenchmarkSupport = readFileSync(new URL('../scripts/lan-benchmark-support.mjs', import.meta.url), 'utf8');
-const occlusionLanSource = readFileSync(new URL('../scripts/occlusion-lan-benchmark.mjs', import.meta.url), 'utf8');
-const browserBenchmarkSource = readFileSync(new URL('../scripts/browser-performance-benchmark.mjs', import.meta.url), 'utf8');
+const candidate = readFileSync(new URL('../.github/workflows/desktop-candidate.yml', import.meta.url), 'utf8');
+const publish = readFileSync(new URL('../.github/workflows/publish-desktop-release.yml', import.meta.url), 'utf8');
+const workflows = readdirSync(new URL('../.github/workflows/', import.meta.url));
 
-test('release publishing declares the repository without requiring a checkout', () => {
-  assert.match(
-    workflow,
-    /gh release create[\s\S]*?--repo "\$GITHUB_REPOSITORY"[\s\S]*?--target/,
-  );
-  assert.match(workflow, /Prepare release notes from changelog/);
-  assert.match(workflow, /Source Commit/);
-  assert.match(workflow, /--notes-file/);
-});
-
-test('release LAN benchmark isolates hosted-runner disk jitter without relaxing budgets', () => {
-  assert.match(
-    workflow,
-    /Assert LAN WebSocket performance budget[\s\S]*?RPGMAP_BENCHMARK_TMPDIR:\s*\/dev\/shm[\s\S]*?npm run benchmark:lan -- --assert/,
-  );
-  assert.match(lanBenchmarkSupport, /process\.env\.RPGMAP_BENCHMARK_TMPDIR/);
-  assert.match(lanBenchmarkSource, /for \(const type of \['move', 'status', 'chat', 'aggregate'\]\)/);
-  assert.match(lanBenchmarkSource, /ackMeasurement\[type\]\.p95Ms > 60/);
-  assert.match(lanBenchmarkSource, /measurement\[type\]\.p95Ms > 60/);
-  assert.match(lanBenchmarkSource, /moveBytes\.requestMax > 4096 \|\| moveBytes\.responseMax > 4096/);
-});
-
-test('automatic v2.5.4 publishing gates the exact Windows ZIP on large-range LAN and Chrome performance', () => {
-  const windowsJob = workflow.replaceAll('\r\n', '\n').split('\n  windows-smoke:')[1]?.split('\n  publish:')[0];
-  assert.ok(windowsJob, 'Windows package verification job must exist before publication');
-  const step = name => {
-    const marker = `      - name: ${name}\n`;
-    const start = windowsJob.indexOf(marker);
-    assert.notEqual(start, -1, `${name} must run in the Windows gate job`);
-    const remainder = windowsJob.slice(start + marker.length);
-    const end = remainder.indexOf('\n      - name:');
-    return end < 0 ? remainder : remainder.slice(0, end);
-  };
-  const gate = step('Determine v2.5.4 performance gates');
-  const lan = step('Assert large-range LAN performance on the candidate ZIP');
-  const browser = step('Assert seven-session Chrome performance on the candidate ZIP');
-  assert.match(gate, /id: occlusion_gates/);
-  assert.match(gate, /\[version\]\$version -ge \[version\]'2\.5\.4'/);
-  for (const check of [lan, browser]) {
-    assert.match(check, /if: steps\.occlusion_gates\.outputs\.required == 'true'/);
-    assert.match(check, /release\/unpacked\/RPGmap-v\$version/);
-    assert.match(check, /\$LASTEXITCODE -ne 0/);
+test('main and pull requests build the Windows desktop candidate with the locked toolchain and existing gates', () => {
+  assert.match(candidate, /pull_request:\s*\n\s*branches: \[main\]/);
+  assert.match(candidate, /push:\s*\n\s*branches: \[main\]/);
+  assert.match(candidate, /runs-on: windows-latest/);
+  for (const workflow of [candidate, publish]) {
+    assert.match(workflow, /node-version: '24\.19\.0'/);
+    assert.match(workflow, /npm install --global npm@11\.17\.0/);
   }
-  assert.match(lan, /occlusion-lan-benchmark\.mjs "--package=\$packageRoot" --rounds=5 --warmup-rounds=1 --assert/);
-  assert.match(browser, /RPGMAP_BENCHMARK_BROWSER: chrome/);
-  assert.match(browser, /RPGMAP_BROWSER_BENCHMARK_HEADLESS: '1'/);
-  assert.match(browser, /RPGMAP_BROWSER_BENCHMARK_SECONDS: '60'/);
-  assert.match(browser, /RPGMAP_BROWSER_BENCHMARK_TOKENS: '500'/);
-  assert.match(browser, /RPGMAP_BROWSER_BENCHMARK_SESSIONS: '7'/);
-  assert.match(browser, /\$env:RPGMAP_BENCHMARK_PACKAGE = \(Resolve-Path/);
-  assert.match(browser, /browser-performance-benchmark\.mjs --assert/);
-  assert.match(workflow, /publish:\s*\n\s*needs: \[candidate, windows-smoke\]/);
-  assert.match(occlusionLanSource, /result\.movementAck\.p95Ms > 60 \|\| result\.allClientFanout\.p95Ms > 60/);
-  assert.match(browserBenchmarkSource, /!withinMillisecondsBudget\(input\.p95, 16\.7\)/);
-  assert.match(browserBenchmarkSource, /session\.diagnostics\.averageFps < 58 \|\| frame\.p95 > 20/);
-  assert.match(browserBenchmarkSource, /recoveredMs > 13_000/);
+  for (const command of ['npm ci --no-audit --no-fund', 'npm test', 'npm run build', 'npm run check:bundle',
+    'npm run package:desktop', 'npm run check:desktop', 'npm run export:maps']) assert.ok(candidate.includes(command), command);
+  assert.equal((candidate.match(/npm audit --registry=https:\/\/registry\.npmjs\.org/g) || []).length, 2);
+  assert.match(candidate, /desktop-release\.mjs assemble/);
+  assert.match(candidate, /--receipt=artifact\/desktop-build-receipt\.json/);
+  assert.match(candidate, /artifact\/frozen\//);
+  assert.match(candidate, /artifact\/desktop-stage\//);
+  assert.match(candidate, /desktop-installer-smoke\.ps1 -Installer/);
+  assert.match(candidate, /RPGMAP_SMOKE_EXPECTED_SOURCE_COMMIT: \$\{\{ github\.sha \}\}/);
+  assert.match(candidate, /node scripts\/vision-mask-raster-check\.mjs/);
+  assert.match(candidate, /RPGMAP_BENCHMARK_TMPDIR: \/dev\/shm/);
+  assert.match(candidate, /npm run benchmark:lan -- --assert/);
+  assert.match(candidate, /occlusion-lan-benchmark\.mjs --package=candidate\/desktop-stage\/resources[^\n]+--rounds=5 --warmup-rounds=1 --assert/);
+  assert.doesNotMatch(candidate, /gh release|contents: write|package:local-server|RPGmap-v\*\.zip/);
 });
 
-test('release package closes every local server module inside the ZIP root', () => {
-  assert.match(packageSource, /'http-runtime\.mjs'/);
-  assert.match(packageSource, /'websocket-runtime\.mjs'/);
-  assert.match(packageSource, /'world-checkpoint\.mjs'/);
-  assert.match(verifierSource, /'world-checkpoint\.mjs'/);
-  assert.match(packageSource, /bundleServerModule\('src\/permissions\/model\.js', 'permissions-model\.mjs'\)/);
-  assert.match(packageSource, /bundleServerModule\('deployment\/local-server\/status-operations\.mjs', 'status-operations\.mjs'\)/);
-  assert.match(verifierSource, /imports outside the package root/);
-  assert.match(verifierSource, /imports missing package module/);
+test('release publication only promotes an immutable successful main artifact after checking the exact four downloaded files', () => {
+  assert.match(publish, /workflow_dispatch:/);
+  assert.doesNotMatch(publish, /\n  push:|\n  release:/);
+  assert.match(publish, /if: github\.ref == 'refs\/heads\/main'/);
+  assert.match(publish, /\^\[a-f0-9\]\{40\}\$/);
+  assert.match(publish, /test "\$\(git rev-parse HEAD\)" = "\$RELEASE_COMMIT"/);
+  for (const field of ['head_sha', 'head_branch', 'event', 'status', 'conclusion', 'path']) assert.ok(publish.includes(`r.${field}`));
+  assert.match(publish, /r\.path!=="\.github\/workflows\/desktop-candidate\.yml"/);
+  assert.match(publish, /gh run download "\$CANDIDATE_RUN"/);
+  assert.match(publish, /--name "RPGmap-desktop-\$RELEASE_COMMIT"/);
+  assert.match(publish, /desktop-release\.mjs verify[^\n]+--directory=candidate\/frozen\/delivery/);
+  assert.match(publish, /--stage=candidate\/desktop-stage/);
+  assert.match(publish, /r\.assets\.map\(a=>a\.name\)\.sort\(\)/);
+  assert.match(publish, /desktop-release\.mjs verify[^\n]+--directory=downloaded-draft/);
+  assert.match(publish, /desktop-release\.mjs verify[^\n]+--directory=downloaded-release/);
+  assert.match(publish, /gh release edit[^\n]+--draft=false --latest/);
+  assert.doesNotMatch(publish, /npm run build|package:desktop|export:maps|package:local-server|unzip|\.zip/);
 });
 
-test('packaged LAN smoke speaks the current protocol without legacy snapshot requests', () => {
-  assert.match(lanSmokeSource, /operationSchema: WORLD_OPERATION_SCHEMA_VERSION/);
-  assert.match(lanSmokeSource, /statusSchema: STATUS_SCHEMA_VERSION/);
-  assert.match(lanSmokeSource, /accessSchema: ACCESS_SCHEMA_VERSION/);
-  assert.match(lanSmokeSource, /type: 'world\.snapshot\.request'/);
-  assert.doesNotMatch(lanSmokeSource, /type: 'world\.request'/);
-});
-
-test('v2.5.4 publication requires large-range LAN and complete browser gates for the exact ZIP', () => {
-  const directory = mkdtempSync(path.join(tmpdir(), 'rpgmap-release-validation-'));
-  const version = '2.5.4', commit = 'a'.repeat(40), archive = Buffer.from('validated candidate');
-  const checks = Object.fromEntries(['tests', 'build', 'bundle', 'package', 'benchmark', 'lanBenchmark', 'chrome',
-    'visionBenchmark', 'occlusionLanBenchmark', 'browserBenchmark'].map(check => [check, 'passed']));
-  const validation = { version, commit, sha256: createHash('sha256').update(archive).digest('hex'), checks };
-  const verify = () => execFileSync(process.execPath, [fileURLToPath(new URL('../scripts/verify-local-validation.mjs', import.meta.url)),
-    directory, version, commit], { stdio: 'pipe', windowsHide: true });
-  const save = () => writeFileSync(path.join(directory, 'local-validation.json'), JSON.stringify(validation));
-  try {
-    writeFileSync(path.join(directory, `RPGmap-v${version}.zip`), archive);
-    for (const check of ['visionBenchmark', 'occlusionLanBenchmark', 'browserBenchmark']) {
-      validation.checks[check] = 'failed'; save();
-      assert.throws(verify, error => error.stderr.toString().includes(`Local check missing: ${check}`));
-      validation.checks[check] = 'passed';
-    }
-    // Passing labels alone must not promote a fake archive or substitute for
-    // the v2.5.4 raw package-bound performance evidence.
-    save(); assert.throws(verify, error => error.stderr.toString().includes('Candidate ZIP directory missing'));
-    writeFileSync(path.join(directory, `RPGmap-v${version}.zip`), 'different candidate');
-    assert.throws(verify, error => error.stderr.toString().includes('ZIP checksum mismatch'));
-  } finally {
-    if (path.dirname(path.resolve(directory)) !== path.resolve(tmpdir())
-      || !path.basename(directory).startsWith('rpgmap-release-validation-')) throw new Error('Unexpected validation temp directory');
-    rmSync(directory, { recursive: true, force: true });
+test('retired tag and ZIP workflows cannot publish a competing v3 release', () => {
+  for (const retired of ['multiplayer-test-package.yml', 'publish-local-candidate.yml', 'publish-local-server-release.yml']) {
+    assert.equal(workflows.includes(retired), false, retired);
   }
+  assert.deepEqual(workflows.sort(), ['desktop-candidate.yml', 'publish-desktop-release.yml']);
+});
+
+test('deferring browser latency leaves the original runtime performance assertions intact', () => {
+  const browser = readFileSync(new URL('../scripts/browser-performance-benchmark.mjs', import.meta.url), 'utf8');
+  const lan = readFileSync(new URL('../scripts/lan-performance-benchmark.mjs', import.meta.url), 'utf8');
+  const support = readFileSync(new URL('../scripts/lan-benchmark-support.mjs', import.meta.url), 'utf8');
+  assert.match(browser, /!withinMillisecondsBudget\(input\.p95, 16\.7\)/);
+  assert.match(browser, /session\.diagnostics\.averageFps < 58 \|\| frame\.p95 > 20/);
+  assert.match(browser, /recoveredMs > 13_000/);
+  assert.match(lan, /ackMeasurement\[type\]\.p95Ms > 60/);
+  assert.match(lan, /measurement\[type\]\.p95Ms > 60/);
+  assert.match(lan, /moveBytes\.requestMax > 4096 \|\| moveBytes\.responseMax > 4096/);
+  assert.match(support, /process\.env\.RPGMAP_BENCHMARK_TMPDIR/);
+});
+
+test('hosted LAN regression still speaks the current protocol', () => {
+  const source = readFileSync(new URL('../scripts/lan-vision-smoke.mjs', import.meta.url), 'utf8');
+  assert.match(source, /operationSchema: WORLD_OPERATION_SCHEMA_VERSION/);
+  assert.match(source, /statusSchema: STATUS_SCHEMA_VERSION/);
+  assert.match(source, /accessSchema: ACCESS_SCHEMA_VERSION/);
+  assert.match(source, /type: 'world\.snapshot\.request'/);
+  assert.doesNotMatch(source, /type: 'world\.request'/);
 });

@@ -3,16 +3,17 @@ import { canControlActor, validateLocalPlayerChange } from './permissions.js';
 import {
   deriveWorldOperations,
   WORLD_OPERATION_SCHEMA_VERSION,
-} from '../world/operations.js';
+} from '../world/operation-intents.js';
 import { applyDocumentChanges } from '../documents/changes.js';
 import { worldOperationsToDocumentWrites } from '../documents/protocol.js';
 import { STATUS_SCHEMA_VERSION } from '../status/model.js';
 import { ACCESS_SCHEMA_VERSION, canPlaceActorTemplate } from '../permissions/model.js';
 import { escapeMultiplayerHtml as escapeHtml } from './access-ui.js';
-import { createMultiplayerSessionStorage } from './session.js';
+import { createMultiplayerSessionStorage, stageSceneReloadConnection, clearSceneReloadConnection } from './session.js';
 import { createOperationId, parseTransportMessage, sendTransportMessage } from './transport.js';
 import { hasWorldOperationRevisionGap, shouldApplyOwnServerSnapshot } from './revision.js';
 import { readRuntimeState } from '../engine/state-access.js';
+import { sourceAudienceSnapshotChanges } from './audience-snapshot.js';
 
 const STYLE_ID = 'rpgmap-multiplayer-style';
 const REVISION_CONFLICT_RETRY_LIMIT = 3;
@@ -143,6 +144,13 @@ export function createMultiplayerController() {
       let reconnectCountdown = 0;
       let lastConnectionOptions = null;
       let resuming = false;
+
+      function prepareSceneReload() {
+        if (!connected || session?.identityStatus !== 'active' || !lastConnectionOptions) return;
+        stageSceneReloadConnection(windowNode.sessionStorage,
+          readRuntimeState(api)?.preferences?.worldV2?.id, lastConnectionOptions);
+      }
+      api.on?.('scene:reload-required', prepareSceneReload);
 
       const operationId = createOperationId;
 
@@ -358,7 +366,7 @@ export function createMultiplayerController() {
 
       function socketUrl() { return multiplayerSocketUrl(documentNode.defaultView?.location); }
 
-      function applyRemoteState(state, nextRevision, reason = 'remote', { serverState = state } = {}) {
+      function applyRemoteState(state, nextRevision, reason = 'remote', { serverState = state, sourceAudienceSnapshot = false } = {}) {
         if (!state || typeof state !== 'object') return Promise.resolve(false);
         const epoch = remoteEpoch;
         const requestedState = structuredClone(state);
@@ -373,22 +381,39 @@ export function createMultiplayerController() {
             const requestedScene = requestedScenes.find(scene => String(scene?.id || '') === String(requestedWorld?.activeSceneId || '')) || requestedScenes[0] || null;
             const requestedMapId = String(requestedScene?.mapPackage?.id || '');
             const loadedMapId = String(api.mapPackage?.id || api.mapPackage?.mapId || '');
-            if (requestedMapId && loadedMapId && requestedMapId !== loadedMapId) {
+            const requestedVersion = String(requestedScene?.mapPackage?.version || '');
+            const loadedVersion = String(api.mapPackage?.version || api.mapPackage?.mapVersion || '');
+            if (requestedScene?.id !== api.world?.getActiveScene?.()?.id) api.emit?.('scene:switch-starting', { sceneId: requestedScene?.id, mapPackage: requestedScene?.mapPackage });
+            if (requestedMapId && loadedMapId && (requestedMapId !== loadedMapId || requestedVersion !== loadedVersion)) {
+              api.emit?.('scene:switch-starting', { sceneId: requestedScene.id, mapPackage: requestedScene.mapPackage });
               revision = requestedRevision;
               lastServerState = structuredClone(serverState);
               lastObservedLocalState = structuredClone(requestedState);
               setMapStatus(`Scene 已切换到 ${requestedMapId}，正在重新载入地图…`);
+              prepareSceneReload();
               queueMicrotask(() => documentNode.defaultView?.location?.reload?.());
               return true;
             }
-            await api.importState(requestedState, false);
+            const sourceChanges = sourceAudienceSnapshot && typeof api.applyAuthoritativePatchState === 'function'
+              ? sourceAudienceSnapshotChanges(readRuntimeState(api), requestedState, {
+                reason, loadedMap: api.mapPackage, loadedRuleset: api.ruleset, currentRevision: revision,
+                nextRevision: requestedRevision, sceneTransitionPending: api.world?.isSceneTransitionPending?.() === true,
+              }) : null;
+            if (sourceChanges) {
+              api.applyAuthoritativePatchState(requestedState, {
+                source: 'audience.snapshot', revision: requestedRevision, changeSet: sourceChanges.changeSet,
+                documentChanges: sourceChanges.changes,
+              });
+            } else await api.importState(requestedState, false);
             if (epoch !== remoteEpoch) return false;
+            if (api.world?.isSceneTransitionPending?.()) api.emit?.('scene:switch-complete', { sceneId: requestedScene?.id, mapPackage: requestedScene?.mapPackage });
             revision = requestedRevision;
             lastServerState = structuredClone(serverState);
             lastObservedLocalState = structuredClone(requestedState);
             setMapStatus(`联机同步完成 · revision ${revision}${reason ? ` · ${reason}` : ''}`);
             return true;
           } catch (error) {
+            if (api.world?.isSceneTransitionPending?.()) api.emit?.('scene:switch-failed', { error });
             console.error('[RPGmap Multiplayer] remote state import failed', error);
             setMapStatus('联机同步失败：' + error.message);
             return false;
@@ -1078,7 +1103,9 @@ export function createMultiplayerController() {
           if (!Number.isSafeInteger(incomingAudienceRevision) || incomingAudienceRevision <= audienceRevision) return;
           audienceRevision = incomingAudienceRevision;
           audienceFingerprint = String(message.audienceFingerprint || audienceFingerprint);
-          applyRemoteState(message.state, Number(message.revision) || revision, message.reason || 'audience.snapshot')
+          applyRemoteState(message.state, Number(message.revision) || revision, message.reason || 'audience.snapshot', {
+            sourceAudienceSnapshot: message.reason === 'vision.source.set',
+          })
             .then(flushPendingNetworkWork);
           return;
         }
@@ -1149,19 +1176,23 @@ export function createMultiplayerController() {
           const applyPromise = Promise.resolve().then(() => {
                 const nextWorld = canonicalState.preferences.worldV2;
                 const nextScene = nextWorld.scenes.find(scene => scene.id === nextWorld.activeSceneId);
-                if (nextScene?.mapPackage?.id && nextScene.mapPackage.id !== String(api.mapPackage?.id || api.mapPackage?.mapId || '')) {
+                if (nextScene?.id !== api.world?.getActiveScene?.()?.id) api.emit?.('scene:switch-starting', { sceneId: nextScene?.id, mapPackage: nextScene?.mapPackage });
+                if (nextScene?.mapPackage?.id && (nextScene.mapPackage.id !== String(api.mapPackage?.id || api.mapPackage?.mapId || '')
+                  || String(nextScene.mapPackage.version || '') !== String(api.mapPackage?.version || api.mapPackage?.mapVersion || ''))) {
                   return applyRemoteState(canonicalState, incomingRevision, 'scene.map-package');
                 }
                 const started = api.diagnostics?.enabled ? windowNode.performance.now() : null;
                 api.applyAuthoritativeDocumentChanges(message.changes, {
                   source: 'document.batch', revision: incomingRevision, updatedAt: message.updatedAt, operationId: message.operationId,
                 });
+                if (api.world?.isSceneTransitionPending?.()) api.emit?.('scene:switch-complete', { sceneId: nextScene?.id, mapPackage: nextScene?.mapPackage });
                 if (started !== null) api.diagnostics.record('documents.apply', windowNode.performance.now() - started);
                 revision = incomingRevision;
                 lastServerState = canonicalState;
                 lastObservedLocalState = null;
                 return true;
               }).catch(error => {
+                if (api.world?.isSceneTransitionPending?.()) api.emit?.('scene:switch-failed', { error });
                 console.error('[RPGmap Multiplayer] authoritative Document patch apply failed', error);
                 return false;
               });
@@ -1421,6 +1452,7 @@ export function createMultiplayerController() {
 
       function disconnect() {
         intentionalClose = true;
+        clearSceneReloadConnection(windowNode.sessionStorage);
         clearReconnectTimer();
         stopHeartbeat();
         remoteEpoch += 1;
@@ -1564,6 +1596,18 @@ export function createMultiplayerController() {
       });
 
       api.multiplayer = {
+        async fetchManagement(path, options = {}) {
+          if (path !== '/api/manage/worlds/scene-backup') throw new Error('invalid_management_path');
+          if (!connected || !contentToken || session?.role !== 'gm' || session?.identityStatus !== 'active') throw new Error('gm_required');
+          const headers = new Headers(options.headers);
+          headers.set('Authorization', `Bearer ${contentToken}`);
+          const response = await windowNode.fetch(path, { ...options, headers, cache: 'no-store', credentials: 'same-origin', redirect: 'error' });
+          if (!response.ok) {
+            const value = await response.json().catch(() => ({}));
+            throw Object.assign(new Error(value.error || 'management_request_failed'), { code: value.error, status: response.status });
+          }
+          return response;
+        },
         async fetchContent(path = '', options = {}) {
           if (!connected || !contentToken || session?.identityStatus !== 'active') throw new Error('identity_required');
           if (!/^\/?(?:[a-f0-9]{64}(?:\/references)?)?$/.test(path)) throw new Error('invalid_content_path');

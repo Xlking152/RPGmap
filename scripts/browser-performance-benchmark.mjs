@@ -6,17 +6,24 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
-import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
-import { browserBenchmarkMovementTarget, browserBenchmarkPhaseOperations } from './browser-benchmark-movement.mjs';
+import { benchmarkBuildInfo, benchmarkPackagePaths, installBrowserBenchmarkMap } from './lan-benchmark-support.mjs';
+import { browserBenchmarkMovementTarget, browserBenchmarkMoveToken, browserBenchmarkPhaseOperations } from './browser-benchmark-movement.mjs';
 import { withinMillisecondsBudget } from './performance-budget.mjs';
 import { closeOwnedBrowser, rejectPendingCdp } from './owned-browser-close.mjs';
+import { runIncrementalEnvironmentAudit } from './v3-incremental-environment-audit.mjs';
+import { completeBrowserBenchmarkReport, finishBrowserBenchmarkReport } from './browser-benchmark-report.mjs';
+import { createBrowserBenchmarkFixture, BROWSER_BENCHMARK_ACTOR_COUNT as ACTOR_COUNT,
+  BROWSER_BENCHMARK_TIMESTAMP } from './browser-benchmark-fixture.mjs';
+import { MapPackageStore } from '../deployment/local-server/package-store.mjs';
+import { browserBenchmarkLongTaskRecorder, startBrowserDiagnosticTrace, finishBrowserDiagnosticTraces } from './browser-benchmark-profile.mjs';
 
 if (process.platform !== 'win32') throw new Error('Browser performance benchmark requires Windows');
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packageJson = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const packageRoot = path.resolve(process.env.RPGMAP_BENCHMARK_PACKAGE
-  || path.join(root, 'artifact', `RPGmap-v${packageJson.version}`));
+  || path.join(root, 'artifact', 'desktop-stage', 'resources'));
+const packagePaths = benchmarkPackagePaths(packageRoot);
 const browserName = String(process.env.RPGMAP_BENCHMARK_BROWSER || 'edge').toLowerCase();
 const headless = process.env.RPGMAP_BROWSER_BENCHMARK_HEADLESS === '1';
 const phaseSeconds = Math.max(5, Number(process.env.RPGMAP_BROWSER_BENCHMARK_SECONDS) || 60);
@@ -25,7 +32,6 @@ const profileSessionIndex = process.env.RPGMAP_BROWSER_BENCHMARK_PROFILE_SESSION
   ? null : Number(process.env.RPGMAP_BROWSER_BENCHMARK_PROFILE_SESSION);
 const GM_SECRET = 'BROWSER-BENCHMARK-GM';
 const JOIN_CODE = '246810';
-const ACTOR_COUNT = 100;
 const TOKEN_COUNT = Math.max(1, Math.min(500, Number(process.env.RPGMAP_BROWSER_BENCHMARK_TOKENS) || 500));
 const SESSION_COUNT = Math.max(1, Math.min(7, Number(process.env.RPGMAP_BROWSER_BENCHMARK_SESSIONS) || 7));
 if (profileSessionIndex !== null && (!Number.isInteger(profileSessionIndex)
@@ -107,53 +113,18 @@ class JsonSocket {
   close() { try { this.socket.close(); } catch {} }
 }
 
-function fixture(definitions) {
-  const actors = Array.from({ length: ACTOR_COUNT }, (_, index) => ({
-    id: `browser-actor-${index}`, name: `Browser Actor ${index}`, type: 'pc', partyId: 'browser-party',
-    system: {}, effects: [], notes: '', ownership: {},
-  }));
-  const tokens = Array.from({ length: TOKEN_COUNT }, (_, index) => ({
-    id: `browser-token-${index}`, actorId: `browser-actor-${index % ACTOR_COUNT}`,
-    actorLink: true, actorDelta: null, placement: 'map',
-    x: 2900 + (index % 25) * 2, y: 2500 + Math.floor(index / 25) * 2,
-    featureId: null, diameterMeters: 1, rotation: 0, elevationMeters: 0,
-    locked: false, showName: true, effects: [], controllerUserIds: [],
-    visibility: { mode: 'party', userIds: [] },
-    vision: { enabled: true, preciseRangeOverrideMeters: 80, vagueRangeOverrideMeters: 120, overrideUserIds: [] },
-    movement: { mode: 'walk', budgetMetersPerTurn: null, spentMeters: 0, adjudicationRequired: false },
-  }));
-  const scene = {
-    id: 'scene-northern-song-lanzhou-1104', name: 'Browser Performance Scene',
-    mapPackage: { id: 'northern-song-lanzhou-1104', version: '1.1.0' },
-    tokens, markers: [], attackAreas: [], sceneEvents: [], featureStates: {},
-    fog: { schemaVersion: 1, cellSizeMeters: 5, exploredByParty: {} },
-    settings: { gridVisible: true, lineOfSightEnabled: false },
-  };
-  const world = {
-    schemaVersion: 4, id: 'browser-performance-world', name: 'Browser Performance World',
-    ruleset: { id: 'infinite-horror', version: '1.1.0' }, activeSceneId: scene.id,
-    actors, statusDefinitions: definitions, scenes: [scene], journals: [], templateLibrary: {},
-    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
-  };
-  return {
-    version: 2, mapId: scene.mapPackage.id, mapVersion: scene.mapPackage.version,
-    markers: [], attackAreas: [], sceneEvents: [], preferences: {
-      worldV2: world,
-      entitySystem: { schemaVersion: 4, actors: structuredClone(actors), tokens: structuredClone(tokens), statusDefinitions: structuredClone(definitions) },
-      combatSystem: { schemaVersion: 2, combat: null },
-      chatSystem: { schemaVersion: 1, messages: [] },
-    },
-  };
-}
-
 async function launchServer({ port, mapDir }) {
+  const mapImportStartedAt = performance.now();
+  const mapPackage = await installBrowserBenchmarkMap(root, mapDir);
+  const mapImportMs = performance.now() - mapImportStartedAt;
   const startedAt = performance.now();
-  const child = spawn(process.execPath, [path.join(packageRoot, 'server.mjs')], {
-    cwd: packageRoot,
+  const child = spawn(process.execPath, [packagePaths.serverPath], {
+    cwd: packagePaths.runtimeDirectory,
     env: {
       ...process.env, NODE_ENV: 'test', RPGMAP_TEST_ALLOW_MISSING_ORIGIN: '1',
       RPGMAP_GM_SECRET: GM_SECRET, RPGMAP_JOIN_CODE: JOIN_CODE,
-      RPGMAP_MAP_DIR: mapDir, RPGMAP_PUBLIC_DIR: path.join(packageRoot, 'app'), PORT: String(port),
+      RPGMAP_DATA_DIR: '', RPGMAP_MAP_DIR: mapDir, RPGMAP_PACKAGE_DATA_DIR: mapDir,
+      RPGMAP_PUBLIC_DIR: packagePaths.appDirectory, RPGMAP_STATIC_DIR: packagePaths.appDirectory, PORT: String(port),
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true,
   });
@@ -170,7 +141,7 @@ async function launchServer({ port, mapDir }) {
     const response = await fetch(`http://127.0.0.1:${port}/api/health`).catch(() => null);
     return response?.ok;
   }, 'benchmark server');
-  return { child, output: () => output, startupMs: performance.now() - startedAt };
+  return { child, output: () => output, startupMs: performance.now() - startedAt, mapPackage, mapImportMs };
 }
 
 async function stopServer(server) {
@@ -234,18 +205,18 @@ class BrowserSession {
     });
     await Promise.all([this.send('Runtime.enable'), this.send('Network.enable'), this.send('Log.enable')]);
   }
-  send(method, params = {}) {
+  send(method, params = {}, timeoutMs = CDP_WAIT_MS) {
     if (!this.socket || !this.pending) return Promise.reject(new Error(`${this.name} CDP transport is unavailable`));
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`${this.name} ${method} timed out`)); }, CDP_WAIT_MS);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`${this.name} ${method} timed out`)); }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try { this.socket.send(JSON.stringify({ id, method, params })); }
       catch (error) { this.pending.delete(id); clearTimeout(timer); reject(error); }
     });
   }
-  async evaluate(expression) {
-    const result = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+  async evaluate(expression, timeoutMs = CDP_WAIT_MS) {
+    const result = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, timeoutMs);
     if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'evaluation failed');
     return result.result?.value;
   }
@@ -287,25 +258,11 @@ class BrowserSession {
       return true;
     })()`);
   }
-  async moveToken(tokenIndex, phaseName) {
-    const tokenId = `browser-token-${tokenIndex}`;
+  async moveToken(tokenIndex) {
     return this.evaluate(`(async () => {
       const api = document.querySelector('#app').rpgMapApp;
-      const before = api.tokens.get('${tokenId}');
-      const target = (${browserBenchmarkMovementTarget.toString()})(before, ${tokenIndex});
-      if (Number(before.x) === target.x && Number(before.y) === target.y) {
-        throw new Error('Benchmark target must differ from the current Token position');
-      }
-      await api.world.performOperations([{
-        type: 'token.move', payload: { sceneId: 'scene-northern-song-lanzhou-1104', tokenId: '${tokenId}',
-          placement: 'map', x: target.x, y: target.y, movementMode: 'walk' }
-      }], { source: 'benchmark:${phaseName}' });
-      const after = api.tokens.get('${tokenId}');
-      if (!after || Number(after.x) !== target.x || Number(after.y) !== target.y) {
-        throw new Error('Benchmark Token did not reach the committed target');
-      }
-      return { tokenId: '${tokenId}', from: { x: Number(before.x), y: Number(before.y) },
-        to: target, sourceTokenId: api.vision.getSource() };
+      return (${browserBenchmarkMoveToken.toString()})(api, ${tokenIndex},
+        ${browserBenchmarkMovementTarget.toString()});
     })()`);
   }
   async visionSnapshot(tokenIndex) {
@@ -389,12 +346,16 @@ function validatePhase(phase) {
 
 const port = await reservePort();
 const mapDir = await mkdtemp(path.join(os.tmpdir(), 'rpgmap-browser-performance-world-'));
-const outputRoot = path.join(root, 'output', 'playwright', `v${packageJson.version}-seven-session`);
+const outputRoot = path.join(root, 'output', 'playwright', profileSessionIndex === null
+  ? `v${packageJson.version}-seven-session`
+  : `v${packageJson.version}-diagnostic-profile-${profileSessionIndex}-${Date.now()}`);
 await mkdir(outputRoot, { recursive: true });
+console.error(`[browser-benchmark] output: ${outputRoot}`);
 let server = null;
 let setupSocket = null;
 const sessions = [];
 let benchmarkFailure = null;
+let completedMeasurements = null;
 const buildInfo = await benchmarkBuildInfo(root, packageRoot);
 
 try {
@@ -411,8 +372,16 @@ try {
   const { INFINITE_HORROR_STATUS_DEFINITIONS } = await import(pathToFileURL(
     path.join(root, 'src', 'rulesets', 'infinite-horror', 'statuses.js'),
   ).href);
+  const { infiniteHorrorRuleset } = await import(pathToFileURL(
+    path.join(root, 'src', 'rulesets', 'infinite-horror', 'index.js'),
+  ).href);
+  const installedMaps = await new MapPackageStore({ root: path.join(mapDir, 'packages', 'maps') }).initialize();
+  const mapPackage = installedMaps.get(server.mapPackage);
+  if (mapPackage.fingerprint !== server.mapPackage.fingerprint) throw new Error('Fixture map fingerprint differs from the actual imported archive');
+  const initialState = createBrowserBenchmarkFixture({ mapPackage, ruleset: infiniteHorrorRuleset,
+    definitions: INFINITE_HORROR_STATUS_DEFINITIONS, tokenCount: TOKEN_COUNT });
   const imported = setupSocket.wait(message => message.type === 'world.snapshot' && message.revision === 1, 'World import');
-  setupSocket.send({ type: 'world.push', baseRevision: 0, state: fixture(INFINITE_HORROR_STATUS_DEFINITIONS), reason: 'file-import:browser-performance' });
+  setupSocket.send({ type: 'world.push', baseRevision: 0, state: initialState, reason: 'file-import:browser-performance' });
   await imported;
   console.error(`[browser-benchmark] ${TOKEN_COUNT} Token World imported`);
 
@@ -459,7 +428,13 @@ try {
     await new Promise(resolve => setTimeout(resolve, 1000));
     await Promise.all(sessions.map(session => session.resetDiagnostics()));
     const profiledSession = profileSessionIndex === null ? null : sessions[profileSessionIndex];
+    let diagnosticTraces = null;
     if (profiledSession) {
+      diagnosticTraces = await Promise.all(sessions.map(async session => ({
+        index: session.index, stop: await startBrowserDiagnosticTrace(session),
+      })));
+      await Promise.all(sessions.map(session => session.evaluate(
+        `(${browserBenchmarkLongTaskRecorder.toString()})('start', '${name}')`)));
       await profiledSession.send('Profiler.enable');
       await profiledSession.send('Profiler.setSamplingInterval', { interval: 1000 });
       await profiledSession.send('Profiler.start');
@@ -470,11 +445,28 @@ try {
     const movesBySession = new Map(sessions.map(session => [session.index, 0]));
     const sourceMismatchBySession = new Map(sessions.map(session => [session.index, 0]));
     const inputStimuliBySession = new Map(sessions.map(session => [session.index, 0]));
+    const movementSamples = [];
     while (performance.now() - started < phaseSeconds * 1000) {
       const cycleStarted = performance.now();
       const session = sessions.length > 1 ? sessions[1 + (step % (sessions.length - 1))] : sessions[0];
       const tokenIndex = Math.max(0, session.index - 1);
-      const moved = await session.moveToken(tokenIndex, name);
+      let moved;
+      try { moved = await session.moveToken(tokenIndex); }
+      catch (error) {
+        // A rejected move ends the run. Keep its whole elapsed time and partial
+        // diagnostics; never retry or discard a denied attempt to obtain a pass.
+        const failure = { status: 'failed', completed: false, name, seconds: phaseSeconds,
+          phaseElapsedMs: performance.now() - started, operations: step, actualMoves, movementSamples,
+          failedMove: { session: session.name, tokenId: `browser-token-${tokenIndex}`,
+            elapsedMs: performance.now() - cycleStarted, error: error.message },
+          sessions: await Promise.all(sessions.map(async value => ({ name: value.name,
+            diagnostics: await value.snapshot().catch(cause => ({ error: cause.message })),
+            failures: value.failures, exceptions: value.exceptions }))),
+        };
+        await writeFile(path.join(outputRoot, `${name}-failure.json`), `${JSON.stringify(failure, null, 2)}\n`, 'utf8');
+        throw error;
+      }
+      movementSamples.push({ session: session.name, ...moved });
       if (moved.from.x !== moved.to.x || moved.from.y !== moved.to.y) actualMoves += 1;
       movesBySession.set(session.index, movesBySession.get(session.index) + 1);
       if (session.role === 'player' && moved.sourceTokenId !== moved.tokenId) {
@@ -490,10 +482,17 @@ try {
     }
     await new Promise(resolve => setTimeout(resolve, 1000));
     if (profiledSession) {
+      const longTasks = await Promise.all(sessions.map(async session => ({ name: session.name,
+        ...(await session.evaluate(`(${browserBenchmarkLongTaskRecorder.toString()})('stop', '${name}')`)) })));
       const { profile } = await profiledSession.send('Profiler.stop');
       await writeFile(path.join(outputRoot, `${name}-browser-profile-${profileSessionIndex}.cpuprofile`),
         `${JSON.stringify(profile)}\n`, 'utf8');
       await profiledSession.send('Profiler.disable');
+      // The owning process waits for every stream before it can close windows.
+      await finishBrowserDiagnosticTraces(diagnosticTraces,
+        index => path.join(outputRoot, `${name}-browser-trace-${index}.trace.json`));
+      await writeFile(path.join(outputRoot, `${name}-native-long-tasks.json`),
+        `${JSON.stringify(longTasks, null, 2)}\n`, 'utf8');
     }
     const sceneMetrics = await gm.evaluate(`(() => {
       const world = document.querySelector('#app').rpgMapApp.world.get();
@@ -509,7 +508,7 @@ try {
       vision: session.role === 'player' ? await session.visionSnapshot(session.index - 1) : null,
       failures: session.failures, exceptions: session.exceptions,
     })));
-    const phase = { name, seconds: phaseSeconds, operations: step, actualMoves, scene: sceneMetrics, sessions: measurements };
+    const phase = { name, seconds: phaseSeconds, operations: step, actualMoves, movementSamples, scene: sceneMetrics, sessions: measurements };
     await writeFile(path.join(outputRoot, `${name}.json`), `${JSON.stringify(phase, null, 2)}\n`, 'utf8');
     console.error(`[browser-benchmark] ${name} phase completed`);
     return phase;
@@ -559,15 +558,19 @@ try {
   });
   const recovery = { outageDelayMs: 3000, recoveredMs, ...shutdown, startupMs: server.startupMs,
     reconnectedAt, revisionsBefore, revisionsAfter, synchronizationComplete: true, projectionMatches, projectionDifferences };
-  const report = {
+  const report = await completeBrowserBenchmarkReport(outputRoot, {
     version: packageJson.version, browser: browserName, headless, browserExecutable: browserExecutable(),
-    packageRoot, build: buildInfo,
+    packageRoot, build: buildInfo, mapPackage: server.mapPackage,
     fixture: { sessions: SESSION_COUNT, actors: ACTOR_COUNT, tokens: TOKEN_COUNT, viewport: '1920x1080' },
+    fixturePreparation: { normalization: 'normalizeWorldV2 + projectWorldV2ToRuntimeState before import',
+      actorCreatedAt: BROWSER_BENCHMARK_TIMESTAMP, actorUpdatedAt: BROWSER_BENCHMARK_TIMESTAMP,
+      mapFingerprint: server.mapPackage.fingerprint, ruleset: { id: infiniteHorrorRuleset.id, version: infiniteHorrorRuleset.version } },
     diagnosticProfileSession: profileSessionIndex,
     phases, recovery, generatedAt: new Date().toISOString(),
-  };
-  await writeFile(path.join(outputRoot, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  console.log(JSON.stringify(report, null, 2));
+  }, { runAudit: process.env.RPGMAP_BROWSER_BENCHMARK_ENVIRONMENT_AUDIT === '1'
+    ? () => runIncrementalEnvironmentAudit((expression, timeout) => sessions[0].evaluate(expression, timeout),
+      { mapDir, expectedMap: server.mapPackage, progressPath: path.join(outputRoot, 'incremental-environment-progress.json') }) : null });
+  completedMeasurements = report;
   if (JSON.stringify(await benchmarkBuildInfo(root, packageRoot)) !== JSON.stringify(buildInfo)) {
     throw new Error('Browser benchmark candidate changed during measurement');
   }
@@ -584,8 +587,11 @@ try {
       throw new Error(`${session.name} browser errors: ${JSON.stringify({ failures: session.failures, exceptions: session.exceptions })}`);
     }
   }
+  const finalReport = await finishBrowserBenchmarkReport(outputRoot, report, { asserted: shouldAssert });
+  console.log(JSON.stringify(finalReport, null, 2));
 } catch (error) {
   benchmarkFailure = error;
+  if (completedMeasurements) await finishBrowserBenchmarkReport(outputRoot, completedMeasurements, { error });
   throw error;
 } finally {
   setupSocket?.close();
@@ -593,6 +599,11 @@ try {
   await stopServer(server);
   await rm(mapDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => {});
   const failures = shutdown.filter(result => result.status === 'rejected').map(result => result.reason);
-  if (failures.length) throw new AggregateError(benchmarkFailure ? [benchmarkFailure, ...failures] : failures,
-    'Browser benchmark shutdown failed');
+  if (failures.length) {
+    const error = new AggregateError(benchmarkFailure ? [benchmarkFailure, ...failures] : failures,
+      'Browser benchmark shutdown failed');
+    if (completedMeasurements) await finishBrowserBenchmarkReport(outputRoot, completedMeasurements,
+      { error, stage: 'browser-shutdown' });
+    throw error;
+  }
 }

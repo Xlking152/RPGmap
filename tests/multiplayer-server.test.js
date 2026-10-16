@@ -15,9 +15,10 @@ import { STATUS_SCHEMA_VERSION } from '../src/status/model.js';
 import { ACCESS_SCHEMA_VERSION } from '../src/permissions/model.js';
 import { createWorldWal } from '../deployment/local-server/world-wal.mjs';
 import { BUILT_IN_LANZHOU_MAP } from '../src/map-package/constants.js';
-import { minimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { minimalReferencePackage } from '../maps/minimal/package.js';
 import { createNavigationGrid, nearestWalkablePoint } from '../src/engine/navigation.js';
 import { deriveSceneState } from '../src/engine/state.js';
+import { installServerPackageFixtures } from '../scripts/server-package-fixtures.mjs';
 
 const WEBSOCKET_WAIT_TIMEOUT_MS = 15_000;
 
@@ -126,9 +127,10 @@ async function openAndClaim(url, { name, claimCode, visionSourceTokenId = null }
 
 async function startServer(extraEnv = {}, existingMapDir = null) {
   const mapDir = existingMapDir || await mkdtemp(path.join(tmpdir(), 'rpgmap-map-'));
+  await installServerPackageFixtures(mapDir);
   const serverPath = fileURLToPath(new URL('../deployment/local-server/server.mjs', import.meta.url));
   const child = spawn(process.execPath, [serverPath], {
-    env: { ...process.env, NODE_ENV: 'test', RPGMAP_TEST_ALLOW_MISSING_ORIGIN: '1', RPGMAP_VERIFY_PROJECTIONS: '1', RPGMAP_GM_SECRET: 'TEST-GM-SECRET', PORT: '0', RPGMAP_MAP_DIR: mapDir, RPGMAP_PUBLIC_DIR: mapDir, ...extraEnv },
+    env: { ...process.env, NODE_ENV: 'test', RPGMAP_TEST_ALLOW_MISSING_ORIGIN: '1', RPGMAP_VERIFY_PROJECTIONS: '1', RPGMAP_GM_SECRET: 'TEST-GM-SECRET', PORT: '0', RPGMAP_MAP_DIR: mapDir, RPGMAP_PACKAGE_DATA_DIR: mapDir, RPGMAP_PUBLIC_DIR: mapDir, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   let stderr = '';
@@ -409,7 +411,9 @@ test('batch Fog reset keeps only later movement, and feature exits and repositio
     gm.ws.close(); gm = null; await stopServer(runtime, { removeMap: false }); runtime = await startServer({}, mapDir);
     const drained = await waitForExplorationDrained(runtime), fog = drained.state.preferences.worldV2.scenes[0].fog;
     for (const x of [40, 70, 300, 400]) assert.equal(isFogCellExplored(fog, 'party-a', { x, y: 10 }), true);
-    assert.equal(isFogCellExplored(fog, 'party-a', exit), true);
+    // The navigation endpoint lies on the doorway boundary. Its 5m Fog cell
+    // center remains behind the actual closed-door occluder, and must stay hidden.
+    assert.equal(isFogCellExplored(fog, 'party-a', exit), false);
     for (const x of [0, 150, 250, 350]) assert.equal(isFogCellExplored(fog, 'party-a', { x, y: 10 }), false);
   } finally { gm?.ws.close(); await stopServer(runtime); }
 });

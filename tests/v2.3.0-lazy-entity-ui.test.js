@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const entityIndex = readFileSync(new URL('../src/entities/index.js', import.meta.url), 'utf8');
-const mapRuntime = readFileSync(new URL('../src/runtime/map-runtime.js', import.meta.url), 'utf8');
+const mapRuntime = readFileSync(new URL('../src/runtime/map-runtime-base.js', import.meta.url), 'utf8');
 const appShell = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
 const lazyTools = readFileSync(new URL('../src/ui/lazy-runtime-tools.js', import.meta.url), 'utf8');
 

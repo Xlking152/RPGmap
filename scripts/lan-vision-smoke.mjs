@@ -17,17 +17,18 @@ import { ACCESS_SCHEMA_VERSION } from '../deployment/local-server/access-control
 import { isDeepStrictEqual } from 'node:util';
 import { deriveSceneState } from '../src/engine/state.js';
 import { runPackagedRuinsLanSmoke, sceneEventsHash } from './ruins-lan-smoke.mjs';
-import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
+import { benchmarkBuildInfo, benchmarkPackagePaths } from './lan-benchmark-support.mjs';
 
 const httpUrl = String(process.argv[2] || '').replace(/\/$/, '');
 const gmSecret = String(process.argv[3] || '');
 const joinCode = String(process.argv[4] || '');
 const mapDir = process.argv[5] ? path.resolve(process.argv[5]) : null;
+const packageRoot = mapDir ? path.resolve(process.env.RPGMAP_SMOKE_PACKAGE_ROOT || path.dirname(mapDir)) : null;
 if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(httpUrl) || !gmSecret || !/^\d{6}$/.test(joinCode)) {
   throw new Error('Usage: node scripts/lan-vision-smoke.mjs http://127.0.0.1:PORT GM_SECRET JOIN_CODE [PACKAGED_MAP_DIR]');
 }
 const WAIT_MS = 12_000;
-const build = mapDir ? await benchmarkBuildInfo(process.cwd(), path.dirname(mapDir)) : null;
+const build = mapDir ? await benchmarkBuildInfo(process.cwd(), packageRoot) : null;
 if (build) {
   const response = await fetch(`${httpUrl}/api/version`);
   assert(response.ok && isDeepStrictEqual(await response.json(), build.metadata),
@@ -300,15 +301,20 @@ async function verifyPackagedRestart(prefix, sceneId, partyId, point, destructio
     const restoredMap = path.join(directory, 'map');
     // A durable World can reference immutable content created by earlier UI
     // checks. Restore those dependencies alongside its snapshot/WAL prefix.
-    await cp(path.join(mapDir, 'uploads'), path.join(restoredMap, 'uploads'), { recursive: true });
+    try { await cp(path.join(mapDir, 'uploads'), path.join(restoredMap, 'uploads'), { recursive: true }); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (!String(build.metadata.version).startsWith('2.')) {
+      await cp(path.join(mapDir, 'packages'), path.join(restoredMap, 'packages'), { recursive: true });
+    }
     await writeFile(path.join(restoredMap, 'world.json'), prefix.snapshotText);
     await writeFile(path.join(restoredMap, 'world.operations.ndjson'), prefix.walText);
-    const serverPath = path.join(path.dirname(mapDir), 'server.mjs');
+    const serverPath = benchmarkPackagePaths(packageRoot).serverPath;
     child = spawn(process.execPath, [serverPath], {
-      env: { ...process.env, NODE_ENV: 'production', PORT: '0', RPGMAP_MAP_DIR: restoredMap,
+      env: { ...process.env, NODE_ENV: 'production', PORT: '0', RPGMAP_DATA_DIR: '',
+        RPGMAP_PACKAGE_DATA_DIR: restoredMap, RPGMAP_MAP_DIR: restoredMap,
         RPGMAP_PUBLIC_DIR: directory, RPGMAP_GM_SECRET: gmSecret, RPGMAP_JOIN_CODE: joinCode,
         RPGMAP_TEST_PAUSE_EXPLORATION: '0' },
-      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true,
     });
     let stderr = '';
     child.stderr.on('data', value => { stderr += String(value); });
@@ -526,9 +532,9 @@ try {
   const restartRecovery = confirmedPrefix ? await verifyPackagedRestart(confirmedPrefix,
     scene.id, 'smoke-party', { x: 2940, y: 2500 }) : null;
   const ruinsLan = mapDir ? await runPackagedRuinsLanSmoke({ gm, playerSocket, playerIdentity,
-    mapDir, sceneId: scene.id, sourcePoint: { x: 2940, y: 2500 }, joinCode, hello, waitForMessage,
+    mapDir, packageRoot, sceneId: scene.id, sourcePoint: { x: 2940, y: 2500 }, joinCode, hello, waitForMessage,
     waitForFog, canonicalSnapshot, durablePrefix, verifyPackagedRestart }) : null;
-  if (build) assert(isDeepStrictEqual(await benchmarkBuildInfo(process.cwd(), path.dirname(mapDir)), build),
+  if (build) assert(isDeepStrictEqual(await benchmarkBuildInfo(process.cwd(), packageRoot), build),
     'LAN vision package changed during verification');
 
   console.log(JSON.stringify({

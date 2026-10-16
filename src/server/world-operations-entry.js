@@ -1,4 +1,3 @@
-import { BUILT_IN_LANZHOU_MAP, BUILT_IN_LANZHOU_MAP_BOUNDS } from '../map-package/constants.js';
 import { applyWorldOperations as applyCoreWorldOperations, applyWorldOperationsAsync as applyCoreWorldOperationsAsync } from '../world/operations.js';
 
 export * from '../world/operations.js';
@@ -19,23 +18,15 @@ function sceneById(state, sceneId) {
   return scenes.find(scene => String(scene?.id ?? '') === target) || null;
 }
 
-function trustedMetricsForScene(scene) {
-  const ref = object(scene?.mapPackage);
+function trustedMetricsForScene(scene, context) {
+  const ref = typeof context.mapForScene === 'function' ? object(context.mapForScene(scene)) : object(context.mapMetrics);
   let width = positive(ref.width);
   let height = positive(ref.height);
 
-  // Existing v2.2.x worlds persisted only map id/version. Keep a trusted
-  // built-in fallback so old Lanzhou saves immediately gain exact bounds after
-  // upgrading, without requiring the client to rewrite the Scene first.
-  if ((!width || !height) && String(ref.id ?? ref.mapId ?? '') === BUILT_IN_LANZHOU_MAP.id) {
-    width = BUILT_IN_LANZHOU_MAP_BOUNDS.width;
-    height = BUILT_IN_LANZHOU_MAP_BOUNDS.height;
-  }
-
-  return width && height ? { metersPerUnit: 1, width, height } : null;
+  return width && height ? { metersPerUnit: Number(ref.metersPerUnit) || 1, width, height } : null;
 }
 
-function trustedMetricsForOperations(state, operations) {
+function trustedMetricsForOperations(state, operations, context) {
   const fogSceneIds = new Set((Array.isArray(operations) ? operations : [])
     .filter(operation => String(operation?.type || '').startsWith('scene.fog.')
       || ['token.move', 'token.movePath', 'token.reposition'].includes(String(operation?.type || '')))
@@ -43,7 +34,7 @@ function trustedMetricsForOperations(state, operations) {
     .filter(Boolean));
   if (!fogSceneIds.size) return null;
 
-  const metrics = [...fogSceneIds].map(sceneId => trustedMetricsForScene(sceneById(state, sceneId)));
+  const metrics = [...fogSceneIds].map(sceneId => trustedMetricsForScene(sceneById(state, sceneId), context));
   if (metrics.some(value => !value)) return null;
   const first = metrics[0];
   if (metrics.some(value => value.width !== first.width || value.height !== first.height
@@ -54,7 +45,7 @@ function trustedMetricsForOperations(state, operations) {
 function trustedContext(state, operations, context) {
   const existing = object(context.mapMetrics);
   const hasTrustedBounds = positive(existing.width) && positive(existing.height);
-  const inferred = hasTrustedBounds ? null : trustedMetricsForOperations(state, operations);
+  const inferred = hasTrustedBounds ? null : trustedMetricsForOperations(state, operations, context);
   return {
     ...context,
     mapMetrics: inferred ? { ...existing, ...inferred } : existing,

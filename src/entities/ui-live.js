@@ -58,7 +58,7 @@ export function createEntityUiTool(options = {}) {
 
       const store = new EntityStore(api, { canonicalTokenReads: true });
       const migration = store.load({
-        migrateLegacy: true,
+        migrateLegacy: api.isLocalWorldActive?.() !== false,
         dropMarkers: options.dropLegacyMarkers !== false,
       });
       const describeActorSheet = actor => describeActorSheetDocument(actor, store.actorContext(actor));
@@ -786,7 +786,7 @@ export function createEntityUiTool(options = {}) {
         }
       }
 
-      function migrateLegacyMarkers() {
+      async function migrateLegacyMarkers() {
         if (!requireStructure('只有 GM 可以迁移旧标记')) return;
         const next = api.getState();
         const markers = Array.isArray(next.markers) ? next.markers : [];
@@ -800,8 +800,10 @@ export function createEntityUiTool(options = {}) {
           area.anchor = { type: 'free', markerId: null };
         }
         next.markers = [];
-        store.persist({ appState: next });
-        setStatus('旧标记已迁移；关联范围已转换为自由锚点');
+        try {
+          await store.persist({ appState: next });
+          setStatus('旧标记已迁移；关联范围已转换为自由锚点');
+        } catch (error) { setStatus(`旧标记迁移失败：${error.message}`); }
       }
 
       async function handlePanelClick(event) {

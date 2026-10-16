@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createMemoryStorage } from '../src/app/storage.js';
 import { createWorldStatePersistence, worldStateStorageKey } from '../src/app/world-storage.js';
 import { canonicalWorldStorageKey, legacyMapWorldStorageKey } from '../src/world/manager.js';
-import { createMinimalReferencePackage } from '../reference/maps/minimal/package.js';
+import { createMinimalReferencePackage } from '../maps/minimal/package.js';
 import { infiniteHorrorRuleset } from '../src/rulesets/infinite-horror/index.js';
 
 test('modern persistence is keyed by World id while map-key form remains legacy-compatible', () => {

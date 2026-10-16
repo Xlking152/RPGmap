@@ -1,16 +1,25 @@
 {
   "name": "rpgmap",
-  "version": "2.5.5",
+  "version": "3.0.0",
+  "description": "RPGmap desktop tactical map application",
+  "author": "Xlking152",
+  "main": "desktop/main.cjs",
   "private": true,
   "type": "module",
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": ">=24.19.0"
   },
   "scripts": {
+    "package:desktop": "node scripts/package-desktop.mjs",
+    "check:desktop": "node scripts/verify-desktop-package.mjs",
+    "package:release": "node scripts/desktop-release.mjs assemble",
+    "check:release": "node scripts/desktop-release.mjs verify",
+    "export:maps": "node scripts/export-map-packages.mjs",
+    "export:rulesets": "node scripts/export-ruleset-packages.mjs",
+    "test:desktop": "node --test tests/desktop-v3.test.js",
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "check:bundle": "node scripts/check-bundle-budget.mjs",
-    "check:package": "node scripts/verify-package.mjs",
+    "check:bundle": "node scripts/check-bundle-budget.mjs . --strict-budget",
     "benchmark": "node scripts/performance-benchmark.mjs",
     "benchmark:vision": "node scripts/vision-performance-benchmark.mjs",
     "check:vision-performance": "node scripts/compare-vision-performance.mjs",
@@ -18,8 +27,7 @@
     "benchmark:browser": "node scripts/browser-performance-benchmark.mjs",
     "generate:lanzhou-runtime": "node scripts/generate-lanzhou-runtime-svg.mjs",
     "test": "node --test tests/*.test.js",
-    "test:xlsx": "node scripts/test-xlsx-import.mjs",
-    "package:local-server": "node scripts/package-local-server.mjs"
+    "test:xlsx": "node scripts/test-xlsx-import.mjs"
   },
   "dependencies": {
     "leaflet": "1.9.4",
@@ -27,10 +35,13 @@
     "polygon-clipping": "0.15.7"
   },
   "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3",
     "fake-indexeddb": "6.2.5",
     "vite": "8.2.1"
   },
   "overrides": {
-    "nanoid": "3.3.18"
+    "nanoid": "3.3.18",
+    "@electron/get": "5.1.0"
   }
 }

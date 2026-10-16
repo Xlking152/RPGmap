@@ -1,10 +1,7 @@
 import { createBrowserStorage, createMemoryStorage } from './app/storage-adapter.js';
 import { listBuiltInRulesets } from './ruleset/metadata.js';
-import { createWorldCatalogManager } from './world/manager.js';
-import { chooseWorldBeforeMap } from './world/setup.js';
-import { DEFAULT_REFERENCE_MAP_ID } from './map-package/constants.js';
 import { mapPackageRegistry } from './map-package/registry.js';
-import { registerBuiltInMapPackages } from './map-package/builtins.js';
+import { registerInstalledMapPackages, loadInstalledRulesetReference } from './adapters/installed-packages.js';
 import { readRpgMapServerBootstrap } from './multiplayer/server-bootstrap.js';
 import { readServerWorldBootstrap, readWorldBootstrap } from './world/bootstrap.js';
 
@@ -28,12 +25,16 @@ function firstRegisteredRuleset() {
 
 function defaultMapReference() {
   const maps = mapPackageRegistry.list();
-  const preferred = maps.find(item => item.id === DEFAULT_REFERENCE_MAP_ID) || maps[0];
+  const preferred = maps[0];
   if (!preferred) throw new Error('没有可用的 RPGmap MapPackage');
   return { id: preferred.id, version: preferred.version || null };
 }
 
 async function chooseLocalWorld(appContainer, storageAdapter, defaultRuleset) {
+  const [{ createWorldCatalogManager }, { chooseWorldBeforeMap }] = await Promise.all([
+    import('./world/manager.js'),
+    import('./world/setup.js'),
+  ]);
   const manager = createWorldCatalogManager(storageAdapter);
   manager.adoptLegacyMapWorld({
     mapPackage: defaultMapReference(),
@@ -55,7 +56,11 @@ export async function startRpgMap() {
   const appContainer = document.getElementById('app');
   if (!appContainer) throw new Error('缺少 RPGmap 应用容器');
 
-  registerBuiltInMapPackages(mapPackageRegistry);
+  if (globalThis.location.pathname === '/setup') {
+    const { startDesktopSetup } = await import('./app/desktop-setup.js');
+    return startDesktopSetup({ container: appContainer });
+  }
+  await registerInstalledMapPackages(mapPackageRegistry);
   const bootstrapStorage = createBrowserStorage();
   const defaultRuleset = firstRegisteredRuleset();
   setBootStatus('正在检查 Windows RPGmap Server 与 World…');
@@ -73,9 +78,8 @@ export async function startRpgMap() {
     worldBootstrap = readServerWorldBootstrap(serverBootstrap.world, { defaultRuleset });
     worldId = worldBootstrap.worldId || serverBootstrap.world?.worldId || 'world-default';
     if (worldBootstrap.kind === 'empty') {
-      const choice = await chooseLocalWorld(appContainer, createMemoryStorage(), defaultRuleset);
-      worldDescriptor = choice.descriptor;
-      worldName = worldDescriptor.name;
+      globalThis.location.replace('/setup');
+      return;
     } else {
       worldName = worldBootstrap.worldName || 'RPGmap Server World';
     }
@@ -91,6 +95,7 @@ export async function startRpgMap() {
 
   const rulesetReference = serverRuntime && worldBootstrap.kind === 'empty'
     ? worldDescriptor.ruleset : worldBootstrap.ruleset;
+  await loadInstalledRulesetReference(rulesetReference);
   const mapReference = worldBootstrap.mapPackage
     || worldDescriptor?.mapPackage
     || defaultMapReference();

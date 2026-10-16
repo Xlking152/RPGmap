@@ -1,5 +1,7 @@
 import { prepareRuleset } from './contract.js';
 
+const key = (id, version) => JSON.stringify([String(id), String(version)]);
+
 export class RulesetRegistry {
   constructor(initialRulesets = []) {
     this.rulesets = new Map();
@@ -8,20 +10,23 @@ export class RulesetRegistry {
 
   register(rawRuleset) {
     const ruleset = prepareRuleset(rawRuleset);
-    this.rulesets.set(ruleset.id, ruleset);
+    this.rulesets.set(key(ruleset.id, ruleset.version), ruleset);
     return ruleset;
   }
 
-  has(id) {
-    return this.rulesets.has(String(id));
+  has(id, version = null) {
+    return Boolean(this.get(id, version));
   }
 
-  get(id) {
-    return this.rulesets.get(String(id)) || null;
+  get(id, version = null) {
+    if (id && typeof id === 'object') return this.get(id.id, id.version);
+    if (version) return this.rulesets.get(key(id, version)) || null;
+    // Legacy tools may select by ID. World references always resolve an exact version.
+    return [...this.rulesets.values()].filter(ruleset => ruleset.id === String(id)).at(-1) || null;
   }
 
-  require(id) {
-    const ruleset = this.get(id);
+  require(id, version = null) {
+    const ruleset = this.get(id, version);
     if (!ruleset) throw new Error(`Unknown ruleset: ${id}`);
     return ruleset;
   }
@@ -34,10 +39,10 @@ export class RulesetRegistry {
       error.code = 'world_ruleset_missing';
       throw error;
     }
-    const ruleset = this.get(id);
+    const ruleset = this.get(id, version);
     if (!ruleset) {
-      const error = new Error(`Unknown ruleset: ${id}`);
-      error.code = 'unknown_ruleset';
+      const error = new Error(`Ruleset ${id}@${version} is not installed`);
+      error.code = this.has(id) ? 'ruleset_version_incompatible' : 'unknown_ruleset';
       throw error;
     }
     if (String(ruleset.version) !== version) {
@@ -50,5 +55,10 @@ export class RulesetRegistry {
 
   list() {
     return [...this.rulesets.values()];
+  }
+
+  unregister(reference) {
+    if (!reference?.id || !reference?.version) throw new Error('Removing a ruleset requires id and version');
+    return this.rulesets.delete(key(reference.id, reference.version));
   }
 }

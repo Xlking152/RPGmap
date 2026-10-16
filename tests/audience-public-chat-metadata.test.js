@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { projectStateForAudience, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, advanceFogProjectionMetadata,
+import { projectStateForAudience, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, advanceFogProjectionMetadata, hasCanonicalPrivateMovementPredecessor,
   projectionCollectionChanges } from '../src/vision/audience.js';
 import { projectStateForAudience as oldFullProjection } from './fixtures/audience-before-targeted-movement.mjs';
 import { createCanonicalWorldValidator } from '../deployment/local-server/world-schema.mjs';
@@ -18,7 +18,7 @@ const sceneOf = state => worldOf(state).scenes[0];
 const server = readFileSync(new URL('../deployment/local-server/server.mjs', import.meta.url), 'utf8');
 const serverFunctions = server.slice(server.indexOf('function lightweightProjectionShell('), server.indexOf('function sendAudienceSnapshot('));
 const factory = new Function('dependencies', `
-  const { advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, advanceFogProjectionMetadata, describeServerVision,
+  const { advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, advanceFogProjectionMetadata, hasCanonicalPrivateMovementPredecessor, describeServerVision,
     visionMapForScene, findUser, assertCanonicalWorldState } = dependencies;
   ${serverFunctions}
   return tryIncrementalAudienceProjection;
@@ -61,7 +61,7 @@ function append(state, text = 'Public chat') {
 }
 
 function candidate(state, after, context = state.context, results = [{ chatId: 'public-chat' }]) {
-  return factory({ advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, advanceFogProjectionMetadata,
+  return factory({ advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, advanceFogProjectionMetadata, hasCanonicalPrivateMovementPredecessor,
     describeServerVision: context.describeVision, visionMapForScene: () => context.mapPackage,
     findUser: () => context.user, assertCanonicalWorldState: state.validate })(context, state.projected, after,
     [{ type: 'chat.append', payload: {} }], results, state.before);
@@ -90,7 +90,7 @@ function sourceFreeStatusPredecessor(messages = []) {
     applyStatus: (value, message) => applyStatusMessage(value, message, { mutate: true, assumeNormalized: true }),
   });
   state.validate(applied.state);
-  const projected = factory({ advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, advanceFogProjectionMetadata,
+  const projected = factory({ advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, advanceFogProjectionMetadata, hasCanonicalPrivateMovementPredecessor,
     describeServerVision: state.context.describeVision, visionMapForScene: () => map,
     findUser: () => state.context.user, assertCanonicalWorldState: state.validate })(
     state.context, state.projected, applied.state, operations, applied.results, state.before);

@@ -324,3 +324,50 @@ test('offline and LAN events suppress unrelated commits and preserve every sourc
     }
   } finally { globalThis.Worker = previousWorker; }
 });
+
+test('Scene transitions cancel an actual visibility Worker and reject its late mask before the next Scene is ready', async () => {
+  const previousWorker = globalThis.Worker, workers = [];
+  globalThis.Worker = class {
+    constructor() { this.messages = []; workers.push(this); }
+    postMessage(message) { this.messages.push(message); }
+    terminate() { this.terminated = true; }
+  };
+  try {
+    for (const connected of [false, true]) {
+      const runtime = fakeRuntime(connected), { api } = runtime;
+      try {
+        if (!connected) await api.vision.setSource('scout');
+        runtime.flush();
+        const worker = workers.at(-1), oldRequest = worker.messages.at(-1);
+        assert.ok(oldRequest.input, 'the initial Scene submitted a real visibility task');
+        api.emit('scene:switch-starting', { sceneId: 'inactive' });
+        assert.deepEqual(worker.messages.at(-1).cancelIds, [oldRequest.id]);
+        worker.onmessage({ data: { id: oldRequest.id, result: { precise: [['0', [[0, 10]]]], vague: [] } } });
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(api.vision.getFeedbackState(), null);
+        assert.equal(runtime.frames.size, 0, 'late old-Scene pixels never enter the paint queue');
+        const next = structuredClone(runtime.state);
+        next.preferences.worldV2.activeSceneId = 'inactive';
+        next.preferences.worldV2.scenes[1].tokens.find(token => token.id === 'scout').x = 70;
+        next.preferences.audienceVision.source.x = 70;
+        runtime.replace(next);
+        api.emit('state:commit', { changeSet: { scenes: { activeSceneChanged: true } } });
+        assert.equal(runtime.frames.size, 0, 'target commits cannot paint until the transition completes');
+        api.emit('scene:switch-complete', { sceneId: 'inactive' });
+        runtime.flush();
+        const nextRequest = worker.messages.at(-1);
+        assert.notEqual(nextRequest.id, oldRequest.id);
+        assert.equal(nextRequest.input.source.x, 70);
+        worker.onmessage({ data: { id: nextRequest.id, result: { precise: [['0', [[14, 15]]]], vague: [] } } });
+        await new Promise(resolve => setImmediate(resolve));
+        runtime.flush();
+        assert.equal(api.vision.getFeedbackState().source.x, 70);
+        api.emit('scene:reset-starting', { sceneId: 'inactive' });
+        assert.equal(api.vision.getFeedbackState(), null);
+        assert.equal(runtime.frames.size, 0);
+        api.emit('scene:reset-failed', { sceneId: 'inactive' });
+        assert.equal(runtime.frames.size, 1, 'failed transitions resume the intact Scene');
+      } finally { runtime.destroy(); }
+    }
+  } finally { globalThis.Worker = previousWorker; }
+});

@@ -6,6 +6,7 @@ import { prepareMapPackage } from '../src/map-package/contract.js';
 import { featureToPolygon } from '../src/engine/geometry.js';
 import { createDamagePreview, commitDamageEvent, commitRestoreEvent, deriveSceneState } from '../src/engine/state.js';
 import { benchmarkBuildInfo } from './lan-benchmark-support.mjs';
+import { MapPackageStore } from '../deployment/local-server/package-store.mjs';
 
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
@@ -39,12 +40,17 @@ export function createRuinsLanFixture(map, sceneEvents = []) {
   throw new Error('Packaged map has no isolated, undamaged building for the LAN partial-destruction fixture');
 }
 
-async function packagedMap(mapDir) {
+export async function loadPackagedRuinsMap({ mapDir, packageRoot = path.dirname(mapDir), reference } = {}) {
   assert(mapDir, 'Packaged destruction recovery requires the real package map directory');
-  const appRoot = path.join(path.dirname(mapDir), 'app');
+  const build = await benchmarkBuildInfo(process.cwd(), packageRoot);
+  if (!String(build.metadata.version).startsWith('2.')) {
+    const store = await new MapPackageStore({ root: path.join(mapDir, 'packages', 'maps') }).initialize();
+    return store.get(reference);
+  }
+  const appRoot = path.join(packageRoot, 'app');
   const manifest = JSON.parse(await readFile(path.join(appRoot, '.vite', 'manifest.json'), 'utf8'));
-  const data = manifest['reference/maps/lanzhou/runtime.json']?.file;
-  const svg = manifest['reference/maps/lanzhou/runtime.svg']?.file;
+  const data = (manifest['maps/lanzhou/runtime.json'] || manifest['reference/maps/lanzhou/runtime.json'])?.file;
+  const svg = (manifest['maps/lanzhou/runtime.svg'] || manifest['reference/maps/lanzhou/runtime.svg'])?.file;
   assert(data && svg, 'Package is missing its Lanzhou map resources');
   const map = JSON.parse(await readFile(path.join(appRoot, data), 'utf8'));
   return prepareMapPackage({ ...map, svg: await readFile(path.join(appRoot, svg), 'utf8') }, { source: 'packaged-lan-smoke' });
@@ -68,10 +74,10 @@ export function assertRuinsSceneEventDelta(message, sceneId, event) {
 }
 
 /** Real GM/Player sockets, fsynced WAL, identity reconnect and packaged restart. */
-export async function runPackagedRuinsLanSmoke({ gm, playerSocket, playerIdentity, mapDir, sceneId,
+export async function runPackagedRuinsLanSmoke({ gm, playerSocket, playerIdentity, mapDir, sceneId, packageRoot = path.dirname(mapDir),
   sourcePoint, joinCode, hello, waitForMessage, waitForFog, canonicalSnapshot, durablePrefix, verifyPackagedRestart }) {
-  const packageRoot = path.dirname(mapDir), build = await benchmarkBuildInfo(process.cwd(), packageRoot);
-  const map = await packagedMap(mapDir), before = await canonicalSnapshot(gm.socket);
+  const build = await benchmarkBuildInfo(process.cwd(), packageRoot), before = await canonicalSnapshot(gm.socket);
+  const map = await loadPackagedRuinsMap({ mapDir, packageRoot, reference: sceneIn(before.state, sceneId).mapPackage });
   const originalScene = sceneIn(before.state, sceneId), originalHistory = originalScene.sceneEvents;
   const fixture = createRuinsLanFixture(map, originalHistory), samples = [];
   let recipient = playerSocket, reconnected;
@@ -178,7 +184,8 @@ export async function runPackagedRuinsLanSmoke({ gm, playerSocket, playerIdentit
     assert(restoredRestart?.sceneEventsRetained && restoredRestart.restorationRetained, 'Restart lost restoration');
     assert.deepEqual(await benchmarkBuildInfo(process.cwd(), packageRoot), build, 'LAN destruction package changed during verification');
     return { passed: true, version: build.metadata.version, build, featureId: fixture.featureId, partialCoverage: fixture.partialCoverage,
-      fixture: { mapId: map.id, sceneId, source: 'actual-package', area: fixture.area, partialEventId: fixture.partialEvent.id },
+      fixture: { mapId: map.id, mapVersion: map.version, fingerprint: map.fingerprint || null, sceneId,
+        source: String(build.metadata.version).startsWith('2.') ? 'actual-release-embedded' : 'installed-rpgmap', area: fixture.area, partialEventId: fixture.partialEvent.id },
       originalSceneEvents: structuredClone(originalHistory), originalFeatureStates: structuredClone(originalScene.featureStates),
       restoredFeatureStates: structuredClone(restoredScene.featureStates),
       samples, permissions: permissionProofs,

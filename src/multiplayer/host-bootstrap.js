@@ -1,4 +1,5 @@
 import { isLocalHost } from './protocol.js';
+import { consumeSceneReloadConnection } from './session.js';
 
 const HOST_FLAG = 'rpgmap-host';
 
@@ -20,20 +21,21 @@ export function createMultiplayerHostBootstrapSystem() {
   return Object.freeze({
     register(api) {
       const windowNode = api.map?.getContainer?.()?.ownerDocument?.defaultView || globalThis.window;
-      const launch = parseHostBootstrap(windowNode?.location?.hash);
-      if (!launch || !isLocalHost(windowNode?.location) || typeof api.multiplayer?.connect !== 'function') return;
+      const local = isLocalHost(windowNode?.location);
+      const reload = consumeSceneReloadConnection(windowNode?.sessionStorage, api.world?.get?.()?.id, local);
+      const host = local ? parseHostBootstrap(windowNode?.location?.hash) : null;
+      const launch = host || reload;
+      if (!launch || typeof api.multiplayer?.connect !== 'function') return;
 
       // Consume the secret-bearing hash before opening the socket so it does not
       // remain visible in the address bar or normal browser history.
-      const cleanUrl = `${windowNode.location.pathname || '/'}${windowNode.location.search || ''}`;
-      windowNode.history?.replaceState?.(null, '', cleanUrl);
+      if (host) {
+        const cleanUrl = `${windowNode.location.pathname || '/'}${windowNode.location.search || ''}`;
+        windowNode.history?.replaceState?.(null, '', cleanUrl);
+      }
 
       const connect = () => {
-        api.multiplayer.connect({
-          name: launch.name,
-          requestedRole: launch.requestedRole,
-          gmSecret: launch.gmSecret,
-        });
+        api.multiplayer.connect(launch);
       };
 
       // In a real browser, give the already-rendered map one frame to paint before
