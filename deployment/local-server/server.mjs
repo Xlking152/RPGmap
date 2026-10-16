@@ -30,7 +30,6 @@ import {
   verifyUserCredential,
 } from './access-control.mjs';
 import { createPortableStorage, ensurePortableStorage, migrateLegacyStorage } from './portable-storage.mjs';
-import { hasCompletePreciseTokenProjection } from './movement-projection.mjs';
 import { assertSafeJson, assertWorldState, createCanonicalWorldValidator, createWorldSnapshotSizeValidator, isSameChat } from './world-schema.mjs';
 import {
   STATUS_OPERATION_CACHE_LIMIT,
@@ -62,7 +61,7 @@ import {
   advancePublicChatProjectionMetadata,
   matchesSourceFreeProjectionScope,
   projectionCollectionChanges,
-  hasCanonicalPrivateMovementPredecessor,
+  canonicalMovementCollectionChanges,
   serverRuleset,
   configureServerRuleset,
   sphereGroundRadiusMeters,
@@ -934,24 +933,6 @@ function canonicalWorldScene(state, sceneId) {
     .find(scene => String(scene?.id || '') === String(sceneId || '')) || null;
 }
 
-function movementProjectionTargets(state, operations) {
-  const activeSceneId = String(state?.preferences?.worldV2?.activeSceneId || '');
-  const targets = new Map();
-  let movement = false;
-  for (const operation of operations) {
-    if (operation.type === 'scene.fog.explore') continue;
-    if (!['token.move', 'token.movePath', 'token.reposition'].includes(operation.type)) return null;
-    movement = true;
-    const sceneId = String(operation.payload?.sceneId || activeSceneId);
-    const ids = operation.type === 'token.movePath'
-      ? operation.payload?.tokenIds || []
-      : [operation.payload?.tokenId];
-    if (!targets.has(sceneId)) targets.set(sceneId, new Set());
-    for (const tokenId of ids) targets.get(sceneId).add(String(tokenId || ''));
-  }
-  return movement ? targets : null;
-}
-
 function projectedFogAfterMovement(previous, canonical, partyIds = []) {
   const visiblePartyIds = [...new Set([
     ...Object.keys(previous?.exploredByParty || {}),
@@ -971,7 +952,7 @@ function incrementalProjectionShell(beforeProjection, afterState) {
   return next;
 }
 
-function tryIncrementalAudienceProjection(session, beforeProjection, afterState, operations, results, beforeState = null, preparedMovementTargets = undefined) {
+function tryIncrementalAudienceProjection(session, beforeProjection, afterState, operations, results, beforeState = null) {
   if (!beforeProjection || session.role === 'gm' || !Array.isArray(operations) || !operations.length) return null;
   const types = new Set(operations.map(operation => String(operation?.type || '')));
   if ([...types].every(type => type === 'scene.fog.explore')) {
@@ -1042,91 +1023,6 @@ function tryIncrementalAudienceProjection(session, beforeProjection, afterState,
       || !Array.isArray(oldMessages) || !Array.isArray(messages)
       || messages.length !== oldMessages.length + appended.length || messages.length > 500
       || oldMessages.some((message, index) => message !== messages[index])) return null;
-    return next;
-  }
-
-  const movementTargets = preparedMovementTargets === undefined
-    ? movementProjectionTargets(afterState, operations) : preparedMovementTargets;
-  if (movementTargets) {
-    const projectedWorld = beforeProjection.preferences?.worldV2 || {};
-    const activeSceneId = String(projectedWorld.activeSceneId || '');
-    const sourceId = String(session.visionSourceTokenId || '');
-    const sourceMoved = movementTargets.get(activeSceneId)?.has(sourceId) === true;
-    if (sourceMoved) {
-      const projectedScene = canonicalWorldScene(beforeProjection, activeSceneId);
-      const canonicalScene = canonicalWorldScene(afterState, activeSceneId);
-      if (!hasCompletePreciseTokenProjection(projectedScene?.tokens || [], canonicalScene?.tokens || [])) return null;
-    }
-    const pending = new Set([...movementTargets].flatMap(([sceneId, ids]) =>
-      [...ids].map(tokenId => `${sceneId}:${tokenId}`)));
-    const sceneMoves = [];
-    for (const [sceneIndex, scene] of (projectedWorld.scenes || []).entries()) {
-      const canonical = canonicalWorldScene(afterState, scene.id);
-      if (!canonical) return null;
-      const movedIds = movementTargets.get(String(scene.id)) || new Set();
-      let tokens = null;
-      const sceneTokens = scene.tokens || [];
-      for (let tokenIndex = 0; tokenIndex < sceneTokens.length; tokenIndex++) {
-        const token = sceneTokens[tokenIndex];
-        const tokenId = String(token?.id || '');
-        if (!movedIds.has(tokenId)) continue;
-        if (token.audienceRestricted === true || token.audienceVisibility === 'vague') continue;
-        const authoritative = (canonical.tokens || []).find(item => String(item?.id || '') === String(token.id));
-        if (!authoritative) continue;
-        pending.delete(`${scene.id}:${tokenId}`);
-        tokens ||= sceneTokens.slice();
-        tokens[tokenIndex] = structuredClone(authoritative);
-      }
-      sceneMoves.push({ sceneIndex, scene, canonical, movedIds, tokens });
-    }
-    if (pending.size) return null;
-    if (!sourceMoved && hasCanonicalPrivateMovementPredecessor(beforeProjection, beforeState, afterState, {
-      role: session.role, userId: session.userId, user: session.userId ? findUser(session.userId) : null,
-      visionSourceTokenId: session.visionSourceTokenId, trustedProjection: true,
-      isCanonicalData: assertCanonicalWorldState.isImmutableData,
-    })) return audienceStateFor(session, afterState, { movementCache: { beforeState, previousProjection: beforeProjection,
-      tokenIds: new Set([...movementTargets.values()].flatMap(ids => [...ids])) } });
-    const source = sourceMoved ? describeVisionForToken(afterState, sourceId) : null;
-    if (sourceMoved && !source) return null;
-    // Perception-only or missing targets must use the full audience projection.
-    // Stage eligible Token replacements before copying the large Actor shell;
-    // unchanged Scenes also avoid a temporary full Token array.
-    const next = incrementalProjectionShell(beforeProjection, afterState);
-    const nextWorld = next.preferences.worldV2;
-    for (const { sceneIndex, scene, canonical, movedIds, tokens } of sceneMoves) {
-      const fog = canonicalWorldScene(beforeState, scene.id)?.fog === canonical.fog ? scene.fog
-        : projectedFogAfterMovement(scene.fog, canonical.fog, next.preferences.audienceVision?.partyIds || []);
-      if (!tokens && (fog === scene.fog || JSON.stringify(fog) === JSON.stringify(scene.fog))) continue;
-      const nextTokens = tokens || [...(scene.tokens || [])];
-      const attackAreas = (scene.attackAreas || []).map(area => {
-        if (!movedIds.has(String(area?.anchor?.tokenId || ''))) return area;
-        return structuredClone((canonical.attackAreas || []).find(item => String(item?.id || '') === String(area?.id || '')) || area);
-      });
-      nextWorld.scenes[sceneIndex] = { ...scene, tokens: nextTokens, attackAreas, fog };
-      if (String(nextWorld.activeSceneId || '') === String(scene.id)) {
-        next.preferences.entitySystem = { ...next.preferences.entitySystem, tokens: [...nextTokens] };
-        next.attackAreas = [...attackAreas];
-      }
-    }
-    if (sourceMoved) {
-      next.preferences.audienceVision = {
-        ...next.preferences.audienceVision,
-        source: {
-          ...next.preferences.audienceVision?.source,
-          tokenId: source.tokenId,
-          x: source.x,
-          y: source.y,
-          elevationMeters: source.elevationMeters,
-          rangeMeters: source.preciseRangeMeters,
-          preciseRangeMeters: source.preciseRangeMeters,
-          vagueRangeMeters: source.vagueRangeMeters,
-          preciseGroundRangeMeters: source.preciseGroundRangeMeters,
-          vagueGroundRangeMeters: source.vagueGroundRangeMeters,
-          senses: structuredClone(source.senses || {}),
-          lighting: source.lighting,
-        },
-      };
-    }
     return next;
   }
 
@@ -1211,7 +1107,6 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
   // These describe the authoritative commit, not any viewer's permissions.
   // Keep them private to this broadcast; each audience still prepares its own
   // mask, incremental eligibility, motion and Document changes.
-  const movementTargets = movementProjectionTargets(afterState, operations);
   const pureMovement = operations.length && operations.every(operation => ['token.move', 'token.movePath', 'token.reposition'].includes(operation.type))
     && results.every(result => ['token.move', 'token.movePath', 'token.reposition'].includes(result.action));
   const tokenIds = pureMovement ? new Set(results.flatMap(result => result.tokenIds || [result.tokenId]).map(String)) : null;
@@ -1223,8 +1118,11 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
   for (const [socket, session] of recipients) {
     if (session.role !== 'gm' && session.identityStatus !== 'active') continue;
     const beforeProjection = session.audienceProjection || audienceStateFor(session, beforeState);
-    const incrementalProjection = tryIncrementalAudienceProjection(
-      session, beforeProjection, afterState, operations, results, beforeState, movementTargets,
+    // Movement uses the common projector directly. It already proves the
+    // canonical predecessor and refreshes detection when the source moves;
+    // a second Token scan here cannot add a viewer-specific guarantee.
+    const incrementalProjection = pureMovement ? null : tryIncrementalAudienceProjection(
+      session, beforeProjection, afterState, operations, results, beforeState,
     );
     const afterProjection = incrementalProjection || audienceStateFor(session, afterState, pureMovement || ordinaryStatus || fogRefresh ? {
       movementCache: { beforeState, previousProjection: beforeProjection,
@@ -1246,7 +1144,10 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
       changes: fogOnly ? createFogDocumentChanges(beforeProjection, afterProjection, { fog,
         isCanonicalData: assertCanonicalWorldState.isImmutableData })
         : createDocumentChanges(beforeProjection, afterProjection, null, { motion, fog,
-          collectionChanges: projectionCollectionChanges(beforeProjection, afterProjection) }),
+          collectionChanges: pureMovement && session.role === 'gm'
+            && beforeProjection === beforeState && afterProjection === afterState
+            ? canonicalMovementCollectionChanges(beforeState, afterState, assertCanonicalWorldState.isImmutableData)
+            : projectionCollectionChanges(beforeProjection, afterProjection) }),
       ...(motion.length ? { motion } : {}),
       originSessionId,
       audienceRevision: session.audienceRevision,

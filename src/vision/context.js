@@ -28,13 +28,14 @@ function mapGeometrySignature(map, refs) {
   return key;
 }
 // Two scene geometries per map; no Actor permissions or audience results live here.
-export function sceneVisionContext(map, scene = {}) {
+export function sceneVisionContext(map, scene = {}, isCanonicalData = null) {
+  const immutableInput = reference => immutable(reference, isCanonicalData);
   let entries = contexts.get(map);
   if (!entries) { entries = new Map(); contexts.set(map, entries); }
   const mapRefs = [map.features, map.visionOccluders, map.occlusionShapes, map.metersPerUnit];
   const mapKey = mapGeometrySignature(map, mapRefs);
   const geometryRefs = [scene.id, scene.featureStates, scene.sceneEvents, scene.occlusionShapes];
-  const immutableGeometry = geometryRefs.every(reference => immutable(reference));
+  const immutableGeometry = geometryRefs.every(immutableInput);
   let value = immutableGeometry ? [...entries.values()].find(entry => entry.geometryRefs
     && entry.mapKey === mapKey && geometryRefs.every((reference, index) => reference === entry.geometryRefs[index])) : null;
   // Keep the large static signature out of the Scene serialization. Mutable
@@ -73,7 +74,7 @@ export function sceneVisionContext(map, scene = {}) {
   }
   value.geometryRefs = immutableGeometry ? geometryRefs : null;
   const lightRefs = [scene.tokens, map.lights];
-  const immutableLighting = lightRefs.every(reference => immutable(reference));
+  const immutableLighting = lightRefs.every(immutableInput);
   if (!immutableLighting || !value.lightRefs || !lightRefs.every((reference, index) => reference === value.lightRefs[index])) {
     // Most moves replace a non-luminous Token. Keep only the exact immutable
     // light-bearing documents, in their original order; no per-Token temporary

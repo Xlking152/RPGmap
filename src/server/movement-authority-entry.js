@@ -29,7 +29,67 @@ export function mapForScene(scene) {
 // checked independently below; this cache contains no audience projection.
 const canonicalMovementInputs = new Map();
 let canonicalMovementScope = null;
-export function prepareCanonicalMovementInputs({ world, scene, token, ruleset, isCanonicalData, canonicalMovementRuleset = null }) {
+const borrowMovementInputs = Symbol('borrowMovementInputs');
+
+function frozenDataValue(object, key) {
+  if (!object || !Object.isFrozen(object)) return null;
+  const descriptor = Object.getOwnPropertyDescriptor(object, key);
+  return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : null;
+}
+
+function hasFixedMovementInputHooks(ruleset) {
+  // Re-preparing the server's built-in package preserves these function
+  // identities. Frozen own data prevents getters replacing a hook after this
+  // check. Custom normalizers/derivers may retain references to their outputs.
+  const actor = frozenDataValue(ruleset, 'actor');
+  const statuses = frozenDataValue(ruleset, 'statuses');
+  const movement = frozenDataValue(ruleset, 'movement');
+  return ['migrateLegacy', 'normalizeSystem', 'derive'].every(key =>
+    frozenDataValue(actor, key) === infiniteHorrorRuleset.actor[key])
+    && frozenDataValue(statuses, 'derive') === infiniteHorrorRuleset.statuses.derive
+    && frozenDataValue(movement, 'describe') === infiniteHorrorRuleset.movement.describe
+    && frozenDataValue(movement, 'calculateCost') === infiniteHorrorRuleset.movement.calculateCost;
+}
+
+function actorEffectsOnlyChanged(previous, actor) {
+  if (previous === actor || previous.effects === actor.effects || !Array.isArray(actor.effects)
+    || Object.getPrototypeOf(previous) !== Object.getPrototypeOf(actor)) return false;
+  // Legacy forms without IDs acquire fresh generated IDs on normalization.
+  const forms = Array.isArray(actor.forms) ? actor.forms : actor.system?.forms;
+  if (Array.isArray(forms) && forms.some(form => form && (typeof form.id !== 'string' || !form.id.trim()))) return false;
+  const keys = Reflect.ownKeys(previous);
+  return keys.length === Reflect.ownKeys(actor).length && keys.every(key =>
+    Object.hasOwn(actor, key) && (key === 'effects' || Object.is(previous[key], actor[key])));
+}
+
+function freezeMovementInputs(value) {
+  const visiting = new WeakSet(), complete = new WeakSet(), nodes = [];
+  const inspect = current => {
+    if (current === null || ['string', 'boolean'].includes(typeof current)) return true;
+    if (typeof current === 'number') return Number.isFinite(current);
+    if (!current || typeof current !== 'object' || visiting.has(current)) return false;
+    if (complete.has(current)) return true;
+    const array = Array.isArray(current), prototype = Object.getPrototypeOf(current);
+    if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
+    const keys = Reflect.ownKeys(current);
+    if (array && keys.length !== current.length + 1) return false;
+    visiting.add(current);
+    for (let index = 0; index < keys.length; index++) {
+      const key = keys[index];
+      if (array && key !== (index === current.length ? 'length' : String(index))) return false;
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (typeof key !== 'string' || !descriptor || !Object.hasOwn(descriptor, 'value')
+        || !(array && key === 'length') && !descriptor.enumerable || !inspect(descriptor.value)) return false;
+    }
+    visiting.delete(current); complete.add(current); nodes.push(current);
+    return true;
+  };
+  if (!inspect(value)) return false;
+  for (const node of nodes) Object.freeze(node);
+  return true;
+}
+
+export function prepareCanonicalMovementInputs({ world, scene, token, ruleset, isCanonicalData, canonicalMovementRuleset = null }, mode = null) {
   // Server bundles carry distinct copies of the same prepared ruleset. The
   // host supplies its fixed instance through this internal context only.
   if (ruleset !== (canonicalMovementRuleset || infiniteHorrorRuleset) || typeof isCanonicalData !== 'function') return null;
@@ -49,27 +109,46 @@ export function prepareCanonicalMovementInputs({ world, scene, token, ruleset, i
   }
   const key = JSON.stringify([actor.id, token.id]);
   let entry = canonicalMovementInputs.get(key);
+  const borrow = mode === borrowMovementInputs && hasFixedMovementInputHooks(ruleset);
   // An unrelated Actor update replaces the collection, not this document.
   // The fresh first-match lookup and exact Actor dependency below still
   // invalidate replacement, reordering of duplicate IDs and same-ID imports.
   if (!entry || entry.ruleset !== ruleset || entry.actor !== actor || entry.definitions !== definitions
     || entry.actorLink !== token.actorLink || entry.actorDelta !== token.actorDelta || entry.effects !== token.effects) {
     // The guarded linked Token already selected this exact first-match Actor.
-    // Run the same complete normalization without building the resolver's
-    // discarded Token/baseActor copies. Status and returned copies stay fresh.
-    const resolvedActor = normalizeActorDocument(actor, { ruleset });
+    // Fixed built-in normalization does not read Actor effects; its shell only
+    // copies them. An effects-only edit can retain the existing normalized
+    // shell/system. Every status and all other Actor edits still resolve fully.
+    const effectsOnly = borrow && entry?.fixedNormalization === true && entry.ruleset === ruleset && entry.definitions === definitions
+      && entry.actorLink === token.actorLink && entry.actorDelta === token.actorDelta && entry.effects === token.effects
+      && actorEffectsOnlyChanged(entry.actor, actor);
+    const resolvedActor = effectsOnly ? { ...entry.resolvedActor, effects: structuredClone(actor.effects) }
+      : normalizeActorDocument(actor, { ruleset });
     const status = resolveStatuses({ schemaVersion: 4, actors: [resolvedActor], tokens: [token], statusDefinitions: definitions },
       { actorId: token.actorId, tokenId: token.id, ruleset });
     entry = { ruleset, actor, definitions, actorLink: token.actorLink, actorDelta: token.actorDelta, effects: token.effects,
-      resolvedActor, status };
+      resolvedActor, status, fixedNormalization: borrow };
   }
-  // Callers receive private mutable copies. Keep one version per Actor/Token
+  // Public callers receive private mutable copies. Keep one version per Actor/Token
   // key and at most 64 entries, including after imports or scene changes.
   canonicalMovementInputs.delete(key);
   canonicalMovementInputs.set(key, entry);
   if (canonicalMovementInputs.size > 64) canonicalMovementInputs.delete(canonicalMovementInputs.keys().next().value);
-  return { actor: structuredClone(entry.resolvedActor), status: structuredClone(entry.status) };
+  if (borrow && entry.readOnlyInputs) return entry.readOnlyInputs;
+  if (borrow && entry.fixedNormalization === true) {
+    // The fixed producer owns both complete outputs. Freeze that private
+    // graph directly; public/custom preparation still receives detached data.
+    const owned = { actor: entry.resolvedActor, status: entry.status };
+    try {
+      if (freezeMovementInputs(owned)) { entry.readOnlyInputs = owned; return owned; }
+    } catch { /* Unsupported ownership/freezing retains the detached path. */ }
+  }
+  const detached = { actor: structuredClone(entry.resolvedActor), status: structuredClone(entry.status) };
+  // Only this module's authority borrows the snapshot. The public preparation
+  // API still returns independent mutable copies, including after a loan.
+  if (borrow && freezeMovementInputs(detached)) entry.readOnlyInputs = detached;
+  return detached;
 }
 
 export const validateAuthoritativeTokenMovePath = createMovementAuthority(mapForScene,
-  { prepareActorInputs: prepareCanonicalMovementInputs });
+  { prepareActorInputs: args => prepareCanonicalMovementInputs(args, borrowMovementInputs) });

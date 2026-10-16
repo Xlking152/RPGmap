@@ -1,9 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { hasCompletePreciseTokenProjection } from '../deployment/local-server/movement-projection.mjs';
 import { createDocumentChanges, createFogDocumentChanges } from '../src/documents/changes.js';
-import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, hasCanonicalPrivateMovementPredecessor } from '../src/vision/audience.js';
+import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, canonicalMovementCollectionChanges } from '../src/vision/audience.js';
 import { createPreviousProjectionFunctions } from './fixtures/server-incremental-before-preparation.js';
 
 const server = readFileSync(new URL('../deployment/local-server/server.mjs', import.meta.url), 'utf8');
@@ -12,19 +11,17 @@ const functionSource = server.slice(server.indexOf('function lightweightProjecti
 const currentFactory = new Function('dependencies', `
   const { sessions, audienceStateFor, projectMotionForSession, createFogDocumentChanges,
     createDocumentChanges, sendSocket, rememberResumeCommit, committedPatches,
-    describeVisionForToken, describeServerVision, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, hasCanonicalPrivateMovementPredecessor, visionMapForScene,
-    findUser, assertCanonicalWorldState, hasCompletePreciseTokenProjection, structuredClone, metrics } = dependencies;
+    describeVisionForToken, describeServerVision, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, canonicalMovementCollectionChanges, visionMapForScene,
+    findUser, assertCanonicalWorldState, structuredClone, metrics } = dependencies;
   ${functionSource}
   const shell = lightweightProjectionShell;
   lightweightProjectionShell = (...args) => { metrics.shells++; return shell(...args); };
-  const targets = movementProjectionTargets;
-  movementProjectionTargets = (...args) => { metrics.targets++; return targets(...args); };
   const incremental = tryIncrementalAudienceProjection;
   tryIncrementalAudienceProjection = (...args) => {
-    metrics.preparedTargets.push(args[6]);
+    metrics.incrementalCalls++;
     return incremental(...args);
   };
-  return { tryIncrementalAudienceProjection, broadcastOperationCommit, movementProjectionTargets };
+  return { tryIncrementalAudienceProjection, broadcastOperationCommit };
 `);
 
 const token = (id, actorId, x = 10) => ({ id, actorId, actorLink: true, placement: 'map',
@@ -58,11 +55,11 @@ function fixture() {
 }
 
 function harness(previous = false, overrides = {}) {
-  const metrics = { shells: 0, clones: 0, targets: 0, preparedTargets: [], caches: [],
+  const metrics = { shells: 0, clones: 0, incrementalCalls: 0, caches: [],
     calls: [], responses: [], resumptions: [] };
   const dependencies = {
-    sessions: new Map(), committedPatches: new WeakMap(), metrics, hasCompletePreciseTokenProjection,
-    advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, hasCanonicalPrivateMovementPredecessor,
+    sessions: new Map(), committedPatches: new WeakMap(), metrics,
+    advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, canonicalMovementCollectionChanges,
     describeServerVision: () => ({}), visionMapForScene: () => null, findUser: () => null,
     assertCanonicalWorldState: { isImmutableData: () => false },
     structuredClone(value) { metrics.clones++; return structuredClone(value); },
@@ -165,7 +162,7 @@ test('rejected source, target, chat and unsupported operations allocate no proje
   }
 });
 
-test('movement preparation matches the previous output across sources, scenes, Fog and duplicate IDs', () => {
+test('movement leaves source, Scene, Fog and duplicate-ID handling to the complete projector', () => {
   for (const kind of ['target', 'source', 'multi', 'other-scene', 'mixed-fog', 'fog-change',
     'fog-only-change-in-other-scene', 'duplicate-projected', 'colon-id', 'empty-targets']) {
     const values = fixture();
@@ -191,15 +188,12 @@ test('movement preparation matches the previous output across sources, scenes, F
       });
     }
     if (kind === 'empty-targets') operations = move([]);
-    const { actual, current } = compareIncremental(values, operations);
-    assert.ok(actual, kind);
-    assert.equal(current.metrics.shells, 1, kind);
-    if (kind === 'target') {
-      assert.equal(actual.preferences.worldV2.scenes[1], values.projection.preferences.worldV2.scenes[1]);
-      assert.equal(actual.preferences.worldV2.scenes[0].tokens[0], values.projection.preferences.worldV2.scenes[0].tokens[0]);
-      actual.preferences.worldV2.scenes[0].tokens[1].x = 999;
-      assert.equal(values.after.preferences.worldV2.scenes[0].tokens[1].x, 34);
-    }
+    const current = harness(), input = structuredClone(values);
+    assert.equal(current.tryIncrementalAudienceProjection(session, values.projection, values.after,
+      operations, [], values.before), null, kind);
+    assert.equal(current.metrics.shells, 0, kind);
+    assert.equal(current.metrics.clones, 0, kind);
+    assert.deepEqual(values, input);
   }
 });
 
@@ -242,7 +236,7 @@ function broadcastFixture() {
   return { ...values, sessions };
 }
 
-test('one broadcast prepares movement inputs once and preserves independent masks and origin/resume ordering', () => {
+test('one movement broadcast bypasses legacy preparation and preserves independent masks and origin/resume ordering', () => {
   const currentValues = broadcastFixture(), previousValues = broadcastFixture();
   const current = harness(false, { sessions: currentValues.sessions });
   const previous = harness(true, { sessions: previousValues.sessions });
@@ -257,10 +251,8 @@ test('one broadcast prepares movement inputs once and preserves independent mask
     } });
   previous.broadcastOperationCommit({ ...input, beforeState: previousValues.before, afterState: previousValues.after,
     onOriginProjection() { previousAck++; previous.metrics.calls.push('origin'); } });
-  assert.equal(current.metrics.targets, 1);
   assert.equal(current.metrics.shells, 0);
-  assert.equal(current.metrics.preparedTargets.length, 7);
-  assert.ok(current.metrics.preparedTargets.every(value => value === current.metrics.preparedTargets[0]));
+  assert.equal(current.metrics.incrementalCalls, 0);
   assert.equal(current.metrics.caches.length, 7);
   assert.ok(current.metrics.caches.every(value => value.tokenIds === current.metrics.caches[0].tokenIds));
   assert.deepEqual([...current.metrics.caches[0].tokenIds], ['source', 'target']);
@@ -277,15 +269,15 @@ test('one broadcast prepares movement inputs once and preserves independent mask
     if (viewer.identityStatus === 'active') assert.equal(viewer.audienceProjection.preferences.worldV2.actors[0].name, viewer.id);
   }
   // A following authoritative commit gets a fresh private descriptor and Set.
-  const oldTargets = current.metrics.preparedTargets[0], oldIds = current.metrics.caches[0].tokenIds;
+  const oldIds = current.metrics.caches[0].tokenIds;
   current.broadcastOperationCommit({ ...input, operationId: 'next', beforeState: currentValues.before,
     afterState: currentValues.after, operations: move(['target']), results: [{ action: 'token.movePath', tokenIds: ['target'] }] });
-  assert.notEqual(current.metrics.preparedTargets.at(-1), oldTargets);
+  assert.equal(current.metrics.incrementalCalls, 0);
   assert.notEqual(current.metrics.caches.at(-1).tokenIds, oldIds);
   assert.deepEqual([...oldIds], ['source', 'target']);
 });
 
-test('one broadcast mixes private incremental and restricted fallback projections without sharing viewer data', () => {
+test('one movement projector preserves private, restricted and hidden recipient masks independently', () => {
   function mixedHarness(previous) {
     const values = fixture();
     for (const state of [values.before, values.after]) {
@@ -367,10 +359,9 @@ test('one broadcast mixes private incremental and restricted fallback projection
   }
   assert.deepEqual(input, unchangedInput);
   assert.deepEqual(current.runner.metrics.responses, previous.runner.metrics.responses);
-  assert.deepEqual(current.runner.metrics.calls, previous.runner.metrics.calls);
   assert.deepEqual(current.runner.metrics.calls.filter(value => value.startsWith('full:')),
-    ['full:p-scout', 'full:p-short', 'full:gm']);
-  assert.equal(current.runner.metrics.shells, 2, 'only the two eligible Players build incremental shells');
+    ['full:q-owner', 'full:all-owner', 'full:p-scout', 'full:p-short', 'full:gm']);
+  assert.equal(current.runner.metrics.shells, 0, 'movement has no separate legacy projection shell');
   assert.equal(current.runner.metrics.responses.length, 5, 'pending identity receives no commit');
   assert.equal(current.runner.metrics.responses[0][0], 'socket-q-owner');
   assert.equal(current.runner.metrics.calls.filter(value => value === 'origin').length, 1);
@@ -378,10 +369,7 @@ test('one broadcast mixes private incremental and restricted fallback projection
   assert.equal(current.runner.metrics.calls.at(-1), 'resume');
   assert.equal(current.runner.metrics.resumptions.length, 1);
   assert.deepEqual(current.runner.metrics.resumptions, previous.runner.metrics.resumptions);
-  assert.equal(current.runner.metrics.targets, 1);
-  assert.ok(current.runner.metrics.preparedTargets.every(value => value === current.runner.metrics.preparedTargets[0]));
-  assert.deepEqual([...current.runner.metrics.preparedTargets[0]].map(([scene, ids]) => [scene, [...ids]]),
-    [['active', ['target']]]);
+  assert.equal(current.runner.metrics.incrementalCalls, 0);
   assert.ok(current.runner.metrics.caches.every(value => value.tokenIds === current.runner.metrics.caches[0].tokenIds));
   assert.deepEqual([...current.runner.metrics.caches[0].tokenIds], ['target']);
   for (const [socket, viewer] of current.sessions) {
@@ -423,7 +411,6 @@ test('mixed and nonmovement broadcasts keep the previous fallback without granti
       originSessionId: 'player-0', operations, documentBatch: false };
     current.broadcastOperationCommit({ ...input, beforeState: values.before, afterState: values.after });
     previous.broadcastOperationCommit({ ...input, beforeState: oldValues.before, afterState: oldValues.after });
-    assert.equal(current.metrics.targets, 1);
     assert.ok(current.metrics.caches.every(value => value === undefined));
     assert.deepEqual(current.metrics.responses, previous.metrics.responses);
     assert.deepEqual(current.metrics.calls, previous.metrics.calls);
@@ -442,5 +429,43 @@ test('ordinary status full fallback receives an exact predecessor and always ref
     assert.ok(current.metrics.caches.every(cache => cache?.beforeState === values.before && cache.previousProjection
       && cache.tokenIds.size === 0));
     assert.ok(current.metrics.freshDetection.every(value => value === true));
+  }
+});
+
+test('only an exact unfiltered GM movement pair uses canonical collection changes', () => {
+  for (const mixed of [false, true]) {
+    const values = fixture(), canonicalProof = new Map(), recipientProof = new Map();
+    const sessions = new Map([
+      ['gm', { id: 'gm', role: 'gm', audienceProjection: values.before }],
+      ['preview', { id: 'preview', role: 'gm', visionSourceTokenId: 'source', audienceProjection: structuredClone(values.before) }],
+      ['player', { id: 'player', role: 'player', identityStatus: 'active', audienceProjection: structuredClone(values.before) }],
+    ]);
+    const canonicalCalls = [], diffs = [];
+    const runner = harness(false, { sessions,
+      audienceStateFor(viewer, state) {
+        return viewer.role === 'gm' && !viewer.visionSourceTokenId ? state : structuredClone(state);
+      },
+      canonicalMovementCollectionChanges(before, after, accepted) {
+        canonicalCalls.push({ before, after, accepted }); return canonicalProof;
+      },
+      projectionCollectionChanges() { return recipientProof; },
+      createDocumentChanges(before, after, patch, options) {
+        diffs.push(options.collectionChanges);
+        return createDocumentChanges(before, after, patch, options);
+      },
+    });
+    const operations = move(['target']);
+    if (mixed) operations.push({ type: 'actor.metadata.update', payload: {} });
+    runner.broadcastOperationCommit({ beforeState: values.before, afterState: values.after,
+      operationId: 'canonical-gm', baseRevision: 1, revision: 2, updatedAt: 'after',
+      operations, results: [{ action: 'token.movePath', tokenIds: ['target'] }], documentBatch: true });
+    assert.equal(canonicalCalls.length, mixed ? 0 : 1);
+    if (!mixed) {
+      assert.strictEqual(canonicalCalls[0].before, values.before);
+      assert.strictEqual(canonicalCalls[0].after, values.after);
+      assert.strictEqual(canonicalCalls[0].accepted, runner.dependencies.assertCanonicalWorldState.isImmutableData);
+    }
+    assert.deepEqual(diffs, mixed ? [recipientProof, recipientProof, recipientProof]
+      : [canonicalProof, recipientProof, recipientProof], 'preview and Player collections keep their own projection proof');
   }
 });

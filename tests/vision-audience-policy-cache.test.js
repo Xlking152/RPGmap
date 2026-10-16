@@ -429,8 +429,8 @@ test('previous canonical Token indexes are reused while even frozen recipient To
   } finally { Map.prototype.set = mapSet; }
 });
 
-test('unqualified mutable, shallow, accessor and duplicate Token arrays never reuse canonical indexes', () => {
-  for (const variant of ['mutable', 'shallow', 'accessor', 'duplicate']) {
+test('unqualified mutable, shallow, accessor, duplicate and custom Token arrays never reuse canonical indexes', () => {
+  for (const variant of ['mutable', 'shallow', 'accessor', 'duplicate', 'non-string-id', 'custom-map']) {
     let before = structuredClone(fixture());
     const tokens = before.preferences.worldV2.scenes[0].tokens;
     const near = tokens.find(token => token.id === 'near');
@@ -441,6 +441,11 @@ test('unqualified mutable, shallow, accessor and duplicate Token arrays never re
     }
     if (variant === 'duplicate') {
       tokens.push({ ...near, x: 90 }); before = frozen(before);
+    }
+    if (variant === 'non-string-id') { near.id = 17; before = frozen(before); }
+    if (variant === 'custom-map') {
+      Object.defineProperty(tokens, 'map', { value: function (callback) { return Array.prototype.map.call(this, callback); } });
+      before = frozen(before);
     }
     const projected = projectStateForAudience(before, context);
     const after = update(before, { tokenId: 'source', tokenPatch: { x: 60 } });

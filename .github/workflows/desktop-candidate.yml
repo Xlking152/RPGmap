@@ -107,11 +107,18 @@ jobs:
           name: RPGmap-desktop-${{ github.sha }}
           path: candidate
       - run: npm run benchmark
-      - name: Assert the LAN performance budget
-        run: npm run benchmark:lan -- --assert
-      - name: Assert large-range performance on the exact desktop payload
-        run: node scripts/occlusion-lan-benchmark.mjs --package=candidate/desktop-stage/resources --map=candidate/frozen/delivery/北宋兰州城-1.1.0.rpgmap --rounds=5 --warmup-rounds=1 --assert
+      - name: Assert local GM operation latency on the exact desktop payload
+        run: npm run benchmark:lan -- --assert --package=candidate/desktop-stage/resources --output=artifact/backend-local-gm.json
+      - name: Retain backend measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: RPGmap-backend-${{ github.sha }}
+          path: artifact/backend-local-gm.json
+          if-no-files-found: ignore
+          retention-days: 7
 
-# Seven-browser latency investigation is explicitly deferred for v3.0.0.
-# Existing browser/performance benchmark assertions remain in source; this CI
-# neither marks those measurements passed nor replaces them with hosted data.
+# Default latency checks cover local GM operation only, as requested by the user.
+# Multiplayer functionality remains in the regression suite; multiplayer timing
+# and seven-browser long tasks are deferred. Their manual benchmarks and original
+# assertions remain in source, and deferred measurements are not passing results.

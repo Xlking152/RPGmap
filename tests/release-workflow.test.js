@@ -26,7 +26,8 @@ test('main and pull requests build the Windows desktop candidate with the locked
   assert.match(candidate, /node scripts\/vision-mask-raster-check\.mjs/);
   assert.match(candidate, /RPGMAP_BENCHMARK_TMPDIR: \/dev\/shm/);
   assert.match(candidate, /npm run benchmark:lan -- --assert/);
-  assert.match(candidate, /occlusion-lan-benchmark\.mjs --package=candidate\/desktop-stage\/resources[^\n]+--rounds=5 --warmup-rounds=1 --assert/);
+  assert.match(candidate, /benchmark:lan -- --assert --package=candidate\/desktop-stage\/resources --output=artifact\/backend-local-gm\.json/);
+  assert.doesNotMatch(candidate, /occlusion-lan-benchmark\.mjs|--multiplayer|continue-on-error/);
   assert.doesNotMatch(candidate, /gh release|contents: write|package:local-server|RPGmap-v\*\.zip/);
 });
 
@@ -67,6 +68,12 @@ test('deferring browser latency leaves the original runtime performance assertio
   assert.match(lan, /measurement\[type\]\.p95Ms > 60/);
   assert.match(lan, /moveBytes\.requestMax > 4096 \|\| moveBytes\.responseMax > 4096/);
   assert.match(support, /process\.env\.RPGMAP_BENCHMARK_TMPDIR/);
+  assert.match(lan, /PLAYER_COUNT = process\.argv\.includes\('--multiplayer'\) \? 6 : 0/);
+  assert.match(lan, /players\.length \? players\.map\(player => player\.socket\) : \[gm\.socket\]/);
+  assert.match(browser, /RPGMAP_BENCHMARK_BROWSER \|\| 'chrome'/);
+  assert.match(browser, /RPGMAP_BROWSER_BENCHMARK_SESSIONS\) \|\| 1/);
+  const largeRange = readFileSync(new URL('../scripts/occlusion-lan-benchmark.mjs', import.meta.url), 'utf8');
+  assert.match(largeRange, /result\.movementAck\.p95Ms > 60 \|\| result\.allClientFanout\.p95Ms > 60/);
 });
 
 test('hosted LAN regression still speaks the current protocol', () => {

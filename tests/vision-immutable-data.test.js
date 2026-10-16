@@ -1,6 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isImmutableVisionData, hasImmutableVisionData, recordImmutableVisionData } from '../src/vision/immutable-data.js';
+import { createCanonicalWorldValidator } from '../deployment/local-server/world-schema.mjs';
+
+test('vision reuses an accepted canonical graph without inspecting every Token again', () => {
+  const tokens = Array.from({ length: 500 }, (_, id) => ({ id: String(id), x: id, light: { enabled: false } }));
+  const state = { preferences: { spatialFixture: { tokens } } };
+  const validate = createCanonicalWorldValidator({ compactMetadata: true });
+  validate(state);
+  assert.equal(validate.isImmutableData(state), true);
+  assert.equal(hasImmutableVisionData(tokens), false);
+  const descriptors = Object.getOwnPropertyDescriptors;
+  let reads = 0;
+  Object.getOwnPropertyDescriptors = value => { reads++; return descriptors(value); };
+  try {
+    assert.equal(isImmutableVisionData(tokens, validate.isImmutableData), true);
+    assert.equal(reads, 0);
+  } finally { Object.getOwnPropertyDescriptors = descriptors; }
+  assert.equal(hasImmutableVisionData(tokens), true);
+  for (const truthy of ['true', 1, {}, []]) {
+    const unaccepted = Object.freeze({ child: { x: 1 } });
+    assert.equal(isImmutableVisionData(unaccepted, () => truthy), false);
+    assert.equal(hasImmutableVisionData(unaccepted), false);
+  }
+});
 
 test('shared immutable structure proof never evaluates accessors and rejects evolving children or cycles', () => {
   const mutable = { x: 1 }, shallow = Object.freeze({ mutable });
@@ -42,6 +65,8 @@ test('inherited serialization hooks invalidate existing structural reuse without
     Object.defineProperty(Object.prototype, 'toJSON', { configurable: true,
       get() { reads++; return () => ({ x: reads }); } });
     assert.equal(isImmutableVisionData(value), false);
+    assert.equal(isImmutableVisionData(value, () => true), false,
+      'even an accepted canonical graph cannot bypass inherited serialization hooks');
     assert.equal(hasImmutableVisionData(value), false);
     assert.equal(recordImmutableVisionData(value, Object.getOwnPropertyDescriptors(value)), false);
     assert.equal(reads, 0);
