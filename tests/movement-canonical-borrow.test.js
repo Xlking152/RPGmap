@@ -41,6 +41,38 @@ function assertDeepFrozen(value, seen = new WeakSet()) {
 
 const detachedAuthority = createMovementAuthority(() => copyMap, { prepareActorInputs: prepareCanonicalMovementInputs });
 
+test('a new fixed private entry freezes owned outputs directly without either loan copy', () => {
+  const input = fixture(), raw = new WeakSet(), frozen = [], freeze = Object.freeze;
+  const collect = value => {
+    if (!value || typeof value !== 'object' || raw.has(value)) return;
+    raw.add(value); Object.values(value).forEach(collect);
+  };
+  collect(input.state);
+  let loan;
+  Object.freeze = value => {
+    frozen.push(value);
+    if (value?.actor?.id === input.world.actors[0].id && value?.status?.statusVersion) loan = value;
+    return freeze(value);
+  };
+  let first;
+  try { first = countCopies(() => validateAuthoritativeTokenMovePath(input)); }
+  finally { Object.freeze = freeze; }
+  assert.equal(first.result.valid, true); assert.ok(loan);
+  assertDeepFrozen(loan);
+  assert.ok(frozen.every(value => !raw.has(value)), 'only producer-owned outputs are frozen');
+  const control = fixture();
+  const detached = countCopies(() => detachedAuthority(control));
+  assert.deepEqual(first.result, detached.result);
+  assert.equal(detached.cloned.length - first.cloned.length, 2, 'the first fixed loan also avoids both ownership copies');
+  const publicCopy = prepareCanonicalMovementInputs(input);
+  assert.notEqual(publicCopy.actor, loan.actor); assert.notEqual(publicCopy.status, loan.status);
+  assert.equal(Object.isFrozen(publicCopy.actor), false); assert.equal(Object.isFrozen(publicCopy.status), false);
+  publicCopy.actor.system.directFreezeMutation = true;
+  publicCopy.status.capabilities.canMove = false;
+  assert.equal(prepareCanonicalMovementInputs(input).actor.system.directFreezeMutation, undefined);
+  assert.equal(prepareCanonicalMovementInputs(input).status.capabilities.canMove, true);
+});
+
 test('the package store built-in instance borrows deeply frozen inputs and removes exactly two warm copies', async () => {
   // The actual store re-prepares its built-in, so object identity differs but
   // all fixed hook function identities remain the same as the server bundle.
@@ -48,13 +80,26 @@ test('the package store built-in instance borrows deeply frozen inputs and remov
   const ruleset = await store.get({ id: copyRuleset.id, version: copyRuleset.version });
   assert.notEqual(ruleset, copyRuleset);
   const input = fixture(ruleset), before = JSON.stringify(input.state);
-  detachedAuthority(input);
-  const first = countCopies(() => validateAuthoritativeTokenMovePath(input));
+  const freeze = Object.freeze;
+  let loan;
+  const publicCopy = prepareCanonicalMovementInputs(input);
+  // Prepare the actual fixed private entry, then observe its completed loan.
+  // The public entry above remains ineligible for direct ownership freezing.
+  const first = (() => {
+    Object.freeze = value => {
+      if (value?.actor?.id === input.world.actors[0].id && value?.status?.statusVersion) loan = value;
+      return freeze(value);
+    };
+    try { return countCopies(() => validateAuthoritativeTokenMovePath(input)); }
+    finally { Object.freeze = freeze; }
+  })();
   assert.equal(first.result.valid, true);
-  const actorCopy = first.cloned.find(value => value?.id === input.world.actors[0].id);
-  const statusCopy = first.cloned.find(value => value?.capabilities && value?.statusVersion);
-  assert.ok(actorCopy); assert.ok(statusCopy);
-  assertDeepFrozen(actorCopy); assertDeepFrozen(statusCopy);
+  assert.ok(loan);
+  assertDeepFrozen(loan.actor); assertDeepFrozen(loan.status);
+  assert.notEqual(loan.actor, publicCopy.actor); assert.notEqual(loan.status, publicCopy.status);
+  assert.notEqual(loan.actor, input.world.actors[0]);
+  assert.equal(Object.isFrozen(publicCopy.actor), false);
+  assert.equal(Object.isFrozen(publicCopy.status), false);
   const detached = countCopies(() => detachedAuthority(input));
   const warm = countCopies(() => validateAuthoritativeTokenMovePath(input));
   assert.deepEqual(warm.result, detached.result);
@@ -125,6 +170,42 @@ test('custom derivers retaining returned references keep fresh copies instead of
   assert.equal(warm.cloned.length, detached.cloned.length, 'custom output aliases cannot be hidden by a retained frozen copy');
 });
 
+test('a custom entry later exposed through fixed hooks keeps retained outputs mutable', () => {
+  let retained;
+  const statuses = { ...copyRuleset.statuses, derive() {
+    retained = { id: 'retained', definitionId: 'retained', enabled: true, capabilities: {} };
+    return [retained];
+  } };
+  const ruleset = { ...copyRuleset, statuses }, input = fixture(ruleset);
+  prepareCanonicalMovementInputs(input);
+  statuses.derive = copyRuleset.statuses.derive;
+  Object.freeze(statuses); Object.freeze(ruleset);
+  const first = countCopies(() => validateAuthoritativeTokenMovePath(input));
+  assert.equal(first.result.valid, true);
+  assert.equal(Object.isFrozen(retained), false);
+  assert.equal(Object.isFrozen(retained.capabilities), false);
+  retained.label = 'later change';
+  assert.equal(prepareCanonicalMovementInputs(input).status.derivedStatuses[0].label, 'later change');
+});
+
+test('a failed direct freeze retains the detached loan fallback', () => {
+  const input = fixture(), freeze = Object.freeze;
+  let failed = false;
+  Object.freeze = value => {
+    if (!failed && value?.id === input.world.actors[0].id && value?.system) {
+      failed = true; Object.freeze = freeze; throw new Error('direct freeze rejected');
+    }
+    return freeze(value);
+  };
+  try { assert.equal(validateAuthoritativeTokenMovePath(input).valid, true); }
+  finally { Object.freeze = freeze; }
+  assert.equal(failed, true);
+  const publicCopy = prepareCanonicalMovementInputs(input);
+  assert.equal(Object.isFrozen(publicCopy.actor), false);
+  assert.equal(Object.isFrozen(publicCopy.status), false);
+  assert.deepEqual(validateAuthoritativeTokenMovePath(input), detachedAuthority(input));
+});
+
 test('every custom normalization, derivation and movement hook retains detached input delivery', () => {
   for (const [section, key] of [['actor', 'migrateLegacy'], ['actor', 'normalizeSystem'], ['actor', 'derive'],
     ['statuses', 'derive'], ['movement', 'describe'], ['movement', 'calculateCost']]) {
@@ -176,7 +257,7 @@ test('mutable and getter hook containers preserve hook replacement and cannot bo
   }
 });
 
-test('unsupported or cyclic cloned snapshots are never published as reusable loans', () => {
+test('unsupported or cyclic detached snapshots from untrusted entries never become reusable loans', () => {
   for (const kind of ['cycle', 'non-json']) {
     const input = fixture(); prepareCanonicalMovementInputs(input);
     let changed = false;

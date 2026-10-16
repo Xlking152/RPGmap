@@ -39,11 +39,12 @@ const movementPartyRelations = new WeakMap();
 const targetedMovementRelations = new WeakMap();
 const projectionCollectionProofs = new WeakMap();
 const fullProjectionCollectionProofs = new WeakMap();
-const uniqueProjectionCollections = new WeakSet();
+const uniqueProjectionCollections = new WeakMap();
+const unchangedCollectionLength = collection => uniqueProjectionCollections.get(collection) === collection.length;
 function registerUniqueProjectionCollection(collection, previous = null) {
   if (!Array.isArray(collection)) return;
   const ids = new Set();
-  let sameOrder = Array.isArray(previous) && previous.length === collection.length && uniqueProjectionCollections.has(previous);
+  let sameOrder = Array.isArray(previous) && previous.length === collection.length && unchangedCollectionLength(previous);
   const indices = [];
   for (let index = 0; index < collection.length; index++) {
     const item = collection[index];
@@ -56,7 +57,7 @@ function registerUniqueProjectionCollection(collection, previous = null) {
       else if (previous[index] !== item) indices.push(index);
     }
   }
-  uniqueProjectionCollections.add(collection);
+  uniqueProjectionCollections.set(collection, collection.length);
   return sameOrder ? Object.freeze({ before: previous, indices: Object.freeze(indices) }) : null;
 }
 const EMPTY_ACTOR_SELECTION = Object.freeze([]);
@@ -352,8 +353,8 @@ function targetedMovementProjection(state, rawState, context, previousProjection
   state.audienceProjection = true;
   const collections = new Map();
   const rememberCollection = (before, after, indices = []) => {
-    if (Array.isArray(before) && Array.isArray(after) && uniqueProjectionCollections.has(before)) {
-      uniqueProjectionCollections.add(after);
+    if (Array.isArray(before) && Array.isArray(after) && unchangedCollectionLength(before)) {
+      uniqueProjectionCollections.set(after, after.length);
       collections.set(after, Object.freeze({ before, indices: Object.freeze(indices) }));
     }
   };
@@ -871,8 +872,10 @@ export function projectStateForAudience(rawState, rawContext = {}) {
     const projectedScene = projectedScenes.get(String(scene.id));
     const previousTokens = canonicalTokenMap(previousScene?.tokens || [], context);
     const projectedSceneTokens = projectedScene?.tokens || [];
-    const projectedTokens = new Map(projectedSceneTokens.map(token => [String(token.id), token]));
     const hasVaguePrior = Boolean(sourceIdentityUnchanged && projectedSceneTokens.some(token => token.audienceVisibility === 'vague'));
+    const selections = targetedRelation && context.trustedProjection === true && !hasVaguePrior
+      && unchangedCollectionLength(projectedSceneTokens) ? previousPolicies.targetedIndex.get(String(scene.id)) : null;
+    let projectedTokens = selections ? null : new Map(projectedSceneTokens.map(token => [String(token.id), token]));
     const sceneVisibleTokenIds = new Set();
     const projectedSceneTokensNext = [];
     const sceneSelectionIndex = targetedIndex ? new Map() : null;
@@ -889,7 +892,12 @@ export function projectStateForAudience(rawState, rawContext = {}) {
       const unchanged = movementCache && actor && previousTokens.get(String(rawToken.id)) === rawToken
         && previousActors.get(String(rawToken.actorId)) === actor && definitionsUnchanged && partiesUnchanged;
       const canReuseVaguePrior = hasVaguePrior && unchanged && !movedIds.has(String(rawToken.id));
-      const prior = movementCache ? projectedTokens.get(String(rawToken.id))
+      const record = selections?.get(String(rawToken.id));
+      const selected = record?.index >= 0 ? projectedSceneTokens[record.index] : null;
+      const indexed = record && (record.kind === 'hidden' && record.index === -1 || selected
+        && record.id === String(selected.id) && record.actorId === String(selected.actorId) && record.kind === selectionKind(selected));
+      if (selections && !indexed) projectedTokens ||= new Map(projectedSceneTokens.map(token => [String(token.id), token]));
+      const prior = movementCache ? indexed ? selected : projectedTokens.get(String(rawToken.id))
         || (canReuseVaguePrior ? projectedTokens.get((context.lookupOpaqueId || context.opaqueIdFor)('token', rawToken.id)) : null) : null;
       if (!actor) { rememberSelection(rawToken); continue; }
       // Only the immediately preceding projection supplies policy decisions,

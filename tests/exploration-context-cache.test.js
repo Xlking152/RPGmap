@@ -180,3 +180,116 @@ test('every internal enqueue still enforces the exact 32 MiB JSON budget includi
     { code: 'exploration_backlog' });
   assert.throws(() => validateExploration({ ...boundary, unknown: boundary.unknown + 'a' }), { code: 'exploration_backlog' });
 });
+
+function countContextSerializations(context, callback) {
+  const stringify = JSON.stringify;
+  let traversals = 0;
+  JSON.stringify = (value, replacer, space) => {
+    assert.equal(replacer, undefined);
+    return stringify(value, (_key, current) => {
+      if (current === context) traversals++;
+      return current;
+    }, space);
+  };
+  try { return { result: callback(), traversals }; }
+  finally { JSON.stringify = stringify; }
+}
+
+test('warm plain enqueues do not serialize accepted geometry while public validation still does', () => {
+  const { map, scene } = fixture(), context = sceneExplorationContext(map, scene);
+  const queue = enqueueExploration(emptyExploration(), context, input());
+  const warm = countContextSerializations(context, () => enqueueExploration(queue, context, input('move:1')));
+  assert.equal(warm.traversals, 0);
+  const external = countContextSerializations(context, () => validateExploration(warm.result));
+  assert.equal(external.traversals, 2, 'public byte-budget and checksum validation both retain the complete serialization');
+  assert.equal(external.result, warm.result);
+});
+
+test('cached byte arithmetic preserves the exact limit with multiple contexts and escaped unknown keys', () => {
+  const { map, scene } = fixture();
+  const first = frozen({ ...sceneExplorationContext(map, scene), extension: '中文😀"\\\n' });
+  const second = frozen({ ...first, ambient: 'dim', extension: '另一份地图😀' });
+  let queue = enqueueExploration(emptyExploration(), first, input());
+  queue = enqueueExploration(queue, second, input('move:1'));
+  const key = '中文😀"\\\n', prefix = '中文😀"\\\n';
+  const target = { ...enqueueExploration(queue, first, input('move:2')), [key]: { [key]: prefix } };
+  const spare = 32 * 1024 * 1024 - Buffer.byteLength(JSON.stringify(target));
+  const boundaryInput = { ...queue, [key]: { [key]: prefix + 'a'.repeat(spare) } };
+  const measured = countContextSerializations(first, () => enqueueExploration(boundaryInput, first, input('move:2')));
+  assert.equal(measured.traversals, 0);
+  assert.equal(Object.keys(measured.result.contexts).length, 2);
+  assert.equal(Buffer.byteLength(JSON.stringify(measured.result)), 32 * 1024 * 1024);
+  assert.equal(validateExploration(measured.result), measured.result);
+  assert.throws(() => enqueueExploration({ ...boundaryInput, [key]: { [key]: boundaryInput[key][key] + 'a' } },
+    first, input('move:2')), { code: 'exploration_backlog' });
+});
+
+test('getter, toJSON, proxy and custom-prototype wrapper values keep complete serialization', () => {
+  const { map, scene } = fixture(), context = sceneExplorationContext(map, scene);
+  const queue = enqueueExploration(emptyExploration(), context, input());
+  for (const kind of ['getter', 'toJSON', 'proxy', 'prototype']) {
+    let reads = 0;
+    let unknown;
+    if (kind === 'getter') unknown = { get value() { reads++; return '中文😀'; } };
+    if (kind === 'toJSON') unknown = { toJSON() { reads++; return '中文😀'; } };
+    if (kind === 'proxy') unknown = new Proxy({ value: '中文😀' }, {
+      get(target, key) { reads++; return Reflect.get(target, key); },
+    });
+    if (kind === 'prototype') unknown = Object.create({ toJSON() { reads++; return '中文😀'; } });
+    const measured = countContextSerializations(context, () => enqueueExploration({ ...queue, unknown }, context, input('next:0')));
+    assert.equal(measured.traversals, 1, kind);
+    assert.ok(reads > 0, kind);
+    assert.equal(validateExploration(measured.result), measured.result);
+  }
+});
+
+test('Object and Array prototype toJSON changes invalidate old checksum and byte proofs', () => {
+  for (const prototype of [Object.prototype, Array.prototype]) {
+    const { map, scene } = fixture(), context = sceneExplorationContext(map, scene);
+    const queue = enqueueExploration(emptyExploration(), context, input());
+    const previous = Object.getOwnPropertyDescriptor(prototype, 'toJSON');
+    Object.defineProperty(prototype, 'toJSON', { configurable: true, value() {
+      if (this === context) return { ...context, ambient: 'dark' };
+      if (this === context.occluders) return [];
+      return this;
+    } });
+    try {
+      assert.throws(() => enqueueExploration(queue, context, input('next:0')), /checksum/);
+      assert.throws(() => validateExploration(queue), /checksum/);
+    } finally {
+      if (previous) Object.defineProperty(prototype, 'toJSON', previous);
+      else delete prototype.toJSON;
+    }
+    assert.equal(validateExploration(queue), queue);
+    const warm = countContextSerializations(context, () => enqueueExploration(queue, context, input('restored:0')));
+    assert.equal(warm.traversals, 0, 'restoring prototypes leaves the original verified metadata intact');
+  }
+});
+
+test('sparse inherited array elements cannot qualify for immutable context metadata', () => {
+  const context = frozen({ map: { metersPerUnit: 1 }, occluders: new Array(1), lights: [] });
+  const queue = enqueueExploration(emptyExploration(), context, input());
+  const previous = Object.getOwnPropertyDescriptor(Array.prototype, '0');
+  Object.defineProperty(Array.prototype, '0', { configurable: true, writable: true, value: { changed: true } });
+  try {
+    assert.throws(() => enqueueExploration(queue, context, input('next:0')), /checksum/);
+    assert.throws(() => validateExploration(queue), /checksum/);
+  } finally {
+    if (previous) Object.defineProperty(Array.prototype, '0', previous);
+    else delete Array.prototype[0];
+  }
+});
+
+test('the memoized byte path retains the exact 4096 job limit', () => {
+  const { map, scene } = fixture(), context = sceneExplorationContext(map, scene);
+  const queue = enqueueExploration(emptyExploration(), context, input());
+  const job = queue.jobs['move:0'];
+  const almostFull = { ...queue, jobs: Object.fromEntries(Array.from({ length: 4095 }, (_value, index) => {
+    const id = `pending:${index}`;
+    return [id, { ...job, id }];
+  })) };
+  const full = enqueueExploration(almostFull, context, input('last:0'));
+  assert.equal(Object.keys(full.jobs).length, 4096);
+  assert.equal(validateExploration(full), full);
+  assert.throws(() => enqueueExploration(full, context, input('overflow:0')), { code: 'exploration_backlog' });
+});

@@ -11,6 +11,16 @@ const keyFor = (sceneId, partyId) => JSON.stringify([String(sceneId), String(par
 const validatedContexts = new WeakMap();
 const immutableContexts = new WeakSet();
 
+function stableJsonPrototypes() {
+  for (const prototype of [Object.prototype, Array.prototype]) {
+    for (let current = prototype; current; current = Object.getPrototypeOf(current)) {
+      const descriptor = Object.getOwnPropertyDescriptor(current, 'toJSON');
+      if (descriptor && (!own(descriptor, 'value') || typeof descriptor.value === 'function')) return false;
+    }
+  }
+  return true;
+}
+
 // Frozen JSON data has a stable checksum. Accessors, custom prototypes and
 // toJSON functions keep the full validation path, even on frozen objects.
 function immutableContext(value) {
@@ -18,8 +28,12 @@ function immutableContext(value) {
   if (immutableContexts.has(value)) return true;
   if (typeof value !== 'object' || !Object.isFrozen(value)
     || types.isProxy(value)
-    || (!Array.isArray(value) && ![Object.prototype, null].includes(Object.getPrototypeOf(value)))) return false;
-  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
+    || !(Array.isArray(value) ? Object.getPrototypeOf(value) === Array.prototype
+      : [Object.prototype, null].includes(Object.getPrototypeOf(value)))) return false;
+  const descriptors = Object.getOwnPropertyDescriptors(value), keys = Reflect.ownKeys(descriptors);
+  if (Array.isArray(value) && (keys.length !== value.length + 1
+    || keys.some((key, index) => key !== (index === value.length ? 'length' : String(index))))) return false;
+  for (const descriptor of Object.values(descriptors)) {
     if (!own(descriptor, 'value') || !immutableContext(descriptor.value)) return false;
   }
   for (let prototype = Object.getPrototypeOf(value); prototype; prototype = Object.getPrototypeOf(prototype)) {
@@ -30,9 +44,53 @@ function immutableContext(value) {
   return true;
 }
 
-function contextChecksum(context, memoized = false) {
-  return memoized && validatedContexts.has(context) ? validatedContexts.get(context)
-    : createHash('sha256').update(JSON.stringify(context)).digest('hex');
+function contextFingerprint(context, memoized = false) {
+  if (memoized && stableJsonPrototypes() && validatedContexts.has(context)) return validatedContexts.get(context);
+  const serialized = JSON.stringify(context);
+  return { checksum: createHash('sha256').update(serialized).digest('hex'), bytes: Buffer.byteLength(serialized) };
+}
+
+function memoizedStateBytes(value) {
+  if (!stableJsonPrototypes()) return null;
+  // The mutable wrapper must contain plain own JSON data: otherwise getters,
+  // proxies or toJSON could change serialization while replacing contexts.
+  const visiting = new WeakSet(), complete = new WeakSet();
+  const inspect = (current, depth = 0) => {
+    if (current === null || ['string', 'boolean'].includes(typeof current)) return true;
+    if (typeof current === 'number') return Number.isFinite(current);
+    if (!current || typeof current !== 'object' || depth > 64 || types.isProxy(current)) return false;
+    if (complete.has(current)) return true;
+    if (visiting.has(current)) return false;
+    const array = Array.isArray(current), prototype = Object.getPrototypeOf(current);
+    if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
+    const descriptors = Object.getOwnPropertyDescriptors(current), keys = Reflect.ownKeys(descriptors);
+    if (array && keys.length !== current.length + 1) return false;
+    visiting.add(current);
+    for (let index = 0; index < keys.length; index++) {
+      const key = keys[index], descriptor = descriptors[key];
+      if (typeof key !== 'string' || !own(descriptor, 'value')
+        || !(array && key === 'length') && !descriptor.enumerable
+        || array && key !== (index === current.length ? 'length' : String(index))) return false;
+      if (current === value && key === 'contexts') continue;
+      if (!inspect(descriptor.value, depth + 1)) return false;
+    }
+    visiting.delete(current); complete.add(current);
+    return true;
+  };
+  if (!inspect(value) || !own(value, 'contexts')) return null;
+  const contexts = value.contexts;
+  if (types.isProxy(contexts) || ![Object.prototype, null].includes(Object.getPrototypeOf(contexts))) return null;
+  const placeholders = Object.create(null);
+  let omittedBytes = 0;
+  for (const key of Reflect.ownKeys(contexts)) {
+    const descriptor = Object.getOwnPropertyDescriptor(contexts, key);
+    if (typeof key !== 'string' || !descriptor.enumerable || !own(descriptor, 'value')) return null;
+    const record = validatedContexts.get(descriptor.value);
+    if (!record) return null;
+    placeholders[key] = null;
+    omittedBytes += record.bytes - 4;
+  }
+  return Buffer.byteLength(JSON.stringify({ ...value, contexts: placeholders })) + omittedBytes;
 }
 
 function assertContextShape(context) {
@@ -51,16 +109,19 @@ export function validateExploration(value) {
 function validateExplorationState(value, memoizedContexts = false) {
   if (!object(value) || value.schemaVersion !== 1 || typeof value.worldEpoch !== 'string'
     || !object(value.partyEpochs) || !object(value.contexts) || !object(value.jobs)) fail('Invalid durable exploration state');
-  if (Object.keys(value.jobs).length > MAX_JOBS || Buffer.byteLength(JSON.stringify(value)) > MAX_BYTES) {
+  if (Object.keys(value.jobs).length > MAX_JOBS
+    || ((memoizedContexts ? memoizedStateBytes(value) : null) ?? Buffer.byteLength(JSON.stringify(value))) > MAX_BYTES) {
     throw Object.assign(new Error('Exploration backlog is full; retry after it has drained'), { code: 'exploration_backlog' });
   }
   for (const epoch of Object.values(value.partyEpochs)) if (!Number.isSafeInteger(epoch) || epoch < 0) fail('Invalid exploration epoch');
   const pendingContexts = [];
   for (const [id, context] of Object.entries(value.contexts)) {
-    if (!/^[a-f0-9]{64}$/.test(id) || contextChecksum(context, memoizedContexts) !== id) fail('Exploration context checksum mismatch');
-    if (memoizedContexts && validatedContexts.get(context) === id) continue;
+    if (!/^[a-f0-9]{64}$/.test(id)) fail('Exploration context checksum mismatch');
+    const fingerprint = contextFingerprint(context, memoizedContexts);
+    if (fingerprint.checksum !== id) fail('Exploration context checksum mismatch');
+    if (memoizedContexts && validatedContexts.get(context) === fingerprint) continue;
     assertContextShape(context);
-    if (immutableContext(context)) pendingContexts.push([context, id]);
+    if (stableJsonPrototypes() && immutableContext(context)) pendingContexts.push([context, fingerprint]);
   }
   for (const [id, job] of Object.entries(value.jobs)) {
     if (!object(job) || id !== job.id || !own(value.contexts, job.contextId) || job.worldEpoch !== value.worldEpoch
@@ -73,7 +134,7 @@ function validateExplorationState(value, memoizedContexts = false) {
       || job.totalSamples !== explorationSampleCount(job.path, value.contexts[job.contextId].map.metersPerUnit)
       || job.epoch !== (value.partyEpochs[keyFor(job.sceneId, job.partyId)] || 0)) fail('Invalid durable exploration job');
   }
-  for (const [context, id] of pendingContexts) validatedContexts.set(context, id);
+  for (const [context, fingerprint] of pendingContexts) validatedContexts.set(context, fingerprint);
   return value;
 }
 
@@ -109,7 +170,7 @@ export function explorationSampleCount(path, metersPerUnit = 1) {
 }
 
 export function enqueueExploration(previous, context, input) {
-  const contextId = contextChecksum(context, true);
+  const fingerprint = contextFingerprint(context, true), contextId = fingerprint.checksum;
   const next = { ...previous, contexts: { ...previous.contexts,
     [contextId]: own(previous.contexts, contextId) ? previous.contexts[contextId] : context }, jobs: { ...previous.jobs } };
   if (own(next.jobs, input.id)) return previous;
@@ -123,9 +184,9 @@ export function enqueueExploration(previous, context, input) {
   // A restart can leave an accepted snapshot object distinct from its equal
   // freshly derived context. Its verified checksum and local shape also make
   // the immutable incoming object safe to reuse on the next movement.
-  if (next.contexts[contextId] !== context && immutableContext(context)) {
+  if (next.contexts[contextId] !== context && stableJsonPrototypes() && immutableContext(context)) {
     assertContextShape(context);
-    validatedContexts.set(context, contextId);
+    validatedContexts.set(context, fingerprint);
   }
   return validated;
 }

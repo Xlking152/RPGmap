@@ -253,7 +253,7 @@ test('accepted canonical projection reuses its whole-graph policy proof while so
     'canonical immutability never suppresses fresh source range and target detection');
 });
 
-test('server-accepted previous Token arrays share the existing canonical index while recipient indexes stay private', () => {
+test('accepted movement reuses canonical and recipient selection indexes without rebuilding Token maps', () => {
   const state = setup(), applied = move(state, 'source');
   const canonicalToken = sceneOf(state.before).tokens.find(token => token.id === 'foreign');
   const projectedToken = sceneOf(state.projected).tokens.find(token => token.id === 'foreign');
@@ -270,12 +270,60 @@ test('server-accepted previous Token arrays share the existing canonical index w
   try {
     const first = audience.projectStateForAudience(applied.state, options);
     assert.equal(canonicalInsertions, 1);
-    assert.equal(projectedInsertions, 1);
+    assert.equal(projectedInsertions, 0);
     assert.deepEqual(audience.projectStateForAudience(applied.state, options), first);
     assert.equal(canonicalInsertions, 1, 'the accepted graph need not be separately registered in the vision WeakSet');
-    assert.equal(projectedInsertions, 2, 'each recipient still builds its own selected Token index');
+    assert.equal(projectedInsertions, 0, 'the existing private selection index supplies the prior Token');
     assert.deepEqual(first, fullProjection(applied.state, state.context));
   } finally { Map.prototype.set = mapSet; }
+});
+
+test('selection-index reuse keeps hidden Tokens masked and preserves vague, public and changed-selection fallbacks', () => {
+  for (const kind of ['hidden', 'vague', 'public', 'changed-id', 'reordered']) {
+    const state = setup(kind === 'hidden' || kind === 'vague' ? { describeVision: () => ({
+      preciseRangeMeters: kind === 'hidden' ? 10 : 1, vagueRangeMeters: kind === 'hidden' ? 10 : 300, senses: {},
+    }) } : {});
+    if (kind === 'changed-id') sceneOf(state.projected).tokens.find(token => token.id === 'owned').id = 'old-id';
+    if (kind === 'reordered') sceneOf(state.projected).tokens.reverse();
+    const token = sceneOf(state.projected).tokens.find(token => token.id !== 'source');
+    const applied = move(state, 'source'), context = { ...state.context,
+      ...(kind === 'public' ? { trustedProjection: false } : {}),
+    };
+    const set = Map.prototype.set;
+    let insertions = 0, actual;
+    Map.prototype.set = function (key, value) {
+      if (value === token) insertions++;
+      return set.call(this, key, value);
+    };
+    try {
+      actual = audience.projectStateForAudience(applied.state, { ...context, movementCache: {
+        beforeState: state.before, previousProjection: state.projected, tokenIds: new Set(['source']),
+      } });
+    } finally { Map.prototype.set = set; }
+    assert.deepEqual(actual, fullProjection(applied.state, context), kind);
+    assert.equal(insertions, kind === 'hidden' ? 0 : 1, kind);
+    if (kind === 'hidden') assert.equal(sceneOf(actual).tokens.some(token => token.id === 'foreign'), false);
+    assert.equal(JSON.stringify(actual).includes('secret'), false);
+  }
+});
+
+test('changed prior collection length keeps the original Map fallback and duplicate-ID precedence', () => {
+  for (const kind of ['append-duplicate', 'append', 'splice', 'replace']) {
+    const state = setup(), tokens = sceneOf(state.projected).tokens;
+    const prior = tokens.find(token => token.id === 'foreign');
+    if (kind === 'append-duplicate') tokens.push({ ...prior, x: 99 });
+    if (kind === 'append') tokens.push({ ...prior, id: 'extra' });
+    if (kind === 'splice') tokens.splice(tokens.findIndex(token => token.id === 'owned'), 1);
+    if (kind === 'replace') tokens[tokens.indexOf(prior)] = { ...prior, x: 99 };
+    const applied = move(state, 'source'), options = { ...state.context, movementCache: {
+      beforeState: state.before, previousProjection: state.projected, tokenIds: new Set(['source']),
+    } };
+    const actual = audience.projectStateForAudience(applied.state, options);
+    const originalMapPath = audience.projectStateForAudience(applied.state, { ...options, trustedProjection: false });
+    assert.deepEqual(actual, originalMapPath, kind);
+    if (kind !== 'append-duplicate' && kind !== 'replace') assert.deepEqual(actual, fullProjection(applied.state, state.context), kind);
+    assert.equal(JSON.stringify(actual).includes('secret'), false);
+  }
 });
 
 test('the common movement projector refreshes stale, copied, unaccepted and changed recipient scopes', () => {

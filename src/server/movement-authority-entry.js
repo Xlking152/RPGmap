@@ -51,6 +51,17 @@ function hasFixedMovementInputHooks(ruleset) {
     && frozenDataValue(movement, 'calculateCost') === infiniteHorrorRuleset.movement.calculateCost;
 }
 
+function actorEffectsOnlyChanged(previous, actor) {
+  if (previous === actor || previous.effects === actor.effects || !Array.isArray(actor.effects)
+    || Object.getPrototypeOf(previous) !== Object.getPrototypeOf(actor)) return false;
+  // Legacy forms without IDs acquire fresh generated IDs on normalization.
+  const forms = Array.isArray(actor.forms) ? actor.forms : actor.system?.forms;
+  if (Array.isArray(forms) && forms.some(form => form && (typeof form.id !== 'string' || !form.id.trim()))) return false;
+  const keys = Reflect.ownKeys(previous);
+  return keys.length === Reflect.ownKeys(actor).length && keys.every(key =>
+    Object.hasOwn(actor, key) && (key === 'effects' || Object.is(previous[key], actor[key])));
+}
+
 function freezeMovementInputs(value) {
   const visiting = new WeakSet(), complete = new WeakSet(), nodes = [];
   const inspect = current => {
@@ -98,27 +109,40 @@ export function prepareCanonicalMovementInputs({ world, scene, token, ruleset, i
   }
   const key = JSON.stringify([actor.id, token.id]);
   let entry = canonicalMovementInputs.get(key);
+  const borrow = mode === borrowMovementInputs && hasFixedMovementInputHooks(ruleset);
   // An unrelated Actor update replaces the collection, not this document.
   // The fresh first-match lookup and exact Actor dependency below still
   // invalidate replacement, reordering of duplicate IDs and same-ID imports.
   if (!entry || entry.ruleset !== ruleset || entry.actor !== actor || entry.definitions !== definitions
     || entry.actorLink !== token.actorLink || entry.actorDelta !== token.actorDelta || entry.effects !== token.effects) {
     // The guarded linked Token already selected this exact first-match Actor.
-    // Run the same complete normalization without building the resolver's
-    // discarded Token/baseActor copies. Status and returned copies stay fresh.
-    const resolvedActor = normalizeActorDocument(actor, { ruleset });
+    // Fixed built-in normalization does not read Actor effects; its shell only
+    // copies them. An effects-only edit can retain the existing normalized
+    // shell/system. Every status and all other Actor edits still resolve fully.
+    const effectsOnly = borrow && entry?.fixedNormalization === true && entry.ruleset === ruleset && entry.definitions === definitions
+      && entry.actorLink === token.actorLink && entry.actorDelta === token.actorDelta && entry.effects === token.effects
+      && actorEffectsOnlyChanged(entry.actor, actor);
+    const resolvedActor = effectsOnly ? { ...entry.resolvedActor, effects: structuredClone(actor.effects) }
+      : normalizeActorDocument(actor, { ruleset });
     const status = resolveStatuses({ schemaVersion: 4, actors: [resolvedActor], tokens: [token], statusDefinitions: definitions },
       { actorId: token.actorId, tokenId: token.id, ruleset });
     entry = { ruleset, actor, definitions, actorLink: token.actorLink, actorDelta: token.actorDelta, effects: token.effects,
-      resolvedActor, status };
+      resolvedActor, status, fixedNormalization: borrow };
   }
-  // Callers receive private mutable copies. Keep one version per Actor/Token
+  // Public callers receive private mutable copies. Keep one version per Actor/Token
   // key and at most 64 entries, including after imports or scene changes.
   canonicalMovementInputs.delete(key);
   canonicalMovementInputs.set(key, entry);
   if (canonicalMovementInputs.size > 64) canonicalMovementInputs.delete(canonicalMovementInputs.keys().next().value);
-  const borrow = mode === borrowMovementInputs && hasFixedMovementInputHooks(ruleset);
   if (borrow && entry.readOnlyInputs) return entry.readOnlyInputs;
+  if (borrow && entry.fixedNormalization === true) {
+    // The fixed producer owns both complete outputs. Freeze that private
+    // graph directly; public/custom preparation still receives detached data.
+    const owned = { actor: entry.resolvedActor, status: entry.status };
+    try {
+      if (freezeMovementInputs(owned)) { entry.readOnlyInputs = owned; return owned; }
+    } catch { /* Unsupported ownership/freezing retains the detached path. */ }
+  }
   const detached = { actor: structuredClone(entry.resolvedActor), status: structuredClone(entry.status) };
   // Only this module's authority borrows the snapshot. The public preparation
   // API still returns independent mutable copies, including after a loan.
