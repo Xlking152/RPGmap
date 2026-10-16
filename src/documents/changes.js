@@ -120,6 +120,39 @@ function diffFields(before, after, path = [], removed = [], isCanonicalData = nu
   return changed;
 }
 
+// Fog contains deeply nested party/row objects. Discover equality while
+// collecting their patch instead of comparing each subtree before walking it
+// again. A null result means equal; an empty patch can still contain removals.
+function diffFogFields(before, after, path, removed, isCanonicalData) {
+  if (before === after) return null;
+  const changed = {};
+  let different = false;
+  for (const key of Object.keys(before)) {
+    if (!Object.hasOwn(after, key)) {
+      removed.push([...path, key]);
+      different = true;
+    }
+  }
+  for (const [key, value] of Object.entries(after)) {
+    const owned = Object.hasOwn(before, key), previous = before[key];
+    if (owned && previous === value) continue;
+    if (plain(previous) && plain(value)) {
+      const nested = diffFogFields(previous, value, [...path, key], removed, isCanonicalData);
+      if (nested !== null) {
+        different = true;
+        if (Object.keys(nested).length) changed[key] = nested;
+      }
+      if (!owned) different = true;
+    } else if (!owned || !equal(previous, value)) {
+      different = true;
+      changed[key] = value === null || typeof value === 'string' || typeof value === 'boolean'
+        || (typeof value === 'number' && Number.isFinite(value)) ? value
+          : typeof isCanonicalData === 'function' && isCanonicalData(value) === true ? value : clone(value);
+    }
+  }
+  return different ? changed : null;
+}
+
 function collectionEntries(state) {
   const world = state.preferences.worldV2;
   const entries = [['Scene', world.scenes, null], ['ChatMessage', state.preferences.chatSystem?.messages || [], null]];
@@ -155,7 +188,7 @@ export function createFogDocumentChanges(beforeState, afterState, { fog = [], is
   const afterScenes = new Map((afterState?.preferences?.worldV2?.scenes || []).map(scene => [String(scene.id), scene]));
   for (const [sceneId, dirtyBounds] of bounds) {
     const before = beforeScenes.get(sceneId)?.fog, after = afterScenes.get(sceneId)?.fog;
-    if (equal(before, after)) continue;
+    if (before === after) continue;
     const document = { type: 'Fog', id: sceneId, parent: { type: 'Scene', id: sceneId } };
     if (after === undefined) { changes.push({ action: 'delete', document, changed: null }); continue; }
     if (before === undefined) { changes.push({ action: 'create', document, changed: clone(after), dirtyBounds: dirtyBounds ?? null }); continue; }
@@ -165,7 +198,14 @@ export function createFogDocumentChanges(beforeState, afterState, { fog = [], is
     // from its filtered Fog; default callers retain detached mutable output.
     // Sharing canonical row arrays avoids cloning the same large numeric rows
     // once for every session while synchronous socket serialization reads them.
-    const changed = plain(before) && plain(after) ? diffFields(before, after, [], removed, isCanonicalData) : clone(after);
+    let changed;
+    if (plain(before) && plain(after)) {
+      changed = diffFogFields(before, after, [], removed, isCanonicalData);
+      if (changed === null) continue;
+    } else {
+      if (equal(before, after)) continue;
+      changed = clone(after);
+    }
     changes.push({ action: 'update', document, changed, ...(removed.length ? { removed } : {}), dirtyBounds: dirtyBounds ?? null });
   }
   return changes;

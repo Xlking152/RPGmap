@@ -147,7 +147,7 @@ function activeScene(world) {
   return (world?.scenes || []).find(scene => String(scene?.id ?? '') === String(world?.activeSceneId ?? '')) || null;
 }
 
-function actorMap(world, cacheCanonical = false) {
+function actorMap(world, cacheCanonical = false, context = {}) {
   const actors = world?.actors || [];
   if (!cacheCanonical || !Array.isArray(actors)) {
     return new Map(actors.map(actor => [String(actor?.id ?? ''), actor]));
@@ -158,7 +158,11 @@ function actorMap(world, cacheCanonical = false) {
   // Only canonical input arrays use this map. Recipient projections always
   // build their own map, even if a caller freezes the returned projection.
   // Duplicate IDs retain the legacy last-entry precedence without being cached.
-  if (result.size === actors.length && jsonPermissionValue(actors) && immutablePolicyDocument(actors)
+  // The server's accepted immutable JSON proof already covers the whole Actor
+  // array. Reuse it instead of traversing the same graph in two more helpers.
+  if (result.size === actors.length
+    && (context.trustedProjection && typeof context.isCanonicalData === 'function' && context.isCanonicalData(actors) === true
+      || jsonPermissionValue(actors) && immutablePolicyDocument(actors))
     && actors.every(actor => typeof actor?.id === 'string' && actor.id.length > 0)) {
     canonicalActorMaps.set(actors, result);
   }
@@ -746,7 +750,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   };
   const world = state?.preferences?.worldV2;
   if (!plainObject(world)) return state;
-  const actors = actorMap(world, true);
+  const actors = actorMap(world, true, context);
   if (context.role === 'gm') {
     const vision = currentVision(world, context, actors);
     if (vision) {
@@ -816,7 +820,7 @@ export function projectStateForAudience(rawState, rawContext = {}) {
       role: context.role, userId: context.userId, partyIds: [...parties],
     }))
     .map(entry => structuredClone(entry));
-  const previousActors = actorMap(previousWorld, true);
+  const previousActors = actorMap(previousWorld, true, context);
   const projectedActors = actorMap(previousProjection?.preferences?.worldV2);
   const previousScenes = new Map((previousWorld?.scenes || []).map(scene => [String(scene.id), scene]));
   const projectedScenes = new Map((previousProjection?.preferences?.worldV2?.scenes || []).map(scene => [String(scene.id), scene]));
@@ -1109,7 +1113,7 @@ export function advancePublicChatProjectionMetadata(previousProjection, projecti
     || audience.partyIds.some((partyId, index) => partyId !== metadata.partyIds[index])) return null;
   // Re-run the descriptor hook: a time/user-dependent hook is not proved
   // invariant merely because the canonical Actor and Token references match.
-  const vision = currentVision(afterWorld, context, actorMap(afterWorld, true));
+  const vision = currentVision(afterWorld, context, actorMap(afterWorld, true, context));
   if (JSON.stringify(vision) !== JSON.stringify(previousAudience.source || null)) return null;
   const beforeChat = beforeState.preferences.chatSystem, afterChat = afterState.preferences.chatSystem;
   const beforeProjectedChat = previousProjection.preferences.chatSystem, projectedChat = projection.preferences.chatSystem;
