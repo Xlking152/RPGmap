@@ -48,6 +48,6 @@ NSIS 更新仅按旧程序的 `PROGRAM-FILES.txt` 删除程序文件，并先完
 
 ## 正式发布
 
-Release 仅提供安装器、独立兰州地图、SHA256SUMS.txt 和使用说明.md。node scripts/desktop-release.mjs assemble 汇总正式文件并写冻结凭据，verify 校验清单、源提交和载荷；构建记录保留在 artifact/，不作为下载资产。完整参数见[开发与制图说明](../文档/RPGmap-v3.0.0-开发与制图说明.md)。
+Release 仅提供安装器、Lanzhou-1.1.0.rpgmap、SHA256SUMS.txt 和 README.md（使用说明），地图和说明使用中文显示标签。node scripts/desktop-release.mjs assemble 汇总正式文件并写冻结凭据，verify 校验清单、源提交和载荷；构建记录保留在 artifact/，不作为下载资产。完整参数见[开发与制图说明](../文档/RPGmap-v3.0.0-开发与制图说明.md)。
 
 程序包不复制 maps/、素材库、测试、候选报告或用户存档。正式发布使用验收后的相同字节，不能在上传前重新构建或改名复用 RC 安装器。
