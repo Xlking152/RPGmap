@@ -238,7 +238,8 @@ export async function createDesktopPlayerBrowserAudit(context) {
     return true;
   };
   try {await browser.launch(origin+'/');browserVersion=await browser.call('Browser.getVersion');
-    assert.match(browserVersion.product,/^Chrome\//,'The selected executable must actually be Google Chrome');await connect(origin,catalog.connection.joinCode);}
+    assert.match(browserVersion.product,/^Chrome\//,'The selected executable must actually be Google Chrome');
+    assert.doesNotMatch(browserVersion.userAgent,/Edg\//,'The Player audit requires Google Chrome');await connect(origin,catalog.connection.joinCode);}
   catch(error){await browser.close().catch(()=>{});throw error;}
   async function observe({reason,startedAt=performance.now(),expectReload=false}) {
     const current=await gm(api=>({worldId:api.world.get().id,sceneId:api.world.getActiveScene().id,mapPackage:{id:api.mapPackage.id,version:api.mapPackage.version},fingerprint:api.mapPackage.fingerprint}));
