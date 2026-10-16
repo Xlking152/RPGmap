@@ -110,7 +110,15 @@ jobs:
       - name: Assert the LAN performance budget
         run: npm run benchmark:lan -- --assert
       - name: Assert large-range performance on the exact desktop payload
-        run: node scripts/occlusion-lan-benchmark.mjs --package=candidate/desktop-stage/resources --map=candidate/frozen/delivery/北宋兰州城-1.1.0.rpgmap --rounds=5 --warmup-rounds=1 --assert
+        run: node scripts/occlusion-lan-benchmark.mjs --package=candidate/desktop-stage/resources --map=candidate/frozen/delivery/北宋兰州城-1.1.0.rpgmap --rounds=5 --warmup-rounds=1 --assert --output=artifact/backend-large-range.json
+      - name: Retain backend measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: RPGmap-backend-${{ github.sha }}
+          path: artifact/backend-large-range.json
+          if-no-files-found: ignore
+          retention-days: 7
 
 # Seven-browser latency investigation is explicitly deferred for v3.0.0.
 # Existing browser/performance benchmark assertions remain in source; this CI

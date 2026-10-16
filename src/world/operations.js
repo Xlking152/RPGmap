@@ -540,7 +540,7 @@ export function projectWorldOperationState(rawState) {
   return state;
 }
 
-function projectGranularOperationState(state, operations, privateEvents = false) {
+function projectGranularOperationState(state, operations, privateEvents = false, sharedPositionTokens = false) {
   if (privateEvents) {
     const scene = activeScene(worldFromState(state));
     // Unchanged projections remain internal read-only leaves. Only the replaced
@@ -581,14 +581,14 @@ function projectGranularOperationState(state, operations, privateEvents = false)
       const index = String(entity.tokens?.[sceneIndex]?.id ?? '') === tokenId
         ? sceneIndex
         : (entity.tokens?.findIndex(item => String(item?.id ?? '') === tokenId) ?? -1);
-      if (token && index >= 0) entity.tokens[index] = clone(token);
+      if (token && index >= 0) entity.tokens[index] = sharedPositionTokens ? token : clone(token);
       state.attackAreas = clone(scene.attackAreas || []);
     }
     if (operation.type === 'token.movePath' && String(payload.sceneId || world.activeSceneId) === String(world.activeSceneId)) {
       for (const tokenId of payload.tokenIds || []) {
         const token = scene.tokens?.find(item => String(item?.id ?? '') === String(tokenId));
         const index = entity.tokens?.findIndex(item => String(item?.id ?? '') === String(tokenId)) ?? -1;
-        if (token && index >= 0) entity.tokens[index] = clone(token);
+        if (token && index >= 0) entity.tokens[index] = sharedPositionTokens ? token : clone(token);
       }
       state.attackAreas = clone(scene.attackAreas || []);
     }
@@ -1457,8 +1457,14 @@ function* worldOperationSteps(rawState, rawOperations, context = {}) {
     && markMovementAdjudicationRequired(state, context.ruleset, context.prepareMovementAdjudicationActor);
   const world = worldFromState(state);
   world.updatedAt = String(context.now || new Date().toISOString());
+  // The server immediately validates and freezes this result. Its position-only
+  // transaction may share changed Token leaves between the two read projections;
+  // arrays stay separate. Generated status operations must retain full cloning.
+  const sharedPositionTokens = context.trustedOperationHooks === true
+    && operations.every(operation => TOKEN_POSITION_TYPES.has(operation.type) || operation.type === 'token.movePath')
+    && typeof context.isCanonicalData === 'function' && context.isCanonicalData(rawState) === true;
   if (movementAdjudicationChanged) projectWorldOperationState(state);
-  else projectGranularOperationState(state, operations, privateEvents);
+  else projectGranularOperationState(state, operations, privateEvents, sharedPositionTokens);
   return {
     state,
     operations,
@@ -1536,7 +1542,14 @@ export function createWorldOperationPatch(beforeState, afterState, { trustedCano
     }
     const tokens = diffById(previous.tokens, scene.tokens);
     if (tokens.upsert.length || tokens.remove.length) scenes.tokens.push({ sceneId, ...tokens });
-    if (!same(sceneContent(previous), sceneContent(scene))) scenes.content.push({ sceneId, ...sceneContent(scene) });
+    // Only the server's validated immutable stream may reuse all four content
+    // fields. Public callers keep their original clone and accessor behavior.
+    const unchangedContent = trustedCanonical === true && previous.markers === scene.markers
+      && previous.attackAreas === scene.attackAreas && previous.sceneEvents === scene.sceneEvents
+      && previous.settings === scene.settings;
+    if (!unchangedContent && !same(sceneContent(previous), sceneContent(scene))) {
+      scenes.content.push({ sceneId, ...sceneContent(scene) });
+    }
     const featureStates = diffById(
       Object.entries(previous.featureStates || {}).map(([id, state]) => ({ id, state })),
       Object.entries(scene.featureStates || {}).map(([id, state]) => ({ id, state })),

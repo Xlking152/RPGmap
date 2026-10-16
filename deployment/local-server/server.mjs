@@ -62,6 +62,7 @@ import {
   advancePublicChatProjectionMetadata,
   matchesSourceFreeProjectionScope,
   projectionCollectionChanges,
+  canonicalMovementCollectionChanges,
   hasCanonicalPrivateMovementPredecessor,
   serverRuleset,
   configureServerRuleset,
@@ -1246,7 +1247,10 @@ function broadcastOperationCommit({ beforeState, afterState, operationId, baseRe
       changes: fogOnly ? createFogDocumentChanges(beforeProjection, afterProjection, { fog,
         isCanonicalData: assertCanonicalWorldState.isImmutableData })
         : createDocumentChanges(beforeProjection, afterProjection, null, { motion, fog,
-          collectionChanges: projectionCollectionChanges(beforeProjection, afterProjection) }),
+          collectionChanges: pureMovement && session.role === 'gm'
+            && beforeProjection === beforeState && afterProjection === afterState
+            ? canonicalMovementCollectionChanges(beforeState, afterState, assertCanonicalWorldState.isImmutableData)
+            : projectionCollectionChanges(beforeProjection, afterProjection) }),
       ...(motion.length ? { motion } : {}),
       originSessionId,
       audienceRevision: session.audienceRevision,

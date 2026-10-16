@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { hasCompletePreciseTokenProjection } from '../deployment/local-server/movement-projection.mjs';
 import { createDocumentChanges, createFogDocumentChanges } from '../src/documents/changes.js';
-import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, hasCanonicalPrivateMovementPredecessor } from '../src/vision/audience.js';
+import { projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, canonicalMovementCollectionChanges, hasCanonicalPrivateMovementPredecessor } from '../src/vision/audience.js';
 import { createPreviousProjectionFunctions } from './fixtures/server-incremental-before-preparation.js';
 
 const server = readFileSync(new URL('../deployment/local-server/server.mjs', import.meta.url), 'utf8');
@@ -12,7 +12,7 @@ const functionSource = server.slice(server.indexOf('function lightweightProjecti
 const currentFactory = new Function('dependencies', `
   const { sessions, audienceStateFor, projectMotionForSession, createFogDocumentChanges,
     createDocumentChanges, sendSocket, rememberResumeCommit, committedPatches,
-    describeVisionForToken, describeServerVision, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, hasCanonicalPrivateMovementPredecessor, visionMapForScene,
+    describeVisionForToken, describeServerVision, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, canonicalMovementCollectionChanges, hasCanonicalPrivateMovementPredecessor, visionMapForScene,
     findUser, assertCanonicalWorldState, hasCompletePreciseTokenProjection, structuredClone, metrics } = dependencies;
   ${functionSource}
   const shell = lightweightProjectionShell;
@@ -62,7 +62,7 @@ function harness(previous = false, overrides = {}) {
     calls: [], responses: [], resumptions: [] };
   const dependencies = {
     sessions: new Map(), committedPatches: new WeakMap(), metrics, hasCompletePreciseTokenProjection,
-    advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, hasCanonicalPrivateMovementPredecessor,
+    advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, canonicalMovementCollectionChanges, hasCanonicalPrivateMovementPredecessor,
     describeServerVision: () => ({}), visionMapForScene: () => null, findUser: () => null,
     assertCanonicalWorldState: { isImmutableData: () => false },
     structuredClone(value) { metrics.clones++; return structuredClone(value); },
@@ -442,5 +442,43 @@ test('ordinary status full fallback receives an exact predecessor and always ref
     assert.ok(current.metrics.caches.every(cache => cache?.beforeState === values.before && cache.previousProjection
       && cache.tokenIds.size === 0));
     assert.ok(current.metrics.freshDetection.every(value => value === true));
+  }
+});
+
+test('only an exact unfiltered GM movement pair uses canonical collection changes', () => {
+  for (const mixed of [false, true]) {
+    const values = fixture(), canonicalProof = new Map(), recipientProof = new Map();
+    const sessions = new Map([
+      ['gm', { id: 'gm', role: 'gm', audienceProjection: values.before }],
+      ['preview', { id: 'preview', role: 'gm', visionSourceTokenId: 'source', audienceProjection: structuredClone(values.before) }],
+      ['player', { id: 'player', role: 'player', identityStatus: 'active', audienceProjection: structuredClone(values.before) }],
+    ]);
+    const canonicalCalls = [], diffs = [];
+    const runner = harness(false, { sessions,
+      audienceStateFor(viewer, state) {
+        return viewer.role === 'gm' && !viewer.visionSourceTokenId ? state : structuredClone(state);
+      },
+      canonicalMovementCollectionChanges(before, after, accepted) {
+        canonicalCalls.push({ before, after, accepted }); return canonicalProof;
+      },
+      projectionCollectionChanges() { return recipientProof; },
+      createDocumentChanges(before, after, patch, options) {
+        diffs.push(options.collectionChanges);
+        return createDocumentChanges(before, after, patch, options);
+      },
+    });
+    const operations = move(['target']);
+    if (mixed) operations.push({ type: 'actor.metadata.update', payload: {} });
+    runner.broadcastOperationCommit({ beforeState: values.before, afterState: values.after,
+      operationId: 'canonical-gm', baseRevision: 1, revision: 2, updatedAt: 'after',
+      operations, results: [{ action: 'token.movePath', tokenIds: ['target'] }], documentBatch: true });
+    assert.equal(canonicalCalls.length, mixed ? 0 : 1);
+    if (!mixed) {
+      assert.strictEqual(canonicalCalls[0].before, values.before);
+      assert.strictEqual(canonicalCalls[0].after, values.after);
+      assert.strictEqual(canonicalCalls[0].accepted, runner.dependencies.assertCanonicalWorldState.isImmutableData);
+    }
+    assert.deepEqual(diffs, mixed ? [recipientProof, recipientProof, recipientProof]
+      : [canonicalProof, recipientProof, recipientProof], 'preview and Player collections keep their own projection proof');
   }
 });

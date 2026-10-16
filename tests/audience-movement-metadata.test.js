@@ -103,6 +103,127 @@ test('an owned stationary-source move advances canonical metadata and preserves 
   assert.ok(audience.targetedProjectionCollectionChanges(result, following), 'a fast move must not break the next complete target proof');
 });
 
+test('canonical movement collection changes address only proved Token indices with the full Document oracle', () => {
+  const state = setup(), applied = move(state, 'source');
+  const beforeScene = sceneOf(state.before), afterScene = sceneOf(applied.state);
+  const proof = audience.canonicalMovementCollectionChanges(state.before, applied.state, state.validate.isImmutableData);
+  assert.ok(proof instanceof Map);
+  const collection = proof.get(afterScene.tokens);
+  assert.strictEqual(collection.before, beforeScene.tokens);
+  assert.deepEqual(collection.indices, [0]);
+  assert.ok(Object.isFrozen(collection) && Object.isFrozen(collection.indices));
+  const motion = [{ sceneId: 'scene', tokenId: 'source' }];
+  assert.deepEqual(createDocumentChanges(state.before, applied.state, null, { motion, collectionChanges: proof }),
+    createDocumentChangesFull(state.before, applied.state, null, { motion }));
+  assert.equal(audience.canonicalMovementCollectionChanges(state.before, applied.state, () => false), null,
+    'a cached relation never bypasses the current canonical proof');
+  assert.equal(audience.canonicalMovementCollectionChanges(state.before, structuredClone(applied.state), state.validate.isImmutableData), null);
+  assert.equal(audience.canonicalMovementCollectionChanges(state.projected, applied.state, state.validate.isImmutableData), null,
+    'a recipient projection is not an accepted canonical predecessor');
+});
+
+test('canonical collection indices remain Scene-scoped when Scenes reuse Token identifiers', () => {
+  const state = setup(), world = worldOf(state.before), scene = sceneOf(state.before);
+  const before = { ...state.before, preferences: { ...state.before.preferences,
+    worldV2: { ...world, scenes: [scene, { ...scene, id: 'second-scene', tokens: [...scene.tokens] }] } } };
+  state.validate(before);
+  const applied = applyWorldOperations(before, [{ type: 'token.move',
+    payload: { sceneId: 'second-scene', tokenId: 'owned', x: 65, y: 50 } }],
+  { source: { role: 'gm' }, now: '2026-10-05T00:00:00.000Z' });
+  state.validate(applied.state);
+  const proof = audience.canonicalMovementCollectionChanges(before, applied.state, state.validate.isImmutableData);
+  assert.ok(proof);
+  const scenes = worldOf(applied.state).scenes;
+  assert.deepEqual(proof.get(scenes[0].tokens).indices, []);
+  assert.deepEqual(proof.get(scenes[1].tokens).indices, [1]);
+  const motion = [{ sceneId: 'second-scene', tokenId: 'owned' }];
+  const changes = createDocumentChanges(before, applied.state, null, { motion, collectionChanges: proof });
+  assert.deepEqual(changes, createDocumentChangesFull(before, applied.state, null, { motion }));
+  assert.deepEqual(changes.filter(change => change.document.type === 'Token').map(change => change.document.parent.id), ['second-scene']);
+});
+
+test('canonical movement collection proof requires an explicit boolean acceptance for both states', () => {
+  const state = setup(), applied = move(state);
+  const before = structuredClone(state.before), after = structuredClone(applied.state);
+  for (const truthy of ['true', 1, {}, []]) {
+    assert.equal(audience.canonicalMovementCollectionChanges(before, after, () => truthy), null);
+    assert.equal(audience.canonicalMovementCollectionChanges(before, after,
+      value => value === before ? true : truthy), null);
+  }
+  assert.ok(audience.canonicalMovementCollectionChanges(state.before, applied.state, state.validate.isImmutableData));
+  assert.equal(audience.canonicalMovementCollectionChanges(state.before, applied.state, () => 'true'), null,
+    'a cached relation also requires explicit boolean acceptance');
+});
+
+test('canonical movement collection proof rejects membership, order and non-coordinate changes', () => {
+  for (const edit of ['reorder', 'append', 'delete', 'actor', 'fog', 'light']) {
+    const state = setup(), applied = move(state), world = worldOf(applied.state), scene = sceneOf(applied.state);
+    let tokens = scene.tokens, nextScene = scene, actors = world.actors;
+    if (edit === 'reorder') tokens = [...tokens].reverse();
+    if (edit === 'append') tokens = [...tokens, { ...tokens[0], id: 'added-token' }];
+    if (edit === 'delete') tokens = tokens.slice(1);
+    if (edit === 'light') tokens = tokens.map(token => token.id !== 'owned' ? token : { ...token,
+      light: { enabled: true, rangeMeters: 100, intensity: 1, color: '#fff3c4', elevationOffsetMeters: 0, occlusion: 'scene' } });
+    if (edit === 'actor') actors = actors.map(actor => actor.id === 'scout' ? { ...actor, name: 'Changed' } : actor);
+    if (edit === 'fog') nextScene = { ...scene, fog: { ...scene.fog, exploredByParty: {} } };
+    const after = { ...applied.state, preferences: { ...applied.state.preferences,
+      entitySystem: { ...applied.state.preferences.entitySystem, tokens, actors },
+      worldV2: { ...world, actors, scenes: [{ ...nextScene, tokens }] } } };
+    state.validate(after);
+    assert.equal(audience.canonicalMovementCollectionChanges(state.before, after, state.validate.isImmutableData), null, edit);
+  }
+});
+
+test('accepted canonical projection reuses its whole-graph policy proof while source movement still refreshes detection', () => {
+  const state = setup(), applied = move(state, 'source');
+  const options = { ...state.context, movementCache: { beforeState: state.before,
+    previousProjection: state.projected, tokenIds: new Set(['source']) } };
+  const warmed = audience.projectStateForAudience(applied.state, options);
+  const documents = new Set([...worldOf(state.before).actors, ...sceneOf(state.before).tokens]);
+  const weakHas = WeakSet.prototype.has;
+  let checks = 0;
+  WeakSet.prototype.has = function (value) {
+    if (documents.has(value)) checks++;
+    return weakHas.call(this, value);
+  };
+  try {
+    assert.deepEqual(audience.projectStateForAudience(applied.state, options), warmed);
+    assert.equal(checks, 0, 'the server-accepted graph replaces repeated per-Token/Actor immutable qualification');
+  } finally { WeakSet.prototype.has = weakHas; }
+  assert.deepEqual(warmed, fullProjection(applied.state, state.context));
+  let hookCalls = 0;
+  const changed = audience.projectStateForAudience(applied.state, { ...options,
+    describeVision() { hookCalls++; return { preciseRangeMeters: 1, vagueRangeMeters: 1, senses: {} }; } });
+  assert.ok(hookCalls > 0);
+  assert.equal(sceneOf(changed).tokens.some(token => token.id === 'foreign'), false,
+    'canonical immutability never suppresses fresh source range and target detection');
+});
+
+test('server-accepted previous Token arrays share the existing canonical index while recipient indexes stay private', () => {
+  const state = setup(), applied = move(state, 'source');
+  const canonicalToken = sceneOf(state.before).tokens.find(token => token.id === 'foreign');
+  const projectedToken = sceneOf(state.projected).tokens.find(token => token.id === 'foreign');
+  assert.notStrictEqual(canonicalToken, projectedToken);
+  const options = { ...state.context, movementCache: { beforeState: state.before,
+    previousProjection: state.projected, tokenIds: new Set(['source']) } };
+  const mapSet = Map.prototype.set;
+  let canonicalInsertions = 0, projectedInsertions = 0;
+  Map.prototype.set = function (key, value) {
+    if (value === canonicalToken) canonicalInsertions++;
+    if (value === projectedToken) projectedInsertions++;
+    return mapSet.call(this, key, value);
+  };
+  try {
+    const first = audience.projectStateForAudience(applied.state, options);
+    assert.equal(canonicalInsertions, 1);
+    assert.equal(projectedInsertions, 1);
+    assert.deepEqual(audience.projectStateForAudience(applied.state, options), first);
+    assert.equal(canonicalInsertions, 1, 'the accepted graph need not be separately registered in the vision WeakSet');
+    assert.equal(projectedInsertions, 2, 'each recipient still builds its own selected Token index');
+    assert.deepEqual(first, fullProjection(applied.state, state.context));
+  } finally { Map.prototype.set = mapSet; }
+});
+
 test('private movement eligibility rejects stale, forged, unaccepted and changed recipient scopes', () => {
   const state = setup(), applied = move(state);
   const qualifies = (projected = state.projected, before = state.before, after = applied.state, extra = {}) =>

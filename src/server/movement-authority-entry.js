@@ -29,7 +29,56 @@ export function mapForScene(scene) {
 // checked independently below; this cache contains no audience projection.
 const canonicalMovementInputs = new Map();
 let canonicalMovementScope = null;
-export function prepareCanonicalMovementInputs({ world, scene, token, ruleset, isCanonicalData, canonicalMovementRuleset = null }) {
+const borrowMovementInputs = Symbol('borrowMovementInputs');
+
+function frozenDataValue(object, key) {
+  if (!object || !Object.isFrozen(object)) return null;
+  const descriptor = Object.getOwnPropertyDescriptor(object, key);
+  return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : null;
+}
+
+function hasFixedMovementInputHooks(ruleset) {
+  // Re-preparing the server's built-in package preserves these function
+  // identities. Frozen own data prevents getters replacing a hook after this
+  // check. Custom normalizers/derivers may retain references to their outputs.
+  const actor = frozenDataValue(ruleset, 'actor');
+  const statuses = frozenDataValue(ruleset, 'statuses');
+  const movement = frozenDataValue(ruleset, 'movement');
+  return ['migrateLegacy', 'normalizeSystem', 'derive'].every(key =>
+    frozenDataValue(actor, key) === infiniteHorrorRuleset.actor[key])
+    && frozenDataValue(statuses, 'derive') === infiniteHorrorRuleset.statuses.derive
+    && frozenDataValue(movement, 'describe') === infiniteHorrorRuleset.movement.describe
+    && frozenDataValue(movement, 'calculateCost') === infiniteHorrorRuleset.movement.calculateCost;
+}
+
+function freezeMovementInputs(value) {
+  const visiting = new WeakSet(), complete = new WeakSet(), nodes = [];
+  const inspect = current => {
+    if (current === null || ['string', 'boolean'].includes(typeof current)) return true;
+    if (typeof current === 'number') return Number.isFinite(current);
+    if (!current || typeof current !== 'object' || visiting.has(current)) return false;
+    if (complete.has(current)) return true;
+    const array = Array.isArray(current), prototype = Object.getPrototypeOf(current);
+    if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
+    const keys = Reflect.ownKeys(current);
+    if (array && keys.length !== current.length + 1) return false;
+    visiting.add(current);
+    for (let index = 0; index < keys.length; index++) {
+      const key = keys[index];
+      if (array && key !== (index === current.length ? 'length' : String(index))) return false;
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (typeof key !== 'string' || !descriptor || !Object.hasOwn(descriptor, 'value')
+        || !(array && key === 'length') && !descriptor.enumerable || !inspect(descriptor.value)) return false;
+    }
+    visiting.delete(current); complete.add(current); nodes.push(current);
+    return true;
+  };
+  if (!inspect(value)) return false;
+  for (const node of nodes) Object.freeze(node);
+  return true;
+}
+
+export function prepareCanonicalMovementInputs({ world, scene, token, ruleset, isCanonicalData, canonicalMovementRuleset = null }, mode = null) {
   // Server bundles carry distinct copies of the same prepared ruleset. The
   // host supplies its fixed instance through this internal context only.
   if (ruleset !== (canonicalMovementRuleset || infiniteHorrorRuleset) || typeof isCanonicalData !== 'function') return null;
@@ -68,8 +117,14 @@ export function prepareCanonicalMovementInputs({ world, scene, token, ruleset, i
   canonicalMovementInputs.delete(key);
   canonicalMovementInputs.set(key, entry);
   if (canonicalMovementInputs.size > 64) canonicalMovementInputs.delete(canonicalMovementInputs.keys().next().value);
-  return { actor: structuredClone(entry.resolvedActor), status: structuredClone(entry.status) };
+  const borrow = mode === borrowMovementInputs && hasFixedMovementInputHooks(ruleset);
+  if (borrow && entry.readOnlyInputs) return entry.readOnlyInputs;
+  const detached = { actor: structuredClone(entry.resolvedActor), status: structuredClone(entry.status) };
+  // Only this module's authority borrows the snapshot. The public preparation
+  // API still returns independent mutable copies, including after a loan.
+  if (borrow && freezeMovementInputs(detached)) entry.readOnlyInputs = detached;
+  return detached;
 }
 
 export const validateAuthoritativeTokenMovePath = createMovementAuthority(mapForScene,
-  { prepareActorInputs: prepareCanonicalMovementInputs });
+  { prepareActorInputs: args => prepareCanonicalMovementInputs(args, borrowMovementInputs) });
