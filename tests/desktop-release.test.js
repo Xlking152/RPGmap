@@ -65,19 +65,23 @@ const verify = f => verifyDesktopRelease({ ...f, directory: f.output, receipt: f
 test('the official assembler freezes exactly four independent files and validates their stage and map content', async () => {
   const f = await fixture();
   const result = await assembleDesktopRelease(f);
-  assert.deepEqual((await readdir(f.output)).sort(), releaseFiles('3.0.0'));
+  assert.deepEqual((await readdir(f.output)).sort(), ['Lanzhou-1.1.0.rpgmap', 'README.md', 'RPGmap-Setup-3.0.0.exe', 'SHA256SUMS.txt']);
   assert.equal(result.map.fingerprint, LANZHOU_FINGERPRINT);
   assert.equal(result.sourceCommit, sourceCommit);
   assert.deepEqual(await verify(f), result);
-  assert.equal((await readFile(path.join(f.output, 'SHA256SUMS.txt'), 'utf8')).trim().split('\n').length, 3);
+  const checksums = await readFile(path.join(f.output, 'SHA256SUMS.txt'), 'utf8');
+  assert.equal(checksums.trim().split('\n').length, 3);
+  for (const filename of ['Lanzhou-1.1.0.rpgmap', 'README.md', 'RPGmap-Setup-3.0.0.exe']) {
+    assert.ok(checksums.includes(`${hash(await readFile(path.join(f.output, filename)))} *${filename}\n`));
+  }
 });
 
 test('release verification rejects byte replacement, additional assets and forged checksum entries', async () => {
   const f = await fixture(); await assembleDesktopRelease(f);
-  const original = await readFile(path.join(f.output, '使用说明.md'));
-  await writeFile(path.join(f.output, '使用说明.md'), 'substituted instructions');
+  const original = await readFile(path.join(f.output, 'README.md'));
+  await writeFile(path.join(f.output, 'README.md'), 'substituted instructions');
   await assert.rejects(verify(f), /交付文件已变化/);
-  await writeFile(path.join(f.output, '使用说明.md'), original);
+  await writeFile(path.join(f.output, 'README.md'), original);
   await writeFile(path.join(f.output, '验收报告.md'), 'not a release asset');
   await assert.rejects(verify(f), /恰好为四个/);
   const records = { 'a.exe': { sha256: 'a'.repeat(64) }, '地图.rpgmap': { sha256: 'b'.repeat(64) }, '使用说明.md': { sha256: 'c'.repeat(64) } };
@@ -121,7 +125,7 @@ test('a receipt cannot be added as a fifth asset and symbolic-link assets are re
   const f = await fixture();
   await assert.rejects(assembleDesktopRelease({ ...f, frozenReceipt: path.join(f.output, 'receipt.json') }), /第五个/);
   await assembleDesktopRelease(f);
-  const target = path.join(f.output, '使用说明.md');
+  const target = path.join(f.output, 'README.md');
   await rm(target);
   try { await symlink(f.instructions, target, 'file'); } catch (error) {
     if (['EPERM', 'EACCES'].includes(error.code)) { t.diagnostic('OS does not allow file symlinks; path and allowlist cases still exercised.'); return; }

@@ -80,13 +80,18 @@ jobs:
               exit 1
             fi
             node --input-type=module -e 'import fs from "node:fs"; const v=process.env.RELEASE_VERSION; const explicit=`RELEASE-NOTES-v${v}.md`; let notes; if(fs.existsSync(explicit)) notes=fs.readFileSync(explicit,"utf8"); else {const text=fs.readFileSync("CHANGELOG.md","utf8"); const heading=`## v${v}`; const start=text.split(/\r?\n/).findIndex(l=>l===heading); if(start<0) throw new Error("Missing release notes"); const tail=text.split(/\r?\n/).slice(start+1); const end=tail.findIndex(l=>/^## /.test(l)); notes=tail.slice(0,end<0?undefined:end).join("\n");} if(!notes.trim()) throw new Error("Empty release notes"); fs.writeFileSync(process.env.RUNNER_TEMP+"/release-notes.md",`${notes}\n\nSource Commit: \x60${process.env.RELEASE_COMMIT}\x60\n`);'
-            gh release create "$RELEASE_TAG" candidate/frozen/delivery/* --repo "$GITHUB_REPOSITORY" --target "$RELEASE_COMMIT" --title "RPGmap $RELEASE_VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" --draft
+            gh release create "$RELEASE_TAG" \
+              "candidate/frozen/delivery/RPGmap-Setup-$RELEASE_VERSION.exe" \
+              'candidate/frozen/delivery/Lanzhou-1.1.0.rpgmap#北宋兰州城-1.1.0.rpgmap' \
+              candidate/frozen/delivery/SHA256SUMS.txt \
+              'candidate/frozen/delivery/README.md#使用说明.md' \
+              --repo "$GITHUB_REPOSITORY" --target "$RELEASE_COMMIT" --title "RPGmap $RELEASE_VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" --draft
           elif [[ "$CANDIDATE_SOURCE" != draft ]]; then
             echo 'Unknown candidate source.' >&2
             exit 1
           fi
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,targetCommitish,assets > "$RUNNER_TEMP/draft.json"
-          node --input-type=module -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/draft.json"));const wanted=[`RPGmap-Setup-${process.env.RELEASE_VERSION}.exe`,"北宋兰州城-1.1.0.rpgmap","SHA256SUMS.txt","使用说明.md"].sort();if(!r.isDraft||r.isPrerelease||r.targetCommitish!==process.env.RELEASE_COMMIT||JSON.stringify(r.assets.map(a=>a.name).sort())!==JSON.stringify(wanted))throw new Error("Draft identity or four-file asset allowlist mismatch");'
+          node --input-type=module -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/draft.json"));const wanted=[`RPGmap-Setup-${process.env.RELEASE_VERSION}.exe`,"Lanzhou-1.1.0.rpgmap","SHA256SUMS.txt","README.md"].sort();if(!r.isDraft||r.isPrerelease||r.targetCommitish!==process.env.RELEASE_COMMIT||JSON.stringify(r.assets.map(a=>a.name).sort())!==JSON.stringify(wanted))throw new Error("Draft identity or four-file asset allowlist mismatch");for(const [name,label] of [["Lanzhou-1.1.0.rpgmap","北宋兰州城-1.1.0.rpgmap"],["README.md","使用说明.md"]])if(r.assets.find(a=>a.name===name).label!==label)throw new Error("Draft asset display label mismatch: "+name);'
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir downloaded-draft
           node scripts/desktop-release.mjs verify "--version=$RELEASE_VERSION" "--commit=$RELEASE_COMMIT" --directory=downloaded-draft --receipt=candidate/frozen/evidence/desktop-release-receipt.json --stage=candidate/desktop-stage
       - name: Publish without rebuilding and verify the downloaded release

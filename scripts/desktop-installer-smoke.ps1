@@ -10,7 +10,7 @@ $installDirectory = [IO.Path]::GetFullPath((Join-Path $artifactRoot 'desktop-ins
 if (-not $installDirectory.StartsWith($artifactRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe test installation directory.' }
 if (-not $Installer) { $Installer = Join-Path $artifactRoot ('desktop/RPGmap-Setup-' + $applicationVersion + '.exe') }
 if (-not $Map) {
-  $mapCandidates = @((Join-Path $artifactRoot 'content-packages/北宋兰州城-1.1.0.rpgmap'), (Join-Path $taskRoot ('release/RPGmap-v' + $applicationVersion + '/北宋兰州城-1.1.0.rpgmap')))
+  $mapCandidates = @((Join-Path $artifactRoot 'content-packages/北宋兰州城-1.1.0.rpgmap'), (Join-Path $taskRoot ('release/RPGmap-v' + $applicationVersion + '/Lanzhou-1.1.0.rpgmap')))
   $Map = $mapCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
   if (-not $Map) { throw 'No release map package found. Supply -Map explicitly.' }
 }

@@ -14,7 +14,7 @@ export const LANZHOU_FINGERPRINT = '9a8de38844f6b6f5e528d507bf38bd134045d27f24c9
 
 export function releaseFiles(version) {
   if (!/^3\.\d+\.\d+(?:-rc\.\d+)?$/.test(version)) fail('应用版本必须是明确的 v3 版本。');
-  return [`RPGmap-Setup-${version}.exe`, '北宋兰州城-1.1.0.rpgmap', 'SHA256SUMS.txt', '使用说明.md'].sort();
+  return [`RPGmap-Setup-${version}.exe`, 'Lanzhou-1.1.0.rpgmap', 'SHA256SUMS.txt', 'README.md'].sort();
 }
 
 export function assertReleaseIdentity(receipt, { version, commit }) {
@@ -107,7 +107,7 @@ export async function assembleDesktopRelease({ installer, map, instructions, rec
   assertReleaseIdentity(build, { version, commit });
   if (!stage) fail('汇总正式交付时必须验证实际程序载荷。');
   await verifyStage(stage, build, { version, commit });
-  const input = [[installer, `RPGmap-Setup-${version}.exe`], [map, '北宋兰州城-1.1.0.rpgmap'], [instructions, '使用说明.md']];
+  const input = [[installer, `RPGmap-Setup-${version}.exe`], [map, 'Lanzhou-1.1.0.rpgmap'], [instructions, 'README.md']];
   const files = {};
   let mapIdentity;
   for (const [source, name] of input) {
