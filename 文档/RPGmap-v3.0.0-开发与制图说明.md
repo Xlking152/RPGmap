@@ -102,7 +102,7 @@ node scripts/desktop-release.mjs assemble --installer=artifact/desktop/RPGmap-Se
 node scripts/desktop-release.mjs verify --directory=release/RPGmap-v3.0.0 --receipt=artifact/desktop-release-receipt.json --stage=artifact/desktop-stage --version=3.0.0 --commit=<完整源提交>
 ~~~
 
-最终目录恰好包含安装器、兰州地图、SHA256SUMS.txt、使用说明.md。构建记录和冻结凭据放 artifact/，测试附件和报告不随 Release 分发。INSTALL-MANIFEST.json 记录源提交、dirty 状态、工具版本及载荷校验，PROGRAM-FILES.txt 约束清理范围。先验证实际构建文件并冻结，再发布同一字节；发布阶段不能重新构建。
+最终目录恰好包含安装器、Lanzhou-1.1.0.rpgmap、SHA256SUMS.txt、README.md。英文下载名避免 GitHub 过滤中文文件名，地图和说明保留中文显示标签；地图制作导出的中文文件名可保留，正式汇总工具统一命名并生成匹配的 SHA 清单。构建记录和冻结凭据放 artifact/，测试附件和报告不随 Release 分发。INSTALL-MANIFEST.json 记录源提交、dirty 状态、工具版本及载荷校验，PROGRAM-FILES.txt 约束清理范围。先验证实际构建文件并冻结，再发布同一字节；发布阶段不能重新构建。
 
 测试保留核心权限、碰撞、Actor/Token、多地图版本、导入安全、恢复、WAL、幂等和升级回归。应用 JS/CSS 使用原严格门槛，Electron 运行库单独统计。按用户决定，没有特殊说明时只测本机 GM 单人操作延迟；CI 使用实际桌面运行包执行本地 GM 的 60 ms 后端门槛，多人功能仍在回归套件中验证。`benchmark:lan` 默认一个 GM、零玩家，显式传 `--multiplayer` 才运行原六玩家计时；`benchmark:browser` 默认本地 Chrome、一个 GM 会话，环境变量仍支持明确要求的多人测试。大范围多人基准及原严格断言保留，暂缓不标作通过。GM 另用实际安装器验证拖动与存档恢复。后端确认、提交更新与真实浏览器输入和帧率是不同指标，本机回环不能称为 VPN 多机。长任务失败和未测环境的当前说明见 CHANGELOG。
 

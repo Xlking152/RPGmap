@@ -9,9 +9,9 @@ RPGmap 是面向桌面跑团的自托管战术地图工具。v3.0.0 使用 Windo
 从同一正式 Release 下载：
 
 - RPGmap-Setup-3.0.0.exe
-- 北宋兰州城-1.1.0.rpgmap
+- Lanzhou-1.1.0.rpgmap
 - SHA256SUMS.txt
-- 使用说明.md
+- README.md（使用说明）
 
 1. 运行安装器，再打开桌面 RPGmap 图标。
 2. 在管理首页点击“导入地图 / 随附兰州地图”，选择地图文件并确认。
