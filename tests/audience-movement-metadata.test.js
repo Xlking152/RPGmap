@@ -3,21 +3,22 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as audience from '../src/vision/audience.js';
 import { projectStateForAudience as fullProjection } from './fixtures/audience-before-targeted-movement.mjs';
-import { hasCompletePreciseTokenProjection } from '../deployment/local-server/movement-projection.mjs';
 import { createCanonicalWorldValidator } from '../deployment/local-server/world-schema.mjs';
 import { applyWorldOperations } from '../src/world/operations.js';
-import { createDocumentChanges, createDocumentChangesFull } from '../src/documents/changes.js';
+import { createDocumentChanges, createDocumentChangesFull, createFogDocumentChanges } from '../src/documents/changes.js';
 import { INFINITE_HORROR_STATUS_DEFINITIONS } from '../src/rulesets/infinite-horror/statuses.js';
 import { migrateTestStateToWorldV3 } from './helpers/world-v3.js';
 
 const server = readFileSync(new URL('../deployment/local-server/server.mjs', import.meta.url), 'utf8');
 const functions = server.slice(server.indexOf('function lightweightProjectionShell('), server.indexOf('function sendAudienceSnapshot('));
 const factory = new Function('dependencies', `
-  const { hasCanonicalPrivateMovementPredecessor, audienceStateFor, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata,
-    matchesSourceFreeProjectionScope, describeVisionForToken, describeServerVision, visionMapForScene,
-    findUser, assertCanonicalWorldState, hasCompletePreciseTokenProjection } = dependencies;
+  const { audienceStateFor, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata,
+    matchesSourceFreeProjectionScope, describeServerVision, visionMapForScene,
+    findUser, assertCanonicalWorldState, sessions, createDocumentChanges, createFogDocumentChanges,
+    projectMotionForSession, sendSocket, rememberResumeCommit, committedPatches,
+    projectionCollectionChanges, canonicalMovementCollectionChanges } = dependencies;
   ${functions}
-  return tryIncrementalAudienceProjection;
+  return broadcastOperationCommit;
 `);
 const map = { id: 'movement-metadata-map', version: '1', width: 1000, height: 1000, metersPerUnit: 1, features: [] };
 const describeVision = () => ({ preciseRangeMeters: 120, vagueRangeMeters: 300, senses: {} });
@@ -71,13 +72,20 @@ function move(state, tokenId = 'owned', offset = 3) {
   return { ...applied, operations };
 }
 
-function candidate(state, applied, context = state.context) {
-  const incremental = factory({ ...audience, hasCompletePreciseTokenProjection,
+function candidate(state, applied, context = state.context, onResponse = () => {}) {
+  const viewer = { ...context, id: context.userId, identityStatus: 'active', audienceRevision: 1,
+    audienceProjection: state.projected };
+  const broadcast = factory({ ...audience, sessions: new Map([['player', viewer]]),
     describeServerVision: context.describeVision, visionMapForScene: () => context.mapPackage,
     findUser: () => context.user, assertCanonicalWorldState: state.validate,
-    audienceStateFor: (_session, after, options) => audience.projectStateForAudience(after, { ...context, ...options }),
-    describeVisionForToken() { throw new Error('A stationary source must not be resolved by the source-move branch'); } });
-  return incremental(context, state.projected, applied.state, applied.operations, applied.results, state.before);
+    createDocumentChanges, createFogDocumentChanges,
+    projectMotionForSession: () => [], sendSocket: (_socket, response) => onResponse(response),
+    rememberResumeCommit() {}, committedPatches: new WeakMap(),
+    audienceStateFor: (_session, after, options) => audience.projectStateForAudience(after, { ...context, ...options }) });
+  broadcast({ beforeState: state.before, afterState: applied.state, operations: applied.operations,
+    results: applied.results, operationId: 'move', baseRevision: 1, revision: 2,
+    updatedAt: '2026-10-05T00:00:00.000Z', originSessionId: viewer.id });
+  return viewer.audienceProjection;
 }
 
 test('an owned stationary-source move advances canonical metadata and preserves the following targeted projection', () => {
@@ -101,6 +109,52 @@ test('an owned stationary-source move advances canonical metadata and preserves 
     movementCache: { beforeState: applied.state, previousProjection: result, tokenIds: new Set(['foreign']) } });
   assert.deepEqual(following, fullProjection(next.state, state.context));
   assert.ok(audience.targetedProjectionCollectionChanges(result, following), 'a fast move must not break the next complete target proof');
+});
+
+test('source and hostile movement broadcast fresh detection and exact Document changes across visibility categories', () => {
+  for (const moved of ['source', 'foreign']) {
+    let state = setup();
+    const positions = moved === 'source' ? [350, 450, 100] : [250, 450, 90];
+    for (const [index, position] of positions.entries()) {
+      const oldToken = sceneOf(state.before).tokens.find(token => token.id === moved);
+      const applied = move(state, moved, position - oldToken.x);
+      const previousBytes = JSON.stringify(state.projected), canonicalBytes = JSON.stringify(state.before);
+      const expected = fullProjection(applied.state, state.context);
+      let response;
+      const { value: actual, metadata } = metadataDuring(() => candidate(state, applied, state.context,
+        value => { response = value; }));
+      assert.deepEqual(actual, expected, `${moved}/${position}`);
+      assert.deepEqual(response.changes, createDocumentChangesFull(state.projected, expected), `${moved}/${position}`);
+      assert.equal(JSON.stringify(state.projected), previousBytes);
+      assert.equal(JSON.stringify(state.before), canonicalBytes);
+      assert.strictEqual(metadata.canonicalState, applied.state);
+      assert.strictEqual(metadata.targetedState, applied.state);
+      const selected = sceneOf(actual).tokens.find(token => token.actorId === 'hostile'
+        || token.audienceVisibility === 'vague');
+      if (index === 0) assert.equal(selected?.audienceVisibility, 'vague');
+      if (index === 1) assert.equal(selected, undefined);
+      if (index === 2) assert.equal(selected?.audienceVisibility, 'precise');
+      assert.equal(JSON.stringify(actual).includes('secret'), false);
+      state = { ...state, before: applied.state, projected: actual, metadata };
+    }
+  }
+});
+
+test('mixed movement and Fog uses a complete fresh projection and retains private party filtering', () => {
+  const state = setup(), moved = move(state, 'foreign');
+  const operations = [...moved.operations, { type: 'scene.fog.reset', payload: { sceneId: 'scene', partyId: 'party' } }];
+  const applied = applyWorldOperations(state.before, operations, {
+    source: { role: 'gm' }, now: '2026-10-05T00:00:00.000Z', mapPackage: map,
+  });
+  state.validate(applied.state);
+  const expected = fullProjection(applied.state, state.context);
+  let response;
+  const actual = candidate(state, { ...applied, operations }, state.context, value => { response = value; });
+  assert.deepEqual(actual, expected);
+  const fog = applied.results.filter(result => Object.hasOwn(result, 'dirtyBounds'));
+  assert.deepEqual(response.changes, createDocumentChangesFull(state.projected, expected, null, { fog }));
+  assert.deepEqual(Object.keys(sceneOf(actual).fog.exploredByParty), []);
+  assert.equal(JSON.stringify(actual).includes('secret'), false);
 });
 
 test('canonical movement collection changes address only proved Token indices with the full Document oracle', () => {
@@ -224,28 +278,34 @@ test('server-accepted previous Token arrays share the existing canonical index w
   } finally { Map.prototype.set = mapSet; }
 });
 
-test('private movement eligibility rejects stale, forged, unaccepted and changed recipient scopes', () => {
+test('the common movement projector refreshes stale, copied, unaccepted and changed recipient scopes', () => {
   const state = setup(), applied = move(state);
-  const qualifies = (projected = state.projected, before = state.before, after = applied.state, extra = {}) =>
-    audience.hasCanonicalPrivateMovementPredecessor(projected, before, after, { ...state.context, ...extra });
-  assert.equal(qualifies(), true);
+  const fresh = (after, projected = state.projected, before = state.before, extra = {}) => {
+    const context = { ...state.context, ...extra };
+    const actual = audience.projectStateForAudience(after, { ...context, movementCache: {
+      beforeState: before, previousProjection: projected, tokenIds: new Set(['owned', 'source', 'foreign']),
+    } });
+    assert.deepEqual(actual, fullProjection(after, context));
+    return actual;
+  };
+  fresh(applied.state);
   for (const extra of [
     { role: 'gm' }, { userId: 'different' }, { trustedProjection: false },
     { visionSourceTokenId: 'owned' }, { user: { ownership: {}, placementGrants: {} } },
     { user: { ...state.context.user, disabled: true } },
-  ]) assert.equal(qualifies(state.projected, state.before, applied.state, extra), false);
-  assert.equal(qualifies(structuredClone(state.projected)), false, 'a copied output has no registered predecessor');
+  ]) fresh(applied.state, state.projected, state.before, extra);
+  const copied = structuredClone(state.projected);
+  fresh(applied.state, copied);
   const importedBefore = structuredClone(state.before); state.validate(importedBefore);
-  assert.equal(qualifies(state.projected, importedBefore), false, 'equal imported data is a different predecessor');
-  assert.equal(qualifies(state.projected, state.before, structuredClone(applied.state)), false, 'an unvalidated after-state cannot supply a relation');
-  const sourceMove = move(state, 'source');
-  assert.equal(qualifies(state.projected, state.before, sourceMove.state), false, 'a moving source retains full detection');
-  assert.equal(candidate(state, sourceMove), null, 'a source with restricted targets retains the existing server fallback');
-  const foreignMove = move(state, 'foreign');
-  assert.equal(qualifies(state.projected, state.before, foreignMove.state), false, 'restricted selections never become private targets');
+  fresh(applied.state, state.projected, importedBefore);
+  const unaccepted = structuredClone(applied.state);
+  fresh(unaccepted);
+  const following = move({ ...state, before: applied.state }, 'foreign');
+  fresh(following.state, state.projected, applied.state);
+  for (const tokenId of ['source', 'foreign']) fresh(move(state, tokenId).state);
 });
 
-test('canonical policy, light and geometry edits cannot qualify as a private coordinate-only predecessor', () => {
+test('the common projector refreshes policy, light, Actor, Fog and geometry edits against the full oracle', () => {
   for (const edit of ['light', 'visibility', 'actor', 'fog', 'geometry']) {
     const state = setup(), moved = move(state), world = worldOf(moved.state), scene = sceneOf(moved.state);
     let nextWorld = world, nextScene = scene;
@@ -259,7 +319,12 @@ test('canonical policy, light and geometry edits cannot qualify as a private coo
     const after = { ...moved.state, preferences: { ...moved.state.preferences,
       worldV2: { ...nextWorld, scenes: [nextScene] } } };
     state.validate(after);
-    assert.equal(audience.hasCanonicalPrivateMovementPredecessor(state.projected, state.before, after, state.context), false, edit);
+    const context = { ...state.context, movementCache: { beforeState: state.before,
+      previousProjection: state.projected, tokenIds: new Set(['owned']) } };
+    const actual = audience.projectStateForAudience(after, context);
+    assert.deepEqual(actual, fullProjection(after, state.context), edit);
+    assert.equal(audience.targetedProjectionCollectionChanges(state.projected, actual), null,
+      `${edit} cannot be mistaken for a coordinate-only change`);
   }
 });
 

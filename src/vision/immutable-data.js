@@ -29,8 +29,17 @@ function inspect(value, visiting) {
   return valid;
 }
 
-export function isImmutableVisionData(value) {
-  return stableJsonPrototypes() && inspect(value, new WeakSet());
+export function isImmutableVisionData(value, isCanonicalData = null) {
+  if (!stableJsonPrototypes()) return false;
+  // The server's private validator has already checked and frozen this whole
+  // graph. Share that fact with geometry instead of walking its Token slots
+  // again. Public/mutable inputs still establish their own structural proof.
+  if (value && typeof value === 'object' && Object.isFrozen(value)
+    && typeof isCanonicalData === 'function' && isCanonicalData(value) === true) {
+    known.add(value);
+    return true;
+  }
+  return inspect(value, new WeakSet());
 }
 
 export function hasImmutableVisionData(value) {

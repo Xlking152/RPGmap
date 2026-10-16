@@ -401,24 +401,6 @@ export function canonicalMovementCollectionChanges(beforeState, afterState, isCa
   return collections;
 }
 
-// The server's legacy private-Token shortcut does not register a new canonical
-// predecessor. Route eligible stationary-source moves through the existing
-// targeted projector instead; this only selects that path and mints no proof
-// for an externally prepared projection. Its normal scope/detection checks run.
-export function hasCanonicalPrivateMovementPredecessor(previousProjection, beforeState, afterState, rawContext = {}) {
-  const context = { ...rawContext, userId: rawContext.userId == null ? '' : String(rawContext.userId) };
-  const previousAudience = previousProjection?.preferences?.audienceVision;
-  const metadata = projectionPolicies.get(previousAudience);
-  if (context.trustedProjection !== true || context.role !== 'player' || !metadata?.targetedIndex
-    || metadata.canonicalState !== beforeState || metadata.targetedState !== beforeState
-    || metadata.sourceTokenId !== String(context.visionSourceTokenId || '')
-    || !permissionsCacheable(context.user) || projectionAudiences.get(previousAudience) !== audienceKey(context)) return false;
-  const relation = targetedMovementRelation(beforeState, afterState, context.isCanonicalData);
-  return Boolean(relation?.changes.length && relation.changes.every(change =>
-    String(change.after.id) !== metadata.sourceTokenId
-    && metadata.targetedIndex.get(change.sceneId)?.get(String(change.after.id))?.kind === 'private'));
-}
-
 function tokenControlled(token, actor, context) {
   if (context.role === 'gm') return true;
   if (!context.userId) return false;
@@ -816,7 +798,8 @@ export function projectStateForAudience(rawState, rawContext = {}) {
   const metersPerUnit = Math.max(0.000001, Number(context.mapMetrics?.metersPerUnit) || 1);
   const currentScene = activeScene(world);
   const lineOfSightEnabled = true;
-  const spatial = context.mapPackage ? sceneVisionContext(context.mapPackage, currentScene) : null;
+  const spatial = context.mapPackage ? sceneVisionContext(context.mapPackage, currentScene,
+    context.trustedProjection === true ? context.isCanonicalData : null) : null;
   const occluders = spatial?.occluders || [];
   const sourceOccluders = vision && !visionIgnoresOcclusion(vision)
     ? visionOccludersForSource(vision, occluders, metersPerUnit) : occluders;

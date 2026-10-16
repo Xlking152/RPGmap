@@ -5,6 +5,7 @@ import { deriveSceneState } from '../engine/state.js';
 import { normalizeOcclusionShapes } from '../vision/occlusion-model.js';
 import { assertOcclusionReferences } from '../world/occlusion-config.js';
 import { assertFeatureVision } from '../world/feature-states.js';
+import { isImmutableVisionData } from '../vision/immutable-data.js';
 import {
   deriveVisionOccluders,
   deriveSceneLightSources,
@@ -12,7 +13,7 @@ import {
   visionIgnoresOcclusion,
 } from '../spatial/kernel.js';
 
-export { canUserControlToken, projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, canonicalMovementCollectionChanges, hasCanonicalPrivateMovementPredecessor } from '../vision/audience.js';
+export { canUserControlToken, projectStateForAudience, advanceFogProjectionMetadata, advancePublicChatProjectionMetadata, matchesSourceFreeProjectionScope, targetedProjectionCollectionChanges, projectionCollectionChanges, canonicalMovementCollectionChanges } from '../vision/audience.js';
 export { sphereGroundRadiusMeters } from '../spatial/kernel.js';
 export { sceneVisionContext, sceneExplorationContext };
 export { mergeExploration } from '../vision/fog.js';
@@ -22,19 +23,30 @@ export { createServerMovementAdjudicationActorResolver } from './movement-adjudi
 
 export let serverRuleset = infiniteHorrorRuleset;
 let canonicalVisionDescriptions = new WeakMap();
+let actorOnlyServerVision = hasBundledActorVision(serverRuleset);
 
 export function configureServerRuleset(ruleset) {
   if (!ruleset?.id || !ruleset?.version || !ruleset?.vision?.describe) throw new TypeError('Invalid server Ruleset');
   serverRuleset = ruleset;
+  actorOnlyServerVision = hasBundledActorVision(ruleset);
   canonicalVisionDescriptions = new WeakMap();
 }
 
-// The bundled ruleset's normal-light detection derives only from Actor data
-// and Actor effects. Permission decisions and Token status precision are still
-// evaluated independently for each audience. Mutable/reduced Actors are never
-// memoized, and independent Actor deltas keep their existing fresh resolution.
+function hasBundledActorVision(ruleset) {
+  const field = (value, key) => value && Object.isFrozen(value)
+    ? Object.getOwnPropertyDescriptor(value, key)?.value : null;
+  return field(ruleset, 'id') === infiniteHorrorRuleset.id
+    && field(ruleset, 'version') === infiniteHorrorRuleset.version
+    && field(field(ruleset, 'vision'), 'describe') === infiniteHorrorRuleset.vision.describe;
+}
+
+// Only the fixed bundled hook derives normal-light detection solely from Actor
+// data and Actor effects. Other rules receive their complete original context
+// on every call. Re-preparing the built-in package preserves its hook identity;
+// the Actor's whole data graph must also be immutable before memoizing it.
 export function describeServerVision(actor, context = {}) {
-  if (!actor || !Object.isFrozen(actor) || context.effects !== undefined || context.lighting !== 'normal') {
+  if (!actorOnlyServerVision || !actor || context.effects !== undefined
+    || context.lighting !== 'normal' || !isImmutableVisionData(actor)) {
     return serverRuleset.vision.describe(actor, context);
   }
   let description = canonicalVisionDescriptions.get(actor);

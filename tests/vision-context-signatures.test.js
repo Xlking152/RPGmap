@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { prepareMapPackage } from '../src/map-package/contract.js';
 import { sceneVisionContext, releaseVisionContexts } from '../src/vision/context.js';
 import { deriveSceneLightSources } from '../src/spatial/kernel.js';
+import { createCanonicalWorldValidator } from '../deployment/local-server/world-schema.mjs';
 
 function frozen(value) {
   if (value && typeof value === 'object') { Object.values(value).forEach(frozen); Object.freeze(value); }
@@ -14,6 +15,33 @@ const wall = () => ({ id: 'wall', polygon: [[10, 0], [20, 0], [20, 100], [10, 10
 const scene = () => ({ id: 'scene', featureStates: {}, sceneEvents: [], occlusionShapes: [], tokens: [] });
 const map = () => ({ id: 'map', version: '1', width: 200, height: 200, metersPerUnit: 1,
   features: [], visionOccluders: [wall()], lights: [] });
+
+test('canonical Scene inputs share their existing proof and retain fresh light derivation', () => {
+  const packageMap = frozen(map()), validate = createCanonicalWorldValidator({ compactMetadata: true });
+  const accept = value => {
+    const state = { preferences: { spatialFixture: value } };
+    validate(state); assert.equal(validate.isImmutableData(state), true);
+    return value;
+  };
+  const lamp = { id: 'lamp', placement: 'map', x: 40, y: 20, light: { enabled: true, rangeMeters: 100 } };
+  const initial = accept({ ...scene(), tokens: [{ id: 'moving', placement: 'map', x: 5, y: 5 }, lamp] });
+  const first = sceneVisionContext(packageMap, initial, validate.isImmutableData);
+  const moved = accept({ ...initial, tokens: [{ ...initial.tokens[0], x: 20 }, initial.tokens[1]] });
+  const next = sceneVisionContext(packageMap, moved, validate.isImmutableData);
+  assert.strictEqual(next.occluders, first.occluders);
+  assert.strictEqual(next.lights, first.lights);
+  for (const patch of [{ x: 80 }, { light: { enabled: false } }, { placement: 'feature' }]) {
+    const changed = accept({ ...moved, tokens: [moved.tokens[0], { ...lamp, ...patch }] });
+    const result = sceneVisionContext(packageMap, changed, validate.isImmutableData);
+    assert.deepEqual(result.lights, deriveSceneLightSources(packageMap, changed));
+  }
+  const mutable = { ...moved, tokens: [{ ...lamp, light: { ...lamp.light } }] };
+  sceneVisionContext(packageMap, mutable, validate.isImmutableData);
+  mutable.tokens[0].light.rangeMeters = 25;
+  assert.deepEqual(sceneVisionContext(packageMap, mutable, validate.isImmutableData).lights,
+    deriveSceneLightSources(packageMap, mutable));
+  releaseVisionContexts(packageMap);
+});
 
 test('500 immutable non-light Token moves reuse light preparation and all real light changes match the full kernel', () => {
   const packageMap = frozen(map());
