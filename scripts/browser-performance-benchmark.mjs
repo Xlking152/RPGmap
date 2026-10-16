@@ -24,7 +24,7 @@ const packageJson = JSON.parse(await readFile(path.join(root, 'package.json'), '
 const packageRoot = path.resolve(process.env.RPGMAP_BENCHMARK_PACKAGE
   || path.join(root, 'artifact', 'desktop-stage', 'resources'));
 const packagePaths = benchmarkPackagePaths(packageRoot);
-const browserName = String(process.env.RPGMAP_BENCHMARK_BROWSER || 'edge').toLowerCase();
+const browserName = String(process.env.RPGMAP_BENCHMARK_BROWSER || 'chrome').toLowerCase();
 const headless = process.env.RPGMAP_BROWSER_BENCHMARK_HEADLESS === '1';
 const phaseSeconds = Math.max(5, Number(process.env.RPGMAP_BROWSER_BENCHMARK_SECONDS) || 60);
 const shouldAssert = process.argv.includes('--assert');
@@ -33,7 +33,7 @@ const profileSessionIndex = process.env.RPGMAP_BROWSER_BENCHMARK_PROFILE_SESSION
 const GM_SECRET = 'BROWSER-BENCHMARK-GM';
 const JOIN_CODE = '246810';
 const TOKEN_COUNT = Math.max(1, Math.min(500, Number(process.env.RPGMAP_BROWSER_BENCHMARK_TOKENS) || 500));
-const SESSION_COUNT = Math.max(1, Math.min(7, Number(process.env.RPGMAP_BROWSER_BENCHMARK_SESSIONS) || 7));
+const SESSION_COUNT = Math.max(1, Math.min(7, Number(process.env.RPGMAP_BROWSER_BENCHMARK_SESSIONS) || 1));
 if (profileSessionIndex !== null && (!Number.isInteger(profileSessionIndex)
   || profileSessionIndex < 0 || profileSessionIndex >= SESSION_COUNT)) {
   throw new Error('Diagnostic profile session index is invalid');
@@ -346,8 +346,9 @@ function validatePhase(phase) {
 
 const port = await reservePort();
 const mapDir = await mkdtemp(path.join(os.tmpdir(), 'rpgmap-browser-performance-world-'));
-const outputRoot = path.join(root, 'output', 'playwright', profileSessionIndex === null
-  ? `v${packageJson.version}-seven-session`
+const outputRoot = process.env.RPGMAP_BROWSER_BENCHMARK_OUTPUT ? path.resolve(process.env.RPGMAP_BROWSER_BENCHMARK_OUTPUT)
+  : path.join(root, 'output', 'playwright', profileSessionIndex === null
+  ? `v${packageJson.version}-${SESSION_COUNT === 1 ? 'local-gm' : 'seven-session'}`
   : `v${packageJson.version}-diagnostic-profile-${profileSessionIndex}-${Date.now()}`);
 await mkdir(outputRoot, { recursive: true });
 console.error(`[browser-benchmark] output: ${outputRoot}`);

@@ -13,6 +13,8 @@ const buildInfo = await benchmarkBuildInfo(root, packageRoot);
 const ACTOR_COUNT = 100;
 const TOKEN_COUNT = 500;
 const WARMUP_COUNT = 30;
+// Local GM is the default. Multiplayer timing is an explicit follow-up task.
+const PLAYER_COUNT = process.argv.includes('--multiplayer') ? 6 : 0;
 
 function fixture(definitions) {
   const actors = Array.from({ length: ACTOR_COUNT }, (_, index) => ({
@@ -84,7 +86,7 @@ try {
     return connect({ name, requestedRole: 'player', claimCode });
   }
   const players = [];
-  for (let index = 0; index < 6; index += 1) {
+  for (let index = 0; index < PLAYER_COUNT; index += 1) {
     players.push(await createPlayer(`Benchmark Player ${index + 1}`));
   }
   if (process.argv.includes('--debug')) {
@@ -135,7 +137,8 @@ try {
     const request = {
       type: 'document.batch', operationSchema, operationId, baseRevision: revision, writes: [write],
     };
-    const result = await measureDocumentBatch(gm.socket, players.map(player => player.socket), request);
+    const recipients = players.length ? players.map(player => player.socket) : [gm.socket];
+    const result = await measureDocumentBatch(gm.socket, recipients, request);
     const { messages } = result;
     if (type === 'move') {
       moveBytes.requestMax = Math.max(moveBytes.requestMax, Buffer.byteLength(JSON.stringify(request)));
@@ -169,9 +172,10 @@ try {
   const report = {
     repo: root, packageRoot, serverPath: runtime.serverPath,
     build: buildInfo,
-    version: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, schemas, fixture: { actors: ACTOR_COUNT, tokens: TOKEN_COUNT, players: 6 },
+    version: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, schemas, fixture: { actors: ACTOR_COUNT, tokens: TOKEN_COUNT, players: PLAYER_COUNT },
     warmup: WARMUP_COUNT, measurement, ackMeasurement, moveBytes, benchmarkTmpRoot,
-    scope: 'GM + 6 Player WebSocket fanout only. This does not measure browser DOM, Canvas, input preview or FPS; those require a separate foreground browser benchmark.',
+    scope: PLAYER_COUNT ? 'Explicit multiplayer timing: GM + 6 Player WebSocket fanout. This does not measure browser DOM, Canvas, input preview or FPS.'
+      : 'Local GM only: one client, authoritative ACK and its committed Document update. This does not measure browser DOM, Canvas, input preview or FPS.',
   };
   if (JSON.stringify(await benchmarkBuildInfo(root, packageRoot)) !== JSON.stringify(buildInfo)) {
     throw new Error('Benchmark candidate changed during the measurement; rerun against a stable package');
