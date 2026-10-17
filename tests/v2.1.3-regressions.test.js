@@ -7,10 +7,11 @@ const chatController = readFileSync(new URL('../src/chat/controller.js', import.
 const areaSystem = readFileSync(new URL('../src/scene/areas.js', import.meta.url), 'utf8');
 const mapInspector = readFileSync(new URL('../src/interaction/map-inspector.js', import.meta.url), 'utf8');
 
-test('Select mode owns direct Feature inspection without a duplicate Inspect toolbar button', () => {
+test('Select mode retains direct Feature inspection alongside the explicit workbench Inspect tool', () => {
   assert.match(appShell, /button\(documentNode, '选择'/);
   assert.doesNotMatch(appShell, /button\(documentNode, '检查地物'/);
-  assert.doesNotMatch(appShell, /inspect\.dataset\.mainTool\s*=\s*'inspect'/);
+  assert.match(appShell, /inspect\.dataset\.mainTool\s*=\s*'inspect'/);
+  assert.match(appShell, /setMainTool\('inspect'\); activatePanel\('inspect'\)/);
   assert.match(mapInspector, /\['pan', 'inspect'\]\.includes\(tool\)/);
   assert.match(mapInspector, /api\.selectFeature\(feature\.id, \{ switchTab: true \}\)/);
 });

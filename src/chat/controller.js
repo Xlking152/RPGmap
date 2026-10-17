@@ -1,4 +1,5 @@
 import { ChatStore } from './store.js';
+import { activateSidebarPanel } from '../ui/sidebar-navigation.js';
 import { describeHealth, healthOperationPresentation, healthTypeLabel } from '../health/model.js';
 
 const STYLE_ID = 'rpgmap-chat-system-style';
@@ -147,8 +148,12 @@ export function createChatController({ selection } = {}) {
       };
 
       function activateChat() {
-        shell.querySelectorAll('.sidebar [data-panel]').forEach(node => node.classList.toggle('active', node === panel));
-        shell.querySelectorAll('.ui-sidebar-tab').forEach(node => node.classList.toggle('active', node === chatTab));
+        if (api.setActivePanel?.('chat') === true) return;
+        activateSidebarPanel(shell, 'chat');
+        showChatLog();
+      }
+
+      function showChatLog() {
         unreadCount = 0;
         updateUnreadBadge();
         renderLog();
@@ -361,12 +366,16 @@ export function createChatController({ selection } = {}) {
         if (composerMode === 'damage' || composerMode === 'healing') renderComposer();
       });
       if (typeof selectionOff === 'function') off.push(selectionOff);
+      off.push(api.on('ui:panel-change', event => {
+        if ((event?.detail || event)?.panel === 'chat') showChatLog();
+      }));
       off.push(api.on('state:import', () => {
         if (store.saving) return;
         store.load();
         if (panel.classList.contains('active')) renderLog();
       }));
-      off.push(api.on('chat:change', detail => {
+      off.push(api.on('chat:change', event => {
+        const detail = event?.detail || event;
         store.load();
         if (panel.classList.contains('active')) {
           unreadCount = 0;

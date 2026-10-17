@@ -559,14 +559,15 @@ test('generated landmarks stay inside their independently destructible feature g
   assert.match(featureSlice('yellow-river-pontoon-bridge'), /generated-yellow-river-pontoon/);
   assert.match(featureSlice('market-office'), /generated-market-office-hall/);
   assert.match(featureSlice('market-storehouse'), /generated-market-storehouse/);
-  assert.equal((artPackage.svg.match(/generated-yamen-hall/g) || []).length, 3);
-  assert.equal((artPackage.svg.match(/generated-chenghuang-temple/g) || []).length, 2);
-  assert.equal((artPackage.svg.match(/generated-city-gatehouse/g) || []).length, 5);
-  assert.equal((artPackage.svg.match(/generated-jincheng-gatehouse/g) || []).length, 2);
-  assert.equal((artPackage.svg.match(/generated-city-wall-tower/g) || []).length, 5);
-  assert.equal((artPackage.svg.match(/generated-yellow-river-pontoon/g) || []).length, 2);
-  assert.equal((artPackage.svg.match(/generated-market-office-hall/g) || []).length, 2);
-  assert.equal((artPackage.svg.match(/generated-market-storehouse/g) || []).length, 2);
+  const countImages = className => (artPackage.svg.match(new RegExp(`<image\\b[^>]*class="[^"]*\\b${className}\\b[^"]*"`, 'g')) || []).length;
+  assert.equal(countImages('generated-yamen-hall'), 2);
+  assert.equal(countImages('generated-chenghuang-temple'), 1);
+  assert.equal(countImages('generated-city-gatehouse'), 4);
+  assert.equal(countImages('generated-jincheng-gatehouse'), 1);
+  assert.equal(countImages('generated-city-wall-tower'), 4);
+  assert.equal(countImages('generated-yellow-river-pontoon'), 1);
+  assert.equal(countImages('generated-market-office-hall'), 1);
+  assert.equal(countImages('generated-market-storehouse'), 1);
 });
 
 test('map presentation metadata supports zoom hierarchy and automatic label avoidance', () => {

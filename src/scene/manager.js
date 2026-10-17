@@ -1,3 +1,5 @@
+import { renderUiIcon } from '../ui/icons.js';
+
 const clone = structuredClone;
 
 function currentMapId(api) {
@@ -34,7 +36,7 @@ function installSceneSelector(api, sceneApi) {
   const wrap = documentNode.createElement('div');
   wrap.dataset.sceneManager = 'true';
   wrap.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:11px;color:#5d696a';
-  wrap.innerHTML = '<span>场景</span><select aria-label="当前场景" data-scene-manager-select style="max-width:180px;padding:5px 6px;border:1px solid #c8d1ce;border-radius:6px;background:#fff"></select><select aria-label="新场景的地图" data-scene-manager-map style="max-width:180px;padding:5px 6px;border:1px solid #c8d1ce;border-radius:6px;background:#fff"></select><button type="button" data-scene-manager-create>＋ 场景</button>';
+  wrap.innerHTML = `<span>场景</span><select aria-label="当前场景" data-scene-manager-select style="padding:5px 6px;border:1px solid #c8d1ce;border-radius:5px;background:#fff"></select><details class="ui-command-menu" data-scene-create-menu><summary aria-label="创建场景" title="创建场景">${renderUiIcon('plus')}</summary><div class="ui-command-popover ui-scene-create"><label>起始地图<select aria-label="新场景的地图" data-scene-manager-map></select></label><button type="button" data-scene-manager-create>创建场景</button></div></details>`;
   toolbar.prepend(wrap);
   const select = wrap.querySelector('select');
   const mapSelect = wrap.querySelector('[data-scene-manager-map]');
@@ -59,6 +61,7 @@ function installSceneSelector(api, sceneApi) {
     select.disabled = pending || !manager;
     mapSelect.hidden = !manager;
     createButton.hidden = !manager;
+    wrap.querySelector('[data-scene-create-menu]').hidden = !manager;
     mapSelect.disabled = pending || !maps.length;
     createButton.disabled = pending || !maps.length;
   }

@@ -111,3 +111,35 @@ node scripts/desktop-release.mjs verify --directory=release/RPGmap-v3.0.0 --rece
 增量失效从权威 Document changes 与提交前后数据推导受影响对象和区域，聊天及名称变化不触发空间更新；未知变化完整重建。视野按真实影响区域计算，不能仅局部重画门周围。缓存键包含 World、Scene、地图 ID、版本、内容及相关计算版本，销毁时释放 Worker、监听器和资源。
 
 过程日志、旧候选目录、性能 trace 和一次性诊断数据不属于源码。长期回归测试、夹具、性能门槛和构建校验工具必须保留。清理目录链接或基线工作树前先核对路径和 Git 登记，不递归跟随目录链接删除目标。
+
+## 6. UI 与地图美术候选（未发布）
+
+`codex/ui-ux-refresh` 是界面与地图美术开发分支，不是新的正式版本。应用仍为 3.0.0，World、Operation、Ruleset 和地图权威几何未升级。新增统一工作区、管理页、对象检查、游玩角色卡和视野面板；侧栏切换保持唯一活动面板，聊天未读状态跟随实际激活，快捷状态沿用原作用域并原子提交，避免 Token 已有状态被重复添加到共享 Actor。
+
+兰州美术样板新增树冠、土石地表、石板路和院落纹理，生成提示词与来源说明保留在 `maps/lanzhou/assets/`。地图 ID、55 栋建筑及全部地物的位置、入口、碰撞、导航和 LOS 不变。1.1.1 样板冻结，第二轮显式导出 1.1.2；默认正式导出仍使用原 1.1.0 内容。样板不能覆盖旧安装或自动迁移用户 Scene。详见 [兰州制作说明](../maps/lanzhou/README.md)。
+
+开发检查分为不连接游戏服务器的内存预览和独立真实房间，不能把前者当作 LAN 验收：
+
+~~~powershell
+npm run dev
+# UI 内存预览：/scripts/ui-refresh-preview.html
+node scripts/export-map-packages.mjs --out output/art-map-slice-v2 --map-version 1.1.2
+npm run build -- --outDir output/ui-art-session-1.1.2/app
+node scripts/ui-local-session.mjs --art-version 1.1.2
+# 保持上一个服务运行，在另一个终端执行：
+node scripts/ui-local-session-smoke.mjs --art-version 1.1.2
+node scripts/ui-art-session-review.mjs --art-version 1.1.2
+~~~
+
+真实房间只使用对应 `output/` 下的独立数据与动态端口。`session.json`、凭据、World、截图、日志和浏览器配置不提交。开发 Vite 忽略仓库根生成目录的文件监听，以免 Windows 目录句柄阻止地图原子安装；不改变生产安装校验，也不忽略 `src/`、`maps/`、`scripts/` 的热更新。
+
+本轮验证：2,040 项自动化测试、709 个 JavaScript/MJS/CJS 文件语法检查及构建通过；本地 Chrome 的桌面及 390px UI 检查通过；真实 GM 房间的地图资源、角色卡、状态停启、LOS 像素、移动端和建筑破坏/恢复共 8 个场景通过，控制台与资源请求错误为 0。此处是本机 GM 验收，不代表玩家 Audience、多机 VPN 或正式安装器已重新验收。当前机器 Node 24.14.1 低于正式工具链要求，不能据此发布。
+
+未关闭的事项：
+
+- 当前构建 initial JS gzip 为 8,572 B（上限 11,726 B）；总 JS 为 340,848 B（上限 328,432 B），CSS 为 18,059 B（上限 7,429 B），严格预算仍失败。后续修改以实际测量为准，不能放宽门槛、转移 CSS 统计或称为 CI 全绿。
+- 地图仍采用原建筑密度和街巷布局，材质升级不等于标准概念图的高密度街区。地物详情等旧界面仍需继续统一，尚未完成全部界面的最终美术验收。
+- Fog 保留原权威遮罩和探索网格，只调整显示配色及操作面板。内缘柔化实验因视觉收益有限、连续移动额外开销约 2.54 ms/帧而撤回，没有宣称边缘柔化已交付。
+- 旧 `syntheticActor` 状态兼容写入仍走 `world.commit`，接着进行 Token 局部 Document 更新时可能读取过时缓存。已观察到 World 中 Effect 保留而 Token 读取缓存丢失，未发现持久数据丢失。后续应保留目标校验并优先走 canonical operation，不扩大到 Core 重写；本轮未修改此旧兼容路径。
+
+本轮仅上传开发检查点，不合并 `main`、不创建 Tag、安装器或 Release。

@@ -9,6 +9,8 @@ const builtinsSource = readFileSync(new URL('../src/map-package/builtins.js', im
 const installedPackagesSource = readFileSync(new URL('../src/adapters/installed-packages.js', import.meta.url), 'utf8');
 const rulesetBuiltinsSource = readFileSync(new URL('../src/ruleset/builtins.js', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+const designTokens = readFileSync(new URL('../src/ui/design-tokens.css', import.meta.url), 'utf8');
+const workbenchStyles = readFileSync(new URL('../src/ui/workbench.css', import.meta.url), 'utf8');
 const appShellSource = readFileSync(new URL('../src/ui/app-shell-v2.js', import.meta.url), 'utf8');
 const entityUiSource = readFileSync(new URL('../src/entities/ui-live.js', import.meta.url), 'utf8');
 const actorSheetPartsSource = readFileSync(new URL('../src/entities/sheet/parts.js', import.meta.url), 'utf8');
@@ -34,9 +36,12 @@ test('application entry boots the Character-free World/Scene Token runtime', () 
   assert.doesNotMatch(runtimeSource, /characterPane|selectCharacter|placeCharacter|repositionCharacter|deleteCharacter|character:create|character:move|character:delete/);
 });
 
-test('application chrome keeps the restrained neutral, river and brick palette', () => {
-  assert.match(styles, /--accent: #963f2f;/);
-  assert.match(styles, /--accent-2: #397783;/);
+test('application chrome uses one shared neutral and river palette', () => {
+  assert.match(designTokens, /--ui-accent: #087e8b;/);
+  assert.match(designTokens, /--ui-danger: #b94143;/);
+  assert.match(workbenchStyles, /--accent: var\(--ui-accent\);/);
+  assert.match(workbenchStyles, /--accent-2: var\(--ui-accent\);/);
+  assert.doesNotMatch(styles, /--accent\s*:/);
   assert.match(styles, /\.section \{[\s\S]*?border-bottom: 1px solid var\(--line\);/);
   assert.doesNotMatch(styles, /linear-gradient/i);
   assert.equal(packageJson.dependencies.lucide, '1.30.0');
@@ -100,7 +105,7 @@ test('restricted audience records open a dedicated LIMITED summary instead of th
   assert.doesNotMatch(entityUiSource, /无权读取该 Token 的角色卡/);
   assert.match(entityUiSource, /api\.entities\.openToken\(token\.id\)/);
   assert.match(markerSource, /actor\.audienceRestricted === true \? '公开摘要' : '模板卡'/);
-  assert.match(appShellSource, /view\.actor\.audienceRestricted \? '公开摘要' : '角色卡'/);
+  assert.match(appShellSource, /overview\.restricted \? '公开摘要' : '打开角色卡'/);
 });
 
 test('destruction presentation uses an independent ruins layer without random geometry', () => {

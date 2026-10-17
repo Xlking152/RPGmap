@@ -1,0 +1,137 @@
+/* The map chrome stays separate from map/ruleset presentation. */
+body {
+  --ink: var(--ui-ink); --muted: var(--ui-muted); --paper: var(--ui-bg);
+  --paper-2: var(--ui-surface); --panel: var(--ui-surface);
+  --line: var(--ui-line); --line-strong: #c5cfd7;
+  --accent: var(--ui-accent); --accent-hover: var(--ui-accent-hover);
+  --accent-2: var(--ui-accent); --accent-2-soft: var(--ui-accent-soft);
+  --danger: var(--ui-danger); --success: var(--ui-success); --shadow: var(--ui-shadow);
+  font-family: var(--ui-font); letter-spacing: 0; background: var(--ui-bg); overflow: hidden;
+}
+body button, body input, body select, body textarea { font-family: inherit; letter-spacing: 0; }
+body button:focus-visible, body summary:focus-visible, body a:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 3px; }
+.app-shell.runtime-v2-shell { display: grid; grid-template-rows: 56px minmax(0, 1fr) 28px; height: 100dvh; min-height: 0; background: var(--ui-bg); }
+.app-shell.runtime-v2-shell .topbar { padding: 0 16px; gap: 18px; min-height: 0; flex-wrap: nowrap; position: relative; box-shadow: none; border-color: var(--ui-line); background: var(--ui-surface); }
+.app-shell.runtime-v2-shell .brand { min-width: 0; width: auto; gap: 9px; flex-shrink: 0; }
+.app-shell.runtime-v2-shell .brand-mark { width: 28px; height: 30px; flex-basis: 28px; color: var(--ui-ink); background: none; box-shadow: none; }
+.app-shell.runtime-v2-shell .brand-copy h1 { font-size: 19px; font-weight: 750; }
+.workspace-context { min-width: 0; padding-left: 18px; border-left: 1px solid var(--ui-line); font-size: 13px; font-weight: 550; }
+.workspace-context > span { display: block; max-width: 240px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.app-shell.runtime-v2-shell .toolbar-right { flex: 1; width: auto; min-width: 0; flex-wrap: nowrap; justify-content: flex-end; gap: 8px; border: 0; padding: 0; overflow: visible; }
+.app-shell.runtime-v2-shell .workspace { display: grid; grid-template-columns: 56px minmax(0, 1fr) 376px; gap: 0; padding: 0; overflow: hidden; min-height: 0; height: 100%; }
+.tool-rail { background: #252d33; z-index: 810; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #65727c transparent; }
+.app-shell.runtime-v2-shell .tool-rail .toolbar { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; padding: 10px 6px; gap: 8px; }
+.app-shell.runtime-v2-shell .tool-rail button { width: 44px; min-width: 0; min-height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 8px; border-radius: 5px; border: 0; background: transparent; color: #c6d0d7; font-size: 10px; font-weight: 500; white-space: normal; box-shadow: none; }
+.app-shell.runtime-v2-shell .tool-rail button > span { display: none; }
+.app-shell.runtime-v2-shell .tool-rail button:hover { background: #354149; color: white; }
+.app-shell.runtime-v2-shell .tool-rail button.active { background: var(--ui-accent); color: white; }
+.app-shell.runtime-v2-shell .tool-rail .ui-icon { width: 21px; height: 21px; }
+.app-shell.runtime-v2-shell .map-card { border: 0; border-radius: 0; box-shadow: none; min-height: 0; height: 100%; }
+.app-shell.runtime-v2-shell #map { min-height: 0; background: #e3e9e7; }
+.app-shell.runtime-v2-shell .map-status { top: 12px; left: 54px; max-width: min(480px, calc(100% - 70px)); background: #ffffffed; border: 1px solid var(--ui-line); box-shadow: 0 2px 8px #17293212; color: var(--ui-muted); font-size: 11px; border-radius: 4px; }
+.app-shell.runtime-v2-shell .sidebar { min-height: 0; border: 0; border-left: 1px solid var(--ui-line); border-radius: 0; background: var(--ui-surface); box-shadow: none; overflow: hidden; font-size: 14px; }
+.app-shell.runtime-v2-shell .sidebar .tabbar { display: flex; flex-wrap: nowrap; gap: 0; padding: 0 8px; height: 46px; background: var(--ui-surface); border-bottom: 1px solid var(--ui-line); overflow-x: auto; scrollbar-width: thin; }
+.app-shell.runtime-v2-shell .sidebar .tabbar button { flex: 1 0 auto; padding: 12px 10px; min-height: 44px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--ui-muted); background: transparent; font-size: 14px; font-weight: 550; box-shadow: none; }
+.app-shell.runtime-v2-shell .sidebar .tabbar button.active { color: var(--ui-accent); border-bottom-color: var(--ui-accent); background: transparent; }
+.app-shell.runtime-v2-shell .panel-stack { padding: 0 22px 20px; min-width: 0; overscroll-behavior: contain; }
+.app-shell.runtime-v2-shell .section h2 { color: var(--ui-ink); font-size: 14px; }
+.app-shell.runtime-v2-shell .section h3 { font-size: 12px; }
+.app-shell.runtime-v2-shell .ui-current-card { padding: 24px 0 8px; gap: 24px; border: 0; border-radius: 0; background: transparent; }
+.app-shell.runtime-v2-shell .ui-current-head { gap: 14px; }
+.app-shell.runtime-v2-shell .ui-current-head strong { font-size: 23px; line-height: 1.4; overflow-wrap: anywhere; }
+.app-shell.runtime-v2-shell .ui-current-head small { display: inline-block; margin-top: 6px; color: var(--ui-muted); font-size: 12px; line-height: 1.6; }
+.app-shell.runtime-v2-shell .ui-token-avatar { width: 80px; height: 80px; font-size: 28px; border: 3px solid white; outline: 1px solid var(--ui-line); }
+.app-shell.runtime-v2-shell .ui-token-meta { display: grid; grid-template-columns: 1fr; padding: 18px 0 0; border-top: 1px solid var(--ui-line); gap: 14px; font-size: 14px; }
+.app-shell.runtime-v2-shell .ui-token-meta div { display: grid; grid-template-columns: 76px minmax(0,1fr); padding: 0; background: none; overflow-wrap: anywhere; }
+.ui-token-meta strong { font-weight: 550; color: var(--ui-ink); }
+.ui-object-health-heading { display: flex; align-items: baseline; gap: 16px; font-size: 15px; margin-bottom: 10px; }
+.ui-object-health-heading strong { font-size: 20px; }
+.ui-object-health-track { height: 10px; display: flex; overflow: hidden; border-radius: 4px; background: #e5e9eb; }
+.ui-object-health-track > span { height: 100%; min-width: 0; }
+.app-shell.runtime-v2-shell .ui-object-primary button { width: 100%; min-height: 44px; display: flex; gap: 10px; align-items: center; justify-content: center; background: var(--ui-accent); color: white; font-size: 15px; border-color: var(--ui-accent); }
+.app-shell.runtime-v2-shell .ui-actions { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; }
+.app-shell.runtime-v2-shell .ui-actions button { min-height: 42px; display: flex; align-items: center; justify-content: center; padding: 9px; }
+.app-shell.runtime-v2-shell .ui-actions button > span { display: none; }
+.ui-object-location { padding-top: 18px; border-top: 1px solid var(--ui-line); }
+.ui-object-location h3 { margin: 0 0 12px; font-size: 13px; color: var(--ui-muted); font-weight: 550; }
+.ui-object-location p { display: flex; align-items: center; gap: 12px; margin: 0; font-size: 14px; }
+.ui-object-location .ui-icon { flex-shrink: 0; }
+.ui-current-card .ui-status-summary .status-chip { font-size: 13px; padding: 6px 9px; }
+.app-shell.runtime-v2-shell .ui-current-empty { padding: 48px 12px; font-size: 12px; color: var(--ui-muted); }
+.ui-current-empty .ui-icon { display: block; margin: 0 auto 14px; width: 30px; height: 30px; opacity: .55; }
+.ui-token-debug { border-top: 1px solid var(--ui-line); padding-top: 12px; color: var(--ui-muted); font-size: 11px; }
+.ui-token-debug summary { cursor: pointer; }
+.ui-token-debug p { overflow-wrap: anywhere; margin: 8px 0 0; }
+.app-shell.runtime-v2-shell .ui-primary-tool, .app-shell.runtime-v2-shell .tool-button, .app-shell.runtime-v2-shell .small-button { border-radius: 5px; font-weight: 550; }
+.app-shell.runtime-v2-shell .toolbar-right > button { min-width: 34px; min-height: 34px; font-size: 12px; }
+.app-shell.runtime-v2-shell .toolbar-right > button:has(.ui-icon) { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.ui-command-menu { position: relative; flex-shrink: 0; }
+.ui-command-menu > summary { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--ui-line); border-radius: 5px; list-style: none; cursor: pointer; background: white; }
+.ui-command-menu > summary::-webkit-details-marker { display: none; }
+.ui-command-menu[open] > summary { color: var(--ui-accent); background: var(--ui-accent-soft); }
+.ui-command-popover { position: absolute; top: calc(100% + 8px); right: 0; z-index: 2200; width: 220px; max-width: calc(100vw - 24px); padding: 7px; border: 1px solid var(--ui-line); border-radius: 6px; background: white; box-shadow: var(--ui-shadow); }
+.app-shell.runtime-v2-shell .ui-command-popover button { display: flex; justify-content: flex-start; width: 100%; min-height: 37px; border: 0; background: none; gap: 10px; font-size: 12px; text-align: left; padding: 8px; color: var(--ui-ink); }
+.app-shell.runtime-v2-shell .ui-command-popover button:hover { background: var(--ui-surface-alt); }
+.app-shell.runtime-v2-shell .ui-command-popover .danger { color: var(--ui-danger); }
+.ui-command-divider { height: 1px; margin: 5px; background: var(--ui-line); }
+.app-shell.runtime-v2-shell [data-scene-manager] { max-width: 280px; min-width: 0; }
+.app-shell.runtime-v2-shell [data-scene-manager] > span { flex-shrink: 0; white-space: nowrap; }
+.app-shell.runtime-v2-shell [data-scene-manager-select] { max-width: 170px; min-width: 0; width: 100%; }
+.ui-scene-create { padding: 12px; }
+.ui-scene-create label { display: grid; gap: 6px; margin-bottom: 10px; color: var(--ui-muted); font-size: 12px; }
+.ui-scene-create select { width: 100%; max-width: none; }
+.workspace-footer { min-width: 0; display: flex; justify-content: space-between; align-items: center; padding: 0 14px; border-top: 1px solid var(--ui-line); background: var(--ui-surface); font-size: 10px; color: var(--ui-muted); gap: 12px; }
+.workspace-footer > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-shell.runtime-v2-shell.is-inspector-collapsed .workspace { grid-template-columns: 56px minmax(0, 1fr); }
+.app-shell.runtime-v2-shell.is-inspector-collapsed .sidebar { display: none; }
+.app-shell.runtime-v2-shell:not(.is-inspector-collapsed):has(.sidebar [data-panel="current"].active) .selected-token-summary { display: none; }
+.app-shell.runtime-v2-shell .leaflet-bar { border: 1px solid var(--ui-line); box-shadow: 0 2px 8px #17293215; }
+.app-shell.runtime-v2-shell .leaflet-bar a { background: white; color: var(--ui-ink); }
+body .rpgmap-health-selection-hud { width: min(300px, calc(100% - 24px)); border-color: var(--ui-line); border-radius: 6px; background: #fffffffa; box-shadow: var(--ui-shadow); }
+body .health-selection-help { display: none; }
+body .health-selection-head strong { font-size: 13px; }
+body .health-selection-count, body .health-selection-mode { background: var(--ui-surface-alt); color: var(--ui-muted); border-radius: 4px; }
+body .health-batch-row { grid-template-columns: 52px minmax(76px, 1fr) auto; }
+body .health-batch-row input, body .health-batch-row select, body .health-batch-row button { border-radius: 4px; }
+body .marker-form { border: 0; border-bottom: 1px solid var(--ui-line); border-radius: 0; padding: 16px 0; background: transparent; }
+body .marker-form h2 { font-size: 14px; color: var(--ui-ink); }
+body .marker-form input, body .marker-form select { max-width: 100%; }
+@media (max-width: 1100px) {
+  .app-shell.runtime-v2-shell .workspace { grid-template-columns: 56px minmax(0, 1fr) 310px; }
+  .app-shell.runtime-v2-shell .tool-rail button { width: 44px; }
+  .workspace-context { display: none; }
+  .app-shell.runtime-v2-shell.is-inspector-collapsed .workspace { grid-template-columns: 56px minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .app-shell.runtime-v2-shell { grid-template-rows: 50px minmax(0, 1fr) 25px; }
+  .app-shell.runtime-v2-shell .topbar { gap: 8px; padding: 0 10px; }
+  .app-shell.runtime-v2-shell .brand-copy h1 { font-size: 15px; }
+  .app-shell.runtime-v2-shell .brand-mark { width: 23px; flex-basis: 23px; }
+  .app-shell.runtime-v2-shell .toolbar-right { gap: 5px; }
+  .app-shell.runtime-v2-shell .toolbar-right > button { padding: 5px; }
+  .app-shell.runtime-v2-shell .toolbar-right > button .ui-command-label { display: none; }
+  .app-shell.runtime-v2-shell [data-scene-manager] > span { display: none; }
+  .app-shell.runtime-v2-shell [data-scene-manager] { max-width: 118px; }
+  .app-shell.runtime-v2-shell [data-scene-manager-select] { max-width: 80px; padding-inline: 3px; font-size: 11px; }
+  .app-shell.runtime-v2-shell .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: 54px minmax(100px, 1fr) minmax(0, 36dvh); }
+  .tool-rail { overflow-x: auto; overflow-y: hidden; }
+  .app-shell.runtime-v2-shell .tool-rail .toolbar { flex-direction: row; height: 54px; padding: 3px 7px; gap: 4px; }
+  .app-shell.runtime-v2-shell .tool-rail button { width: 44px; min-width: 44px; min-height: 46px; }
+  .app-shell.runtime-v2-shell .sidebar { border-left: 0; border-top: 1px solid var(--ui-line); }
+  .app-shell.runtime-v2-shell .sidebar .tabbar { height: 42px; min-height: 42px; }
+  .app-shell.runtime-v2-shell .sidebar .tabbar button { padding: 10px; min-height: 40px; }
+  .app-shell.runtime-v2-shell .panel-stack { padding-inline: 14px; }
+  .app-shell.runtime-v2-shell .ui-current-card { padding-top: 14px; gap: 12px; }
+  .app-shell.runtime-v2-shell .ui-token-avatar { width: 48px; height: 48px; font-size: 20px; }
+  .app-shell.runtime-v2-shell .ui-current-head strong { font-size: 17px; }
+  .app-shell.runtime-v2-shell.is-inspector-collapsed .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: 54px minmax(0, 1fr); }
+  body .rpgmap-health-selection-hud { right: 8px; bottom: 8px; width: min(272px, calc(100% - 16px)); padding: 8px; gap: 5px; max-height: calc(100% - 16px); overflow-y: auto; }
+  body .health-batch-row { grid-template-columns: 48px minmax(70px, 1fr) auto; }
+  body .health-batch-row button { grid-column: auto; }
+}
+@media (max-width: 500px) {
+  .app-shell.runtime-v2-shell .brand-copy { display: none; }
+  .app-shell.runtime-v2-shell .toolbar-right { gap: 4px; }
+  .app-shell.runtime-v2-shell .toolbar-right .multiplayer-toolbar { font-size: 11px; padding-inline: 5px; }
+  .app-shell.runtime-v2-shell .topbar { gap: 5px; padding-inline: 6px; }
+}

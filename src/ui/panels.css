@@ -1,0 +1,283 @@
+/* Context panels share the workspace palette, including lazily injected UI. */
+body :is(.status-quick-hud, .status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog, .journal-dialog, .rpgmap-combat-tracker, .rpgmap-chat-panel) {
+  color: var(--ui-text);
+  background: var(--ui-surface);
+  font-family: inherit;
+  letter-spacing: 0;
+}
+
+body :is(.status-definition-backdrop, .multiplayer-backdrop, .actor-ownership-backdrop) {
+  padding: 20px;
+  background: rgb(24 31 39 / 36%);
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog, .journal-dialog) {
+  box-sizing: border-box;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  box-shadow: var(--ui-shadow, 0 16px 48px rgb(21 31 43 / 18%));
+  max-width: calc(100vw - 40px);
+  max-height: calc(100dvh - 40px);
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog) {
+  padding: 24px;
+  gap: 20px;
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog) h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog, .journal-dialog) :is(button, input, select, textarea) {
+  font: inherit;
+  min-width: 0;
+  box-sizing: border-box;
+  border-radius: 4px;
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog, .journal-dialog) :is(input:not([type="checkbox"]):not([type="color"]), select, textarea) {
+  width: 100%;
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  padding: 9px 10px;
+  min-height: 38px;
+  font-size: 13px;
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog, .journal-dialog) :is(input, select, textarea):focus-visible,
+body :is(.status-quick-hud, .status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog, .journal-dialog, .rpgmap-combat-tracker, .rpgmap-chat-panel) button:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog, .journal-dialog) input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  accent-color: var(--ui-accent);
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog, .journal-dialog) button {
+  min-height: 36px;
+  padding: 7px 12px;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog, .journal-dialog) button:hover:not(:disabled) {
+  background: var(--ui-surface-muted);
+  border-color: #b6c6cf;
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog) button.primary,
+body .journal-actions button[type="submit"] {
+  color: #fff;
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog) button.primary:hover:not(:disabled),
+body .journal-actions button[type="submit"]:hover:not(:disabled) {
+  background: #096b79;
+  border-color: #096b79;
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog) button.danger {
+  color: var(--ui-danger);
+  border-color: #e9c8cb;
+}
+
+body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog, .journal-dialog) :disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+body .status-definition-dialog { width: 760px; }
+body .status-definition-dialog > header { align-items: center; padding-bottom: 16px; border-bottom: 1px solid var(--ui-border); }
+body .status-definition-dialog > header p { margin-top: 5px; font-size: 12px; color: var(--ui-muted); }
+body .status-definition-dialog .status-definition-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+body .status-definition-dialog :is(label, legend) { color: var(--ui-text); font-size: 12px; }
+body .status-definition-dialog label { gap: 7px; }
+body .status-definition-dialog fieldset { border: 0; border-top: 1px solid var(--ui-border); border-radius: 0; padding: 18px 0 0; }
+body .status-definition-dialog legend { font-weight: 650; padding: 0 10px 0 0; }
+body .status-definition-dialog .status-capability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+body .status-definition-dialog .status-capability-grid label { display: grid; align-content: start; }
+body .status-definition-dialog .status-capability-grid .status-capability-checkbox { display: flex; grid-column: 1 / -1; }
+body .status-definition-dialog .status-scope-options { display: flex; gap: 24px; }
+body .status-definition-dialog input[type="color"] { width: 100%; height: 38px; padding: 4px; background: #fff; border: 1px solid var(--ui-border); cursor: pointer; }
+body .status-definition-dialog .status-definition-advanced { border-top: 1px solid var(--ui-border); padding-top: 14px; }
+body .status-definition-advanced summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--ui-muted); }
+body .status-definition-advanced > label { display: grid; margin-top: 14px; }
+body .status-definition-dialog small { color: var(--ui-muted); }
+body .status-definition-dialog > footer { border-top: 1px solid var(--ui-border); padding-top: 16px; align-items: center; flex-wrap: wrap; }
+body .status-definition-dialog [data-status-action="definition-close"].status-definition-close { width: 34px; height: 34px; min-height: 34px; padding: 0; border: 0; background: transparent; font-size: 24px; font-weight: 400; flex: 0 0 34px; }
+
+body .status-quick-hud {
+  width: min(356px, calc(100vw - 16px));
+  max-height: min(620px, calc(100dvh - 16px));
+  padding: 0;
+  gap: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  box-shadow: var(--ui-shadow, 0 12px 36px rgb(21 31 43 / 20%));
+  overscroll-behavior: contain;
+}
+
+body .status-quick-hud > header { padding: 15px 16px; border-bottom: 1px solid var(--ui-border); }
+body .status-quick-hud > header div { gap: 3px; }
+body .status-quick-hud > header strong { font-size: 15px; font-weight: 650; }
+body .status-quick-hud > header small { font-size: 11px; color: var(--ui-muted); }
+body .status-quick-hud > header button { width: 32px; height: 32px; padding: 0; flex: 0 0 32px; color: var(--ui-muted); border-radius: 4px; }
+body .status-quick-hud > header button:hover { background: var(--ui-surface-muted); }
+body .status-quick-hud .status-quick-group { margin: 0 16px; padding: 12px 0; border-bottom: 1px solid var(--ui-border); }
+body .status-quick-group h3, body .status-quick-group > summary { margin: 0 0 10px; font-size: 12px; line-height: 1.4; font-weight: 650; color: var(--ui-muted); }
+body .status-quick-group > summary { cursor: pointer; margin: 0; }
+body .status-quick-group[open] > summary { margin-bottom: 10px; }
+body .status-quick-hud .status-quick-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+body .status-quick-hud .status-quick-grid button {
+  display: grid;
+  grid-template-rows: 22px auto auto;
+  place-items: center;
+  justify-content: stretch;
+  min-height: 72px;
+  padding: 7px 4px;
+  border: 1px solid var(--ui-border);
+  border-radius: 4px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font: inherit;
+  gap: 4px;
+}
+body .status-quick-hud .status-quick-grid button:hover { border-color: var(--ui-accent); background: var(--ui-surface-muted); }
+body .status-quick-hud .status-quick-grid button[data-state="enabled"] { color: var(--ui-accent); border-color: var(--ui-accent); background: var(--ui-accent-soft); }
+body .status-quick-hud .status-quick-grid button[data-state="mixed"] { color: var(--ui-accent); border-style: dashed; border-color: var(--ui-accent); background: var(--ui-accent-soft); }
+body .status-quick-hud .status-quick-grid button[data-state="disabled"] { opacity: 1; color: var(--ui-muted); background: var(--ui-surface-muted); }
+body .status-quick-grid .status-quick-label { max-width: 100%; font-size: 12px; line-height: 1.35; }
+body .status-quick-hud .status-quick-grid button small { font-size: 10px; line-height: 1.3; color: var(--ui-muted); }
+body .status-quick-grid .status-quick-icon { display: grid; place-items: center; overflow: visible; }
+body .status-quick-grid .status-quick-icon :is(.status-strip, .status-chip, .status-chip-icon) { display: contents; border: 0; padding: 0; background: none; color: inherit; }
+body .status-quick-grid .status-quick-icon .status-chip-label { display: none; }
+body .status-quick-grid .status-quick-icon svg { width: 23px; height: 23px; stroke-width: 1.7; }
+body .status-quick-hud .status-quick-derived { padding: 14px 16px; }
+body .status-quick-hud .status-quick-derived h3 { font-size: 12px; line-height: 1.4; color: var(--ui-muted); margin-bottom: 8px; }
+body .status-quick-hud .status-chip { border-radius: 4px; font-size: 11px; }
+body .status-quick-hud > footer { padding: 10px 16px; border-top: 1px solid var(--ui-border); justify-content: flex-end; background: var(--ui-surface-muted); }
+body .status-quick-hud > footer button { min-height: 34px; padding: 6px 12px; background: #fff; border: 1px solid var(--ui-border); border-radius: 4px; font-size: 12px; color: var(--ui-text); cursor: pointer; }
+body .status-quick-hud[aria-busy="true"] .status-quick-grid button { opacity: .55; cursor: progress; }
+
+body .rpgmap-chat-panel { background: var(--ui-surface); }
+body .rpgmap-chat-panel .chat-panel-head { padding: 15px 16px; border-color: var(--ui-border); }
+body .rpgmap-chat-panel .chat-panel-head strong { font-size: 13px; font-weight: 650; }
+body .rpgmap-chat-panel .chat-panel-head button { min-height: 28px; font-size: 11px; color: var(--ui-muted); }
+body .rpgmap-chat-panel .chat-log { padding: 0 16px; gap: 0; }
+body .rpgmap-chat-panel .chat-entry { border: 0; border-bottom: 1px solid var(--ui-border); border-radius: 0; background: transparent; padding: 15px 0; gap: 7px; }
+body .rpgmap-chat-panel .chat-entry-head { gap: 7px; color: var(--ui-muted); font-size: 10px; }
+body .rpgmap-chat-panel .chat-entry-head strong { color: var(--ui-text); font-size: 11px; }
+body .rpgmap-chat-panel .chat-entry-head > span:last-child { margin-left: auto; white-space: nowrap; }
+body .rpgmap-chat-panel .chat-entry-text { color: var(--ui-text); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+body .rpgmap-chat-panel :is(.chat-entry.damage, .chat-entry.healing, .chat-entry.roll, .chat-entry.combat) .chat-entry-head strong { display: inline-flex; padding: 3px 6px; border-radius: 3px; color: var(--ui-accent); background: var(--ui-accent-soft); }
+body .rpgmap-chat-panel .chat-entry.damage .chat-entry-head strong { color: var(--ui-danger); background: #fbeef0; }
+body .rpgmap-chat-panel .chat-entry.healing .chat-entry-head strong { color: #287452; background: #edf6f1; }
+body .rpgmap-chat-panel .chat-damage-target { border-radius: 4px; background: var(--ui-surface-muted); padding: 8px 10px; font-size: 11px; }
+body .rpgmap-chat-panel .chat-composer { padding: 12px; gap: 10px; border-color: var(--ui-border); }
+body .rpgmap-chat-panel .chat-composer-tabs { gap: 0; padding: 3px; background: var(--ui-surface-muted); border-radius: 4px; }
+body .rpgmap-chat-panel .chat-composer-tabs button { min-height: 32px; border-radius: 3px; font-size: 12px; font-weight: 550; background: transparent; color: var(--ui-muted); }
+body .rpgmap-chat-panel .chat-composer-tabs button.active { background: #fff; color: var(--ui-accent); box-shadow: 0 1px 3px rgb(21 31 43 / 10%); }
+body .rpgmap-chat-panel .chat-composer :is(input, select) { min-height: 38px; border-color: var(--ui-border); border-radius: 4px; color: var(--ui-text); background: #fff; font-size: 12px; }
+body .rpgmap-chat-panel .chat-composer :is(input, select):focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
+body .rpgmap-chat-panel .chat-composer button.primary { border-radius: 4px; background: var(--ui-accent); border-color: var(--ui-accent); font-weight: 550; }
+body .rpgmap-chat-panel .chat-selection-hint { color: var(--ui-muted); line-height: 1.55; }
+
+body .rpgmap-combat-tracker { width: 280px; max-width: calc(100% - 24px); border-color: var(--ui-border); border-radius: 6px; backdrop-filter: none; box-shadow: 0 6px 24px rgb(21 31 43 / 14%); }
+body .rpgmap-combat-tracker .combat-tracker-head { padding: 13px 14px; border-color: var(--ui-border); }
+body .rpgmap-combat-tracker .combat-tracker-head strong { font-size: 13px; font-weight: 650; }
+body .rpgmap-combat-tracker .combat-tracker-head small { font-size: 11px; color: var(--ui-muted); }
+body .rpgmap-combat-tracker .combat-tracker-list { gap: 0; padding: 4px 8px; }
+body .rpgmap-combat-tracker .combatant-row { min-height: 59px; border: 0; border-bottom: 1px solid var(--ui-border); border-radius: 0; grid-template-columns: 14px 36px minmax(0, 1fr) 44px 24px; padding: 8px 4px; background: transparent; }
+body .rpgmap-combat-tracker .combatant-row.current { background: var(--ui-accent-soft); box-shadow: inset 3px 0 var(--ui-accent); border-radius: 4px; }
+body .rpgmap-combat-tracker .combatant-avatar, body .rpgmap-combat-tracker .combatant-avatar img { width: 34px; height: 34px; }
+body .rpgmap-combat-tracker .combatant-name strong { font-size: 12px; font-weight: 600; }
+body .rpgmap-combat-tracker .combatant-name small { font-size: 10px; margin-top: 4px; color: var(--ui-muted); }
+body .rpgmap-combat-tracker .combatant-initiative { box-sizing: border-box; width: 42px; min-height: 32px; border: 1px solid var(--ui-border); border-radius: 4px; font-size: 12px; color: var(--ui-text); background: #fff; font-weight: 550; }
+body .rpgmap-combat-tracker .combatant-remove { width: 24px; height: 32px; color: var(--ui-muted); }
+body .rpgmap-combat-tracker .combatant-remove:hover { color: var(--ui-danger); }
+
+body .multiplayer-dialog { width: min(920px, calc(100vw - 40px)); }
+body .multiplayer-dialog.login { width: 460px; }
+body .multiplayer-dialog :is(h3, .multiplayer-user-head strong) { font-size: 14px; color: var(--ui-text); font-weight: 600; }
+body .multiplayer-dialog :is(p, .multiplayer-muted, .multiplayer-field) { color: var(--ui-muted); line-height: 1.55; }
+body .multiplayer-dialog .multiplayer-section { padding: 18px 0 0; background: transparent; border: 0; border-top: 1px solid var(--ui-border); border-radius: 0; gap: 12px; }
+body .multiplayer-dialog .multiplayer-user-card { border: 1px solid var(--ui-border); padding: 16px; background: var(--ui-surface); border-radius: 4px; gap: 14px; }
+body .multiplayer-dialog .multiplayer-user-card .multiplayer-section { padding-top: 14px; }
+body .multiplayer-dialog .multiplayer-user-head { gap: 8px; }
+body .multiplayer-dialog .multiplayer-grid-2 { gap: 16px; }
+body .multiplayer-dialog .multiplayer-field { gap: 6px; font-size: 12px; }
+body .multiplayer-dialog .multiplayer-status-card { padding: 12px 14px; border-radius: 4px; border: 1px solid var(--ui-border); background: var(--ui-surface-muted); color: var(--ui-text); overflow-wrap: anywhere; }
+body .multiplayer-dialog .multiplayer-status-card.warn { color: #795c25; border-color: #eadfbd; background: #faf7ec; }
+body .multiplayer-dialog .multiplayer-status-card.key { color: var(--ui-accent); border-color: #badde2; background: var(--ui-accent-soft); }
+body .multiplayer-dialog .multiplayer-key-value { font-size: 17px; letter-spacing: 0; overflow-wrap: anywhere; }
+body .multiplayer-dialog .multiplayer-presence { gap: 8px; }
+body .multiplayer-dialog .multiplayer-chip { border-radius: 4px; padding: 6px 9px; font-size: 11px; font-weight: 550; background: var(--ui-surface-muted); color: var(--ui-text); }
+body .multiplayer-dialog .multiplayer-chip.gm { color: var(--ui-accent); background: var(--ui-accent-soft); }
+body .multiplayer-dialog .multiplayer-ownership { grid-template-columns: minmax(0, 1fr) 160px; gap: 0 16px; font-size: 12px; }
+body .multiplayer-dialog .multiplayer-ownership > * { min-width: 0; padding-block: 8px; overflow-wrap: anywhere; }
+body .multiplayer-dialog .multiplayer-ownership select { margin-block: 4px; }
+body .multiplayer-dialog .multiplayer-actions { gap: 8px; padding-top: 3px; }
+body .multiplayer-dialog .multiplayer-mini-button { font-size: 12px; }
+body .actor-ownership-dialog .actor-ownership-list { gap: 0; }
+body .actor-ownership-dialog .actor-ownership-row { padding: 13px 0; border: 0; border-bottom: 1px solid var(--ui-border); background: transparent; border-radius: 0; }
+body .actor-ownership-dialog .actor-ownership-badge { max-width: 100%; width: fit-content; white-space: normal; border-radius: 3px; color: var(--ui-accent); background: var(--ui-accent-soft); }
+body .actor-ownership-dialog .actor-ownership-feedback { border-radius: 4px; color: var(--ui-text); background: var(--ui-surface-muted); }
+body .actor-ownership-dialog .actor-ownership-feedback.error { color: var(--ui-danger); background: #fbeef0; }
+
+body .journal-dialog { width: 1100px; height: min(780px, calc(100dvh - 40px)); padding: 0; }
+body .journal-dialog::backdrop { background: rgb(24 31 39 / 36%); }
+body .journal-dialog .journal-toolbar { padding: 14px 20px; border-color: var(--ui-border); }
+body .journal-dialog .journal-toolbar h2 { font-size: 16px; font-weight: 650; }
+body .journal-dialog .journal-shell { grid-template-columns: 240px minmax(0, 1fr); }
+body .journal-dialog .journal-index { padding: 20px 14px; background: var(--ui-surface-muted); border-color: var(--ui-border); }
+body .journal-dialog .journal-index h2 { font-size: 12px; color: var(--ui-muted); font-weight: 600; }
+body .journal-dialog .journal-list { gap: 4px; margin-top: 15px; }
+body .journal-dialog .journal-list button { border: 0; background: transparent; padding: 11px 12px; line-height: 1.5; }
+body .journal-dialog .journal-list button[aria-current="true"] { background: #dfedf1; color: var(--ui-accent); box-shadow: inset 3px 0 var(--ui-accent); }
+body .journal-dialog .journal-main { padding: 26px 32px; }
+body .journal-dialog .journal-head { padding-bottom: 18px; border-bottom: 1px solid var(--ui-border); align-items: start; }
+body .journal-dialog .journal-head h2 { font-size: 23px; font-weight: 650; line-height: 1.45; overflow-wrap: anywhere; }
+body .journal-dialog .journal-article { line-height: 1.85; font-size: 14px; color: var(--ui-text); }
+body .journal-dialog .journal-article :is(h1, h2, h3) { font-size: 18px; line-height: 1.5; margin: 24px 0 12px; }
+body .journal-dialog .journal-article img { max-height: 460px; margin: 20px 0; border-radius: 3px; }
+body .journal-dialog .journal-article blockquote { border-left: 3px solid var(--ui-accent); margin-inline: 0; padding: 4px 16px; color: var(--ui-muted); }
+body .journal-dialog .journal-form { gap: 16px; }
+body .journal-dialog .journal-form label { gap: 6px; }
+body .journal-dialog .journal-form textarea { min-height: 240px; line-height: 1.65; }
+body .journal-dialog .journal-message { color: var(--ui-danger); font-size: 12px; }
+body .journal-dialog .journal-actions { border-top: 1px solid var(--ui-border); padding-top: 14px; }
+
+@media (max-width: 620px) {
+  body :is(.status-definition-backdrop, .multiplayer-backdrop, .actor-ownership-backdrop) { padding: 8px; }
+  body :is(.status-definition-dialog, .multiplayer-dialog, .actor-ownership-dialog, .journal-dialog) { width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 16px; gap: 16px; }
+  body .status-definition-dialog .status-definition-grid, body .status-definition-dialog .status-capability-grid { grid-template-columns: minmax(0, 1fr); gap: 13px; }
+  body .multiplayer-dialog .multiplayer-grid-2 { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  body .multiplayer-dialog .multiplayer-user-card { padding: 12px; }
+  body .multiplayer-dialog .multiplayer-ownership { grid-template-columns: minmax(0, 1fr) 116px; gap: 0 8px; }
+  body .multiplayer-dialog .multiplayer-actions button { flex: 1 1 auto; }
+  body .actor-ownership-dialog .actor-ownership-row { grid-template-columns: minmax(0, 1fr); }
+  body .journal-dialog { padding: 0; height: calc(100dvh - 16px); }
+  body .journal-dialog .journal-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(110px, 25%) minmax(0, 1fr); }
+  body .journal-dialog .journal-toolbar { padding: 10px 14px; }
+  body .journal-dialog .journal-index { padding: 12px; border-right: 0; border-bottom: 1px solid var(--ui-border); }
+  body .journal-dialog .journal-list { margin-top: 8px; }
+  body .journal-dialog .journal-main { padding: 18px; }
+  body .journal-dialog .journal-head h2 { font-size: 20px; }
+  body .journal-dialog .journal-article { font-size: 13px; }
+  body .rpgmap-combat-tracker { left: 8px; top: 8px; width: 268px; max-width: calc(100% - 16px); max-height: calc(100% - 16px); }
+}

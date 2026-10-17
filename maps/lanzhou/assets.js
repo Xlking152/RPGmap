@@ -3,10 +3,11 @@ import barracks02Url from './assets/barracks-02.webp';
 import chenghuangTempleUrl from './assets/chenghuang-temple.webp';
 import cityGatehouseUrl from './assets/city-gatehouse.webp';
 import cityWallTowerUrl from './assets/city-wall-tower.webp';
+import courtyardGroundUrl from './assets/courtyard-ground-v3.webp';
 import granary01Url from './assets/granary-01.webp';
 import granary02Url from './assets/granary-02.webp';
 import jinchengGatehouseUrl from './assets/jincheng-gatehouse.webp';
-import loessTerrainUrl from './assets/loess-terrain.webp';
+import loessTerrainUrl from './assets/loess-terrain-v2.webp';
 import marketOfficeHallUrl from './assets/market-office-hall.webp';
 import marketShop01Url from './assets/market-shop-01.webp';
 import marketShop02Url from './assets/market-shop-02.webp';
@@ -20,6 +21,8 @@ import residenceHouse03Url from './assets/residence-house-03.webp';
 import rubbleAtlasUrl from './assets/rubble-atlas.webp';
 import stable01Url from './assets/stable-01.webp';
 import stable02Url from './assets/stable-02.webp';
+import streetPavingUrl from './assets/street-stone-v3.webp';
+import treeCanopyUrl from './assets/tree-elm-canopy-v2.webp';
 import workshop01Url from './assets/workshop-01.webp';
 import workshop02Url from './assets/workshop-02.webp';
 import yamenGateUrl from './assets/yamen-gate.webp';
@@ -33,10 +36,13 @@ export function createLanzhouGeneratedArtAssets() {
     chenghuangTempleUrl,
     cityGatehouseUrl,
     cityWallTowerUrl,
+    courtyardGroundUrl,
     jinchengGatehouseUrl,
     loessTerrainUrl,
     marketOfficeHallUrl,
     marketStorehouseUrl,
+    streetPavingUrl,
+    treeCanopyUrl,
     yamenHallUrl,
     yellowRiverPontoonUrl,
     yellowRiverUrl,

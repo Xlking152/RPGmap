@@ -1,6 +1,7 @@
 import { deriveActorDocument, describeActorSheet } from '../actor/index.js';
 import { resolveActorEffects } from '../status/model.js';
-import { describeHealth, healthModeOptions } from './model.js';
+import { describeHealth, healthModeOptions, healthOperationPresentation } from './model.js';
+import { renderUiIcon } from '../ui/icons.js';
 
 const STYLE_ID = 'rpgmap-health-system-style';
 
@@ -123,6 +124,7 @@ function healthInput(field, actorId, tokenId, disabled) {
 }
 
 export function renderActorHealthPanel(api, actor, { actorId = actor.id, tokenId = null, sheet = null } = {}) {
+  if (actor?.audienceRestricted === true) return '';
   const health = resolveActorHealth(actor, api);
   if (!health) return '';
   const view = describeHealth(health, { ruleset: api.ruleset });
@@ -142,17 +144,44 @@ export function renderActorHealthPanel(api, actor, { actorId = actor.id, tokenId
     .filter(field => !segmentIds.has(String(field.id)))
     .map(field => `<label class="entity-health-value">${escapeHtml(field.label || field.id)}<b>${escapeHtml(field.value)}</b>${healthInput(field, actorId, tokenId, disabled)}</label>`);
   const values = [...segmentValues, ...extraValues].join('');
+  const valuesHtml = values ? `<div class="entity-health-values">${values}</div>` : '';
+  const play = sheet?.dataset?.sheetInteractionMode === 'play';
+  const adjustments = play && valuesHtml
+    ? `<details class="entity-health-adjustments"><summary>修正生命数值</summary>${valuesHtml}</details>`
+    : valuesHtml;
+  const legend = play && (view.segments || []).length > 1
+    ? `<div class="entity-health-legend">${view.segments.map(segment => `<span>${escapeHtml(segment.label || segment.id)} <strong>${escapeHtml(segment.value)}</strong></span>`).join('')}</div>`
+    : '';
   const bar = (view.segments || []).length
     ? `<div class="entity-health-bar" title="${escapeHtml(view.summary)}">${view.segments.map(segment => `<span style="width:${width(segment.value)}%;background:${escapeHtml(segment.color || '#4b9f69')}" title="${escapeHtml(segment.label || segment.id)}"></span>`).join('')}</div>`
     : '';
+  const actionRows = tokenId && editable ? ['damage', 'healing'].map(operation => {
+    const config = healthOperationPresentation(operation, { ruleset: api.ruleset });
+    const types = Array.isArray(config.types) ? config.types : [];
+    return `<div class="entity-play-health-action" data-sheet-health-row="${operation}"><label><span>${operation === 'damage' ? '伤害' : '恢复'}</span><input type="number" min="1" step="1" value="1" data-sheet-health-amount aria-label="${operation === 'damage' ? '伤害' : '恢复'}数值"></label>${types.length ? `<select data-sheet-health-type aria-label="${operation === 'damage' ? '伤害' : '恢复'}类型">${types.map(type => `<option value="${escapeHtml(type.id)}" ${String(type.id) === String(config.defaultType) ? 'selected' : ''}>${escapeHtml(type.label || type.id)}</option>`).join('')}</select>` : ''}<button type="button" class="small-button" data-sheet-health-action="${operation}" title="${operation === 'damage' ? '施加伤害' : '恢复生命'}" aria-label="${operation === 'damage' ? '施加伤害' : '恢复生命'}">${renderUiIcon(operation === 'damage' ? 'minus' : 'plus')}</button></div>`;
+  }).join('') : '';
   return `<section class="entity-section entity-health-panel" data-health-panel>
-    <div class="entity-health-head"><h3>${escapeHtml(view.title || '生命系统')}${view.compactSummary ? `<span class="entity-health-compact">${escapeHtml(view.compactSummary)}</span>` : ''}</h3><label>${independentTemplate ? '默认生命规则（新实例）' : '模式'} <select data-health-mode="${escapeHtml(actorId)}" data-health-token-id="${escapeHtml(tokenId || '')}"${modeDisabled}>${modeOptionsHtml(health.mode, api.ruleset)}</select></label></div>
+    <div class="entity-health-head"><h3>${escapeHtml(view.title || '生命系统')}${view.compactSummary ? `<span class="entity-health-compact">${escapeHtml(view.compactSummary)}</span>` : ''}</h3><label data-sheet-edit-only>${independentTemplate ? '默认生命规则（新实例）' : '模式'} <select data-health-mode="${escapeHtml(actorId)}" data-health-token-id="${escapeHtml(tokenId || '')}"${modeDisabled}>${modeOptionsHtml(health.mode, api.ruleset)}</select></label></div>
     ${bar}
-    ${values ? `<div class="entity-health-values">${values}</div>` : ''}
+    ${legend}
+    ${actionRows ? `<div class="entity-play-health-actions">${actionRows}</div><div class="entity-play-health-feedback" data-sheet-health-feedback role="status"></div>` : ''}
     ${view.status ? `<div class="entity-health-status ${view.danger ? 'is-danger' : ''}">${escapeHtml(view.status)}</div>` : ''}
-    ${view.help ? `<div class="entity-help">${escapeHtml(view.help)}</div>` : ''}
+    ${adjustments}
+    ${view.help ? `<div class="entity-help" data-sheet-edit-only>${escapeHtml(view.help)}</div>` : ''}
     ${independentTemplate ? '<div class="entity-help">此设置只影响之后创建的独立 Token；现有实例的生命规则和当前生命不会改变。实例当前生命请从 Token 卡修改。</div>' : ''}
   </section>`;
+}
+
+export async function applySheetHealthAction(api, { actorId, tokenId }, operation, { amount, type }) {
+  const token = tokenId && api.tokens?.get?.(tokenId);
+  if (!token || String(token.actorId) !== String(actorId)) throw new Error('生命操作需要有效的棋子实例');
+  const actor = api.tokens?.resolveActor?.(tokenId)?.actor;
+  if (!actor || actor.audienceRestricted === true || !canEditHealth(api, actor, tokenId)) throw new Error('没有该棋子的生命修改权限');
+  const value = Number(amount);
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error('请输入大于 0 的整数');
+  const method = operation === 'damage' ? 'applyDamageToTokenIds' : operation === 'healing' ? 'applyHealingToTokenIds' : null;
+  if (!method || typeof api.health?.[method] !== 'function') throw new Error('当前规则不支持此生命操作');
+  return api.health[method]([String(tokenId)], { amount: value, type: String(type || '') });
 }
 
 function sheetShowsHealth(sheet, actor) {
@@ -169,6 +198,7 @@ export function createHealthSheetExtension() {
       const documentNode = mapElement.ownerDocument || document;
       installStyles(documentNode);
       let enhancing = false;
+      const pendingSubjects = new Set();
 
       function enhanceSheet(sheet) {
         if (enhancing || !sheet) return;
@@ -187,7 +217,8 @@ export function createHealthSheetExtension() {
         }
         const view = describeHealth(health, { ruleset: api.ruleset });
         const variantId = describeActorSheet(actor, actorContext(api, actor))?.currentVariantId || '';
-        const signature = healthSignature(subject.tokenId || actor.id, health, view, variantId);
+        const pending = pendingSubjects.has(subject.tokenId);
+        const signature = `${healthSignature(subject.tokenId || actor.id, health, view, variantId)}|${sheet.dataset.sheetInteractionMode}|${canEditHealth(api, actor, subject.tokenId)}|${pending}`;
         const existing = body.querySelector('[data-health-panel]');
         if (existing?.dataset.healthSignature === signature) return;
         enhancing = true;
@@ -195,11 +226,45 @@ export function createHealthSheetExtension() {
           existing?.remove();
           body.insertAdjacentHTML('afterbegin', renderActorHealthPanel(api, actor, { ...subject, sheet }));
           const panel = body.querySelector('[data-health-panel]');
-          if (panel) panel.dataset.healthSignature = signature;
+          if (panel) {
+            panel.dataset.healthSignature = signature;
+            panel.dataset.healthPending = String(pending);
+            panel.querySelectorAll('[data-sheet-health-action]').forEach(control => { control.disabled = pending; });
+          }
         } finally {
           enhancing = false;
         }
       }
+
+      documentNode.addEventListener('click', async event => {
+        const button = event.target.closest?.('[data-sheet-health-action]');
+        if (!button) return;
+        const sheet = button.closest('.entity-sheet');
+        const subject = subjectFromSheet(api, sheet);
+        if (!subject?.tokenId || pendingSubjects.has(subject.tokenId)) return;
+        const row = button.closest('[data-sheet-health-row]');
+        const panel = button.closest('[data-health-panel]');
+        const feedback = panel.querySelector('[data-sheet-health-feedback]');
+        pendingSubjects.add(subject.tokenId);
+        panel.dataset.healthPending = 'true';
+        panel.querySelectorAll('[data-sheet-health-action]').forEach(control => { control.disabled = true; });
+        feedback.textContent = '正在结算…';
+        try {
+          await applySheetHealthAction(api, subject, button.dataset.sheetHealthAction, {
+            amount: row.querySelector('[data-sheet-health-amount]')?.value,
+            type: row.querySelector('[data-sheet-health-type]')?.value || '',
+          });
+          feedback.textContent = '已确认';
+        } catch (error) {
+          feedback.textContent = `未应用：${error?.message || error}`;
+          api.showToast?.(feedback.textContent, 'error');
+        } finally {
+          pendingSubjects.delete(subject.tokenId);
+          panel.dataset.healthPending = 'false';
+          panel.querySelectorAll('[data-sheet-health-action]').forEach(control => { control.disabled = false; });
+          queueMicrotask(enhanceSheets);
+        }
+      });
 
       function enhanceSheets() {
         for (const sheet of documentNode.querySelectorAll('.entity-sheet')) enhanceSheet(sheet);

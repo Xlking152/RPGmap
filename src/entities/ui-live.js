@@ -14,6 +14,7 @@ import { ActorSheet } from './sheet/actor-sheet.js';
 import { SheetFieldDrafts } from './sheet/field-drafts.js';
 import { initializeSheetFields, readSheetControl, reconcileSheetNode, writeSheetControl } from './sheet/reconcile.js';
 import { normalizeActorPublicProfile } from '../actor/public-profile.js';
+import { renderUiIcon } from '../ui/icons.js';
 import {
   actorUiCapabilities,
   classifyNewImportedActor,
@@ -22,7 +23,9 @@ import {
   entityAvatarHtml,
   escapeEntityHtml,
   installEntityStyles,
+  matchesEntitySearch,
   renderEntitySheetSections,
+  renderEntityPlayOverview,
 } from './sheet-renderer.js';
 import {
   canManageStatusDefinitions,
@@ -70,6 +73,10 @@ export function createEntityUiTool(options = {}) {
       const sheetManager = createActorSheetManager({
         storage: windowNode?.localStorage || null,
         storageKey: `rpgmap.ui.actor-sheets.v1.${worldStorageId(api)}`,
+        initialGeometry: ({ index }) => {
+          const width = Math.min(740, Math.max(560, windowNode.innerWidth * .52));
+          return { left: Math.max(8, windowNode.innerWidth - width - index * 22), top: 56 + index * 8, width, height: Math.max(360, windowNode.innerHeight - 84 - index * 8) };
+        },
       });
 
       let selectedTokenId = null;
@@ -87,6 +94,7 @@ export function createEntityUiTool(options = {}) {
       const pendingSheetRenders = new Map();
       let sheetRenderFrame = null;
       let panelRenderFrame = null;
+      let actorSearch = '';
       const actorCardCache = new Map();
       const rulesetCapabilities = actorUiCapabilities(api.ruleset);
 
@@ -423,7 +431,7 @@ export function createEntityUiTool(options = {}) {
                 : [],
           };
         },
-        render: renderPanel,
+        render: refreshStatusViews,
         setStatus,
       });
 
@@ -463,11 +471,13 @@ export function createEntityUiTool(options = {}) {
         importButton.hidden = !canManageStructure || !rulesetCapabilities.canImportXlsx;
         const html = `
           <div class="entity-panel" data-entity-panel>
+            <div class="entity-directory-heading"><h2>角色库</h2><span>${actors.length} 位角色</span></div>
             <div class="entity-panel-head">
-              ${canManageStructure && rulesetCapabilities.canImportXlsx ? '<button type="button" class="small-button primary" data-entity-action="import">导入角色卡</button>' : ''}${canManageStructure ? '<button type="button" class="small-button" data-entity-action="new">新建空白角色</button>' : ''}
+              ${canManageStructure && rulesetCapabilities.canImportXlsx ? '<button type="button" class="small-button primary" data-entity-action="import">导入角色卡</button>' : ''}${canManageStructure ? '<button type="button" class="small-button" data-entity-action="new">新建角色</button>' : ''}
               ${canManageStructure && legacyMarkerCount ? `<button type="button" class="small-button" data-entity-action="migrate-markers">迁移 ${legacyMarkerCount} 个旧标记</button>` : ''}
             </div>
-            <div class="entity-help">角色资料与地图棋子分别管理；同一角色可以放置多个棋子，独立棋子也可以保留自己的状态。${legacyMarkerCount ? `检测到 ${legacyMarkerCount} 个旧标记；它们会保留，只有 GM 确认迁移后才会删除。` : '双击地图棋子或按列表中的“角色卡”打开属性。选中有多个形态的棋子后按 <b>V</b> 切换形态。'}</div>
+            <label class="entity-directory-search">${renderUiIcon('search')}<span class="entity-visually-hidden">搜索角色</span><input type="search" data-entity-search placeholder="搜索名称或形态" value="${escapeEntityHtml(actorSearch)}" autocomplete="off"></label>
+            ${legacyMarkerCount ? `<div class="entity-help">检测到 ${legacyMarkerCount} 个旧标记，等待 GM 确认迁移。</div>` : ''}
             <div data-entity-list>${actors.length ? actors.map(actor => {
               const count = counts.get(String(actor.id)) || 0;
               const canEditActor = capabilities().canEditActor?.(actor.id);
@@ -480,29 +490,50 @@ export function createEntityUiTool(options = {}) {
               const statusSnapshot = actor.audienceRestricted
                 ? { actorStatuses: [], derivedStatuses: [] }
                 : resolveStatusUiSnapshot(api, { actorId: actor.id });
-              const typeLabel = ({ pc: 'PC', monster: '怪物', npc: 'NPC', summon: '召唤物', other: '其他' })[actor.type] || 'PC';
+              const typeLabel = ({ pc: '玩家角色', monster: '怪物', npc: '非玩家角色', summon: '召唤物', other: '其他' })[actor.type] || '玩家角色';
               const html = `<article class="entity-card" data-actor-id="${escapeEntityHtml(actor.id)}">
                 <div class="entity-card-status"><small>${escapeEntityHtml(typeLabel)} · ${['monster', 'npc', 'summon'].includes(String(actor.type)) ? '独立实例' : '共享角色'}</small></div>
-                <div class="entity-card-top">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-card-copy"><strong>${escapeEntityHtml(actor.name)}</strong><small>${escapeEntityHtml(presentation.variantLabel || '无形态')} · ${count ? `${count} 个 Token` : '未放置'}</small></div></div>
+                <div class="entity-card-top">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-card-copy"><strong>${escapeEntityHtml(actor.name)}</strong><small>${escapeEntityHtml(presentation.variantLabel || '默认形态')} · ${count ? `${count} 个棋子` : '未放置'}</small></div></div>
                 <div class="entity-card-status">${renderStatusStrip([...statusSnapshot.actorStatuses, ...statusSnapshot.derivedStatuses], { limit: 4, emptyText: '无状态' })}</div>
                 <div class="entity-card-actions">
                   <button type="button" class="small-button" data-entity-action="open" data-id="${escapeEntityHtml(actor.id)}">${actor.audienceRestricted ? '公开摘要' : '角色卡'}</button>
-                  ${canPlaceActor ? `<label><input type="checkbox" data-entity-share checked> 共享角色数据</label><button type="button" class="small-button" data-entity-action="place" data-id="${escapeEntityHtml(actor.id)}">放置 Token</button>` : ''}
-                  ${canManageStructure && sheetCapabilities.hasVariants && sheetCapabilities.canImportXlsx ? `<button type="button" class="small-button" data-entity-action="add-form" data-id="${escapeEntityHtml(actor.id)}">导入新形态</button>` : ''}${canManageStructure ? `<button type="button" class="small-button danger" data-entity-action="delete" data-id="${escapeEntityHtml(actor.id)}">删除角色</button>` : ''}
+                  ${canPlaceActor ? `<button type="button" class="small-button" data-entity-action="place" data-id="${escapeEntityHtml(actor.id)}">放置到地图</button>` : ''}
                   ${!canEditActor ? '<small>只读</small>' : ''}
                 </div>
+                ${canPlaceActor || canManageStructure ? `<details class="entity-card-more"><summary>更多操作</summary><div class="entity-card-actions">${canPlaceActor ? '<label><input type="checkbox" data-entity-share checked> 共享角色数据</label>' : ''}${canManageStructure && sheetCapabilities.hasVariants && sheetCapabilities.canImportXlsx ? `<button type="button" class="small-button" data-entity-action="add-form" data-id="${escapeEntityHtml(actor.id)}">导入新形态</button>` : ''}${canManageStructure ? `<button type="button" class="small-button danger" data-entity-action="delete" data-id="${escapeEntityHtml(actor.id)}">删除角色</button>` : ''}</div></details>` : ''}
               </article>`;
               actorCardCache.set(actor.id, { actor, count, accessKey, html });
               return html;
-            }).join('') : '<div class="entity-empty">还没有角色。可直接导入 XLSX 角色卡。</div>'}</div>
+            }).join('') : '<div class="entity-empty">还没有角色</div>'}</div>
+            <div class="entity-empty" data-entity-search-empty hidden>没有匹配的角色</div>
           </div>`;
         const template = documentNode.createElement('template');
         template.innerHTML = html.trim();
         const existing = panel.querySelector(':scope > [data-entity-panel]');
         if (existing) reconcileSheetNode(existing, template.content.firstElementChild);
         else panel.replaceChildren(template.content.firstElementChild);
+        filterActorCards();
         queueMicrotask(() => { renderingPanel = false; });
       }
+
+      function filterActorCards() {
+        const query = actorSearch.trim().toLocaleLowerCase();
+        let visibleCount = 0;
+        for (const card of panel.querySelectorAll('[data-entity-list] > [data-actor-id]')) {
+          const text = card.querySelector('.entity-card-copy')?.textContent || '';
+          card.hidden = !matchesEntitySearch(text, query);
+          if (!card.hidden) visibleCount++;
+        }
+        const empty = panel.querySelector('[data-entity-search-empty]');
+        if (empty) empty.hidden = !query || visibleCount > 0;
+      }
+
+      function handleDirectorySearch(event) {
+        if (!event.target.matches?.('[data-entity-search]')) return;
+        actorSearch = event.target.value;
+        filterActorCards();
+      }
+      panel.addEventListener('input', handleDirectorySearch);
 
       const panelObserver = panel ? new MutationObserver(() => {
         if (!renderingPanel && !panel.querySelector('[data-entity-panel]')) queueMicrotask(renderPanel);
@@ -544,6 +575,14 @@ export function createEntityUiTool(options = {}) {
         if (tab === 'token') return tokenController.renderActorTokenSection(actor);
         const description = describeActorSheet(actor) || {};
         const tabDescription = (description.tabs || []).find(item => id(item.id) === id(tab));
+        if (tab === 'overview' && actorSheet.context.mode === 'play' && tabDescription) {
+          const snapshot = resolveStatusUiSnapshot(api, { actorId: actor.id, ...(token ? { tokenId: token.id } : {}) });
+          return renderEntityPlayOverview({
+            sections: tabDescription.sections,
+            checks: (description.tabs || []).find(item => item.id === 'checks')?.sections || [],
+            statuses: snapshot.statuses,
+          });
+        }
         return tabDescription
           ? renderEntitySheetSections(tabDescription.sections)
           : '<div class="entity-empty">规则包没有提供这个角色卡页签。</div>';
@@ -632,7 +671,7 @@ export function createEntityUiTool(options = {}) {
         if (actor.audienceRestricted === true) {
           const typeLabel = ({ pc: 'PC', monster: '怪物', npc: 'NPC', summon: '召唤物', other: '其他' })[actor.type] || '其他';
           const html = `<div class="entity-sheet-backdrop entity-sheet-window" ${windowAttrs}><div class="entity-sheet entity-sheet-v3 entity-limited-sheet" ${windowAttrs} data-actor-id="${escapeEntityHtml(actor.id)}" data-token-id="${escapeEntityHtml(token?.id || '')}" data-sheet-mode="limited" data-sheet-interaction-mode="limited" role="dialog" aria-modal="false">
-            ${renderLayoutPart('header', { Actor: ['name', 'type', 'img', 'publicProfile', 'audienceRestricted'], Token: ['name', 'img', 'publicStatuses'] }, () => `<header class="entity-sheet-header">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><strong>${escapeEntityHtml(actor.name)}</strong><div class="entity-formbar"><span>${escapeEntityHtml(typeLabel)}</span><strong>公开摘要</strong></div>${actorSheet.renderBadges()}</div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>`)}
+            ${renderLayoutPart('header', { Actor: ['name', 'type', 'img', 'publicProfile', 'audienceRestricted'], Token: ['name', 'img', 'publicStatuses'] }, () => `<header class="entity-sheet-header">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><strong>${escapeEntityHtml(actor.name)}</strong><div class="entity-formbar"><span>${escapeEntityHtml(typeLabel)}</span><strong>公开摘要</strong></div>${actorSheet.renderBadges()}</div><button type="button" class="small-button entity-sheet-close" title="关闭角色卡" aria-label="关闭角色卡" data-sheet-action="close">${renderUiIcon('x')}</button></header>`)}
             ${renderLayoutPart('body', { Actor: ['publicProfile', 'name', 'img', 'audienceRestricted'], Token: ['name', 'img', 'publicStatuses'] }, () => `<main class="entity-sheet-body">${actorSheet.renderLimited()}</main>`)}
           </div></div>`;
           return applySheetParts(record, html, actorSheet, affected);
@@ -641,7 +680,7 @@ export function createEntityUiTool(options = {}) {
         const sheetDescription = describeActorSheet(actor) || { variants: [], tabs: [] };
         const sheetKind = String(sheetDescription.kind || ({ pc: 'character', monster: 'monster', npc: 'npc', summon: 'monster' })[actor.type] || 'generic');
         const sheetCapabilities = actorUiCapabilities(api.ruleset, sheetDescription);
-        const tabs = [...(sheetDescription.tabs || []).map(item => [item.id, item.label]), ['status', '状态'], ['token', 'Token']];
+        const tabs = [...(sheetDescription.tabs || []).map(item => [item.id, item.label]), ['status', '状态'], ['token', '棋子']];
         if (!token && api.permissions?.can?.('actor.editPublicProfile', { actorId: actor.id, actor })) tabs.push(['public-profile', '公开资料']);
         let tab = record.tab;
         if (!tabs.some(([tabId]) => id(tabId) === id(tab))) {
@@ -660,7 +699,7 @@ export function createEntityUiTool(options = {}) {
           ...(statusToken ? { tokenId: statusToken.id } : {}),
         });
         const classificationControls = !instanceMode && actorSheet.context.editable && capabilities().canManageStructure
-          ? `<div class="entity-formbar" data-sheet-edit-only><label>类型<select data-actor-type><option value="pc" ${actor.type === 'pc' ? 'selected' : ''}>PC</option><option value="monster" ${actor.type === 'monster' ? 'selected' : ''}>怪物</option><option value="npc" ${actor.type === 'npc' ? 'selected' : ''}>NPC</option><option value="summon" ${actor.type === 'summon' ? 'selected' : ''}>召唤物</option><option value="other" ${actor.type === 'other' ? 'selected' : ''}>其他</option></select></label><label>队伍<input data-actor-party maxlength="80" value="${escapeEntityHtml(actor.partyId || '')}"></label></div>`
+          ? `<div class="entity-formbar entity-classification" data-sheet-edit-only><label>类型<select data-actor-type><option value="pc" ${actor.type === 'pc' ? 'selected' : ''}>玩家角色</option><option value="monster" ${actor.type === 'monster' ? 'selected' : ''}>怪物</option><option value="npc" ${actor.type === 'npc' ? 'selected' : ''}>非玩家角色</option><option value="summon" ${actor.type === 'summon' ? 'selected' : ''}>召唤物</option><option value="other" ${actor.type === 'other' ? 'selected' : ''}>其他</option></select></label><label>所属队伍<input data-actor-party maxlength="80" value="${escapeEntityHtml(actor.partyId || '')}"></label></div>`
           : '';
         const deleteTemplateDanger = !instanceMode
           && actorSheet.context.editable
@@ -669,8 +708,8 @@ export function createEntityUiTool(options = {}) {
           ? `<section class="entity-section entity-danger-zone" data-sheet-edit-only><h3>危险操作</h3><div class="entity-help">删除模板会同时删除所有 Scene 中的关联 Token，并清理战斗引用。</div><button type="button" class="small-button danger" data-sheet-action="delete-template">删除模板</button></section>`
           : '';
         const html = `<div class="entity-sheet-backdrop entity-sheet-window" ${windowAttrs}><div class="entity-sheet entity-sheet-v3 ${canEdit ? '' : 'entity-sheet-readonly'} ${independentTemplate ? 'entity-template-runtime-readonly' : ''}" ${windowAttrs} data-actor-id="${escapeEntityHtml(actor.id)}" data-token-id="${escapeEntityHtml(token?.id || '')}" data-sheet-kind="${escapeEntityHtml(sheetKind)}" data-sheet-mode="${instanceMode ? 'instance' : 'template'}" data-sheet-interaction-mode="${actorSheet.context.mode}" role="dialog" aria-modal="false">
-          ${renderLayoutPart('header', { Actor: ['name', 'type', 'img', 'prototypeToken', 'system', 'effects', 'publicProfile', 'audienceRestricted'], Token: ['actorLink', 'actorDelta', 'effects', 'name', 'img'], StatusDefinition: ['*'] }, () => `<header class="entity-sheet-header">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><input type="text" maxlength="80" value="${escapeEntityHtml(actor.name)}" data-actor-name ${actorSheet.context.editable ? '' : 'disabled'}><div class="entity-formbar"><strong>${instanceMode ? 'Token 实例卡' : 'Actor 模板卡'}</strong>${sheetCapabilities.hasVariants ? `<span>当前形态</span><select data-form-select>${(sheetDescription.variants || []).map(item => `<option value="${escapeEntityHtml(item.id)}" ${id(item.id) === id(sheetDescription.currentVariantId) ? 'selected' : ''}>${escapeEntityHtml(item.label)}</option>`).join('')}</select>${sheetCapabilities.canCycleVariants ? '<button type="button" class="small-button primary" data-sheet-action="cycle-form">V · 切换</button>' : ''}${!instanceMode && sheetCapabilities.canImportXlsx && actorSheet.context.editable ? '<button type="button" class="small-button" data-sheet-edit-only data-sheet-action="add-form">+ 形态</button>' : ''}` : ''}${!instanceMode && actorSheet.context.editable ? '<button type="button" class="small-button" data-sheet-edit-only data-sheet-action="avatar">更换头像</button>' : ''}</div>${actorSheet.renderBadges(sheetDescription)}<div class="status-title-band">${renderStatusStrip(titleSnapshot.statuses, { limit: 8, emptyText: '无机械状态' })}</div></div><button type="button" class="small-button" data-sheet-action="close">关闭</button></header>`)}
-          ${renderLayoutPart('classification', { Actor: ['type', 'partyId', 'audienceRestricted'], Token: ['actorLink'] }, () => classificationControls)}${renderLayoutPart('tabs', { Actor: ['type', 'system', 'audienceRestricted'], Token: ['actorLink'] }, () => `<nav class="entity-sheet-tabs">${tabs.map(([tabId, label]) => `<button type="button" class="entity-sheet-tab ${id(tab) === id(tabId) ? 'active' : ''}" data-sheet-tab="${escapeEntityHtml(tabId)}">${escapeEntityHtml(label)}</button>`).join('')}</nav>`)}
+          ${renderLayoutPart('header', { Actor: ['name', 'type', 'img', 'prototypeToken', 'system', 'effects', 'publicProfile', 'audienceRestricted'], Token: ['actorLink', 'actorDelta', 'effects', 'name', 'img'], StatusDefinition: ['*'] }, () => `<header class="entity-sheet-header">${entityAvatarHtml(actor, api.ruleset)}<div class="entity-sheet-title"><input type="text" aria-label="角色名称" maxlength="80" value="${escapeEntityHtml(actor.name)}" data-actor-name ${actorSheet.context.editable ? '' : 'disabled'}>${actorSheet.renderBadges(sheetDescription)}<div class="entity-formbar">${sheetCapabilities.hasVariants ? `<label class="entity-form-selector"><span>当前形态</span><select data-form-select>${(sheetDescription.variants || []).map(item => `<option value="${escapeEntityHtml(item.id)}" ${id(item.id) === id(sheetDescription.currentVariantId) ? 'selected' : ''}>${escapeEntityHtml(item.label)}</option>`).join('')}</select></label>${sheetCapabilities.canCycleVariants ? '<button type="button" class="small-button" title="切换到下一个形态" data-sheet-action="cycle-form">切换</button>' : ''}${!instanceMode && sheetCapabilities.canImportXlsx && actorSheet.context.editable ? `<button type="button" class="small-button" data-sheet-edit-only data-sheet-action="add-form">${renderUiIcon('plus')}形态</button>` : ''}` : ''}${!instanceMode && actorSheet.context.editable ? '<button type="button" class="small-button" data-sheet-edit-only data-sheet-action="avatar">更换头像</button>' : ''}</div><div class="status-title-band">${renderStatusStrip(titleSnapshot.statuses, { limit: 8, emptyText: '' })}</div></div><button type="button" class="small-button entity-sheet-close" title="关闭角色卡" aria-label="关闭角色卡" data-sheet-action="close">${renderUiIcon('x')}</button></header>`)}
+          ${renderLayoutPart('classification', { Actor: ['type', 'partyId', 'audienceRestricted'], Token: ['actorLink'] }, () => classificationControls)}${renderLayoutPart('tabs', { Actor: ['type', 'system', 'audienceRestricted'], Token: ['actorLink'] }, () => `<nav class="entity-sheet-tabs" aria-label="角色卡页面">${tabs.map(([tabId, label]) => `<button type="button" class="entity-sheet-tab ${id(tab) === id(tabId) ? 'active' : ''}" aria-current="${id(tab) === id(tabId) ? 'page' : 'false'}" data-sheet-tab="${escapeEntityHtml(tabId)}">${escapeEntityHtml(label)}</button>`).join('')}</nav>`)}
           ${renderLayoutPart('body', { Actor: tab === 'public-profile' ? ['publicProfile', 'audienceRestricted'] : ['system', 'effects', 'name', 'img', 'type', 'prototypeToken', 'audienceRestricted'], Token: tab === 'token' ? ['*'] : tab === 'public-profile' ? [] : ['actorDelta', 'effects', 'actorLink'], StatusDefinition: ['*'] }, () => `<main class="entity-sheet-body">${actorSheetBody(context, tab, actorSheet)}${deleteTemplateDanger}</main>`)}
         </div></div>`;
         return applySheetParts(record, html, actorSheet, affected);
@@ -679,6 +718,15 @@ export function createEntityUiTool(options = {}) {
       function renderAllSheets() {
         for (const record of [...sheetManager.list()]) renderSheetRecord(record);
         refreshZOrder();
+      }
+
+      function refreshStatusViews() {
+        renderPanel();
+        // Local pending state settles after the authoritative document event.
+        // Reconcile open status pages again without replacing their draft controls.
+        for (const record of sheetManager.list()) {
+          if (record.tab === 'status') renderSheetRecord(record);
+        }
       }
 
       function renderRelatedSheets({ actorIds = [], tokenIds = [], changes = null } = {}) {
@@ -912,9 +960,9 @@ export function createEntityUiTool(options = {}) {
           return;
         }
 
-        const tab = event.target.closest('[data-sheet-tab]');
+        const tab = event.target.closest('[data-sheet-tab], [data-sheet-overview-target]');
         if (tab) {
-          sheetManager.update(record.key, { tab: tab.dataset.sheetTab });
+          sheetManager.update(record.key, { tab: tab.dataset.sheetTab || tab.dataset.sheetOverviewTarget });
           renderSheetRecord(sheetManager.get(record.key));
           return;
         }
@@ -1137,7 +1185,7 @@ export function createEntityUiTool(options = {}) {
       });
       api.on('status:change', event => {
         if (String(event.detail?.source || '').startsWith('document.')) return;
-        renderPanel();
+        refreshStatusViews();
         renderRelatedSheets({
           actorIds: [...(event.detail?.actorIds || []), event.detail?.actorId].filter(Boolean),
           tokenIds: [...(event.detail?.tokenIds || []), event.detail?.tokenId].filter(Boolean),
@@ -1175,6 +1223,7 @@ export function createEntityUiTool(options = {}) {
         documentNode.removeEventListener('input', trackFieldInput);
         mapElement.removeEventListener('click', tokenController.handleMapClick, true);
         panel.removeEventListener('click', handlePanelClick);
+        panel.removeEventListener('input', handleDirectorySearch);
         panelObserver?.disconnect();
       });
 

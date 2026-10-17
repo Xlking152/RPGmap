@@ -309,7 +309,7 @@ test('setup distinguishes built-in rules and handles reference-protected externa
     location: { href: 'http://127.0.0.1:30000/setup', origin: 'http://127.0.0.1:30000', port: '30000' },
     URL, globalThis: {}, module: { exports: {} }, confirm: () => true,
   };
-  vm.runInNewContext(`${source.replace(/^import .*;\r?\n/m, '').replace('export async function startDesktopSetup', 'async function startDesktopSetup')}\nmodule.exports = { startDesktopSetup };`, context);
+  vm.runInNewContext(`${source.replace(/^import .*;\r?\n/gm, '').replace('export async function startDesktopSetup', 'async function startDesktopSetup')}\nmodule.exports = { startDesktopSetup };`, context);
   await context.module.exports.startDesktopSetup({ container, fetchImpl: async (url, options) => {
     if (options.method === 'DELETE') {
       deletions.push(url);
@@ -360,7 +360,7 @@ test('browser package import requires an inspected preview and cancellation neve
     location: { href: 'http://127.0.0.1:30000/setup', origin: 'http://127.0.0.1:30000', port: '30000' },
     URL, globalThis: {}, module: { exports: {} }, confirm: message => { dialogs.push(message); return accepted; },
   };
-  vm.runInNewContext(`${source.replace(/^import .*;\r?\n/m, '').replace('export async function startDesktopSetup', 'async function startDesktopSetup')}\nmodule.exports = { startDesktopSetup };`, context);
+  vm.runInNewContext(`${source.replace(/^import .*;\r?\n/gm, '').replace('export async function startDesktopSetup', 'async function startDesktopSetup')}\nmodule.exports = { startDesktopSetup };`, context);
   await context.module.exports.startDesktopSetup({ container, fetchImpl: async (url, options) => {
     if (options.method === 'GET') return { ok: true, json: async () => ({ maps: [], rulesets: [], worlds: [] }) };
     calls.push(url);

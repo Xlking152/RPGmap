@@ -4,6 +4,11 @@
 
 ## 文件
 
+- `tree-elm-canopy-v2.webp`：`512 × 512`，真实 Alpha 俯视榆树树冠，109,974 字节。用于原有树木，替代圆形色块；[完整生成提示词与参数](tree-elm-canopy-v2.md)。
+- `loess-terrain-v2.webp`：`768 × 768`，中性土石地面微纹理，190,740 字节；[完整生成提示词与参数](loess-terrain-v2.md)。通过原地表入口接入，旧黄土地表文件保留但不再打入当前美术包。
+- `street-stone-v3.webp`：`512 × 512`，磨损灰石铺面，82,742 字节；用于原有道路与城墙顶面，不改变任何道路宽度或城墙边界。
+- `courtyard-ground-v3.webp`：`768 × 512`，土石与平面苔色交错地表，112,880 字节；只画在原有八块地块内，不添加草丛或其他障碍。[第二轮完整提示词与参数](ground-surfaces-v3.md)。
+
 - `loess-terrain.webp`：`768 × 768`，低对比黄土与夯土地表纹理，约 65 KB。
 - `yellow-river.webp`：`768 × 768`，低对比矿物色黄河流纹，约 39 KB。
 - `rubble-atlas.webp`：`1536 × 1024`，3 × 2 透明瓦砾图集，约 260 KB。
@@ -141,12 +146,12 @@ Never include people, animals, flags, banners, readable signs, text, symbols, ve
 
 ## 使用边界
 
-- 纹理只作为 SVG 表面填充，不参与坐标、命中或破坏判定；生产 SVG 会统一降低地标位图的饱和与对比、提高明度，并保留低透明度矢量底衬。
+- 纹理只作为 SVG 表面填充，不参与坐标、命中或破坏判定；当前样板保留建筑原材质细节，不再用全局提亮或褪色滤镜抹平对比，仍保留低透明度矢量底衬。
 - 瓦砾贴花只用于整毁建筑，按 Feature ID 稳定选择六种变体，并裁切在建筑足迹内。
 - 州衙大殿素材分别放在正堂与后堂 Feature 内；神祠素材放在神祠院落 Feature 内，不能提升到基底层或跨 Feature 共用一个不可破坏图组。
 - 四座州城门分别在自身 Feature 内渲染同一门楼素材；金城关关楼素材只位于 `jincheng-gatehouse` Feature 内。素材随原足迹旋转，不能覆盖独立的城墙或关墙图组。
 - 四座角楼分别位于 `city-wall-tower-*` Feature 内，并保持墙体类别的局部破坏规则；浮桥素材只位于 `yellow-river-pontoon-bridge` Feature 内。
 - 市易务正厅与货栈各自使用独立素材和 Feature，不合并为一个不可单独破坏的院落图组。
-- 50 栋普通建筑各自在自己的 Feature 图组内插入一个 `generated-building-art` 节点；按 `category + renderType` 选择九组素材，再按 Feature ID 的 FNV-1a 哈希稳定选择变体。生成图层透明度为 0.62，普通建筑 SVG 屋体底衬为 0.24，并使用 `xMidYMid meet` 保持素材比例；台基和阴影继续存在但降低视觉权重。
+- 50 栋普通建筑各自在自己的 Feature 图组内插入一个 `generated-building-art` 节点；按 `category + renderType` 选择九组素材，再按 Feature ID 的 FNV-1a 哈希稳定选择变体。当前候选生成图层透明度为 0.94，普通建筑 SVG 屋体底衬为 0.24，并使用 `xMidYMid meet` 保持素材比例；台基和阴影继续存在但降低视觉权重。已冻结版本继续使用各自快照参数。
 - 默认导出的 `lanzhouMapPackage` 仍不包含栅格资源；生产入口通过 `createLanzhouMapPackage()` 显式注入资产。
 - 不直接修改构建产物或把生成图片放到在线地址。

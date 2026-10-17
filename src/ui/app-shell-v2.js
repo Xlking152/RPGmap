@@ -1,6 +1,10 @@
 import { installStatusUiStyles, renderStatusStrip, resolveStatusUiSnapshot } from '../status/ui.js';
 import { describeActor } from '../actor/index.js';
 import { restoreCurrentSceneEnvironment, clearCurrentScene } from './scene-reset.js';
+import { renderUiIcon } from './icons.js';
+import { installWorkbenchChrome } from './workbench.js';
+import { describeObjectInspector } from './object-inspector.js';
+import { installVisionPanel } from './vision-panel.js';
 
 const STYLE_ID = 'rpgmap-app-shell-v2-style';
 
@@ -15,31 +19,31 @@ function installStyles(documentNode) {
   const style = documentNode.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
-    .runtime-v2-shell { grid-template-rows:auto 1fr auto; min-height:100vh; }
-    .runtime-v2-shell .topbar { gap:14px; padding:9px 14px; align-items:center; }
+    .runtime-v2-shell .topbar { align-items:center; }
     .runtime-v2-shell .brand-copy p { display:none; }
-    .runtime-v2-shell .brand-copy h1 { font-size:15px; white-space:nowrap; }
-    .runtime-v2-shell .toolbar, .runtime-v2-shell .toolbar-right { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+    .runtime-v2-shell .brand-copy h1 { white-space:nowrap; }
+    .runtime-v2-shell .toolbar { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+    .runtime-v2-shell .toolbar-right { display:flex; align-items:center; }
     .runtime-v2-shell .toolbar-right { margin-left:auto; }
-    .runtime-v2-shell .ui-primary-tool { min-height:34px; display:inline-flex; align-items:center; justify-content:center; gap:5px; border:1px solid rgba(79,96,98,.22); border-radius:8px; padding:6px 10px; color:#334347; background:#f7f9f6; font:inherit; font-weight:750; cursor:pointer; }
+    .runtime-v2-shell .ui-primary-tool { min-height:34px; display:inline-flex; align-items:center; justify-content:center; gap:5px; border:1px solid rgba(79,96,98,.22); padding:6px 10px; color:#334347; background:#f7f9f6; font:inherit; cursor:pointer; }
     .runtime-v2-shell .ui-primary-tool:hover { background:#eef4f0; }
     .runtime-v2-shell .ui-primary-tool.active { color:#fff; background:#176d76; border-color:#176d76; }
-    .runtime-v2-shell .sidebar .tabbar { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:5px; padding:8px; }
+    .runtime-v2-shell .sidebar .tabbar { grid-template-columns:repeat(4,minmax(0,1fr)); }
     .runtime-v2-shell .ui-sidebar-tab { border:0; border-radius:7px; padding:8px 10px; background:#edf1ee; color:#556265; font-weight:800; cursor:pointer; }
     .runtime-v2-shell .ui-sidebar-tab.active { color:#fff; background:#176d76; }
-    .runtime-v2-shell .ui-current-card { border:1px solid rgba(70,90,90,.18); border-radius:10px; padding:11px; background:#fff; display:grid; gap:9px; }
-    .runtime-v2-shell .ui-current-head { display:flex; gap:10px; align-items:center; }
-    .runtime-v2-shell .ui-token-avatar { width:48px; height:48px; border-radius:50%; display:grid; place-items:center; overflow:hidden; background:#176d76; color:#fff; font-weight:850; flex:0 0 auto; }
+    .runtime-v2-shell .ui-current-card { display:grid; }
+    .runtime-v2-shell .ui-current-head { display:flex; align-items:center; }
+    .runtime-v2-shell .ui-token-avatar { border-radius:50%; display:grid; place-items:center; overflow:hidden; background:#176d76; color:#fff; font-weight:850; flex:0 0 auto; }
     .runtime-v2-shell .ui-token-avatar img { width:100%; height:100%; object-fit:cover; }
-    .runtime-v2-shell .ui-token-meta { display:grid; grid-template-columns:1fr 1fr; gap:7px; font-size:12px; color:#536164; }
-    .runtime-v2-shell .ui-token-meta div { padding:7px 8px; border-radius:7px; background:#f1f4f2; }
-    .runtime-v2-shell .ui-current-empty { padding:24px 10px; text-align:center; color:#718083; line-height:1.6; }
-    .runtime-v2-shell .ui-actions { display:flex; flex-wrap:wrap; gap:6px; }
+    .runtime-v2-shell .ui-token-meta { color:#536164; }
+    .runtime-v2-shell .ui-token-meta div { border-radius:7px; }
+    .runtime-v2-shell .ui-current-empty { text-align:center; line-height:1.6; }
+    .runtime-v2-shell .ui-actions { flex-wrap:wrap; }
     .runtime-v2-shell .ui-file-input { display:none; }
     .entity-sheet-backdrop{background:transparent!important;pointer-events:none}
     .entity-sheet{position:fixed;left:24px;top:72px;resize:both;pointer-events:auto}
     .entity-sheet-header{cursor:move}
-    @media(max-width:760px){.entity-sheet{left:8px!important;top:8px!important;width:calc(100vw - 16px)!important;height:calc(100vh - 16px)!important;max-height:none;resize:none}}
+    @media(max-width:760px){.entity-sheet{left:8px!important;top:8px!important;width:calc(100vw - 16px)!important;height:calc(100vh - 16px)!important;resize:none}}
   `;
   documentNode.head.append(style);
 }
@@ -48,7 +52,16 @@ function button(documentNode, label, action, className = 'ui-primary-tool') {
   const node = documentNode.createElement('button');
   node.type = 'button';
   node.className = className;
-  node.textContent = label;
+  const icon = {
+    '选择': 'mouse-pointer-2', '范围': 'circle', '检查': 'search', '视野': 'eye',
+    '我的角色卡': 'user', '导出': 'download', '导入': 'upload', '回到底图': 'map',
+    '恢复地图环境': 'rotate-ccw', '清空当前场景': 'trash-2',
+    '移动': 'move', '高度': 'layers', '角色卡': 'user', '打开角色卡': 'user', '公开摘要': 'info',
+    '状态': 'sparkles', '棋子配置': 'sliders-horizontal', '设为视野来源': 'eye',
+  }[label];
+  node.innerHTML = `${icon ? renderUiIcon(icon) : ''}<span class="ui-command-label">${escapeHtml(label)}</span>`;
+  node.title = label;
+  node.setAttribute('aria-label', label);
   if (action) node.addEventListener('click', action);
   return node;
 }
@@ -106,7 +119,7 @@ export function createAppShellUiV2() {
       function openMyActor() {
         const actorId = api.multiplayer?.getStatus?.()?.session?.defaultActorId;
         if (!actorId) {
-          api.showToast?.('GM 还没有为当前 Player 分配 OWNER 角色', 'info');
+          api.showToast?.('主持人尚未为你分配角色', 'info');
           return;
         }
         void api.entities?.openActor?.(actorId);
@@ -123,9 +136,9 @@ export function createAppShellUiV2() {
         tabbar.replaceChildren();
         library = button(documentNode, '角色库', () => activatePanel('actors'), 'ui-sidebar-tab active');
         library.dataset.uiPanel = 'actors';
-        const current = button(documentNode, '当前', () => activatePanel('current'), 'ui-sidebar-tab');
+        const current = button(documentNode, '对象', () => activatePanel('current'), 'ui-sidebar-tab');
         current.dataset.uiPanel = 'current';
-        tabbar.append(library, current);
+        tabbar.append(current, library);
       }
 
       function setMainTool(tool) {
@@ -143,7 +156,11 @@ export function createAppShellUiV2() {
         range.dataset.mainTool = 'aoe';
         myActorButton = button(documentNode, '我的角色卡', openMyActor);
         myActorButton.hidden = true;
-        toolbar.append(select, range, myActorButton);
+        const inspect = button(documentNode, '检查', () => { setMainTool('inspect'); activatePanel('inspect'); });
+        inspect.dataset.mainTool = 'inspect';
+        const vision = button(documentNode, '视野', () => activatePanel('vision'));
+        vision.dataset.visionTool = 'true';
+        toolbar.append(select, range, inspect, vision, myActorButton);
       }
 
       let exportButton = null;
@@ -168,7 +185,15 @@ export function createAppShellUiV2() {
         }
         resetButton = button(documentNode, '恢复地图环境', () => resetAction(restoreCurrentSceneEnvironment, '恢复地图环境'));
         clearButton = button(documentNode, '清空当前场景', () => resetAction(clearCurrentScene, '清空当前场景'));
-        toolbarRight.append(exportButton, importButton, button(documentNode, '回到底图', () => api.resetView?.()), resetButton, clearButton);
+        const menu = documentNode.createElement('details');
+        menu.className = 'ui-command-menu';
+        menu.dataset.worldCommands = 'true';
+        menu.innerHTML = `<summary title="世界操作" aria-label="世界操作">${renderUiIcon('settings')}</summary><div class="ui-command-popover"></div>`;
+        const menuBody = menu.querySelector('.ui-command-popover');
+        resetButton.classList.add('danger'); clearButton.classList.add('danger');
+        menuBody.append(exportButton, importButton, button(documentNode, '回到底图', () => api.resetView?.()), resetButton, clearButton);
+        menuBody.addEventListener('click', event => { if (event.target.closest('button')) menu.open = false; });
+        toolbarRight.append(menu);
       }
 
       importInput.addEventListener('change', async () => {
@@ -191,13 +216,12 @@ export function createAppShellUiV2() {
         if (!token) {
           const empty = documentNode.createElement('div');
           empty.className = 'ui-current-empty';
-          empty.textContent = player
-            ? '选择 Token 查看信息；顶部可打开自己的角色卡。'
-            : '选择 Token 后，这里会显示实例信息与快捷操作。';
+          empty.innerHTML = `${renderUiIcon('mouse-pointer-2', { size: 30 })}<span>未选择棋子</span>`;
           currentPanel.replaceChildren(empty);
           return;
         }
         const view = actorView(api, token);
+        const overview = describeObjectInspector(api, token, view.actor);
         const card = documentNode.createElement('div');
         card.className = 'ui-current-card';
         card.dataset.tokenId = token.id;
@@ -211,41 +235,89 @@ export function createAppShellUiV2() {
         const title = documentNode.createElement('div');
         const strong = documentNode.createElement('strong'); strong.textContent = view.name;
         const small = documentNode.createElement('small');
-        small.textContent = view.synthetic ? '独立角色实例' : '共享角色资料';
+        small.textContent = `${view.synthetic ? '独立实例' : '共享角色'} · ${api.world?.getActiveScene?.()?.name || '当前场景'}`;
         title.append(strong, documentNode.createElement('br'), small);
         head.append(avatar, title);
         card.append(head);
 
-        const statusSnapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
-        card.insertAdjacentHTML('beforeend', `<div class="ui-status-summary">${renderStatusStrip(statusSnapshot.statuses, { limit: 6, emptyText: '无机械状态' })}</div>`);
+        if (overview.health) {
+          const section = documentNode.createElement('section');
+          section.className = 'ui-object-health';
+          section.innerHTML = `<div class="ui-object-health-heading"><span>生命</span><strong>${escapeHtml(overview.health.label)}</strong></div>`;
+          const bar = documentNode.createElement('div');
+          bar.className = 'ui-object-health-track';
+          bar.setAttribute('role', 'img');
+          bar.setAttribute('aria-label', `${overview.health.title} ${overview.health.label}`);
+          for (const segment of overview.health.segments) {
+            const part = documentNode.createElement('span');
+            part.style.width = `${segment.percent}%`; part.style.background = segment.color; part.title = segment.label;
+            bar.append(part);
+          }
+          section.append(bar); card.append(section);
+        }
+        if (!overview.restricted) {
+          const statusSnapshot = resolveStatusUiSnapshot(api, { actorId: token.actorId, tokenId: token.id });
+          card.insertAdjacentHTML('beforeend', `<div class="ui-status-summary">${renderStatusStrip(statusSnapshot.statuses, { limit: 6, emptyText: '无状态' })}</div>`);
+        }
 
         const meta = documentNode.createElement('div');
         meta.className = 'ui-token-meta';
-        const metaRows = player
-          ? [locationLabel(token), `高度 ${Number(token.elevationMeters || 0)} m`]
-          : [`棋子 ID ${token.id}`, `角色 ID ${token.actorId}`, locationLabel(token), `高度 ${Number(token.elevationMeters || 0)} m`];
-        for (const text of metaRows) {
-          const item = documentNode.createElement('div'); item.textContent = text; meta.append(item);
+        for (const [label, value] of overview.properties) {
+          const row = documentNode.createElement('div');
+          row.innerHTML = `<span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>`;
+          meta.append(row);
         }
-        card.append(meta);
+        const debug = documentNode.createElement('details');
+        debug.className = 'ui-token-debug';
+        debug.innerHTML = '<summary>对象标识</summary>';
+        if (!player) for (const text of [`棋子 ID ${token.id}`, `角色 ID ${token.actorId}`]) {
+          const item = documentNode.createElement('p'); item.textContent = text; debug.append(item);
+        }
+        if (overview.properties.length) card.append(meta);
+
+        const primary = documentNode.createElement('div');
+        primary.className = 'ui-object-primary';
+        if (view.actor?.id) primary.append(button(documentNode, overview.restricted ? '公开摘要' : '打开角色卡',
+          () => api.entities?.openToken?.(token.id), 'small-button primary'));
+        card.append(primary);
 
         const actions = documentNode.createElement('div');
         actions.className = 'ui-actions';
         const canControl = !player || api.multiplayer?.canControlToken?.(token.id) === true;
         if (canControl && token.placement === 'map') {
-          actions.append(button(documentNode, '移动', () => api.movementUi?.begin?.(token.id), 'small-button primary'));
+          actions.append(button(documentNode, '移动', () => api.movementUi?.begin?.(token.id), 'small-button'));
         } else if (canControl && token.placement === 'feature') {
           actions.append(button(documentNode, '离开 Feature', () => void api.movement?.exitFeature?.(token.id), 'small-button primary'));
         }
         if (canControl) actions.append(button(documentNode, '高度', event => api.elevation?.openTokenElevationEditor?.(token.id, event), 'small-button'));
-        if (view.actor?.id) actions.append(button(documentNode, view.actor.audienceRestricted ? '公开摘要' : '角色卡', () => api.entities?.openToken?.(token.id), 'small-button'));
+        if (canControl && !overview.restricted) {
+          actions.append(button(documentNode, '状态', event => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            void api.statusUi?.openQuickHud?.(token.id, { x: rect.left, y: rect.bottom });
+          }, 'small-button'));
+          if (token.placement === 'map') actions.append(button(documentNode, '设为视野来源', async () => {
+            try { await api.vision?.setSource?.(token.id); activatePanel('vision'); }
+            catch (error) { api.showToast?.(error.message, 'error'); }
+          }, 'small-button'));
+        }
         card.append(actions);
+        const location = documentNode.createElement('section');
+        location.className = 'ui-object-location';
+        const feature = token.placement === 'feature' ? api.mapPackage.features?.find(item => item.id === token.featureId) : null;
+        location.innerHTML = `<h3>当前位置</h3><p>${renderUiIcon('map-pin')}<span>${escapeHtml(feature?.name || locationLabel(token))}</span></p>`;
+        card.append(location);
+        if (!player) card.append(debug);
         const existing = currentPanel.querySelector('.ui-current-card');
         if (!existing || existing.dataset.tokenId !== String(token.id)) currentPanel.replaceChildren(card);
-        else for (const part of [...card.children]) {
-          const current = [...existing.children].find(node => node.className === part.className);
-          if (!current) existing.append(part);
-          else if (current.outerHTML !== part.outerHTML) current.replaceWith(part);
+        else {
+          const classes = new Set([...card.children].map(node => node.className));
+          for (const part of [...existing.children]) if (!classes.has(part.className)) part.remove();
+          for (const [index, part] of [...card.children].entries()) {
+            let current = [...existing.children].find(node => node.className === part.className);
+            if (!current) current = part;
+            else if (current.outerHTML !== part.outerHTML) { current.replaceWith(part); current = part; }
+            if (existing.children[index] !== current) existing.insertBefore(current, existing.children[index] || null);
+          }
         }
       }
 
@@ -279,7 +351,7 @@ export function createAppShellUiV2() {
       }
       const selectionOff = api.selection.subscribe?.(scheduleCurrent);
       if (selectionOff) off.push(selectionOff);
-      for (const eventName of ['token:create', 'token:delete', 'token:move', 'token:property-change', 'elevation:token-change', 'actor:change', 'health:change', 'status:change', 'state:import']) {
+      for (const eventName of ['token:create', 'token:delete', 'token:move', 'token:property-change', 'elevation:token-change', 'actor:change', 'health:change', 'status:change', 'vision:source-change', 'multiplayer:vision', 'state:import']) {
         off.push(api.on?.(eventName, scheduleCurrent));
       }
       off.push(api.on?.('multiplayer:capabilities', applySessionShell));
@@ -296,6 +368,8 @@ export function createAppShellUiV2() {
       api.setActivePanel?.('current');
       shell.querySelectorAll('[data-ui-panel]').forEach(node => node.classList.toggle('active', node.dataset.uiPanel === 'current'));
       applySessionShell();
+      installWorkbenchChrome(api, { shell, documentNode });
+      installVisionPanel(api, { container: api.uiPanels?.get?.('vision') });
       api.emit?.('ui:shell-ready', { tokenFirst: true });
     },
   });

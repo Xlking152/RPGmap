@@ -18,6 +18,7 @@ import { createSceneRenderer } from '../render/scene-renderer.js';
 import { applyDocumentChanges, documentChangeSet } from '../documents/changes.js';
 import { registerRuntimeStateReader } from './state-access.js';
 import { occlusionGeometryCacheStats } from '../spatial/kernel.js';
+import { activateSidebarPanel } from '../ui/sidebar-navigation.js';
 
 const MAX_SAVE_FILE_BYTES = 5 * 1024 * 1024;
 
@@ -38,14 +39,14 @@ function shellMarkup() {
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">R</span>
           <span class="brand-copy">
-            <h1 data-role="app-title"></h1>
-            <p>场景地图 · 角色与战斗</p>
+            <h1>RPGmap</h1>
           </span>
         </div>
-        <nav class="toolbar" aria-label="地图工具"></nav>
+        <div class="workspace-context"><span data-role="app-title"></span></div>
         <div class="toolbar-right"></div>
       </header>
       <main class="workspace">
+        <aside class="tool-rail"><nav class="toolbar" aria-label="地图工具"></nav></aside>
         <section class="map-card">
           <div id="map"></div>
           <div class="map-status" data-role="map-status">浏览模式</div>
@@ -58,9 +59,11 @@ function shellMarkup() {
             <section class="panel" data-panel="inspect" data-canonical-panel-owner="true"></section>
             <section class="panel" data-panel="areas" data-canonical-panel-owner="true"></section>
             <section class="panel" data-panel="markers" data-canonical-panel-owner="true"></section>
+            <section class="panel" data-panel="vision" data-canonical-panel-owner="true"></section>
           </div>
         </aside>
       </main>
+      <footer class="workspace-footer"><span data-ui-selection-label>未选择棋子</span><span data-ui-connection-label>本地模式</span></footer>
       <div class="toast-stack" data-role="toasts"></div>
       <div data-role="modal-root"></div>
     </div>
@@ -230,10 +233,8 @@ export function createRpgMapRuntime({
 
   function setActivePanel(name) {
     const target = String(name || '');
-    if (!elements.panels[target]) return false;
+    if (!activateSidebarPanel(container, target)) return false;
     activePanel = target;
-    for (const panel of Object.values(elements.panels)) panel.classList.toggle('active', panel === elements.panels[target]);
-    container.querySelectorAll('[data-ui-panel]').forEach(node => node.classList.toggle('active', node.dataset.uiPanel === target));
     emit('ui:panel-change', { panel: target });
     return true;
   }

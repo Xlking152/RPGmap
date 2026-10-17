@@ -89,6 +89,51 @@ test('SheetManager persists only local tab, mode, and geometry preferences', () 
   assert.equal(restored.height, 640);
 });
 
+test('unspecified sheet size stays responsive across tabs, mode changes and reopening', () => {
+  const storage = memoryStorage();
+  const storageKey = 'responsive-sheet-prefs';
+  const manager = createActorSheetManager({ storage, storageKey });
+  const first = manager.open({ actorId: 'pc-responsive' }).record;
+  assert.equal(first.width, null);
+  assert.equal(first.height, null);
+  manager.update(first.key, { tab: 'token' });
+  manager.update(first.key, { interactionMode: 'edit' });
+  manager.open({ actorId: 'pc-responsive', tab: 'status' });
+  assert.equal(manager.get(first.key).width, null);
+  assert.equal(manager.get(first.key).height, null);
+  manager.close(first.key);
+  const reopened = manager.open({ actorId: 'pc-responsive' }).record;
+  assert.equal(reopened.width, null);
+  assert.equal(reopened.height, null);
+  assert.equal(reopened.tab, 'status');
+  assert.equal(reopened.interactionMode, 'edit');
+  const reloaded = createActorSheetManager({ storage, storageKey }).open({ actorId: 'pc-responsive' }).record;
+  assert.equal(reloaded.width, null);
+  assert.equal(reloaded.height, null);
+  const stored = JSON.parse(storage.getItem(storageKey)).windows[first.key];
+  assert.equal(stored.width, null);
+  assert.equal(stored.height, null);
+});
+
+test('blank geometry is unspecified but explicit zero coordinates and saved sizes survive', () => {
+  const storage = memoryStorage();
+  storage.setItem('blank-geometry', JSON.stringify({ version: 1, windows: {
+    'actor:blank': { left: null, top: null, width: '', height: '   ' },
+    'actor:explicit': { left: 0, top: 0, width: 640, height: 480 },
+  } }));
+  const manager = createActorSheetManager({ storage, storageKey: 'blank-geometry' });
+  const blank = manager.open({ actorId: 'blank' }).record;
+  assert.equal(blank.left, 24);
+  assert.equal(blank.top, 72);
+  assert.equal(blank.width, null);
+  assert.equal(blank.height, null);
+  const explicit = manager.open({ actorId: 'explicit' }).record;
+  assert.equal(explicit.left, 0);
+  assert.equal(explicit.top, 0);
+  assert.equal(explicit.width, 640);
+  assert.equal(explicit.height, 480);
+});
+
 test('closing the focused window leaves the highest remaining sheet as fallback', () => {
   const manager = createActorSheetManager();
   const actor = manager.open({ actorId: 'a' }).record;

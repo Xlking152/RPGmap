@@ -3,7 +3,11 @@ import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 
 const root = path.resolve(process.argv[2] || '.');
-const dist = path.join(root, 'dist');
+const distOption = process.argv.indexOf('--dist');
+if (distOption >= 0 && (!process.argv[distOption + 1] || process.argv[distOption + 1].startsWith('--'))) {
+  throw new Error('--dist requires a build directory');
+}
+const dist = path.resolve(root, distOption >= 0 ? process.argv[distOption + 1] : 'dist');
 const manifestPath = path.join(dist, '.vite', 'manifest.json');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 const entry = Object.values(manifest).find(item => item?.isEntry);
