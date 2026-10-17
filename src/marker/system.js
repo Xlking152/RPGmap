@@ -161,11 +161,7 @@ export function createLightweightMarkerSystem() {
           ? `<button type="button" class="small-button primary" data-marker-import-actor-type="${type}">导入 XLSX</button>`
           : '';
         const selectedTemplate = actorTemplates.find(actor => String(actor.id) === String(selectedTemplateId)) || null;
-        const parties = [...new Set((world.actors || []).map(actor => String(actor.partyId || '')).filter(Boolean))].sort();
-        const partyOptions = parties.map(partyId => `<option value="${escapeHtml(partyId)}">${escapeHtml(partyId)}</option>`).join('');
         const rows = list().map(marker => `<article class="marker-list-item"><strong>${escapeHtml(marker.name || KINDS[marker.kind])}</strong><small>${escapeHtml(KINDS[marker.kind] || marker.kind)} · ${escapeHtml(marker.visibility?.mode || 'public')} · ${Math.round(marker.x)}, ${Math.round(marker.y)}</small>${canControl(marker) ? `<div class="marker-actions"><button type="button" class="small-button" data-marker-move="${escapeHtml(marker.id)}">移动</button><button type="button" class="small-button danger" data-marker-delete="${escapeHtml(marker.id)}">删除</button></div>` : '<small>只读</small>'}</article>`).join('');
-        const scene = activeScene(api);
-        const lighting = ['normal', 'dim', 'dark'].includes(String(scene?.settings?.lighting)) ? scene.settings.lighting : 'normal';
         panel.innerHTML = `<div class="marker-panel"><form class="marker-form" data-marker-create>
           <h2>其他指示物</h2>
           <label>类别<select name="kind">${allowedKinds.map(([kind, label]) => `<option value="${kind}">${label}</option>`).join('')}</select></label>
@@ -173,7 +169,7 @@ export function createLightweightMarkerSystem() {
           <label>可见性<select name="visibility"><option value="public">公开</option><option value="party">队伍</option>${gm ? '<option value="gm">仅 GM</option>' : ''}</select></label>
           <label>队伍<input name="partyId" maxlength="80" placeholder="party-default" ${gm ? '' : 'disabled'}></label>
           <div class="marker-actions"><button type="submit" class="small-button primary" ${allowedKinds.length ? '' : 'disabled'}>放置指示物</button></div>
-        </form><section class="marker-form"><div class="marker-instance-toolbar"><h2>怪物</h2>${importButton('monster')}</div>${monsterRows}</section><section class="marker-form"><div class="marker-instance-toolbar"><h2>NPC</h2>${importButton('npc')}</div>${npcRows}</section><section class="marker-form"><h2>其他模板</h2>${otherTemplateRows}</section>${renderInstanceDrawer(selectedTemplate)}${gm ? `<section class="marker-form" data-fog-controls><h2>战争迷雾</h2><label>环境光<select data-scene-lighting><option value="normal" ${lighting === 'normal' ? 'selected' : ''}>正常</option><option value="dim" ${lighting === 'dim' ? 'selected' : ''}>昏暗</option><option value="dark" ${lighting === 'dark' ? 'selected' : ''}>黑暗</option></select></label><label>队伍<select name="partyId">${partyOptions}</select></label><label>重新隐藏半径<input name="radiusMeters" type="number" min="5" max="120" step="5" value="20"></label><div class="marker-actions"><button type="button" class="small-button" data-vision-full>全图视角</button><button type="button" class="small-button" data-fog-hide ${parties.length ? '' : 'disabled'}>重新隐藏</button><button type="button" class="small-button danger" data-fog-reset ${parties.length ? '' : 'disabled'}>重置探索</button></div></section>` : ''}${rows || '<div class="ui-current-empty">当前 Scene 没有可见指示物。</div>'}</div>`;
+        </form><section class="marker-form"><div class="marker-instance-toolbar"><h2>怪物</h2>${importButton('monster')}</div>${monsterRows}</section><section class="marker-form"><div class="marker-instance-toolbar"><h2>NPC</h2>${importButton('npc')}</div>${npcRows}</section><section class="marker-form"><h2>其他模板</h2>${otherTemplateRows}</section>${renderInstanceDrawer(selectedTemplate)}<button type="button" class="small-button" data-marker-open-vision>视野与光照</button>${rows || '<div class="ui-current-empty">当前 Scene 没有可见指示物。</div>'}</div>`;
       }
 
       function beginPlacement(value) {
@@ -250,24 +246,10 @@ export function createLightweightMarkerSystem() {
           }
           return;
         }
-        if (event.target.closest('[data-vision-full]')) {
-          api.vision?.setSource?.(null).catch(error => api.showToast?.(error.message, 'error'));
-        }
-        const fogControls = event.target.closest('[data-fog-controls]');
-        const fogReset = event.target.closest('[data-fog-reset]');
-        if (fogReset && fogControls) {
-          const partyId = fogControls.querySelector('[name="partyId"]')?.value;
-          const accepted = documentNode.defaultView?.confirm?.(`重置 ${partyId} 在当前 Scene 的全部探索区域？`) ?? true;
-          if (accepted) api.vision?.resetExplored?.(partyId).catch(error => api.showToast?.(error.message, 'error'));
-        }
-        const fogHide = event.target.closest('[data-fog-hide]');
-        if (fogHide && fogControls) {
-          beginPlacement({
-            type: 'fog-hide',
-            partyId: fogControls.querySelector('[name="partyId"]')?.value,
-            radiusMeters: Number(fogControls.querySelector('[name="radiusMeters"]')?.value) || 20,
-          });
-          api.showToast?.('点击地图选择重新隐藏区域', 'info');
+        if (event.target.closest('[data-marker-open-vision]')) {
+          pending = null;
+          api.setActivePanel?.('vision');
+          return;
         }
         const move = event.target.closest('[data-marker-move]');
         if (move) beginPlacement({ type: 'move', id: move.dataset.markerMove });
@@ -302,16 +284,6 @@ export function createLightweightMarkerSystem() {
           } catch (error) { api.showToast?.(error.message, 'error'); }
           return;
         }
-        const lightingInput = event.target.closest('[data-scene-lighting]');
-        if (lightingInput) {
-          const scene = activeScene(api);
-          if (!scene) return;
-          try {
-            await api.world.performOperations([{ type: 'scene.upsert', payload: {
-              scene: { ...scene, settings: { ...(scene.settings || {}), lighting: lightingInput.value } },
-            } }], { source: 'scene:lighting' });
-          } catch (error) { api.showToast?.(error.message, 'error'); }
-        }
       });
       const handleMapClick = event => {
         if (!pending || event.target.closest?.('.leaflet-control,.rpg-token-v2,.lightweight-marker-icon')) return;
@@ -322,12 +294,6 @@ export function createLightweightMarkerSystem() {
         const point = latLngToWorld(latlng, api.mapPackage.height);
         const action = pending;
         pending = null;
-        if (action.type === 'fog-hide') {
-          api.vision?.hideExplored?.(action.partyId, {
-            x: point.x, y: point.y, radiusMeters: action.radiusMeters,
-          }).catch(error => api.showToast?.(error.message, 'error'));
-          return;
-        }
         const { type: _type, ...marker } = action;
         const promise = action.type === 'move'
           ? api.markers.move(action.id, point)

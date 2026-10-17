@@ -554,10 +554,13 @@ function featureGroupOpen(feature, className) {
 
 function renderWall(feature) {
   const points = pointsAttribute(feature.geometry.points);
+  const closedPoints = `${points} ${feature.geometry.points[0][0]},${feature.geometry.points[0][1]}`;
   return `${featureGroupOpen(feature, 'wall-feature')}
     <polygon points="${points}" class="wall-shadow" transform="translate(7 9)"/>
     <polygon points="${points}" class="rammed-wall"/>
-    <polyline points="${points} ${feature.geometry.points[0][0]},${feature.geometry.points[0][1]}" class="wall-crown"/>
+    <polygon points="${points}" class="wall-stone-patina"/>
+    <polyline points="${closedPoints}" class="wall-crown"/>
+    <polyline points="${closedPoints}" class="wall-cap-joints"/>
   </g>`;
 }
 
@@ -854,7 +857,7 @@ function renderBuilding(feature, artAssets = {}) {
   return `${featureGroupOpen(feature, `building-feature ${category}${generatedFeatureClass}`)}
     <g transform="rotate(${angle} ${cx} ${cy}) translate(${cx} ${cy})">
       <rect x="${round(platformX + 8)}" y="${round(platformY + 10)}" width="${round(platformWidth)}" height="${round(platformHeight)}" rx="5" class="building-shadow"/>
-      <rect x="${platformX}" y="${platformY}" width="${platformWidth}" height="${platformHeight}" rx="5" class="building-platform"/>
+      <rect x="${platformX}" y="${platformY}" width="${platformWidth}" height="${platformHeight}" rx="1" class="building-platform"/>
       <g class="building-vector${hasGeneratedArt ? ' building-vector-underlay' : ''}">${body}</g>
       ${generatedLandmarkArt}
       ${generatedBuildingArt}
@@ -873,12 +876,22 @@ function renderFeature(feature, artAssets = {}) {
   if (feature.renderType === 'bridge') return renderBridge(feature, artAssets);
   if (feature.renderType === 'temple-compound') return renderTempleCompound(feature, artAssets);
   if (feature.renderType === 'tree') {
-    return `${featureGroupOpen(feature, 'vegetation-feature tree-feature')}${treeSvg(feature.cx, feature.cy, feature.width / 2, feature.accent || 0)}</g>`;
+    return `${featureGroupOpen(feature, 'vegetation-feature tree-feature')}${treeSvg(feature.cx, feature.cy, feature.width / 2, feature.accent || 0, artAssets.treeCanopyUrl, feature.id)}</g>`;
   }
   return renderBuilding(feature, artAssets);
 }
 
-function treeSvg(x, y, radius, tone = 0) {
+function treeSvg(x, y, radius, tone = 0, treeCanopyUrl = null, featureId = null) {
+  if (treeCanopyUrl) {
+    const angle = stableVariant(featureId || `${round(x)}:${round(y)}`, 12) * 30;
+    const ownership = featureId ? ` data-tree-art-for="${escapeSvgAttribute(featureId)}"` : '';
+    return `<g class="tree tree-textured" transform="translate(${round(x)} ${round(y)})">
+      <ellipse cx="3" cy="4" rx="${round(radius * .86)}" ry="${round(radius * .72)}" class="tree-shadow"/>
+      <svg x="${round(-radius)}" y="${round(-radius)}" width="${round(radius * 2)}" height="${round(radius * 2)}" viewBox="-1 -1 2 2" overflow="hidden">
+        <image href="${escapeSvgAttribute(treeCanopyUrl)}" x="-1" y="-1" width="2" height="2" preserveAspectRatio="xMidYMid meet" transform="rotate(${angle})" class="generated-tree-art tree-tone-${tone % 3}"${ownership}/>
+      </svg>
+    </g>`;
+  }
   const palettes = [
     ['#607b4e', '#879a63'],
     ['#6f8252', '#9aa36c'],
@@ -893,7 +906,7 @@ function treeSvg(x, y, radius, tone = 0) {
   </g>`;
 }
 
-function seededVegetation() {
+function seededVegetation(artAssets = {}) {
   let state = 1104;
   const random = () => {
     state = (state * 1664525 + 1013904223) >>> 0;
@@ -911,22 +924,32 @@ function seededVegetation() {
       const x = x0 + random() * (x1 - x0);
       const y = y0 + random() * (y1 - y0);
       const radius = 9 + random() * 15;
-      trees.push(treeSvg(x, y, radius, bandIndex + index));
+      trees.push(treeSvg(x, y, radius, bandIndex + index, artAssets.treeCanopyUrl));
     }
   });
   return trees.join('');
 }
 
-function createParcelsLayer() {
+function createParcelsLayer(artAssets = {}) {
+  // Surface masks soften only paint edges; the original parcel paths remain unchanged.
+  const parcels = [
+    ['military-parcel', 'M2110 1660 L3010 1605 L3060 2130 L2850 2200 L2140 2240 Z', .52],
+    ['granary-parcel', 'M3520 1570 L3845 1555 L3910 2045 L3520 2110 Z', .38],
+    ['market-parcel', 'M3030 1585 L3550 1570 L3495 2115 L3010 2175 Z', .26],
+    ['yamen-parcel', 'M2420 2340 L3055 2325 L3060 2870 L2440 2900 Z', .30],
+    ['workshop-parcel', 'M2135 2415 L2675 2335 L2780 2860 L2170 2970 Z', .56],
+    ['stable-parcel', 'M2115 1960 L2960 1930 L2945 2195 L2140 2270 Z', .62],
+    ['residential-parcel', 'M3300 2290 L3975 2250 L4010 2800 L3250 2885 Z', .46],
+    ['residential-parcel pale', 'M2090 2720 L2670 2860 L2610 2980 L2150 3025 Z', .38],
+  ];
   return `<g id="layer-parcels" data-layer="parcels">
-    <path d="M2110 1660 L3010 1605 L3060 2130 L2850 2200 L2140 2240 Z" class="parcel military-parcel"/>
-    <path d="M3520 1570 L3845 1555 L3910 2045 L3520 2110 Z" class="parcel granary-parcel"/>
-    <path d="M3030 1585 L3550 1570 L3495 2115 L3010 2175 Z" class="parcel market-parcel"/>
-    <path d="M2420 2340 L3055 2325 L3060 2870 L2440 2900 Z" class="parcel yamen-parcel"/>
-    <path d="M2135 2415 L2675 2335 L2780 2860 L2170 2970 Z" class="parcel workshop-parcel"/>
-    <path d="M2115 1960 L2960 1930 L2945 2195 L2140 2270 Z" class="parcel stable-parcel"/>
-    <path d="M3300 2290 L3975 2250 L4010 2800 L3250 2885 Z" class="parcel residential-parcel"/>
-    <path d="M2090 2720 L2670 2860 L2610 2980 L2150 3025 Z" class="parcel residential-parcel pale"/>
+    <defs>${parcels.map(([, outline], index) => `<mask id="parcel-surface-${index}" maskUnits="userSpaceOnUse" x="0" y="0" width="6000" height="5000">
+      <path d="${outline}" fill="white"/>
+      ${[['#eeeeee', 96], ['#dddddd', 80], ['#bbbbbb', 64], ['#888888', 48], ['#555555', 32], ['#222222', 16], ['black', 8]].map(([color, width]) => `<path d="${outline}" fill="none" stroke="${color}" stroke-width="${width}" stroke-linejoin="round"/>`).join('')}
+    </mask>`).join('')}</defs>
+    ${parcels.map(([className, outline, opacity], index) => `<g mask="url(#parcel-surface-${index})">
+    <path d="${outline}" class="parcel ${className}"/>
+    ${artAssets.courtyardGroundUrl ? `<path d="${outline}" fill="url(#generated-courtyard-ground)" opacity="${opacity}" class="parcel-material" pointer-events="none"/>` : ''}</g>`).join('\n')}
     <g class="courtyard-walls">
       <path d="M2160 1660 L2980 1620 L2995 2130 L2145 2195 Z"/>
       <path d="M3540 1590 L3830 1570 L3880 2025 L3530 2070 Z"/>
@@ -1025,8 +1048,8 @@ function escapeSvgAttribute(value) {
 
 function generatedTerrainPattern(artAssets) {
   if (!artAssets?.loessTerrainUrl) return '';
-  return `<pattern id="generated-loess-terrain" width="768" height="768" patternUnits="userSpaceOnUse">
-      <image href="${escapeSvgAttribute(artAssets.loessTerrainUrl)}" width="768" height="768" preserveAspectRatio="none"/>
+  return `<pattern id="generated-loess-terrain" width="256" height="256" patternUnits="userSpaceOnUse">
+      <image href="${escapeSvgAttribute(artAssets.loessTerrainUrl)}" width="256" height="256" preserveAspectRatio="none"/>
     </pattern>`;
 }
 
@@ -1035,6 +1058,19 @@ function generatedRiverPattern(artAssets) {
   return `<pattern id="generated-yellow-river" width="768" height="768" patternUnits="userSpaceOnUse">
       <image href="${escapeSvgAttribute(artAssets.yellowRiverUrl)}" width="768" height="768" preserveAspectRatio="none"/>
     </pattern>`;
+}
+
+function generatedSurfacePatterns(artAssets) {
+  const paving = artAssets.streetPavingUrl ? `<pattern id="generated-street-paving" width="24" height="24" patternUnits="userSpaceOnUse">
+      <image href="${escapeSvgAttribute(artAssets.streetPavingUrl)}" width="24" height="24" preserveAspectRatio="none"/>
+    </pattern>
+    <pattern id="generated-wall-stone" width="40" height="40" patternUnits="userSpaceOnUse">
+      <image href="${escapeSvgAttribute(artAssets.streetPavingUrl)}" width="40" height="40" preserveAspectRatio="none"/>
+    </pattern>` : '';
+  const ground = artAssets.courtyardGroundUrl ? `<pattern id="generated-courtyard-ground" width="480" height="320" patternUnits="userSpaceOnUse">
+      <image href="${escapeSvgAttribute(artAssets.courtyardGroundUrl)}" width="480" height="320" preserveAspectRatio="none"/>
+    </pattern>` : '';
+  return `${paving}\n${ground}`;
 }
 
 function generatedTerrainOverlay(artAssets, markup) {
@@ -1047,13 +1083,13 @@ export function createLanzhouSvg(artAssets = {}) {
   <desc id="lanzhou-desc">一幅分层矢量地图，表现黄河、北岸金城关和浮桥、1104年主体城、废弃南城遗迹，以及边防州城的军营、仓廪、马厩、修造场、市易务、官署、州城隍神祠推定院落和民居。</desc>
   <defs>
     <linearGradient id="paper-gradient" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#eee3ca"/><stop offset=".52" stop-color="#e7d9bc"/><stop offset="1" stop-color="#dfcfad"/>
+      <stop offset="0" stop-color="#d8d7cc"/><stop offset=".52" stop-color="#cecec2"/><stop offset="1" stop-color="#c4c5b8"/>
     </linearGradient>
     <linearGradient id="river-gradient" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#8eb3be"/><stop offset=".25" stop-color="#699cad"/><stop offset=".58" stop-color="#4f879b"/><stop offset="1" stop-color="#8cb1ba"/>
+      <stop offset="0" stop-color="#7caaa6"/><stop offset=".25" stop-color="#638f92"/><stop offset=".58" stop-color="#517c83"/><stop offset="1" stop-color="#7fa4a1"/>
     </linearGradient>
     <linearGradient id="mountain-gradient" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#a99872"/><stop offset="1" stop-color="#c9b993"/>
+      <stop offset="0" stop-color="#94998b"/><stop offset="1" stop-color="#b9b9a7"/>
     </linearGradient>
     <pattern id="paper-fiber" width="56" height="44" patternUnits="userSpaceOnUse">
       <path d="M3 9 Q18 3 38 10 M18 31 Q36 25 54 33" fill="none" stroke="#7d6e53" stroke-width="1.2" opacity=".075"/>
@@ -1066,47 +1102,68 @@ export function createLanzhouSvg(artAssets = {}) {
       <path d="M3 20 l8 -7 10 5 8 -9" fill="none" stroke="#806e53" stroke-width="3" opacity=".38"/>
       <circle cx="30" cy="24" r="2.5" fill="#8c7857" opacity=".42"/>
     </pattern>
+    <pattern id="masonry-texture" width="26" height="16" patternUnits="userSpaceOnUse" patternTransform="scale(.5)">
+      <rect width="26" height="16" fill="#a7aaa0"/>
+      <path d="M0 0H26 M0 8H26 M0 16H26 M13 0V8 M4 8V16 M23 8V16" fill="none" stroke="#727c75" stroke-width="1" opacity=".64"/>
+      <path d="M1 2H12 M15 2H25 M6 10H21" stroke="#dadbd0" stroke-width="1.1" opacity=".66"/>
+      <path d="M5 5l4 1 M18 13l3 -1" stroke="#6a756e" stroke-width=".7" opacity=".4"/>
+    </pattern>
+    <pattern id="street-paving" width="13" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(8)">
+      <rect width="13" height="12" fill="#c8c9bd"/>
+      <path d="M0 0H13 M0 6H13 M6 0V6 M2 6V12 M12 6V12" fill="none" stroke="#8c958b" stroke-width=".8" opacity=".6"/>
+      <path d="M1 2H5 M8 2H12 M4 8H10" stroke="#e4e3d7" stroke-width=".8" opacity=".7"/>
+    </pattern>
+    <pattern id="courtyard-gravel" width="67" height="53" patternUnits="userSpaceOnUse">
+      <path d="M4 7l4 -1 2 2 -5 1Z M38 11l3 -1 3 2 -5 2Z M17 36l5 -2 2 3 -5 1Z M54 42l3 -1 2 3 -4 1Z" fill="#6c7a70" opacity=".19"/>
+      <path d="M7 22l12 -2 M38 30l8 1 M27 48l6 -1 M54 6l7 1" stroke="#f1eee3" stroke-width="1.2" opacity=".38"/>
+      <path d="M12 15l3 -1 M26 6l1 2 M48 19l2 1 M4 46l2 -1 M62 32l1 -2 M33 37l2 1" stroke="#76816f" stroke-width="1.1" opacity=".26"/>
+    </pattern>
     ${generatedTerrainPattern(artAssets)}
     ${generatedRiverPattern(artAssets)}
+    ${generatedSurfacePatterns(artAssets)}
     <style>
-      text { font-family: "Noto Serif CJK SC", "Source Han Serif SC", "Microsoft YaHei", serif; fill: #443925; paint-order: stroke; stroke: #eee3ca; stroke-width: 5px; stroke-linejoin: round; }
-      .terrain-contour { fill: none; stroke: #7e6d4f; stroke-width: 9; opacity: .24; }
+      text { font-family: "Noto Serif CJK SC", "Source Han Serif SC", "Microsoft YaHei", serif; fill: #37433c; paint-order: stroke; stroke: #e0e2d9; stroke-width: 5px; stroke-linejoin: round; }
+      .terrain-contour { fill: none; stroke: #717b6c; stroke-width: 9; opacity: .24; }
       .terrain-contour.fine { stroke-width: 4; opacity: .18; }
-      .mountain-face { fill: url(#mountain-gradient); stroke: #806f50; stroke-width: 8; }
-      .mountain-light { fill: #d4c5a1; opacity: .55; }
-      .gully { fill: none; stroke: #9f865f; stroke-width: 24; opacity: .35; stroke-linecap: round; }
-      .field { fill: #cabb91; stroke: #9e8b62; stroke-width: 5; }
+      .mountain-face { fill: url(#mountain-gradient); stroke: #778172; stroke-width: 8; }
+      .mountain-light { fill: #d0d1c3; opacity: .55; }
+      .gully { fill: none; stroke: #858979; stroke-width: 24; opacity: .35; stroke-linecap: round; }
+      .field { fill: #b5b99a; stroke: #8f987d; stroke-width: 5; }
       .field-overlay { fill: url(#field-hatch); }
-      .city-ground { fill: #eadfc8; stroke: #bda986; stroke-width: 5; }
-      .river-bank { fill: none; stroke: #76654b; stroke-width: 13; opacity: .66; }
-      .river-inner-bank { fill: none; stroke: #d5c39e; stroke-width: 30; opacity: .75; }
-      .water-current { fill: none; stroke: #e8f0e9; stroke-width: 8; opacity: .31; stroke-linecap: round; }
-      .sandbar { fill: #d1bd91; stroke: #b49b6c; stroke-width: 5; opacity: .9; }
+      .city-ground { fill: #d5d5c8; stroke: #a0a594; stroke-width: 5; }
+      .generated-terrain-texture { filter: saturate(.55) contrast(.94) brightness(1.04); }
+      .river-bank { fill: none; stroke: #617b73; stroke-width: 13; opacity: .76; stroke-dasharray: 16 3 8 2; }
+      .river-inner-bank { fill: none; stroke: #c5c6ad; stroke-width: 30; opacity: .85; }
+      .water-current { fill: none; stroke: #d6ebe6; stroke-width: 5; opacity: .4; stroke-linecap: round; }
+      .sandbar { fill: #c8c6ac; stroke: #a2a78c; stroke-width: 5; opacity: .9; }
       .ruin-wall { fill: none; stroke: #927b58; stroke-width: 48; stroke-dasharray: 95 34 42 28; stroke-linecap: round; opacity: .55; }
       .ruin-crown { fill: none; stroke: #6f5c43; stroke-width: 7; stroke-dasharray: 38 24; opacity: .52; }
       .ruin-foundation { fill: url(#rubble-pattern); stroke: #8c7655; stroke-width: 6; stroke-dasharray: 18 12; opacity: .62; }
-      .road-edge { fill: none; stroke: #9d8969; stroke-linecap: round; stroke-linejoin: round; opacity: .45; }
-      .road { fill: none; stroke: #c9b793; stroke-linecap: round; stroke-linejoin: round; }
+      .road-edge { fill: none; stroke: #b6b4a1; stroke-linecap: round; stroke-linejoin: round; opacity: .64; }
+      .road { fill: none; stroke: url(#${artAssets.streetPavingUrl ? 'generated-street-paving' : 'street-paving'}); stroke-linecap: round; stroke-linejoin: round; }
+      .outside-roads .road { stroke: #a69e83; }
       .road-edge.major { stroke-width: 18; }.road.major { stroke-width: 12; }
-      .road-edge.country { stroke-width: 14; }.road.country { stroke-width: 8; stroke-dasharray: 34 7; }
+      .road-edge.country { stroke-width: 14; }.road.country { stroke-width: 8; }
       .road-edge.lane { stroke-width: 13; }.road.lane { stroke-width: 7; }
       .road-edge.alley { stroke-width: 9; }.road.alley { stroke-width: 3; }
-      .parcel { stroke: #ad9874; stroke-width: 5; stroke-dasharray: 18 10; }
-      .military-parcel { fill: #e0d4bb; }.granary-parcel { fill: #ddcfac; }.market-parcel { fill: #e6d4b3; }
-      .yamen-parcel { fill: #e5d8bf; }.workshop-parcel { fill: #dbc7a6; }.stable-parcel { fill: #deceb0; }
-      .residential-parcel { fill: #e5d8bf; }.residential-parcel.pale { fill: #e9ddc6; }
-      .courtyard-walls path { fill: none; stroke: #9f8764; stroke-width: 11; stroke-dasharray: 34 14; opacity: .65; }
-      .wall-shadow { fill: #7c6a51; opacity: .26; }.rammed-wall { fill: #c7b58f; stroke: #826d4e; stroke-width: 8; }
-      .wall-crown { fill: none; stroke: #e4d5b5; stroke-width: 10; stroke-dasharray: 28 14; opacity: .72; }
-      .yamen-wall-shadow { fill: #75634a; opacity: .24; }
-      .yamen-compound-wall { fill: #c8b58e; stroke: #806b4f; stroke-width: 3; }
-      .yamen-compound-wall-crown { fill: none; stroke: #eadcbb; stroke-width: 3; opacity: .78; }
-      .pass-wall-shadow { fill: #594b39; opacity: .32; }.pass-wall { fill: #a99773; stroke: #65543d; stroke-width: 9; }
-      .pass-stone-seam { fill: none; stroke: #d5c39f; stroke-width: 7; stroke-dasharray: 24 16; opacity: .65; }
+      .parcel { stroke: none; fill-opacity: .64; }
+      .military-parcel { fill: #b2b59e; }.granary-parcel { fill: #bfc1a9; }.market-parcel { fill: #c8bca4; }
+      .yamen-parcel { fill: #c1c1af; }.workshop-parcel { fill: #a6aba1; }.stable-parcel { fill: #b7ac90; }
+      .residential-parcel { fill: #b9c0a7; }.residential-parcel.pale { fill: #c5c6b0; }
+      .courtyard-walls path { fill: none; stroke: #8a937a; stroke-width: 8; opacity: .26; }
+      .wall-shadow { fill: #36453e; opacity: .32; }.rammed-wall { fill: url(#masonry-texture); stroke: #596258; stroke-width: 5; }
+      .wall-stone-patina { fill: ${artAssets.streetPavingUrl ? 'url(#generated-wall-stone)' : 'none'}; opacity: .66; pointer-events: none; }
+      .wall-crown { fill: none; stroke: #c1bdab; stroke-width: 5; opacity: .96; }
+      .wall-cap-joints { fill: none; stroke: #687161; stroke-width: 5; stroke-dasharray: .8 14; opacity: .62; }
+      .yamen-wall-shadow { fill: #3e4b43; opacity: .3; }
+      .yamen-compound-wall { fill: url(#masonry-texture); stroke: #647366; stroke-width: 3; }
+      .yamen-compound-wall-crown { fill: none; stroke: #e0e1d4; stroke-width: 3; opacity: .85; }
+      .pass-wall-shadow { fill: #39483f; opacity: .35; }.pass-wall { fill: url(#masonry-texture); stroke: #53635a; stroke-width: 7; }
+      .pass-stone-seam { fill: none; stroke: #d8dacc; stroke-width: 5; stroke-dasharray: 24 16; opacity: .8; }
       .wall-tower-base { fill: #b39b70; stroke: #68533a; stroke-width: 7; }.wall-tower-roof { fill: #6f776d; stroke: #465049; stroke-width: 5; }
       .gate-base { fill: #bca881; stroke: #705d43; stroke-width: 7; }.pass-gate-base { fill: #9e8a68; stroke: #5c4b37; stroke-width: 8; }
       .gate-opening { fill: #41372c; stroke: #251e18; stroke-width: 5; }.gate-roof { fill: #6d726b; stroke: #474c47; stroke-width: 7; }
-      .building-shadow { fill: #66533c; opacity: .24; }.building-platform { fill: #d8c8aa; stroke: #9d8663; stroke-width: 4; }
+      .building-shadow { fill: #39443c; opacity: .3; }.building-platform { fill: #c4c6b7; stroke: #818d7d; stroke-width: 3; }
       .building-base { stroke: #856c4d; stroke-width: 4; }.roof { stroke-width: 6; }
       .roof-ridge { stroke: #4d4840; stroke-width: 7; stroke-linecap: round; }.hip-ridge { fill: none; stroke: #555149; stroke-width: 5; opacity: .9; }
       .roof-tile-line { stroke: #4e4b45; stroke-width: 2.4; opacity: .28; }.door { fill: #5c3e2a; }
@@ -1117,12 +1174,12 @@ export function createLanzhouSvg(artAssets = {}) {
       .temple-ground { fill: #ead8b8; stroke: #8b3e32; stroke-width: 5; }.temple-wall { fill: none; stroke: #8f382e; stroke-width: 10; stroke-linecap: square; stroke-linejoin: round; }
       .temple-courtyard { fill: #f0dfc2; stroke: #b77b55; stroke-width: 3; }.temple-incense-burner { fill: #7e392f; stroke: #482821; stroke-width: 3; }
       .temple-entry-path { fill: none; stroke: #aa684d; stroke-width: 9; stroke-dasharray: 5 6; }.temple-label { font-size: 25px; font-weight: 800; fill: #7d2f28; stroke: #f0e1c7; stroke-width: 5px; paint-order: stroke fill; }
-      .generated-landmark-art { pointer-events: none; opacity: .64; filter: saturate(.42) contrast(.76) brightness(1.16) sepia(.18); }
-      .building-vector-underlay { opacity: .34; }
-      .generated-building-art { pointer-events: none; opacity: .62; filter: saturate(.42) contrast(.76) brightness(1.16) sepia(.18); }
-      .generated-building-feature .building-shadow { opacity: .15; }
-      .generated-building-feature .building-platform { fill-opacity: .78; stroke-width: 2.5; }
-      .generated-building-feature .building-vector-underlay { opacity: .24; }
+      .generated-landmark-art { pointer-events: none; opacity: .98; filter: saturate(.82) contrast(1.04); }
+      .building-vector-underlay { opacity: .18; }
+      .generated-building-art { pointer-events: none; opacity: .94; filter: saturate(.78) contrast(1.04); }
+      .generated-building-feature .building-shadow { opacity: .06; }
+      .generated-building-feature .building-platform { fill-opacity: .1; stroke-width: 1; stroke-opacity: .08; }
+      .generated-building-feature .building-vector-underlay { opacity: .06; }
       .generated-building-feature .building-vector-underlay .roof-tile-line,
       .generated-building-feature .building-vector-underlay .roof-ridge,
       .generated-building-feature .building-vector-underlay .hip-ridge,
@@ -1134,25 +1191,17 @@ export function createLanzhouSvg(artAssets = {}) {
       .generated-building-feature .building-vector-underlay .workshop-hearth,
       .generated-building-feature .building-vector-underlay .work-bench { opacity: 0; }
       .generated-building-feature.yamen .building-platform { stroke: #9b6252; }
-      .generated-landmark-feature.yamen .building-platform { stroke: #8f5146; stroke-width: 4.5; }
-      .generated-landmark-feature.market-office .building-platform { stroke: #55766a; stroke-width: 4.5; }
-      .generated-building-feature.barracks .generated-building-art { filter: saturate(.34) contrast(.76) brightness(1.17) sepia(.12); }
-      .generated-building-feature.granary .generated-building-art { filter: saturate(.40) contrast(.77) brightness(1.15) sepia(.24); }
-      .generated-building-feature.stable .generated-building-art { filter: saturate(.44) contrast(.78) brightness(1.13) sepia(.25); }
-      .generated-building-feature.workshop .generated-building-art { filter: saturate(.38) contrast(.82) brightness(1.10) sepia(.20); }
-      .generated-building-feature.market .generated-building-art { filter: saturate(.54) contrast(.78) brightness(1.13) sepia(.16); }
-      .generated-building-feature.residence .generated-building-art { filter: saturate(.38) contrast(.74) brightness(1.18) sepia(.18); }
-      .building-feature .generated-landmark-art { opacity: .62; }
-      .generated-yamen-hall { opacity: .60; }.generated-chenghuang-temple { opacity: .64; }
-      .generated-city-gatehouse { opacity: .60; }.generated-jincheng-gatehouse { opacity: .64; }
-      .generated-city-wall-tower { opacity: .62; }.generated-yellow-river-pontoon { opacity: .66; }
-      .generated-market-office-hall { opacity: .60; }.generated-market-storehouse { opacity: .58; }
+      .generated-landmark-feature .building-platform { fill-opacity: .3; stroke-opacity: .3; stroke-width: 1; }
+      .generated-landmark-feature .building-shadow { opacity: .14; }
       .bridge-rope-shadow { fill: none; stroke: #29444b; stroke-width: 78; opacity: .22; }
       .bridge-boat { fill: #5f4733; stroke: #34281f; stroke-width: 5; }.bridge-boat-rib { stroke: #b99d73; stroke-width: 4; }
       .bridge-deck { fill: none; stroke: #8d704e; stroke-width: 46; stroke-linecap: round; }
       .bridge-plank { stroke: #d0b17a; stroke-width: 8; stroke-linecap: round; }.bridge-rail { fill: none; stroke: #513d2a; stroke-width: 6; stroke-dasharray: 18 12; }
       .bridge-vector-underlay { opacity: .32; }
       .tree-shadow { fill: #4a4734; opacity: .22; }.tree circle { stroke: #4f613f; stroke-width: 2.4; }
+      .generated-tree-art { pointer-events: none; opacity: .97; filter: saturate(.76) contrast(1.04); }
+      .generated-tree-art.tree-tone-1 { filter: saturate(.65) brightness(1.07); }
+      .generated-tree-art.tree-tone-2 { filter: saturate(.8) brightness(.9); }
       .map-title text:first-child { font-size: 78px; font-weight: 700; letter-spacing: 12px; }.map-subtitle { font-size: 29px; letter-spacing: 3px; }
       .water-label { font-size: 66px; font-style: italic; fill: #e7f0eb; stroke: #4f7f8c; stroke-width: 8px; opacity: .9; }
       .place-label { font-size: 34px; font-weight: 650; }.place-label.strong { font-size: 46px; }.small-label { font-size: 24px; }
@@ -1161,14 +1210,14 @@ export function createLanzhouSvg(artAssets = {}) {
       .place-label.muted { opacity: .7; }.water-note { fill: #e4efeb; stroke: #4d7d88; }.north-arrow path { fill: #594a34; stroke: #e5d8bd; stroke-width: 5; }.north-arrow line { stroke: #594a34; stroke-width: 8; }.north-arrow text { font-size: 32px; font-weight: 700; }
       .scale text { font-size: 22px; stroke-width: 3px; }.scale path { fill: none; stroke: #4f4332; stroke-width: 5; }.scale-dark { fill: #554833; }.scale-light { fill: #e8dcc2; stroke: #554833; stroke-width: 4; }
       .map-label-hidden { display: none !important; }
-      svg[data-zoom-tier="overview"] [data-map-importance="detail"] { opacity: .48; }
-      svg[data-zoom-tier="overview"] [data-map-importance="secondary"] { opacity: .76; }
+      svg[data-zoom-tier="overview"] [data-map-importance="detail"] { opacity: .92; }
+      svg[data-zoom-tier="overview"] [data-map-importance="secondary"] { opacity: 1; }
       svg[data-zoom-tier="overview"] [data-map-importance="detail"] .roof-tile-line,
       svg[data-zoom-tier="overview"] [data-map-importance="detail"] .door,
       svg[data-zoom-tier="overview"] .road.alley { display: none; }
-      svg[data-zoom-tier="overview"] #layer-parcels { opacity: .58; }
-      svg[data-zoom-tier="overview"] .road.lane { opacity: .58; }
-      svg[data-zoom-tier="mid"] [data-map-importance="detail"] { opacity: .82; }
+      svg[data-zoom-tier="overview"] #layer-parcels { opacity: .8; }
+      svg[data-zoom-tier="overview"] .road.lane { opacity: .85; }
+      svg[data-zoom-tier="mid"] [data-map-importance="detail"] { opacity: 1; }
       svg[data-zoom-tier="detail"] .place-label { font-size: 18px; stroke-width: 3px; }
       svg[data-zoom-tier="detail"] .small-label,
       svg[data-zoom-tier="detail"] .gate-label,
@@ -1180,7 +1229,7 @@ export function createLanzhouSvg(artAssets = {}) {
   <g id="layer-terrain" data-layer="terrain">
     <rect width="6000" height="5000" fill="url(#paper-gradient)"/>
     <rect width="6000" height="5000" fill="url(#paper-fiber)"/>
-    ${generatedTerrainOverlay(artAssets, '<rect width="6000" height="5000" fill="url(#generated-loess-terrain)" opacity=".14" class="generated-terrain-texture"/>')}
+    ${generatedTerrainOverlay(artAssets, '<rect width="6000" height="5000" fill="url(#generated-loess-terrain)" opacity=".42" class="generated-terrain-texture"/>')}
     <path d="M0 0 H6000 V670 C5560 610 5320 710 5000 670 C4660 625 4450 520 4160 595 C3840 680 3590 780 3260 724 C2920 666 2650 540 2330 615 C1940 705 1750 620 1410 570 C1030 515 760 650 430 610 C250 588 115 548 0 520 Z" class="mountain-face"/>
     <path d="M0 360 C590 220 1020 470 1480 380 C1960 290 2280 470 2660 395 L2710 615 C2190 730 1810 600 1400 565 C880 520 510 670 0 520 Z" class="mountain-light"/>
     <path d="M3260 724 C3630 610 3890 430 4310 380 C4760 330 5230 550 6000 420 V0 H3040 Z" class="mountain-light" opacity=".38"/>
@@ -1191,7 +1240,7 @@ export function createLanzhouSvg(artAssets = {}) {
     <path d="M180 4020 C720 3800 1190 3990 1660 3800 M460 4300 C1060 4070 1580 4260 2180 4010 M3880 3790 C4340 3600 4900 3850 5530 3700 M4150 4140 C4700 3940 5290 4120 5840 3990" class="terrain-contour"/>
     <path d="M2640 160 C2570 350 2490 530 2410 710 M3180 100 C3250 300 3230 490 3160 700 M1310 3900 C1510 4150 1580 4450 1620 4860 M4470 3630 C4280 3950 4210 4280 4220 4740" class="gully"/>
     <path d="M2025 1575 L3835 1495 L4070 2870 L2140 3060 Z" class="city-ground"/>
-    ${generatedTerrainOverlay(artAssets, '<path d="M2025 1575 L3835 1495 L4070 2870 L2140 3060 Z" fill="url(#generated-loess-terrain)" opacity=".12" class="generated-terrain-texture"/>')}
+    ${generatedTerrainOverlay(artAssets, '<path d="M2025 1575 L3835 1495 L4070 2870 L2140 3060 Z" fill="url(#generated-loess-terrain)" opacity=".32" class="generated-terrain-texture"/>')}
   </g>
 
   <g id="layer-ruins" data-layer="ruins">
@@ -1208,13 +1257,14 @@ export function createLanzhouSvg(artAssets = {}) {
     </g>
   </g>
 
+  ${createParcelsLayer(artAssets)}
+  <path d="M2025 1575 L3835 1495 L4070 2870 L2140 3060 Z" fill="url(#${artAssets.loessTerrainUrl ? 'generated-loess-terrain' : 'courtyard-gravel'})" opacity=".24" pointer-events="none" class="ground-material-detail generated-terrain-texture"/>
   <g id="layer-roads" data-layer="roads">
     ${createRoadsLayer()}
   </g>
-  ${createParcelsLayer()}
 
   <g id="layer-vegetation" data-layer="vegetation">
-    ${seededVegetation()}
+    ${seededVegetation(artAssets)}
     <g class="reed-beds" fill="#758258" opacity=".68">
       <path d="M220 1390 l8 -70 10 65 15 -86 5 91 22 -65 1 84 Z"/><path d="M1880 1450 l8 -76 11 68 15 -92 7 90 18 -63 4 75 Z"/>
       <path d="M4730 1310 l8 -72 10 64 15 -86 6 82 20 -62 2 75 Z"/><path d="M5480 1260 l8 -68 10 62 14 -82 7 77 19 -59 2 72 Z"/>
@@ -1308,10 +1358,13 @@ function normalizeArtAssets(artAssets = {}) {
     chenghuangTempleUrl: artAssets.chenghuangTempleUrl ? String(artAssets.chenghuangTempleUrl) : null,
     cityGatehouseUrl: artAssets.cityGatehouseUrl ? String(artAssets.cityGatehouseUrl) : null,
     cityWallTowerUrl: artAssets.cityWallTowerUrl ? String(artAssets.cityWallTowerUrl) : null,
+    courtyardGroundUrl: artAssets.courtyardGroundUrl ? String(artAssets.courtyardGroundUrl) : null,
     jinchengGatehouseUrl: artAssets.jinchengGatehouseUrl ? String(artAssets.jinchengGatehouseUrl) : null,
     loessTerrainUrl: artAssets.loessTerrainUrl ? String(artAssets.loessTerrainUrl) : null,
     marketOfficeHallUrl: artAssets.marketOfficeHallUrl ? String(artAssets.marketOfficeHallUrl) : null,
     marketStorehouseUrl: artAssets.marketStorehouseUrl ? String(artAssets.marketStorehouseUrl) : null,
+    streetPavingUrl: artAssets.streetPavingUrl ? String(artAssets.streetPavingUrl) : null,
+    treeCanopyUrl: artAssets.treeCanopyUrl ? String(artAssets.treeCanopyUrl) : null,
     yamenHallUrl: artAssets.yamenHallUrl ? String(artAssets.yamenHallUrl) : null,
     yellowRiverPontoonUrl: artAssets.yellowRiverPontoonUrl ? String(artAssets.yellowRiverPontoonUrl) : null,
     yellowRiverUrl: artAssets.yellowRiverUrl ? String(artAssets.yellowRiverUrl) : null,

@@ -13,18 +13,25 @@ test('NPC and monster imports refresh visible templates on canonical Actor chang
     L: { layerGroup: () => ({ addTo() { return this; }, clearLayers() {} }) },
   });
   const handlers = new Map();
-  const panel = { innerHTML: '', addEventListener() {} };
+  const panelEvents = new Map();
+  const panel = { innerHTML: '', addEventListener(name, handler) { panelEvents.set(name, handler); } };
   const shell = { querySelector: () => null };
   const document = { getElementById: () => ({}), defaultView: {} };
   const container = { ownerDocument: document, closest: () => shell, addEventListener() {} };
   const world = { activeSceneId: 'scene', actors: [], scenes: [{ id: 'scene', tokens: [], markers: [] }] };
+  let activePanel = null;
   const api = {
     map: { getContainer: () => container, getPane: () => ({ style: {} }) },
     uiPanels: { get: () => panel }, world: { get: () => structuredClone(world) },
     entities: { canImportXlsx: true },
+    setActivePanel(value) { activePanel = value; },
     on(name, callback) { const list = handlers.get(name) || []; list.push(callback); handlers.set(name, list); return () => {}; },
   };
   factory().register(api);
+  assert.match(panel.innerHTML, /data-marker-open-vision/);
+  assert.doesNotMatch(panel.innerHTML, /data-fog-controls|data-fog-reset|data-scene-lighting/);
+  await panelEvents.get('click')({ target: { closest: selector => selector === '[data-marker-open-vision]' ? {} : null } });
+  assert.equal(activePanel, 'vision');
   for (const type of ['npc', 'monster']) {
     const name = `${type}-imported`;
     assert.equal(panel.innerHTML.includes(name), false);

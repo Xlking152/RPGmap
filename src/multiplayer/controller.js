@@ -242,9 +242,9 @@ export function createMultiplayerController() {
           connect(lastConnectionOptions, { resume: true });
         }, delayMs);
       }
-      function setMapStatus(message) {
+      function setMapStatus(message, detail = '') {
         const node = shell.querySelector?.('[data-role="map-status"]');
-        if (node) node.textContent = message;
+        if (node) { node.textContent = message; node.title = detail; }
       }
       function showDialog() {
         overlay.hidden = false;
@@ -273,7 +273,7 @@ export function createMultiplayerController() {
         const savedAuth = saved('authToken', '');
         const hasSavedIdentity = Boolean(savedUserId && savedAuth);
         overlay.innerHTML = `<form class="multiplayer-dialog login" data-mp-login-form>
-          <h2>RPGmap V1.5 多人联机</h2>
+          <h2>加入游戏</h2>
           <p>Player 第一次加入会向 GM 发起身份申请；GM 批准并分配角色后，该 User 会持久保存在当前 World。GM 也可以提前创建 User，并把 Player Key 发给指定玩家。</p>
           ${message ? `<div class="multiplayer-status-card ${message.includes('等待') ? 'warn' : ''}">${escapeHtml(message)}</div>` : ''}
           ${hasSavedIdentity ? `<div class="multiplayer-status-card">检测到本网址已保存的 Player 身份。正常情况下直接加入即可。<button type="button" class="multiplayer-mini-button" data-mp-clear-identity>清除本机身份</button></div>` : ''}
@@ -410,7 +410,7 @@ export function createMultiplayerController() {
             revision = requestedRevision;
             lastServerState = structuredClone(serverState);
             lastObservedLocalState = structuredClone(requestedState);
-            setMapStatus(`联机同步完成 · revision ${revision}${reason ? ` · ${reason}` : ''}`);
+            setMapStatus('联机已同步', `revision ${revision}${reason ? ` · ${reason}` : ''}`);
             return true;
           } catch (error) {
             if (api.world?.isSceneTransitionPending?.()) api.emit?.('scene:switch-failed', { error });
@@ -954,7 +954,7 @@ export function createMultiplayerController() {
           audienceFingerprint = String(message.audienceFingerprint || audienceFingerprint);
           resuming = false;
           reconnectAttempt = 0;
-          setMapStatus(`联机续传完成 · revision ${revision} · RTT ${Number.isFinite(rttMs) ? `${Math.round(rttMs)} ms` : '测量中'}`);
+          setMapStatus('连接已恢复', `revision ${revision} · RTT ${Number.isFinite(rttMs) ? `${Math.round(rttMs)} ms` : '测量中'}`);
           flushPendingNetworkWork();
           return;
         }
@@ -1021,7 +1021,7 @@ export function createMultiplayerController() {
           }
           hideDialog();
           if (message.resumeAccepted === true) {
-            setMapStatus(`连接已恢复 · 正在补发 revision ${revision + 1}-${Number(message.world?.revision) || revision}`);
+            setMapStatus('连接已恢复 · 正在同步', `revision ${revision + 1}-${Number(message.world?.revision) || revision}`);
           } else if (message.world?.state) {
             applyRemoteState(message.world.state, revision, 'initial').then(() => {
               inFlight = false;

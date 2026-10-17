@@ -1,5 +1,10 @@
 import 'leaflet/dist/leaflet.css';
 import '../styles.css';
+import '../ui/design-tokens.css';
+import '../ui/workbench.css';
+import '../ui/panels.css';
+import '../ui/vision-panel.css';
+import '../entities/sheet/presentation.css';
 
 import { createRpgMapRuntime } from '../engine/runtime.js';
 import { createAppLifecycleSystem } from '../engine/lifecycle.js';

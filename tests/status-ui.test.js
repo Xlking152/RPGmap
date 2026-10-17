@@ -67,6 +67,72 @@ test('status writes stay pending until the confirmation Promise settles', async 
   assert.equal(renders, 2);
 });
 
+test('definition import refreshes options and releases sheet controls only after confirmation', async () => {
+  const confirmation = deferred();
+  let definitions = [{ id: 'original', name: 'Original', scopes: ['actor'] }];
+  let change;
+  let rendered = '';
+  const input = {
+    files: [{ text: async () => JSON.stringify({ statusSchemaVersion: 4, definitions: [{ id: 'new-status', name: 'New status', scopes: ['actor'] }] }) }],
+    addEventListener: (name, callback) => { if (name === 'change') change = callback; },
+    click() {}, remove() {},
+  };
+  const api = {
+    multiplayer: { getCapabilities: () => ({ connected: true, canManageStatusDefinitions: true }) },
+    status: {
+      getDefinitions: () => definitions,
+      resolve: () => ({}),
+      importDefinitions: document => confirmation.promise.then(() => { definitions = document.definitions; }),
+    },
+  };
+  const controller = createStatusUiController({
+    api,
+    documentNode: { createElement: () => input, body: { append() {} } },
+    render: () => { rendered = renderActorStatusSheet({ api, actor: { id: 'actor-a' }, canManage: true, canManageDefinitions: true, pendingKeys: controller.pendingKeys }); },
+  });
+  const actionNode = { dataset: { statusAction: 'definition-import' } };
+  controller.handleClick({ preventDefault() {}, target: { closest: () => actionNode } });
+  const importing = change();
+  await Promise.resolve();
+  assert.equal(controller.pendingKeys.has('definition:import'), true);
+  assert.match(rendered, /data-status-action="definition-new" disabled/);
+  assert.match(rendered, /value="original"/);
+  confirmation.resolve();
+  await importing;
+  assert.equal(controller.pendingKeys.size, 0);
+  assert.match(rendered, /value="new-status"/);
+  assert.doesNotMatch(rendered, /value="original"/);
+  assert.doesNotMatch(rendered, /data-status-action="definition-(?:new|import)" disabled/);
+});
+
+test('rejected definition imports release pending controls without changing canonical options', async () => {
+  let change;
+  let rendered = '';
+  const input = {
+    files: [{ text: async () => '{"statusSchemaVersion":4,"definitions":[]}' }],
+    addEventListener: (name, callback) => { if (name === 'change') change = callback; },
+    click() {}, remove() {},
+  };
+  const api = {
+    multiplayer: { getCapabilities: () => ({ connected: true, canManageStatusDefinitions: true }) },
+    status: {
+      getDefinitions: () => [{ id: 'retained', name: 'Retained', scopes: ['actor'] }],
+      resolve: () => ({}),
+      importDefinitions: async () => { throw new Error('status_definition_conflict'); },
+    },
+  };
+  const controller = createStatusUiController({
+    api,
+    documentNode: { createElement: () => input, body: { append() {} } },
+    render: () => { rendered = renderActorStatusSheet({ api, actor: { id: 'actor-a' }, canManage: true, canManageDefinitions: true, pendingKeys: controller.pendingKeys }); },
+  });
+  controller.handleClick({ preventDefault() {}, target: { closest: () => ({ dataset: { statusAction: 'definition-import' } }) } });
+  await change();
+  assert.equal(controller.pendingKeys.size, 0);
+  assert.match(rendered, /value="retained"/);
+  assert.doesNotMatch(rendered, /data-status-action="definition-(?:new|import)" disabled/);
+});
+
 test('OWNER and OBSERVER capabilities cannot mutate status data', () => {
   let calls = 0; let message = '';
   const api = {
@@ -129,6 +195,8 @@ test('status UI is wired into live Actor cards, Token inspector and app startup'
   assert.match(entityUi, /class="status-title-band"/);
   assert.match(entityUi, /class="entity-card-status"/);
   assert.match(entityUi, /status:change/);
+  assert.match(entityUi, /render: refreshStatusViews/);
+  assert.match(entityUi, /function refreshStatusViews\(\)[\s\S]*?record\.tab === 'status'\) renderSheetRecord\(record\)/);
   assert.match(appShell, /class="ui-status-summary"/);
   assert.match(appShell, /status:change/);
   assert.match(appShell, /tokenId/);

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:,">
+    <title>RPGmap · 界面验收</title>
+  </head>
+  <body>
+    <div id="app"><p>正在载入界面验收场景…</p></div>
+    <script type="module">
+      import { createUiRefreshFixture } from './ui-refresh-fixture.js';
+      createUiRefreshFixture(document.querySelector('#app')).then(fixture => {
+        window.uiRefreshFixture = fixture;
+        document.documentElement.dataset.fixtureReady = 'true';
+      }).catch(error => {
+        console.error(error);
+        document.querySelector('#app').textContent = `验收场景载入失败：${error.message}`;
+      });
+    </script>
+  </body>
+</html>

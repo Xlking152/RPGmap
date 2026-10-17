@@ -4,6 +4,14 @@ import { readFileSync, readdirSync } from 'node:fs';
 
 const modulePath = relative => fileURLToPath(new URL(relative, import.meta.url)).replaceAll('\\', '/');
 
+export function developmentWatchIgnored(root = modulePath('./')) {
+  const base = String(root).replaceAll('\\', '/').replace(/\/$/, '');
+  // Windows directory watchers can prevent the atomic staging rename used by
+  // local package installs. Ignore only this project's generated directories.
+  return ['output', 'artifact', 'release', 'releases', 'release-check', 'coverage',
+    'test-results', 'playwright-report', '.playwright-cli', 'dist'].map(name => `${base}/${name}/**`);
+}
+
 function sharedRuntimeWorkers() {
   const entries = new Map([
     [modulePath('./src/app/world-validation-work.js'), {
@@ -123,6 +131,7 @@ export function stripUnusedLeafletRasterCss({ sourceDirectory = modulePath('./sr
 
 export default defineConfig(({ command }) => ({
   base: './',
+  server: { watch: { ignored: developmentWatchIgnored() } },
   resolve: {
     alias: [
       { find: /^leaflet$/, replacement: modulePath(command === 'build'
@@ -173,6 +182,11 @@ export default defineConfig(({ command }) => ({
               includeDependenciesRecursively: false,
             },
             {
+              name: 'ui-icons',
+              test: /[\\/]node_modules[\\/]lucide[\\/]|[\\/]src[\\/]ui[\\/]icons\.js$/,
+              includeDependenciesRecursively: false,
+            },
+            {
               name: 'lazy-runtime-tools',
               test: /[\\/]src[\\/](?:ui[\\/]lazy-runtime-tools|library[\\/]ui|journal[\\/](?:ui|markdown)|content[\\/]archive|entities[\\/](?:xlsx-importer|avatar|actor-operations|canonical-delete|token-controller|sheet-manager|sheet-renderer|sheet-policy|ui-live)|entities[\\/]sheet[\\/].+|token[\\/](?:placement|naming)|status[\\/](?:definition-editor|quick-hud))\.js$/,
               includeDependenciesRecursively: false,
@@ -184,7 +198,8 @@ export default defineConfig(({ command }) => ({
                 if (runtimeWorkers.workerEntries.has(moduleId)
                   || runtimeWorkers.workerDependencies.has(moduleId)
                   || runtimeWorkers.bootDependencies.has(moduleId)) return false;
-                if (/\/node_modules\/(?:leaflet|lucide|polygon-clipping)\//.test(moduleId)) return true;
+                if (/\/node_modules\/lucide\//.test(moduleId) || /\/src\/ui\/icons\.js$/.test(moduleId)) return false;
+                if (/\/node_modules\/(?:leaflet|polygon-clipping)\//.test(moduleId)) return true;
                 if (!moduleId.includes('/src/')) return false;
                 if (/\/src\/adapters\/installed-packages\.js$/.test(moduleId) || /\/src\/app\/desktop-setup\.(?:js|css)$/.test(moduleId)) return false;
                 if (/\/src\/(?:ui\/lazy-runtime-tools|library\/ui|journal\/(?:ui|markdown)|map-package\/default-map|multiplayer\/server-bootstrap|world\/(?:bootstrap|constants|package-upgrades))\.js$/.test(moduleId)) return false;

@@ -1,0 +1,24 @@
+{
+  "chenghuangTempleUrl": "assets/chenghuang-temple.webp",
+  "cityGatehouseUrl": "assets/city-gatehouse.webp",
+  "cityWallTowerUrl": "assets/city-wall-tower.webp",
+  "jinchengGatehouseUrl": "assets/jincheng-gatehouse.webp",
+  "loessTerrainUrl": "assets/loess-terrain.webp",
+  "marketOfficeHallUrl": "assets/market-office-hall.webp",
+  "marketStorehouseUrl": "assets/market-storehouse.webp",
+  "yamenHallUrl": "assets/yamen-hall.webp",
+  "yellowRiverPontoonUrl": "assets/yellow-river-pontoon.webp",
+  "yellowRiverUrl": "assets/yellow-river.webp",
+  "buildingSprites": {
+    "yamenGate": ["assets/yamen-gate.webp"],
+    "yamenSideHall": ["assets/yamen-side-hall.webp"],
+    "barracks": ["assets/barracks-01.webp", "assets/barracks-02.webp"],
+    "granary": ["assets/granary-01.webp", "assets/granary-02.webp"],
+    "stable": ["assets/stable-01.webp", "assets/stable-02.webp"],
+    "workshop": ["assets/workshop-01.webp", "assets/workshop-02.webp"],
+    "marketShop": ["assets/market-shop-01.webp", "assets/market-shop-02.webp", "assets/market-shop-03.webp"],
+    "residenceHouse": ["assets/residence-house-01.webp", "assets/residence-house-02.webp", "assets/residence-house-03.webp"],
+    "residenceCourtyard": ["assets/residence-courtyard-01.webp", "assets/residence-courtyard-02.webp"]
+  },
+  "rubbleAtlas": { "url": "assets/rubble-atlas.webp", "width": 1536, "height": 1024, "columns": 3, "rows": 2 }
+}

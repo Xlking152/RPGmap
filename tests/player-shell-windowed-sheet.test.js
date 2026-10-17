@@ -15,7 +15,8 @@ test('connected Player shell hides GM World controls and exposes one direct owne
 });
 
 test('Player current card removes technical IDs and mutation buttons for uncontrolled Tokens', () => {
-  assert.match(appShell, /const metaRows = player/);
+  assert.match(appShell, /if \(!player\) for \(const text of \[/);
+  assert.match(appShell, /if \(!player\) card\.append\(debug\)/);
   assert.match(appShell, /棋子 ID/);
   assert.match(appShell, /角色 ID/);
   assert.match(appShell, /const canControl = !player \|\| api\.multiplayer\?\.canControlToken\?\.\(token\.id\) === true/);

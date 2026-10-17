@@ -3,6 +3,7 @@ const BASE_Z_INDEX = 4210;
 const Z_INDEX_SPAN = 70;
 
 function finite(value) {
+  if (value == null || (typeof value === 'string' && !value.trim())) return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -60,7 +61,7 @@ export function tokenSheetWindowKey(sceneId, tokenId = undefined) {
   return scene ? `scene:${scene}:token:${id}` : `token:${id}`;
 }
 
-export function createActorSheetManager({ storage = null, storageKey = DEFAULT_STORAGE_KEY } = {}) {
+export function createActorSheetManager({ storage = null, storageKey = DEFAULT_STORAGE_KEY, initialGeometry = null } = {}) {
   const records = new Map();
   const preferences = readPreferences(storage, storageKey);
   let zCounter = BASE_Z_INDEX;
@@ -107,6 +108,7 @@ export function createActorSheetManager({ storage = null, storageKey = DEFAULT_S
     }
     const saved = preferenceFrom(preferences[key]);
     const cascade = records.size % 7;
+    const initial = geometryFrom(typeof initialGeometry === 'function' ? initialGeometry({ index: cascade }) : initialGeometry || {});
     const record = {
       key,
       actorId: normalizedActorId,
@@ -114,10 +116,10 @@ export function createActorSheetManager({ storage = null, storageKey = DEFAULT_S
       sceneId: normalizedSceneId,
       tab: String(tab || saved.tab || 'overview'),
       interactionMode: saved.interactionMode,
-      left: saved.left ?? 24 + cascade * 26,
-      top: saved.top ?? 72 + cascade * 22,
-      width: saved.width,
-      height: saved.height,
+      left: saved.left ?? initial.left ?? 24 + cascade * 26,
+      top: saved.top ?? initial.top ?? 72 + cascade * 22,
+      width: saved.width ?? initial.width,
+      height: saved.height ?? initial.height,
       zIndex: nextZ(),
     };
     records.set(key, record);

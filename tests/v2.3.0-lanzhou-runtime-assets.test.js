@@ -28,7 +28,10 @@ test('Lanzhou authoring adapter retains v2.5.5 generated data and SVG for indepe
   assert.match(runtimeSvg, /^<svg\b/);
   const placeholders = [...runtimeSvg.matchAll(/__RPGMAP_ASSET_([A-Za-z0-9.]+)__/g)].map(match => match[1]);
   assert.equal(placeholders.length > 50, true);
-  assert.equal(new Set(placeholders).size, 28);
+  assert.equal(new Set(placeholders).size, 31);
+  assert.ok(placeholders.includes('treeCanopyUrl'));
+  assert.ok(placeholders.includes('streetPavingUrl'));
+  assert.ok(placeholders.includes('courtyardGroundUrl'));
 });
 
 test('LAN operation broadcasts carry one changes representation from audience projections', async () => {

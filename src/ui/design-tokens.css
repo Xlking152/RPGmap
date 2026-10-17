@@ -1,0 +1,23 @@
+:root {
+  color-scheme: light;
+  --ui-font: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --ui-bg: #f3f5f7;
+  --ui-surface: #ffffff;
+  --ui-surface-alt: #f5f7f9;
+  --ui-surface-muted: var(--ui-surface-alt);
+  --ui-ink: #222b33;
+  --ui-text: var(--ui-ink);
+  --ui-muted: #64717e;
+  --ui-line: #dce3e8;
+  --ui-border: var(--ui-line);
+  --ui-accent: #087e8b;
+  --ui-accent-hover: #066775;
+  --ui-accent-soft: #e7f3f5;
+  --ui-danger: #b94143;
+  --ui-success: #27815b;
+  --ui-radius: 6px;
+  --ui-shadow: 0 8px 30px #17293218;
+}
+
+.ui-icon { flex: 0 0 auto; vertical-align: middle; }
+[hidden] { display: none !important; }

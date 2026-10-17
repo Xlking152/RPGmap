@@ -15,6 +15,11 @@ import {
 } from '../spatial/kernel.js';
 
 const FOG_PANE = 'fogVisionPane';
+export const FOG_PALETTE = Object.freeze({
+  unexplored: 'rgb(14,19,23)',
+  explored: 'rgba(16,25,29,0.84)',
+  vague: 'rgba(25,42,47,0.54)',
+});
 const builtInVisionDescribe = infiniteHorrorRuleset.vision.describe;
 const builtInActorDerive = infiniteHorrorRuleset.actor.derive;
 const builtInStatusDerive = infiniteHorrorRuleset.statuses.derive;
@@ -476,13 +481,13 @@ export function createVisionFogSystem() {
         if (explorationDirty || resized) {
           exploration.clearRect(0, 0, size.x, size.y);
           exploration.globalCompositeOperation = 'source-over';
-          exploration.fillStyle = 'rgba(8,12,14,0.96)';
+          exploration.fillStyle = FOG_PALETTE.unexplored;
           exploration.fillRect(0, 0, size.x, size.y);
           exploration.globalCompositeOperation = 'destination-out';
           exploration.fillStyle = '#000';
           drawExplored(exploration);
           exploration.globalCompositeOperation = 'source-over';
-          exploration.fillStyle = 'rgba(11,16,18,0.70)';
+          exploration.fillStyle = FOG_PALETTE.explored;
           drawExplored(exploration);
           explorationDirty = false;
         }
@@ -500,7 +505,7 @@ export function createVisionFogSystem() {
           perception.fillStyle = '#000';
           drawCurrent(perception, vagueRange, 'vague');
           perception.globalCompositeOperation = 'source-over';
-          perception.fillStyle = 'rgba(218,226,228,0.20)';
+          perception.fillStyle = FOG_PALETTE.vague;
           drawCurrent(perception, vagueRange, 'vague');
         }
         perception.globalCompositeOperation = 'destination-out';

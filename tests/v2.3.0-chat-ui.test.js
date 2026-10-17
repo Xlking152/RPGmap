@@ -19,6 +19,9 @@ test('chat composer collapses on Escape and incoming messages only update the un
   assert.match(chatController, /unreadCount \+= detail\.appendedIds\.length/);
   assert.match(chatController, /unreadBadge\.hidden = unreadCount <= 0/);
   assert.match(chatController, /if \(panel\.classList\.contains\('active'\)\) \{[\s\S]*renderLog\(\)/);
+  assert.match(chatController, /const detail = event\?\.detail \|\| event/);
+  assert.match(chatController, /api\.on\('ui:panel-change'/);
+  assert.match(chatController, /=== 'chat'\) showChatLog\(\)/);
 });
 
 test('ordinary LAN chat resolves only after its authoritative operation ACK', () => {

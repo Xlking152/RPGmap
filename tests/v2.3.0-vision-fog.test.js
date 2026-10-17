@@ -9,9 +9,9 @@ test('Fog renderer separates static exploration memory from the lightweight perc
   assert.match(visionSource, /createCanvas\('exploration-cache'\)/);
   assert.match(visionSource, /createCanvas\('perception'\)/);
   assert.match(visionSource, /explorationCanvas\.style\.display = 'none'/);
-  assert.match(visionSource, /rgba\(8,12,14,0\.96\)/);
-  assert.match(visionSource, /rgba\(11,16,18,0\.70\)/);
-  assert.match(visionSource, /rgba\(218,226,228,0\.20\)/);
+  assert.match(visionSource, /exploration\.fillStyle = FOG_PALETTE\.unexplored/);
+  assert.match(visionSource, /exploration\.fillStyle = FOG_PALETTE\.explored/);
+  assert.match(visionSource, /perception\.fillStyle = FOG_PALETTE\.vague/);
   assert.match(visionSource, /const drawCurrent = \(context, rawRange, kind\) =>/);
   assert.match(visionSource, /computeVisibilityRows/);
   assert.match(visionSource, /drawCurrentCircle\(context, rangeMeters\)/);

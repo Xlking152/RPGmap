@@ -1,12 +1,12 @@
 import { actorPublicProfileHasContent, normalizeActorPublicProfile } from '../../actor/public-profile.js';
 import { escapeEntityHtml } from '../sheet-renderer.js';
 
-const typeLabel = actor => ({ pc: 'PC', monster: '怪物', npc: 'NPC', summon: '召唤物', other: '其他' })[String(actor?.type)] || '其他';
+const typeLabel = actor => ({ pc: '玩家角色', monster: '怪物', npc: '非玩家角色', summon: '召唤物', other: '其他' })[String(actor?.type)] || '其他';
 
 export function renderSheetBadges({ actor, token, context, description = {} } = {}) {
   const kind = String(description.kind || ({ pc: 'character', monster: 'monster', npc: 'npc', summon: 'monster' })[actor?.type] || 'generic');
-  const labels = [typeLabel(actor), token ? 'TOKEN INSTANCE' : 'ACTOR', context?.limited ? 'LIMITED' : context?.level === 'observer' ? '只读' : String(context?.mode || 'play').toUpperCase()];
-  return `<div class="entity-sheet-v3-badges" data-sheet-v3-badges data-sheet-kind="${escapeEntityHtml(kind)}">${labels.map(label => `<span class="entity-sheet-v3-badge">${escapeEntityHtml(label)}</span>`).join('')}${context?.canToggleMode ? `<button type="button" class="entity-sheet-v3-mode-toggle" data-sheet-mode-toggle aria-pressed="${context.mode === 'edit'}">${context.mode === 'edit' ? '返回游玩' : '编辑卡片'}</button>` : ''}</div>`;
+  const labels = [typeLabel(actor), token ? token.actorLink === false ? '独立实例' : '共享角色' : '模板资料', context?.limited ? '公开资料' : context?.level === 'observer' ? '只读' : context?.mode === 'edit' ? '编辑中' : '游玩'];
+  return `<div class="entity-sheet-v3-badges" data-sheet-v3-badges data-sheet-kind="${escapeEntityHtml(kind)}" data-access-level="${escapeEntityHtml(String(context?.level || '').toUpperCase())}">${labels.map(label => `<span class="entity-sheet-v3-badge">${escapeEntityHtml(label)}</span>`).join('')}${context?.canToggleMode ? `<button type="button" class="entity-sheet-v3-mode-toggle" data-sheet-mode-toggle aria-pressed="${context.mode === 'edit'}">${context.mode === 'edit' ? '返回游玩' : '编辑资料'}</button>` : ''}</div>`;
 }
 
 function renderPublicStatuses(token) {
